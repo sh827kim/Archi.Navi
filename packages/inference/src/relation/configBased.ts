@@ -279,10 +279,11 @@ async function findServiceByName(
 /**
  * relation_candidate 저장 (중복 처리 포함)
  * 설계 문서 §2.5 규칙 적용:
- *   MANUAL 관계 존재 → 무시
- *   APPROVED 후보 존재 → 무시
- *   PENDING 후보 존재 → 더 높은 confidence면 업데이트
- *   없음 → 신규 생성
+ *   MANUAL 관계 존재      → 무시 (수동 오버라이드 우선)
+ *   APPROVED 후보 존재    → 무시
+ *   PENDING 후보 존재     → 더 높은 confidence면 업데이트 + evidence 추가
+ *   REJECTED 후보만 존재  → 신규 후보 생성 (REJECTED는 조회에서 제외되므로 자동 처리)
+ *   없음                  → 신규 생성 (status='PENDING')
  */
 async function saveRelationCandidate(
   db: DbClient,

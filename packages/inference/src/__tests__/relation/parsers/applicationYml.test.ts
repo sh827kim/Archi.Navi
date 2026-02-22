@@ -158,6 +158,24 @@ spring:
 
   // ─── 엣지 케이스 ─────────────────────────────────────────────────────────────
 
+  it('spring.profiles.active가 있어도 동일 파일의 설정은 정상 파싱해야 한다', () => {
+    // 파서는 profiles 분기를 하지 않고 단순 YAML 파싱 — profile별 파일은 개별 탐색으로 처리
+    const yaml = `
+spring:
+  profiles:
+    active: prod
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`;
+    const result = parseApplicationYml('/path/application.yml', yaml);
+    // profiles 설정이 있어도 같은 파일의 다른 설정은 정상 파싱
+    expect(result.serviceName).toBe('order-service');
+    expect(result.datasource?.dbType).toBe('mysql');
+    expect(result.datasource?.host).toBe('db-host');
+  });
+
   it('빈 YAML 문자열은 빈 결과를 반환해야 한다', () => {
     const result = parseApplicationYml('/path', '');
     expect(result.serviceName).toBeNull();

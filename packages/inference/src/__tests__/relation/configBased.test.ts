@@ -381,6 +381,52 @@ spring:
     expect(candidates).toHaveLength(2);
   });
 
+  it('REJECTED 상태 후보만 존재할 때 신규 후보를 생성해야 한다 (설계 §2.5)', async () => {
+    // REJECTED 후보는 조회에서 제외되므로 자동으로 신규 생성됨
+    const { orderServiceId } = await createTestFixtures(db, workspaceId);
+
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+    );
+
+    // 첫 번째 실행
+    await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+    // 생성된 후보를 REJECTED 상태로 변경
+    await db
+      .update(relationCandidates)
+      .set({ status: 'REJECTED' })
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+
+    // REJECTED 상태 확인
+    const rejectedCandidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(and(eq(relationCandidates.workspaceId, workspaceId), eq(relationCandidates.status, 'REJECTED')));
+    expect(rejectedCandidates).toHaveLength(2);
+
+    // 두 번째 실행 → REJECTED는 무시하고 신규 후보 생성
+    const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+    expect(result.candidateCount).toBe(2); // 신규 생성됨
+
+    // 최종 PENDING 2개 + REJECTED 2개 = 총 4개
+    const allCandidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(allCandidates).toHaveLength(4);
+
+    const pendingCandidates = allCandidates.filter((c) => c.status === 'PENDING');
+    expect(pendingCandidates).toHaveLength(2);
+  });
+
   // ─── 빈 디렉토리 처리 ─────────────────────────────────────────────────────────
 
   it('설정 파일이 없는 디렉토리에서는 빈 결과를 반환해야 한다', async () => {

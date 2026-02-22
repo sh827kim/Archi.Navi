@@ -72,114 +72,124 @@ packages/inference/src/__tests__/
 
 ### Phase 1: 의존성 및 환경 설정
 
-- [ ] **js-yaml 패키지 설치**
+- [x] **js-yaml 패키지 설치**
   - `packages/inference/package.json`에 `js-yaml`, `@types/js-yaml` 추가
   - `pnpm install` 실행 후 설치 확인
 
 ### Phase 2: 파서 모듈 구현
 
-- [ ] **`parsers/applicationYml.ts` 구현**
-  - [ ] `js-yaml`로 YAML 파싱
-  - [ ] `spring.application.name` 추출 → 서비스명 매칭에 사용
-  - [ ] `spring.datasource.url` 추출 → JDBC URL 파싱 (host, port, dbName, dbType)
-  - [ ] `spring.kafka.bootstrap-servers` 추출 → Broker 주소
-  - [ ] `spring.kafka.consumer.group-id` + topics 추출
-  - [ ] `spring.kafka.producer.*` 존재 여부 확인
-  - [ ] `server.port`, `server.servlet.context-path` 추출
-  - [ ] 잘못된 YAML → 빈 결과 반환 (예외 던지지 않음)
+- [x] **`parsers/applicationYml.ts` 구현**
+  - [x] `js-yaml`로 YAML 파싱
+  - [x] `spring.application.name` 추출 → 서비스명 매칭에 사용
+  - [x] `spring.datasource.url` 추출 → JDBC URL 파싱 (host, port, dbName, dbType)
+  - [x] `spring.kafka.bootstrap-servers` 추출 → Broker 주소
+  - [x] `spring.kafka.consumer.group-id` + topics 추출
+  - [x] `spring.kafka.producer.*` 존재 여부 확인
+  - [x] `server.port`, `server.servlet.context-path` 추출
+  - [x] 잘못된 YAML → 빈 결과 반환 (예외 던지지 않음)
 
-- [ ] **`parsers/dockerCompose.ts` 구현**
-  - [ ] `services.*` 전체 순회
-  - [ ] 각 서비스의 `depends_on` 추출 (배열/객체 형식 모두 지원)
-  - [ ] 각 서비스의 `image` 확인 → DB/Broker 분류
+- [x] **`parsers/dockerCompose.ts` 구현**
+  - [x] `services.*` 전체 순회
+  - [x] 각 서비스의 `depends_on` 추출 (배열/객체 형식 모두 지원)
+  - [x] 각 서비스의 `image` 확인 → DB/Broker 분류
     - DB 이미지: `mysql`, `postgres`, `mariadb`, `mongo`
     - Broker 이미지: `kafka`, `rabbitmq`, `redpanda`
-  - [ ] `environment.MYSQL_DATABASE`, `POSTGRES_DB` 추출 → DB 이름
-  - [ ] 잘못된 YAML → 빈 결과 반환
+  - [x] `environment.MYSQL_DATABASE`, `POSTGRES_DB` 추출 → DB 이름
+  - [x] 잘못된 YAML → 빈 결과 반환
 
-- [ ] **`parsers/k8sManifest.ts` 구현**
-  - [ ] `kind: Deployment` 확인
-  - [ ] `metadata.name` → 서비스명
-  - [ ] `spec.template.spec.containers[].env[]` 순회
-  - [ ] `DB_URL`, `DATABASE_URL`, `JDBC_URL` → JDBC/DB URL 파싱
-  - [ ] `KAFKA_BROKERS`, `KAFKA_BOOTSTRAP_SERVERS` → Broker 주소
-  - [ ] 잘못된 YAML → 빈 결과 반환
+- [x] **`parsers/k8sManifest.ts` 구현**
+  - [x] `kind: Deployment` 확인
+  - [x] `metadata.name` → 서비스명
+  - [x] `spec.template.spec.containers[].env[]` 순회
+  - [x] `DB_URL`, `DATABASE_URL`, `JDBC_URL` → JDBC/DB URL 파싱
+  - [x] `KAFKA_BROKERS`, `KAFKA_BOOTSTRAP_SERVERS` → Broker 주소
+  - [x] 잘못된 YAML → 빈 결과 반환
 
 ### Phase 3: configBased.ts 전면 구현
 
-- [ ] **인터페이스 변경**
-  - [ ] `ConfigInferenceOptions.configFilePath` → `repoRoot`로 변경
-  - [ ] 파일 시스템 탐색 로직 추가 (glob 패턴)
+- [x] **인터페이스 변경**
+  - [x] `ConfigInferenceOptions.configFilePath` → `repoRoot`로 변경
+  - [x] 파일 시스템 탐색 로직 추가
 
-- [ ] **파일 탐색 로직**
-  - [ ] `**/application*.yml` 탐색
-  - [ ] `**/docker-compose*.yml` 탐색
-  - [ ] `**/k8s/**/*.yml`, `**/deployment*.yml` 탐색
+- [x] **파일 탐색 로직**
+  - [x] `**/application*.yml` 탐색 (node_modules, .git, dist 등 제외)
+  - [x] `**/docker-compose*.yml` 탐색
+  - [x] `**/k8s/**/*.yml`, `**/deployment*.yml` 탐색
 
-- [ ] **Object 생성/조회 로직**
-  - [ ] URN 기반 중복 방지 (upsert)
+- [x] **Object 생성/조회 로직**
+  - [x] URN 기반 중복 방지 (upsert)
     - database: `urn:{ws}:storage:database:{host}:{dbName}`
     - message_broker: `urn:{ws}:channel:message_broker:{host}`
     - topic: `urn:{ws}:channel:topic:{topicName}`
-  - [ ] 기존 Object 있으면 재사용, 없으면 신규 생성
+  - [x] 기존 Object 있으면 재사용, 없으면 신규 생성
 
-- [ ] **Service 매칭 로직**
-  - [ ] `spring.application.name` → workspaceId의 service objects에서 이름 매칭
-  - [ ] docker-compose 서비스명 → workspaceId의 service objects에서 이름 매칭
-  - [ ] K8s `metadata.name` → 서비스 이름 매칭
-  - [ ] 매칭 실패 시 해당 relation_candidate 건너뜀
+- [x] **Service 매칭 로직**
+  - [x] `spring.application.name` → workspaceId의 service objects에서 이름 매칭
+  - [x] docker-compose 서비스명 → workspaceId의 service objects에서 이름 매칭
+  - [x] K8s `metadata.name` → 서비스 이름 매칭 (정확 매칭 + 하이픈/언더스코어 정규화)
+  - [x] 매칭 실패 시 해당 relation_candidate 건너뜀
 
-- [ ] **relation_candidates 저장 (중복 처리 포함)**
-  - [ ] 동일 `(workspaceId, relationType, subjectObjectId, objectId)` PENDING 후보 조회
-  - [ ] PENDING 있고 새 confidence가 더 높으면 업데이트 + evidence 추가
-  - [ ] APPROVED 있으면 건너뜀 (수동 오버라이드 우선)
-  - [ ] 없으면 신규 생성 (status='PENDING')
+- [x] **relation_candidates 저장 (중복 처리 포함)**
+  - [x] 동일 `(workspaceId, relationType, subjectObjectId, objectId)` PENDING 후보 조회
+  - [x] PENDING 있고 새 confidence가 더 높으면 업데이트 + evidence 추가
+  - [x] APPROVED 있으면 건너뜀 (수동 오버라이드 우선)
+  - [x] MANUAL 관계 존재 시 건너뜀
+  - [x] REJECTED 후보만 존재 → 신규 후보 생성 (REJECTED는 조회 제외라 자동 처리)
+  - [x] 없으면 신규 생성 (status='PENDING')
 
-- [ ] **evidences 저장**
-  - [ ] evidenceType='CONFIG'
-  - [ ] filePath, excerpt (설정 키=값) 포함
-  - [ ] relation_candidate_evidences에 연결
+- [x] **evidences 저장**
+  - [x] evidenceType='CONFIG'
+  - [x] filePath, excerpt (설정 키=값) 포함
+  - [x] relation_candidate_evidences에 연결
 
-- [ ] **결과 반환**
-  - [ ] `{ candidateCount }` 반환 (새로 생성된 후보 수)
+- [x] **결과 반환**
+  - [x] `{ candidateCount, objectCount }` 반환 (새로 생성된 후보 수 + Object 수)
 
 ### Phase 4: 단위 테스트
 
-- [ ] **`parsers/applicationYml.test.ts`**
-  - [ ] 기본 application.yml 파싱 (datasource + kafka 모두 있음)
-  - [ ] datasource만 있는 경우
-  - [ ] kafka만 있는 경우
-  - [ ] profiles 분기 (active profile 무시 — 단순 파싱)
-  - [ ] 빈 YAML 처리
-  - [ ] 잘못된 YAML 처리
+- [x] **`parsers/applicationYml.test.ts`** (13개)
+  - [x] 기본 application.yml 파싱 (datasource + kafka 모두 있음)
+  - [x] datasource만 있는 경우
+  - [x] kafka만 있는 경우
+  - [x] profiles 분기 무시 — spring.profiles.active가 있어도 기존 설정 정상 파싱
+  - [x] 빈 YAML 처리
+  - [x] 잘못된 YAML 처리
 
-- [ ] **`parsers/dockerCompose.test.ts`**
-  - [ ] 기본 docker-compose 파싱 (depends_on + DB + Broker)
-  - [ ] depends_on 배열 형식
-  - [ ] depends_on 객체 형식 (`service: {condition: service_healthy}`)
-  - [ ] DB 이미지 분류 (mysql, postgres, mariadb)
-  - [ ] Broker 이미지 분류 (kafka, rabbitmq)
-  - [ ] 빈 YAML 처리
+- [x] **`parsers/dockerCompose.test.ts`** (15개)
+  - [x] 기본 docker-compose 파싱 (depends_on + DB + Broker)
+  - [x] depends_on 배열 형식
+  - [x] depends_on 객체 형식 (`service: {condition: service_healthy}`)
+  - [x] DB 이미지 분류 (mysql, postgres, mariadb)
+  - [x] Broker 이미지 분류 (kafka, rabbitmq, redpanda)
+  - [x] 빈 YAML 처리
 
-- [ ] **`parsers/k8sManifest.test.ts`**
-  - [ ] 기본 K8s Deployment 파싱 (env DB_URL, KAFKA_BROKERS)
-  - [ ] kind != Deployment인 경우 (Service, ConfigMap 등) → 무시
-  - [ ] env 없는 경우
-  - [ ] 빈 YAML 처리
+- [x] **`parsers/k8sManifest.test.ts`** (12개)
+  - [x] 기본 K8s Deployment 파싱 (env DB_URL, KAFKA_BROKERS)
+  - [x] kind != Deployment인 경우 (Service, ConfigMap 등) → 무시
+  - [x] 멀티 YAML 문서 처리
+  - [x] env 없는 경우
+  - [x] 빈 YAML 처리
 
-- [ ] **`configBased.test.ts` (통합 테스트)**
-  - [ ] 실제 파일 탐색 + 파싱 + DB 저장 통합 테스트
-  - [ ] service 매칭 성공 → relation_candidate 생성 확인
-  - [ ] service 매칭 실패 → 건너뜀 확인
-  - [ ] 중복 호출 → PENDING 업데이트 확인
+- [x] **`configBased.test.ts` (통합 테스트)** (10개)
+  - [x] datasource.url → database Object + read/write candidate 생성 확인
+  - [x] kafka consumer → topic Object + consume candidate 생성 확인
+  - [x] kafka producer → produce candidate 생성 확인
+  - [x] service 매칭 성공 → relation_candidate 생성 확인
+  - [x] service 매칭 실패 → 건너뜀 확인
+  - [x] depends_on → depend_on candidate 생성 확인
+  - [x] DB 이미지 → database Object 생성 확인
+  - [x] evidence CONFIG 타입 저장 확인
+  - [x] 중복 호출 → PENDING 중복 생성 안 됨 확인
+  - [x] REJECTED 후보만 존재 → 신규 후보 생성 확인 ← **추가됨**
+  - [x] 빈 디렉토리 → 빈 결과 반환 확인
 
 ### Phase 5: 컴파일 및 테스트 실행
 
-- [ ] **TypeScript 컴파일 오류 없음**
-  - [ ] `pnpm --filter @archi-navi/inference lint` 성공
+- [x] **TypeScript 컴파일 오류 없음**
+  - [x] `pnpm --filter @archi-navi/inference lint` 성공
 
-- [ ] **단위 테스트 전체 통과**
-  - [ ] `pnpm --filter @archi-navi/inference test:unit` 전체 GREEN
+- [x] **단위 테스트 전체 통과**
+  - [x] `pnpm --filter @archi-navi/inference test:unit` 전체 GREEN (50개 → 52개)
 
 ---
 
@@ -199,11 +209,18 @@ topic:          urn:{workspaceId}:channel:topic:{topicName}
 
 ### 중복 후보 처리 규칙 (설계 문서 §2.5)
 ```
-MANUAL 관계 존재 → 무시
-APPROVED 후보/관계 존재 → 무시
-PENDING 후보 존재 → 더 높은 confidence면 업데이트 + evidence 추가
-REJECTED 후보만 존재 → 새 후보 생성
-없음 → 신규 생성
+MANUAL 관계 존재      → 무시
+APPROVED 후보 존재    → 무시
+PENDING 후보 존재     → 더 높은 confidence면 업데이트 + evidence 추가
+REJECTED 후보만 존재  → 신규 후보 생성 (REJECTED는 조회에서 제외되어 자동 처리됨)
+없음                  → 신규 생성
+```
+
+### 결과 반환 형식
+```typescript
+{ candidateCount: number, objectCount: number }
+// candidateCount: 새로 생성된 relation_candidate 수
+// objectCount: 새로 생성된 Object 수 (database, message_broker, topic)
 ```
 
 ---
