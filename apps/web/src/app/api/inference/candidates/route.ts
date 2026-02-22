@@ -37,15 +37,20 @@ export async function GET(req: NextRequest) {
       allObjects.map((o: { id: string; displayName: string | null; name: string }) => [o.id, o.displayName ?? o.name])
     );
 
-    // 응답 변환
-    const result = candidates.map((c: typeof candidates[0]) => ({
-      id: c.id,
-      subjectName: objMap.get(c.subjectObjectId) ?? c.subjectObjectId,
-      relationType: c.relationType,
-      objectName: objMap.get(c.objectId) ?? c.objectId,
-      confidence: c.confidence,
-      status: c.status,
-    }));
+    // 응답 변환 (llmAssessment가 있으면 포함)
+    const result = candidates.map((c: typeof candidates[0]) => {
+      const meta = c.metadata as Record<string, unknown> | null;
+      const llmAssessment = meta?.llmAssessment ?? null;
+      return {
+        id: c.id,
+        subjectName: objMap.get(c.subjectObjectId) ?? c.subjectObjectId,
+        relationType: c.relationType,
+        objectName: objMap.get(c.objectId) ?? c.objectId,
+        confidence: c.confidence,
+        status: c.status,
+        ...(llmAssessment ? { llmAssessment } : {}),
+      };
+    });
 
     return NextResponse.json(result);
   } catch (error) {
