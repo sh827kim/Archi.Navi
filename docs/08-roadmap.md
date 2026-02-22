@@ -20,54 +20,63 @@
 
 > **목표**: Regex + Config 파싱으로 전체 Relation의 60~80% 자동 추론
 
-### 1-1. Config 기반 Relation 추론
+### ✅ 1-1. Config 기반 Relation 추론 (완료)
 - **파일:** `packages/inference/src/relation/configBased.ts`
-- **현재:** stub (candidateCount: 0)
-- **구현:**
+- **구현 완료:**
   - `application.yml` 파싱 → `spring.datasource.url` → database Object 생성 + `read`/`write` relation
   - `application.yml` 파싱 → `spring.kafka.*` → message_broker/topic Object 생성 + `produce`/`consume` relation
   - `docker-compose.yml` 파싱 → `depends_on` → service간 `depend_on` relation
   - K8s manifest 파싱 → 환경변수의 DB_URL, KAFKA_BROKERS → Object 생성 + relation
-- **결과:** relation_candidates 테이블에 PENDING 상태로 저장
+- **결과:** relation_candidates 테이블에 PENDING 상태로 저장 (테스트 52개 통과)
 - **참조:** 03-inference-engine.md §7 Config 파싱 전략
 
-### 1-2. Regex 기반 Code Signal 추출 (Phase 1)
-- **파일:** `packages/inference/src/code/` (신규 디렉토리)
-- **언어:** Java/Kotlin, TypeScript/JS, Python
-- **추출 대상:**
-  - `@GetMapping`, `@PostMapping` → `expose` relation
-  - `RestTemplate`, `WebClient`, `FeignClient` → `call` relation
-  - `@KafkaListener`, `kafkaTemplate.send` → `consume`/`produce` relation
-  - MyBatis XML 내 SQL → `read`/`write` relation
-  - JPA `@Table`, `@ManyToOne` → 테이블 매핑
-- **저장:** `code_artifacts` + `code_call_edges` + `evidences`
+### ✅ 1-2. Regex 기반 Code Signal 추출 (Phase 1) (완료)
+- **파일:** `packages/inference/src/code/` (신규)
+- **언어:** Java/Kotlin, TypeScript/JS, Python, MyBatis XML
+- **구현 완료:**
+  - `@GetMapping`/`@PostMapping` 등 + `@*Exchange` (HttpInterface) → `expose`/`call`
+  - `RestTemplate`, `WebClient`, `FeignClient`, `RestClient` → `call`
+  - `@KafkaListener`, `kafkaTemplate.send` → `consume`/`produce`
+  - MyBatis XML SQL → `db_read`/`db_write`
+  - JPA `@Table` → `db_mapping`
+- **저장:** `code_artifacts` + `code_call_edges` + `evidences` (SHA256 증분 스캔)
+- **테스트:** 46개 통과
 - **참조:** 03-inference-engine.md §6.1 Phase 1
 
-### 1-3. DB 시그널 추출
-- **파일:** `packages/inference/src/domain/seedBased.ts`
-- **현재:** dbScore=0 하드코딩
-- **구현:** FK 제약조건 분석 → 테이블 접두사 매칭 → 도메인 affinity 계산
+### ✅ 1-3. DB 시그널 추출 (완료)
+- **파일:** `packages/inference/src/db/dbSchemaSignal.ts` (신규), `seedBased.ts` (수정)
+- **구현 완료:**
+  - FK 제약조건 → `relation_candidates` (confidence 0.95)
+  - 컬럼명 `*_id`/`*_no` 패턴 → implicit FK `relation_candidates` (confidence 0.5)
+  - 테이블 prefix → 도메인 매칭 → `dbScore` 실제 계산 (기존 하드코딩 0 → 실제값)
+- **테스트:** 20개 통과
 - **의존:** DB 스키마 메타데이터가 objects 테이블에 등록되어 있어야 함
 
-### 1-4. Domain Candidates 승인 API + UI
+### ✅ 1-4. Domain Candidates 승인 API + UI (완료)
 - **API:** `GET/PATCH /api/inference/domain-candidates`
-- **현재:** 라우트 미존재 (Relation 승인만 있음)
-- **구현:** domain_candidates 조회/승인/거부 → object_domain_affinities 확정
+- **구현 완료:**
+  - `approveDomainCandidate.ts` 승인/거부 로직 → `object_domain_affinities` upsert
+  - Approval 페이지에 Relations/Domains 탭 추가 (`DomainApprovalList`, `ApprovalTabs`)
+- **테스트:** 6개 통과 (T1~T6)
 - **참조:** 03-inference-engine.md §8.2
 
-### 1-5. Discovery 다중 레이어 통합
+### ✅ 1-5. Discovery 다중 레이어 통합 (완료)
 - **파일:** `packages/inference/src/domain/discovery.ts`
-- **현재:** SERVICE_TO_SERVICE call 엣지만 사용
-- **구현:**
-  - SERVICE_TO_DB, SERVICE_TO_BROKER rollup을 그래프에 추가
-  - `domain_inference_profiles`의 엣지 가중치 (`edge_w_rw`, `edge_w_msg` 등) 적용
-  - `enabled_layers` 프로필 설정 반영
+- **구현 완료:**
+  - SERVICE_TO_DATABASE / SERVICE_TO_BROKER rollup 엣지 추가
+  - `domain_inference_profiles`의 `enabled_layers` + 엣지 가중치 (`edge_w_call`, `edge_w_rw`, `edge_w_msg`) 적용
+  - `addOrMergeEdge` 헬퍼로 동일 노드 쌍 가중치 누적
+  - `domainDiscoveryRuns.inputLayers` 실제 사용 레이어 기록
+- **테스트:** 7개 통과 (T1~T7)
 - **참조:** 03-inference-engine.md §4.2
 
-### 1-6. 클러스터 Label 자동 추출
-- **파일:** `packages/inference/src/domain/discovery.ts`
-- **현재:** `labelCandidates: []` 하드코딩
-- **구현:** 서비스명/테이블 prefix/Topic prefix 토큰 빈도 → 상위 3개 후보
+### ✅ 1-6. 클러스터 Label 자동 추출 (완료)
+- **파일:** `packages/inference/src/domain/labelExtractor.ts` (신규), `discovery.ts` (수정)
+- **구현 완료:**
+  - `tokenize()`: camelCase/PascalCase 분리 + 구분자 분리 + STOP_WORDS 필터
+  - `extractLabelCandidates()`: 토큰 빈도 분석 → score = count/totalCount → 상위 3개 후보
+  - `discovery.ts`: 클러스터 멤버 이름 DB 조회 → `labelCandidates` metadata 채움
+- **테스트:** labelExtractor 8개 + discovery T8 통과
 - **참조:** 03-inference-engine.md §4.5
 
 ---
