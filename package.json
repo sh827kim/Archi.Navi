@@ -33,7 +33,12 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "sharp",
-      "unrs-resolver"
+      "unrs-resolver",
+      "tree-sitter",
+      "tree-sitter-java",
+      "tree-sitter-javascript",
+      "tree-sitter-typescript",
+      "tree-sitter-python"
     ],
     "overrides": {
       "drizzle-orm": "^0.45.1"
