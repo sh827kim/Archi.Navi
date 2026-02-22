@@ -301,4 +301,53 @@ describe('runDiscovery — 다중 레이어 통합', () => {
 
         expect(result.clusterCount).toBe(0);
     });
+
+    it('T8: Discovery 후 domain 객체의 labelCandidates가 비어있지 않음', async () => {
+        // order- prefix를 가진 서비스 3개가 DB를 공유 → 클러스터 생성 → labelCandidates에 "order" 포함
+        const svcA = await createService(db, 'order-service');
+        const svcB = await createService(db, 'order-processor');
+        const svcC = await createService(db, 'order-validator');
+        const dbObj = await createDatabase(db, 'order-db');
+
+        await insertRollup(db, 'SERVICE_TO_DATABASE', svcA, dbObj, 1, GEN);
+        await insertRollup(db, 'SERVICE_TO_DATABASE', svcB, dbObj, 1, GEN);
+        await insertRollup(db, 'SERVICE_TO_DATABASE', svcC, dbObj, 1, GEN);
+
+        const profileId = await createProfile(db, 'db-label-test', ['db'], undefined, undefined, undefined, 2);
+        const result = await runDiscovery(db, {
+            workspaceId,
+            profileId,
+            generationVersion: GEN,
+            minClusterSize: 2,
+        });
+
+        expect(result.clusterCount).toBeGreaterThan(0);
+
+        // 생성된 domain object 조회
+        const domains = await db
+            .select()
+            .from(objects)
+            .where(eq(objects.workspaceId, workspaceId));
+        const discoveredDomains = domains.filter(
+            (o) => o.objectType === 'domain' && (o.metadata as Record<string, unknown>)?.['kind'] === 'DISCOVERED',
+        );
+
+        expect(discoveredDomains.length).toBeGreaterThan(0);
+
+        // 최소 하나의 domain에 labelCandidates가 있어야 함
+        const hasLabels = discoveredDomains.some((d) => {
+            const meta = d.metadata as Record<string, unknown>;
+            const candidates = meta?.['labelCandidates'] as unknown[];
+            return Array.isArray(candidates) && candidates.length > 0;
+        });
+        expect(hasLabels).toBe(true);
+
+        // "order" 토큰이 최소 한 domain의 labelCandidates에 포함되어야 함
+        const hasOrderLabel = discoveredDomains.some((d) => {
+            const meta = d.metadata as Record<string, unknown>;
+            const candidates = meta?.['labelCandidates'] as Array<{ text: string; score: number }>;
+            return Array.isArray(candidates) && candidates.some((c) => c.text === 'order');
+        });
+        expect(hasOrderLabel).toBe(true);
+    });
 });

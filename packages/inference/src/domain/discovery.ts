@@ -5,10 +5,13 @@
  * 1-5 다중 레이어 통합:
  * - enabled_layers (프로필 설정) 에 따라 call/db/msg 레이어 선택적 사용
  * - 엣지 가중치: edge_w_call / edge_w_rw / edge_w_msg 프로필 값 적용
+ *
+ * 1-6 클러스터 Label 자동 추출:
+ * - 멤버 이름 토큰 빈도 분석 → labelCandidates 상위 3개 생성
  */
 import Graph from 'graphology';
 import louvain from 'graphology-communities-louvain';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import {
     objectRollups,
@@ -18,6 +21,7 @@ import {
     objects,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { extractLabelCandidates } from './labelExtractor';
 
 interface DiscoveryOptions {
     workspaceId: string;
@@ -250,6 +254,14 @@ export async function runDiscovery(
         const domainId = generateId();
         const clusterName = `cluster-${clusterId}`;
 
+        // 클러스터 멤버 이름 조회 → 라벨 후보 추출
+        const memberRows = await db
+            .select({ name: objects.name })
+            .from(objects)
+            .where(inArray(objects.id, members));
+        const memberNames = memberRows.map((r) => r.name);
+        const labelCandidates = extractLabelCandidates(memberNames);
+
         await db.insert(objects).values({
             id: domainId,
             workspaceId,
@@ -267,7 +279,7 @@ export async function runDiscovery(
                 algo: 'louvain',
                 algoVersion: '1.0',
                 inputLayers: actualInputLayers,
-                labelCandidates: [], // 1-6에서 구현
+                labelCandidates,
             },
         });
 

@@ -8,3 +8,5 @@ export { runSeedBasedInference } from './seedBased';
 export { runDiscovery } from './discovery';
 export { approveDomainCandidate } from './approveDomainCandidate';
 export type { ApproveDomainCandidateResult } from './approveDomainCandidate';
+export { extractLabelCandidates } from './labelExtractor';
+export type { LabelCandidate } from './labelExtractor';
