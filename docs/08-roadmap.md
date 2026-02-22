@@ -20,33 +20,36 @@
 
 > **목표**: Regex + Config 파싱으로 전체 Relation의 60~80% 자동 추론
 
-### 1-1. Config 기반 Relation 추론
+### ✅ 1-1. Config 기반 Relation 추론 (완료)
 - **파일:** `packages/inference/src/relation/configBased.ts`
-- **현재:** stub (candidateCount: 0)
-- **구현:**
+- **구현 완료:**
   - `application.yml` 파싱 → `spring.datasource.url` → database Object 생성 + `read`/`write` relation
   - `application.yml` 파싱 → `spring.kafka.*` → message_broker/topic Object 생성 + `produce`/`consume` relation
   - `docker-compose.yml` 파싱 → `depends_on` → service간 `depend_on` relation
   - K8s manifest 파싱 → 환경변수의 DB_URL, KAFKA_BROKERS → Object 생성 + relation
-- **결과:** relation_candidates 테이블에 PENDING 상태로 저장
+- **결과:** relation_candidates 테이블에 PENDING 상태로 저장 (테스트 52개 통과)
 - **참조:** 03-inference-engine.md §7 Config 파싱 전략
 
-### 1-2. Regex 기반 Code Signal 추출 (Phase 1)
-- **파일:** `packages/inference/src/code/` (신규 디렉토리)
-- **언어:** Java/Kotlin, TypeScript/JS, Python
-- **추출 대상:**
-  - `@GetMapping`, `@PostMapping` → `expose` relation
-  - `RestTemplate`, `WebClient`, `FeignClient` → `call` relation
-  - `@KafkaListener`, `kafkaTemplate.send` → `consume`/`produce` relation
-  - MyBatis XML 내 SQL → `read`/`write` relation
-  - JPA `@Table`, `@ManyToOne` → 테이블 매핑
-- **저장:** `code_artifacts` + `code_call_edges` + `evidences`
+### ✅ 1-2. Regex 기반 Code Signal 추출 (Phase 1) (완료)
+- **파일:** `packages/inference/src/code/` (신규)
+- **언어:** Java/Kotlin, TypeScript/JS, Python, MyBatis XML
+- **구현 완료:**
+  - `@GetMapping`/`@PostMapping` 등 + `@*Exchange` (HttpInterface) → `expose`/`call`
+  - `RestTemplate`, `WebClient`, `FeignClient`, `RestClient` → `call`
+  - `@KafkaListener`, `kafkaTemplate.send` → `consume`/`produce`
+  - MyBatis XML SQL → `db_read`/`db_write`
+  - JPA `@Table` → `db_mapping`
+- **저장:** `code_artifacts` + `code_call_edges` + `evidences` (SHA256 증분 스캔)
+- **테스트:** 46개 통과
 - **참조:** 03-inference-engine.md §6.1 Phase 1
 
-### 1-3. DB 시그널 추출
-- **파일:** `packages/inference/src/domain/seedBased.ts`
-- **현재:** dbScore=0 하드코딩
-- **구현:** FK 제약조건 분석 → 테이블 접두사 매칭 → 도메인 affinity 계산
+### ✅ 1-3. DB 시그널 추출 (완료)
+- **파일:** `packages/inference/src/db/dbSchemaSignal.ts` (신규), `seedBased.ts` (수정)
+- **구현 완료:**
+  - FK 제약조건 → `relation_candidates` (confidence 0.95)
+  - 컬럼명 `*_id`/`*_no` 패턴 → implicit FK `relation_candidates` (confidence 0.5)
+  - 테이블 prefix → 도메인 매칭 → `dbScore` 실제 계산 (기존 하드코딩 0 → 실제값)
+- **테스트:** 20개 통과
 - **의존:** DB 스키마 메타데이터가 objects 테이블에 등록되어 있어야 함
 
 ### 1-4. Domain Candidates 승인 API + UI
