@@ -17,6 +17,7 @@ import {
   User,
   Loader2,
   Sparkles,
+  ArrowUpRight,
 } from 'lucide-react';
 import { cn, Button, Input } from '@archi-navi/ui';
 
@@ -56,6 +57,119 @@ function getMessageText(msg: { parts?: Array<{ type: string; text?: string }>; c
   // 하위 호환: content 필드
   if (typeof msg.content === 'string') return msg.content;
   return '';
+}
+
+// ─── Answer Composer 파싱 및 카드 렌더링 ─────────────────────────────────────
+
+/** Answer Composer 형식으로 파싱된 섹션 */
+interface AnswerSections {
+  conclusion: string;
+  confidence: string;
+  evidenceList: string[];
+  summary: string;
+  deepLink: string;
+}
+
+/**
+ * AI 응답 텍스트에서 Answer Composer 구조를 파싱한다.
+ * 5개 섹션(결론/신뢰도/증거 목록/요약/딥링크)이 모두 있어야 유효 형식으로 인식.
+ * 형식이 맞지 않으면 null 반환.
+ */
+function parseAnswerText(text: string): AnswerSections | null {
+  if (
+    !text.includes('**결론:**') ||
+    !text.includes('**신뢰도:**') ||
+    !text.includes('**증거 목록:**') ||
+    !text.includes('**요약:**') ||
+    !text.includes('**딥링크:**')
+  ) {
+    return null;
+  }
+
+  const conclusionMatch = text.match(/\*\*결론:\*\*\s*([^\n]+)/);
+  const confidenceMatch = text.match(/\*\*신뢰도:\*\*\s*([^\n]+)/);
+  const evidenceBlockMatch = text.match(/\*\*증거 목록:\*\*\s*\n((?:- [^\n]+\n?)*)/);
+  const summaryMatch = text.match(/\*\*요약:\*\*\s*([\s\S]+?)(?=\n\*\*|$)/);
+  const deepLinkMatch = text.match(/\*\*딥링크:\*\*\s*([^\n]+)/);
+
+  if (!conclusionMatch || !confidenceMatch || !evidenceBlockMatch || !summaryMatch || !deepLinkMatch) {
+    return null;
+  }
+
+  const evidenceList = (evidenceBlockMatch[1] ?? '')
+    .split('\n')
+    .filter((line) => line.startsWith('- '))
+    .map((line) => line.slice(2).trim());
+
+  return {
+    conclusion: conclusionMatch[1]?.trim() ?? '',
+    confidence: confidenceMatch[1]?.trim() ?? '',
+    evidenceList,
+    summary: summaryMatch[1]?.trim() ?? '',
+    deepLink: deepLinkMatch[1]?.trim() ?? '',
+  };
+}
+
+/** Evidence 카드 — Answer Composer 구조화 응답을 시각적으로 표현 */
+function AnswerCard({ sections }: { sections: AnswerSections }) {
+  const confidenceNum = parseFloat(sections.confidence);
+  const confidencePct = isNaN(confidenceNum)
+    ? sections.confidence
+    : `${(confidenceNum * 100).toFixed(0)}%`;
+  const confidenceColor =
+    confidenceNum >= 0.9 ? 'text-emerald-500' : confidenceNum >= 0.7 ? 'text-yellow-500' : 'text-red-400';
+
+  return (
+    <div className="rounded-xl bg-muted/80 overflow-hidden max-w-[320px] text-sm">
+      {/* 결론 */}
+      <div className="bg-primary/10 px-3 py-2 border-b border-white/10">
+        <p className="text-[10px] font-semibold text-primary uppercase tracking-wide mb-1">결론</p>
+        <p className="text-foreground leading-snug">{sections.conclusion}</p>
+      </div>
+
+      {/* 신뢰도 */}
+      <div className="px-3 py-1.5 flex items-center gap-2 border-b border-white/10">
+        <span className="text-xs text-muted-foreground">신뢰도</span>
+        <span className={cn('text-xs font-bold', confidenceColor)}>{confidencePct}</span>
+        <span className="text-xs text-muted-foreground">({sections.confidence})</span>
+      </div>
+
+      {/* 증거 목록 */}
+      {sections.evidenceList.length > 0 && (
+        <div className="px-3 py-2 border-b border-white/10">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">증거</p>
+          <ul className="space-y-0.5">
+            {sections.evidenceList.map((ev, idx) => (
+              <li key={idx} className="text-xs text-foreground/80 leading-relaxed">
+                • {ev}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {/* 요약 */}
+      {sections.summary && (
+        <div className="px-3 py-2 border-b border-white/10">
+          <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">요약</p>
+          <p className="text-xs text-foreground/80 leading-relaxed">{sections.summary}</p>
+        </div>
+      )}
+
+      {/* 딥링크 */}
+      {sections.deepLink && (
+        <div className="px-3 py-2">
+          <a
+            href={sections.deepLink}
+            className="text-xs text-primary hover:underline flex items-center gap-1"
+          >
+            <ArrowUpRight className="h-3 w-3" />
+            아키텍처 맵에서 보기
+          </a>
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function FloatingChat() {
@@ -211,6 +325,22 @@ export function FloatingChat() {
                 messages.map((msg) => {
                   const text = getMessageText(msg);
                   if (!text) return null;
+
+                  // Assistant 메시지: Answer Composer 형식 감지 후 카드 렌더링
+                  if (msg.role !== 'user') {
+                    const parsed = parseAnswerText(text);
+                    if (parsed) {
+                      return (
+                        <div key={msg.id} className="flex gap-2 justify-start">
+                          <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/20 text-primary">
+                            <Bot className="h-3.5 w-3.5" />
+                          </div>
+                          <AnswerCard sections={parsed} />
+                        </div>
+                      );
+                    }
+                  }
+
                   return (
                     <div
                       key={msg.id}
