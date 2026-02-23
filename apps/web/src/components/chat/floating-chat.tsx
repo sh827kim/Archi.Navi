@@ -74,23 +74,35 @@ interface AnswerSections {
 
 /**
  * AI 응답 텍스트에서 Answer Composer 구조를 파싱한다.
- * 5개 섹션(결론/신뢰도/증거 목록/요약/딥링크)이 모두 있어야 유효 형식으로 인식.
+ * 공통 섹션(결론/신뢰도/요약/딥링크) + 목록 섹션(증거 목록 | 도메인 목록 | 멤버 목록) 인식.
  * 형식이 맞지 않으면 null 반환.
  */
 function parseAnswerText(text: string): AnswerSections | null {
+  // 필수 공통 섹션 확인
   if (
     !text.includes('**결론:**') ||
     !text.includes('**신뢰도:**') ||
-    !text.includes('**증거 목록:**') ||
     !text.includes('**요약:**') ||
     !text.includes('**딥링크:**')
   ) {
     return null;
   }
 
+  // 목록 섹션: 증거 목록, 도메인 목록, 멤버 목록 중 하나 이상 존재해야 함
+  const hasListSection =
+    text.includes('**증거 목록:**') ||
+    text.includes('**도메인 목록:**') ||
+    text.includes('**멤버 목록:**');
+  if (!hasListSection) {
+    return null;
+  }
+
   const conclusionMatch = text.match(/\*\*결론:\*\*\s*([^\n]+)/);
   const confidenceMatch = text.match(/\*\*신뢰도:\*\*\s*([^\n]+)/);
-  const evidenceBlockMatch = text.match(/\*\*증거 목록:\*\*\s*\n((?:- [^\n]+\n?)*)/);
+  // 증거 목록 | 도메인 목록 | 멤버 목록 통합 파싱
+  const evidenceBlockMatch = text.match(
+    /\*\*(?:증거 목록|도메인 목록|멤버 목록):\*\*\s*\n((?:- [^\n]+\n?)*)/,
+  );
   const summaryMatch = text.match(/\*\*요약:\*\*\s*([\s\S]+?)(?=\n\*\*|$)/);
   const deepLinkMatch = text.match(/\*\*딥링크:\*\*\s*([^\n]+)/);
 

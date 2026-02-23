@@ -8,40 +8,16 @@
  * 설계 참조: docs/03-inference-engine.md §6.2 Phase 2
  */
 import { createHash } from 'crypto';
-import Parser from 'tree-sitter';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const TSGrammar = require('tree-sitter-typescript').typescript as Parser.Language;
-// tree-sitter-typescript는 TypeScript(TS/TSX)와 JS 모두 파싱 가능 (TypeScript ⊃ JavaScript)
-const JSGrammar = TSGrammar;
-import type { SyntaxNode } from 'tree-sitter';
+import type { SyntaxNode } from 'web-tree-sitter';
 import type { ExtractedSignal, FileScanResult } from '../codeSignalExtractor';
 import {
     findNodes,
+    getChildren,
     extractStringValue,
     makeSignal,
     type VariableMap,
 } from './astScanner';
-
-// ─── 파서 인스턴스 (재사용) ────────────────────────────────────────────────────
-
-let _tsParser: Parser | null = null;
-let _jsParser: Parser | null = null;
-
-function getTsParser(): Parser {
-    if (!_tsParser) {
-        _tsParser = new Parser();
-        _tsParser.setLanguage(TSGrammar);
-    }
-    return _tsParser;
-}
-
-function getJsParser(): Parser {
-    if (!_jsParser) {
-        _jsParser = new Parser();
-        _jsParser.setLanguage(JSGrammar);
-    }
-    return _jsParser;
-}
+import { getWasmParser } from './wasmParser';
 
 // ─── 변수 추적 (Data-Flow) ─────────────────────────────────────────────────────
 
@@ -54,8 +30,9 @@ function buildVariableMap(root: SyntaxNode): VariableMap {
 
     const varDeclarators = findNodes(root, 'variable_declarator');
     for (const decl of varDeclarators) {
-        const nameNode = decl.children.find((c) => c.type === 'identifier');
-        const valueNode = decl.children.find(
+        const children = getChildren(decl);
+        const nameNode = children.find((c) => c.type === 'identifier');
+        const valueNode = children.find(
             (c) => c.type === 'string' || c.type === 'string_literal',
         );
 
@@ -94,7 +71,7 @@ function resolveStringArg(argNode: SyntaxNode, varMap: VariableMap): string | nu
  */
 function getFirstArg(argsNode: SyntaxNode): SyntaxNode | null {
     return (
-        argsNode.children.find(
+        getChildren(argsNode).find(
             (c) => c.type !== '(' && c.type !== ')' && c.type !== ',' && c.type !== ' ',
         ) ?? null
     );
@@ -113,16 +90,18 @@ function processCallExpression(
     varMap: VariableMap,
     signals: ExtractedSignal[],
 ): void {
-    const funcNode = ce.children[0];
-    const argsNode = ce.children.find((c) => c.type === 'arguments');
+    const ceChildren = getChildren(ce);
+    const funcNode = ceChildren[0];
+    const argsNode = ceChildren.find((c) => c.type === 'arguments');
 
     if (!funcNode || !argsNode) return;
 
     // member_expression: obj.method
     if (funcNode.type === 'member_expression') {
-        const memberObj = funcNode.children[0]; // app, router, etc.
-        const dot = funcNode.children[1];
-        const memberMethod = funcNode.children[2]; // get, post, etc.
+        const memberChildren = getChildren(funcNode);
+        const memberObj = memberChildren[0]; // app, router, etc.
+        const dot = memberChildren[1];
+        const memberMethod = memberChildren[2]; // get, post, etc.
 
         if (!memberObj || !dot || !memberMethod) return;
 
@@ -144,7 +123,7 @@ function processCallExpression(
                             symbol: path,
                             lineStart: ce.startPosition.row + 1,
                             lineEnd: ce.endPosition.row + 1,
-                            excerpt: ce.text.split('\n')[0] ?? ce.text,
+                            excerpt: ce.text.split('\n')[0] || ce.text,
                             confidence: 0.9, // Phase 1: 0.8 → Phase 2: 0.9
                             metadata: {
                                 method: methodName.toUpperCase(),
@@ -173,7 +152,7 @@ function processCallExpression(
                             symbol: url,
                             lineStart: ce.startPosition.row + 1,
                             lineEnd: ce.endPosition.row + 1,
-                            excerpt: ce.text.split('\n')[0] ?? ce.text,
+                            excerpt: ce.text.split('\n')[0] || ce.text,
                             confidence: 0.85, // Phase 1: 0.7 → Phase 2: 0.85
                             metadata: {
                                 client: 'axios',
@@ -204,7 +183,7 @@ function processCallExpression(
                                 symbol: url,
                                 lineStart: ce.startPosition.row + 1,
                                 lineEnd: ce.endPosition.row + 1,
-                                excerpt: ce.text.split('\n')[0] ?? ce.text,
+                                excerpt: ce.text.split('\n')[0] || ce.text,
                                 confidence: 0.75, // Phase 1: 0.6 → Phase 2: 0.75
                                 metadata: {
                                     method: methodName.toUpperCase(),
@@ -236,7 +215,7 @@ function processCallExpression(
                             symbol: url,
                             lineStart: ce.startPosition.row + 1,
                             lineEnd: ce.endPosition.row + 1,
-                            excerpt: ce.text.split('\n')[0] ?? ce.text,
+                            excerpt: ce.text.split('\n')[0] || ce.text,
                             confidence: 0.85, // Phase 1: 0.7 → Phase 2: 0.85
                             metadata: { client: 'fetch' },
                         }),
@@ -254,13 +233,14 @@ function processCallExpression(
  * @param filePath - 파일 절대 경로 (.ts, .tsx, .js, .jsx)
  * @param content - 파일 내용
  */
-export function scanTypeScriptAst(filePath: string, content: string): FileScanResult {
+export async function scanTypeScriptAst(filePath: string, content: string): Promise<FileScanResult> {
     const sha256 = createHash('sha256').update(content).digest('hex');
 
     const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
     const language = ext === 'ts' || ext === 'tsx' ? 'typescript' : 'javascript';
 
-    const parser = ext === 'ts' || ext === 'tsx' ? getTsParser() : getJsParser();
+    // web-tree-sitter: typescript grammar으로 TS/JS 모두 파싱
+    const parser = await getWasmParser('typescript');
 
     let tree;
     try {

@@ -268,7 +268,54 @@ Module not found: Can't resolve './types.js'
 
 ---
 
-## 9. 검증 환경
+## 9. 2순위 수정 완료 기록
+
+> 수정일: 2026-02-23
+
+### 수정 요약
+
+2순위 기능결함 6건(이슈 #5~#10) 전체 수정 완료.
+추가로 WARNING 이슈 W-7.1~W-7.4도 WASM 전환 과정에서 함께 해결.
+
+### 수정 상세
+
+| 이슈 ID | 수정 파일 | 수정 내용 |
+|---------|----------|----------|
+| BUILD-C1 | `packages/inference/src/code/ast/wasmParser.ts` (신규), `astScanner.ts`, `astJavaKotlin.ts`, `astTypeScript.ts`, `astPython.ts`, `extractAstCodeSignals.ts`, `package.json` | tree-sitter 네이티브(C++) → web-tree-sitter (WASM) 전환 완료. 비동기 파서 팩토리(`getWasmParser`) 도입, 모든 스캐너 함수 async 전환. 네이티브 의존성(`tree-sitter`, `tree-sitter-java/python/typescript`) 제거, `web-tree-sitter` 단일 의존으로 교체. WASM grammar 다운로드 스크립트(`scripts/download-wasm-grammars.mjs`) 추가. |
+| 2-1-C1 | `packages/inference/src/code/ast/astJavaKotlin.ts`, `wasmParser.ts` | Kotlin 파일(`.kt`, `.kts`)은 `tree-sitter-kotlin.wasm` grammar으로 파싱하도록 변경. 기존: Java grammar으로 오파싱되어 대부분의 패턴 감지 실패. `wasmParser.ts`의 `detectLanguage()`에서 `.kt`/`.kts` → `'kotlin'` 매핑 추가. |
+| INT-C1 | `packages/core/src/query-engine/executor.ts` | `getOrBuildGraph()`를 switch 분기 안으로 이동하여 `DOMAIN_SUMMARY`에서는 호출하지 않도록 변경. PATH_DISCOVERY, IMPACT_ANALYSIS, USAGE_DISCOVERY에서만 graph 빌드 수행. |
+| W-8.1 | `apps/web/src/components/chat/floating-chat.tsx` | `parseAnswerText`가 `**증거 목록:**` 외에 `**도메인 목록:**`, `**멤버 목록:**`도 인식하도록 확장. DOMAIN_SUMMARY 응답에서도 AnswerCard가 정상 렌더링됨. |
+| W-8.2 | `apps/web/src/app/api/chat/route.ts`, `apps/web/src/app/api/inference/llm-filter/route.ts` | `process.env` 동적 덮어쓰기 제거. 헤더로 API 키가 전달된 경우 `createOpenAI({apiKey})` / `createAnthropic({apiKey})` / `createGoogleGenerativeAI({apiKey})` factory 함수로 요청별 SDK 인스턴스 생성. 동시 요청 시 API 키 race condition 해소. |
+| W-8.3 | `apps/web/src/app/api/chat/route.ts` | `resolveDomainId()` 함수 추가 — 사용자 메시지에서 도메인명을 한국어/영어 패턴으로 추출 후 DB에서 `objectType='domain'`인 Object ID를 조회. DOMAIN_SUMMARY 쿼리에 `domainId` 파라미터로 전달하여 특정 도메인 상세 집계 가능. |
+
+### 부수 수정 (WASM 전환 과정에서 함께 해결)
+
+| 이슈 ID | 수정 파일 | 수정 내용 |
+|---------|----------|----------|
+| W-7.1 | `astJavaKotlin.ts`, `astTypeScript.ts`, `astPython.ts` | `ann.text.split('\n')[0] ?? ann.text`에서 `??` → `||`로 변경. 빈 문자열(`""`)은 nullish가 아니므로 `??`가 통과하던 버그 수정. |
+| W-7.2 | `astScanner.ts` | `findNodes` 재귀 + spread 방식 → 스택 기반 반복(iterative) 순회로 전환. 대형 파일에서 스택 오버플로우 위험 해소. |
+| W-7.3 | `astScanner.ts` | `extractStringValue`에서 Python triple-quote(`"""..."""`, `'''...'''`) 처리 시 `slice(3, -3)` 적용. 기존 `slice(1, -1)`은 앞뒤 1문자만 제거하여 따옴표가 남던 오류 수정. |
+| W-7.4 | `astJavaKotlin.ts` | WebClient/RestClient 체인 감지에서 `objectNode.text.split('.')[0]` 대신 `/webClient/i.test(objectNode.text)` 패턴으로 변경. 깊은 체인(`webClient.get().uri(...)`)에서도 정확 감지. |
+
+### 검증 방법
+
+- **정적 코드 분석**: 모든 수정 파일에 대해 이슈별 코드 리뷰 수행
+  - native `tree-sitter` import 완전 제거 확인
+  - `.children` 직접 접근 → `getChildren()` 헬퍼 전환 확인
+  - `process.env` 뮤테이션 완전 제거 확인
+  - 모든 스캐너 함수 async 전환 및 테스트 async/await 적용 확인
+- **테스트 실행**: 샌드박스 환경의 네트워크 제한으로 `pnpm install` 불가하여 런타임 테스트는 미수행. `web-tree-sitter` 설치 후 `pnpm download:wasm && pnpm test:unit` 실행 필요.
+
+### 후속 작업
+
+1. `pnpm install` 실행하여 `web-tree-sitter` 패키지 설치
+2. `pnpm --filter @archi-navi/inference download:wasm` 실행하여 WASM grammar 파일 다운로드
+3. `pnpm test:unit` 전체 테스트 실행하여 AST 스캐너 통과 확인
+4. `packages/inference/src/code/index.ts`에서 AST export 재통합 (WASM 전환 완료했으므로 번들링 충돌 해소)
+
+---
+
+## 10. 검증 환경
 
 - **Node.js**: v24.12.0
 - **pnpm**: v10.26.2

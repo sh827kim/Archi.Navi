@@ -8,29 +8,16 @@
  * 설계 참조: docs/03-inference-engine.md §6.2 Phase 2
  */
 import { createHash } from 'crypto';
-import Parser from 'tree-sitter';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const PythonGrammar = require('tree-sitter-python') as Parser.Language;
-import type { SyntaxNode } from 'tree-sitter';
+import type { SyntaxNode } from 'web-tree-sitter';
 import type { ExtractedSignal, FileScanResult } from '../codeSignalExtractor';
 import {
     findNodes,
+    getChildren,
     extractStringValue,
     makeSignal,
     type VariableMap,
 } from './astScanner';
-
-// ─── 파서 인스턴스 (재사용) ────────────────────────────────────────────────────
-
-let _parser: Parser | null = null;
-
-function getParser(): Parser {
-    if (!_parser) {
-        _parser = new Parser();
-        _parser.setLanguage(PythonGrammar);
-    }
-    return _parser;
-}
+import { getWasmParser } from './wasmParser';
 
 // ─── 변수 추적 (Data-Flow) ─────────────────────────────────────────────────────
 
@@ -43,8 +30,9 @@ function buildVariableMap(root: SyntaxNode): VariableMap {
 
     const assignments = findNodes(root, 'assignment');
     for (const assign of assignments) {
-        const nameNode = assign.children.find((c) => c.type === 'identifier');
-        const valueNode = assign.children.find((c) => c.type === 'string');
+        const assignChildren = getChildren(assign);
+        const nameNode = assignChildren.find((c) => c.type === 'identifier');
+        const valueNode = assignChildren.find((c) => c.type === 'string');
 
         if (nameNode && valueNode) {
             const strValue = extractStringValue(valueNode);
@@ -79,7 +67,7 @@ function resolveStringArg(argNode: SyntaxNode, varMap: VariableMap): string | nu
  */
 function getFirstPositionalArg(argList: SyntaxNode): SyntaxNode | null {
     return (
-        argList.children.find(
+        getChildren(argList).find(
             (c) =>
                 c.type !== '(' &&
                 c.type !== ')' &&
@@ -95,15 +83,16 @@ function getFirstPositionalArg(argList: SyntaxNode): SyntaxNode | null {
  * keyword_argument 구조: [identifier(key), '=', string/identifier(value)]
  */
 function getKeywordArg(argList: SyntaxNode, key: string): SyntaxNode | null {
-    for (const child of argList.children) {
+    for (const child of getChildren(argList)) {
         if (child.type === 'keyword_argument') {
-            const keyNode = child.children.find((c) => c.type === 'identifier');
+            const kwChildren = getChildren(child);
+            const keyNode = kwChildren.find((c) => c.type === 'identifier');
             // 값 노드는 '=' 이후에 위치한 노드
-            const eqIndex = child.children.findIndex((c) => c.type === '=');
+            const eqIndex = kwChildren.findIndex((c) => c.type === '=');
             const valueNode =
                 eqIndex >= 0
-                    ? child.children[eqIndex + 1]
-                    : child.children.find((c) => c.type !== 'identifier' && c.type !== '=');
+                    ? kwChildren[eqIndex + 1]
+                    : kwChildren.find((c) => c.type !== 'identifier' && c.type !== '=');
             if (keyNode?.text === key && valueNode) {
                 return valueNode;
             }
@@ -127,17 +116,19 @@ function processDecorators(
 
     for (const dec of decorators) {
         // @app.route("/path") 또는 @app.get("/path") 형태
-        const callNode = dec.children.find((c) => c.type === 'call');
+        const decChildren = getChildren(dec);
+        const callNode = decChildren.find((c) => c.type === 'call');
         if (!callNode) continue;
 
-        const funcNode = callNode.children[0];
-        const argList = callNode.children.find((c) => c.type === 'argument_list');
+        const callChildren = getChildren(callNode);
+        const funcNode = callChildren[0];
+        const argList = callChildren.find((c) => c.type === 'argument_list');
 
         if (!funcNode || !argList) continue;
 
         // Flask/FastAPI: attribute = app.route 또는 app.get
         if (funcNode.type === 'attribute') {
-            const attrChildren = funcNode.children;
+            const attrChildren = getChildren(funcNode);
             const attrMethod = attrChildren[attrChildren.length - 1];
             if (!attrMethod) continue;
 
@@ -149,10 +140,10 @@ function processDecorators(
                     const path = resolveStringArg(firstArg, varMap);
                     if (path) {
                         // methods 키워드 인수에서 HTTP 메서드 추출
-                        const methodsArg = argList.children.find(
+                        const methodsArg = getChildren(argList).find(
                             (c) =>
                                 c.type === 'keyword_argument' &&
-                                c.children.some((gc) => gc.text === 'methods'),
+                                getChildren(c).some((gc) => gc.text === 'methods'),
                         );
 
                         let httpMethod: string;
@@ -168,7 +159,7 @@ function processDecorators(
                                 symbol: path,
                                 lineStart: dec.startPosition.row + 1,
                                 lineEnd: dec.endPosition.row + 1,
-                                excerpt: dec.text.split('\n')[0] ?? dec.text,
+                                excerpt: dec.text.split('\n')[0] ||dec.text,
                                 confidence: 0.9, // Phase 1: 0.8 → Phase 2: 0.9
                                 metadata: {
                                     method: httpMethod,
@@ -194,7 +185,7 @@ function processDecorators(
                             symbol: topic,
                             lineStart: dec.startPosition.row + 1,
                             lineEnd: dec.endPosition.row + 1,
-                            excerpt: dec.text.split('\n')[0] ?? dec.text,
+                            excerpt: dec.text.split('\n')[0] ||dec.text,
                             confidence: 0.9, // Phase 1: 0.8 → Phase 2: 0.9
                             metadata: { annotation: '@kafka_consumer' },
                         }),
@@ -217,14 +208,15 @@ function processCallStatements(
     const calls = findNodes(root, 'call');
 
     for (const call of calls) {
-        const funcNode = call.children[0];
-        const argList = call.children.find((c) => c.type === 'argument_list');
+        const callChildren = getChildren(call);
+        const funcNode = callChildren[0];
+        const argList = callChildren.find((c) => c.type === 'argument_list');
 
         if (!funcNode || !argList) continue;
 
         // requests.get/post/put/delete("url")
         if (funcNode.type === 'attribute') {
-            const attrChildren = funcNode.children;
+            const attrChildren = getChildren(funcNode);
             const attrObj = attrChildren[0];
             const attrMethod = attrChildren[attrChildren.length - 1];
 
@@ -244,7 +236,7 @@ function processCallStatements(
                                 symbol: url,
                                 lineStart: call.startPosition.row + 1,
                                 lineEnd: call.endPosition.row + 1,
-                                excerpt: call.text.split('\n')[0] ?? call.text,
+                                excerpt: call.text.split('\n')[0] ||call.text,
                                 confidence: 0.85, // Phase 1: 0.7 → Phase 2: 0.85
                                 metadata: {
                                     client: 'requests',
@@ -268,7 +260,7 @@ function processCallStatements(
                                 symbol: topic,
                                 lineStart: call.startPosition.row + 1,
                                 lineEnd: call.endPosition.row + 1,
-                                excerpt: call.text.split('\n')[0] ?? call.text,
+                                excerpt: call.text.split('\n')[0] ||call.text,
                                 confidence: 0.85, // Phase 1: 0.7 → Phase 2: 0.85
                                 metadata: { client: 'KafkaProducer' },
                             }),
@@ -287,11 +279,11 @@ function processCallStatements(
  * @param filePath - 파일 절대 경로 (.py)
  * @param content - 파일 내용
  */
-export function scanPythonAst(filePath: string, content: string): FileScanResult {
+export async function scanPythonAst(filePath: string, content: string): Promise<FileScanResult> {
     void filePath; // filePath는 현재 미사용 (language는 항상 python)
     const sha256 = createHash('sha256').update(content).digest('hex');
 
-    const parser = getParser();
+    const parser = await getWasmParser('python');
 
     let tree;
     try {

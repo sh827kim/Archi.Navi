@@ -7,9 +7,9 @@
  */
 import { streamText, convertToModelMessages } from 'ai';
 import type { UIMessage } from 'ai';
-import { openai } from '@ai-sdk/openai';
-import { anthropic } from '@ai-sdk/anthropic';
-import { google } from '@ai-sdk/google';
+import { openai, createOpenAI } from '@ai-sdk/openai';
+import { anthropic, createAnthropic } from '@ai-sdk/anthropic';
+import { google, createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { getDb, objects, objectRelations } from '@archi-navi/db';
 import { eq, and, ilike, or, inArray } from 'drizzle-orm';
@@ -34,21 +34,23 @@ function getModel(req: Request): LanguageModel {
 
   const provider = headerProvider ?? process.env['AI_PROVIDER'] ?? 'openai';
 
+  // W-8.2: process.env 동적 덮어쓰기 대신 SDK factory로 인스턴스 생성
+  // → 동시 요청 시 API 키 race condition 해소
   switch (provider) {
     case 'anthropic': {
       const modelName = headerModel ?? 'claude-3-5-sonnet-20241022';
-      // 헤더로 API 키가 전달된 경우 환경변수 임시 적용 (Vercel AI SDK는 env var 자동 읽음)
-      if (headerApiKey) process.env['ANTHROPIC_API_KEY'] = headerApiKey;
-      return anthropic(modelName);
+      const sdk = headerApiKey ? createAnthropic({ apiKey: headerApiKey }) : anthropic;
+      return sdk(modelName);
     }
     case 'google': {
       const modelName = headerModel ?? 'gemini-1.5-pro';
-      return google(modelName);
+      const sdk = headerApiKey ? createGoogleGenerativeAI({ apiKey: headerApiKey }) : google;
+      return sdk(modelName);
     }
     default: {
       const modelName = headerModel ?? 'gpt-4o';
-      if (headerApiKey) process.env['OPENAI_API_KEY'] = headerApiKey;
-      return openai(modelName);
+      const sdk = headerApiKey ? createOpenAI({ apiKey: headerApiKey }) : openai;
+      return sdk(modelName);
     }
   }
 }
@@ -97,6 +99,74 @@ async function resolveObjectId(
   // 우선순위 높은 이름부터 매칭되는 row 반환
   for (const name of names) {
     const matched = rows.find((r) => r.name.toLowerCase().includes(name));
+    if (matched) return matched.id;
+  }
+  return rows[0]?.id ?? null;
+}
+
+/**
+ * 메시지에서 도메인 이름을 추출하고 DB에서 domain Object ID를 조회한다.
+ * "주문 도메인", "결제 도메인" 등 한국어/영어 도메인 이름 패턴 인식.
+ * W-8.3: DOMAIN_SUMMARY 쿼리에 특정 domainId를 전달하기 위해 사용.
+ */
+async function resolveDomainId(
+  db: DbClient,
+  workspaceId: string,
+  message: string,
+): Promise<string | null> {
+  // "XXX 도메인" 또는 "domain XXX" 패턴에서 도메인명 추출
+  const patterns = [
+    /(\S+)\s*도메인/g, // 한국어: "주문 도메인", "결제 도메인"
+    /domain\s+(\S+)/gi, // 영어: "domain order", "domain payment"
+  ];
+
+  const candidates: string[] = [];
+  for (const pattern of patterns) {
+    for (const match of message.matchAll(pattern)) {
+      const name = match[1]?.trim();
+      if (name && name.length > 1) {
+        candidates.push(name.toLowerCase());
+      }
+    }
+  }
+
+  // kebab-case 토큰 중 "domain"을 포함하는 것도 추가
+  const kebabTokens = [...message.matchAll(/\b([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*)\b/g)]
+    .map((m) => m[1]?.toLowerCase())
+    .filter((t): t is string => !!t);
+  for (const token of kebabTokens) {
+    if (!candidates.includes(token)) {
+      candidates.push(token);
+    }
+  }
+
+  if (candidates.length === 0) return null;
+
+  // domain objectType인 것만 조회
+  const conditions = candidates.map((name) =>
+    or(ilike(objects.name, `%${name}%`), ilike(objects.displayName, `%${name}%`)),
+  );
+  const rows = await db
+    .select({ id: objects.id, name: objects.name, displayName: objects.displayName })
+    .from(objects)
+    .where(
+      and(
+        eq(objects.workspaceId, workspaceId),
+        eq(objects.objectType, 'domain'),
+        or(...conditions),
+      ),
+    )
+    .limit(candidates.length);
+
+  if (rows.length === 0) return null;
+
+  // 후보 이름 순서대로 매칭
+  for (const name of candidates) {
+    const matched = rows.find(
+      (r) =>
+        r.name.toLowerCase().includes(name) ||
+        (r.displayName?.toLowerCase().includes(name) ?? false),
+    );
     if (matched) return matched.id;
   }
   return rows[0]?.id ?? null;
@@ -270,11 +340,15 @@ export async function POST(req: Request) {
         lastUserMessage.includes('domain') ||
         lastUserMessage.includes('도메인 요약')
       ) {
+        // W-8.3: 메시지에서 도메인명 추출 → domainId 파라미터 전달
+        const domainId = await resolveDomainId(db, workspaceId, lastUserMessage);
         queryResponse = await executeQuery(db, {
           queryType: 'DOMAIN_SUMMARY',
           workspaceId,
           scope: { ...defaultScope, level: 'DOMAIN_TO_DOMAIN' },
-          params: {},
+          params: {
+            ...(domainId ? { domainId } : {}),
+          },
         });
       }
 

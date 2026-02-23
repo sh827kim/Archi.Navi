@@ -5,35 +5,28 @@
  *  - 멀티라인 어노테이션 정확 추출
  *  - confidence +0.1~0.2 상향
  *
+ * web-tree-sitter (WASM) 전환 완료 — BUILD-C1
+ * Kotlin 지원 추가 — 2-1-C1 (.kt → tree-sitter-kotlin.wasm)
+ * W-7.1: excerpt 빈 문자열 체크 수정 (?? → ||)
+ * W-7.4: WebClient 체인 감지 개선
+ *
  * 설계 참조: docs/03-inference-engine.md §6.2 Phase 2
  */
 import { createHash } from 'crypto';
-import Parser from 'tree-sitter';
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const JavaGrammar = require('tree-sitter-java') as Parser.Language;
-import type { SyntaxNode } from 'tree-sitter';
+import type { SyntaxNode } from 'web-tree-sitter';
 import type { ExtractedSignal, FileScanResult } from '../codeSignalExtractor';
 import {
     findNodes,
     findChildByType,
+    getChildren,
     extractStringValue,
     makeSignal,
     MAPPING_ANNOTATIONS,
     EXCHANGE_ANNOTATIONS,
     type VariableMap,
 } from './astScanner';
-
-// ─── 파서 인스턴스 (재사용) ────────────────────────────────────────────────────
-
-let _parser: Parser | null = null;
-
-function getParser(): Parser {
-    if (!_parser) {
-        _parser = new Parser();
-        _parser.setLanguage(JavaGrammar);
-    }
-    return _parser;
-}
+import { getWasmParser } from './wasmParser';
+import type { SupportedLanguage } from './wasmParser';
 
 // ─── 변수 추적 (Data-Flow) ─────────────────────────────────────────────────────
 
@@ -51,8 +44,9 @@ function buildVariableMap(root: SyntaxNode): VariableMap {
     ];
 
     for (const decl of varDecls) {
+        const children = getChildren(decl);
         // type이 String인 것만 추적
-        const typeNode = decl.children.find(
+        const typeNode = children.find(
             (c) => c.type === 'type_identifier' && c.text === 'String',
         );
         if (!typeNode) continue;
@@ -60,8 +54,9 @@ function buildVariableMap(root: SyntaxNode): VariableMap {
         const declarator = findChildByType(decl, 'variable_declarator');
         if (!declarator) continue;
 
-        const nameNode = declarator.children.find((c) => c.type === 'identifier');
-        const valueNode = declarator.children.find((c) => c.type === 'string_literal');
+        const declChildren = getChildren(declarator);
+        const nameNode = declChildren.find((c) => c.type === 'identifier');
+        const valueNode = declChildren.find((c) => c.type === 'string_literal');
 
         if (nameNode && valueNode) {
             const strValue = extractStringValue(valueNode);
@@ -94,7 +89,7 @@ function resolveStringArg(argNode: SyntaxNode, varMap: VariableMap): string | nu
  */
 function getFirstArg(argList: SyntaxNode): SyntaxNode | null {
     return (
-        argList.children.find(
+        getChildren(argList).find(
             (c) => c.type !== '(' && c.type !== ')' && c.type !== ',' && c.type !== ' ',
         ) ?? null
     );
@@ -107,10 +102,11 @@ function getFirstArg(argList: SyntaxNode): SyntaxNode | null {
  */
 function extractAnnotationArgs(annArgList: SyntaxNode): Map<string, SyntaxNode> {
     const result = new Map<string, SyntaxNode>();
-    for (const child of annArgList.children) {
+    for (const child of getChildren(annArgList)) {
         if (child.type === 'element_value_pair') {
-            const key = child.children.find((c) => c.type === 'identifier');
-            const value = child.children.find(
+            const pairChildren = getChildren(child);
+            const key = pairChildren.find((c) => c.type === 'identifier');
+            const value = pairChildren.find(
                 (c) => c.type !== 'identifier' && c.type !== '=' && c.type.trim() !== '',
             );
             if (key && value) {
@@ -125,7 +121,7 @@ function extractAnnotationArgs(annArgList: SyntaxNode): Map<string, SyntaxNode> 
  * element_value_array_initializer에서 첫 번째 string_literal 추출
  */
 function extractFirstFromArray(arrayNode: SyntaxNode): string | null {
-    const firstString = arrayNode.children.find((c) => c.type === 'string_literal');
+    const firstString = getChildren(arrayNode).find((c) => c.type === 'string_literal');
     return firstString ? extractStringValue(firstString) : null;
 }
 
@@ -138,10 +134,13 @@ function processSpringMappingAnnotations(
     const annotations = findNodes(root, 'annotation');
 
     for (const ann of annotations) {
-        const nameNode = ann.children.find((c) => c.type === 'identifier');
+        const annChildren = getChildren(ann);
+        const nameNode = annChildren.find((c) => c.type === 'identifier');
         if (!nameNode) continue;
 
         const annName = nameNode.text;
+        // W-7.1: excerpt 빈 문자열 체크에서 ?? → || 사용 (빈 문자열은 falsy)
+        const excerpt = ann.text.split('\n')[0] || ann.text;
 
         // @GetMapping/@PostMapping/... 처리
         if (annName in MAPPING_ANNOTATIONS) {
@@ -162,7 +161,7 @@ function processSpringMappingAnnotations(
                     }
                 } else {
                     // 단순 @GetMapping("/path") 형태
-                    const firstString = argList.children.find((c) => c.type === 'string_literal');
+                    const firstString = getChildren(argList).find((c) => c.type === 'string_literal');
                     if (firstString) path = extractStringValue(firstString);
                 }
             }
@@ -174,7 +173,7 @@ function processSpringMappingAnnotations(
                         symbol: path,
                         lineStart: ann.startPosition.row + 1,
                         lineEnd: ann.endPosition.row + 1,
-                        excerpt: ann.text.split('\n')[0] ?? ann.text,
+                        excerpt,
                         confidence: 0.95, // Phase 1: 0.8 → Phase 2: 0.95
                         metadata: { method, annotation: `@${annName}` },
                     }),
@@ -189,7 +188,7 @@ function processSpringMappingAnnotations(
 
             let path: string | null = null;
             if (argList) {
-                const firstString = argList.children.find((c) => c.type === 'string_literal');
+                const firstString = getChildren(argList).find((c) => c.type === 'string_literal');
                 if (firstString) path = extractStringValue(firstString);
             }
 
@@ -200,7 +199,7 @@ function processSpringMappingAnnotations(
                         symbol: path,
                         lineStart: ann.startPosition.row + 1,
                         lineEnd: ann.endPosition.row + 1,
-                        excerpt: ann.text.split('\n')[0] ?? ann.text,
+                        excerpt,
                         confidence: 0.9, // Phase 1: 0.8 → Phase 2: 0.9
                         metadata: {
                             client: 'HttpInterface',
@@ -229,7 +228,7 @@ function processSpringMappingAnnotations(
                             symbol: serviceName,
                             lineStart: ann.startPosition.row + 1,
                             lineEnd: ann.endPosition.row + 1,
-                            excerpt: ann.text.split('\n')[0] ?? ann.text,
+                            excerpt,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
                             metadata: { client: 'FeignClient' },
                         }),
@@ -261,7 +260,7 @@ function processSpringMappingAnnotations(
                         symbol: topic,
                         lineStart: ann.startPosition.row + 1,
                         lineEnd: ann.endPosition.row + 1,
-                        excerpt: ann.text.split('\n')[0] ?? ann.text,
+                        excerpt,
                         confidence: 0.95, // Phase 1: 0.8 → Phase 2: 0.95
                         metadata: { annotation: '@KafkaListener' },
                     }),
@@ -285,7 +284,7 @@ function processSpringMappingAnnotations(
                             symbol: tableName,
                             lineStart: ann.startPosition.row + 1,
                             lineEnd: ann.endPosition.row + 1,
-                            excerpt: ann.text.split('\n')[0] ?? ann.text,
+                            excerpt,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
                             metadata: { annotation: '@Table' },
                         }),
@@ -306,7 +305,7 @@ function processMethodInvocations(
     const methodInvocations = findNodes(root, 'method_invocation');
 
     for (const mi of methodInvocations) {
-        const children = mi.children;
+        const children = getChildren(mi);
         // 구조: [identifier|member_access, ., identifier, argument_list]
         // 또는 [object, ., method, argument_list]
         const objectNode = children[0];
@@ -330,7 +329,7 @@ function processMethodInvocations(
                             symbol: url,
                             lineStart: mi.startPosition.row + 1,
                             lineEnd: mi.endPosition.row + 1,
-                            excerpt: mi.text.split('\n')[0] ?? mi.text,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9 (변수 추적 포함)
                             metadata: { client: 'RestTemplate', method: methodName },
                         }),
@@ -339,8 +338,9 @@ function processMethodInvocations(
             }
         }
 
-        // webClient.*(). uri(url) 처리 - 체인 메서드 중 uri() 호출 탐색
-        if (methodName === 'uri' && /^webClient$/i.test(objectNode.text.split('.')[0] ?? '')) {
+        // W-7.4: webClient 체인 감지 — 전체 텍스트에서 webClient 포함 여부로 판단
+        // (objectNode.text.split('.')[0]은 체인이 깊어지면 부정확)
+        if (methodName === 'uri' && /webClient/i.test(objectNode.text)) {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
                 const url = resolveStringArg(firstArg, varMap);
@@ -351,7 +351,7 @@ function processMethodInvocations(
                             symbol: url,
                             lineStart: mi.startPosition.row + 1,
                             lineEnd: mi.endPosition.row + 1,
-                            excerpt: mi.text.split('\n')[0] ?? mi.text,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
                             metadata: { client: 'WebClient', method: methodName },
                         }),
@@ -360,8 +360,8 @@ function processMethodInvocations(
             }
         }
 
-        // restClient.*(). uri(url) 처리
-        if (methodName === 'uri' && /^restClient$/i.test(objectNode.text.split('.')[0] ?? '')) {
+        // restClient 체인 감지 — 동일 패턴 적용
+        if (methodName === 'uri' && /restClient/i.test(objectNode.text)) {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
                 const url = resolveStringArg(firstArg, varMap);
@@ -372,7 +372,7 @@ function processMethodInvocations(
                             symbol: url,
                             lineStart: mi.startPosition.row + 1,
                             lineEnd: mi.endPosition.row + 1,
-                            excerpt: mi.text.split('\n')[0] ?? mi.text,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
                             metadata: { client: 'RestClient', method: methodName },
                         }),
@@ -393,7 +393,7 @@ function processMethodInvocations(
                             symbol: url,
                             lineStart: mi.startPosition.row + 1,
                             lineEnd: mi.endPosition.row + 1,
-                            excerpt: mi.text.split('\n')[0] ?? mi.text,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9,
                             metadata: { client: 'RestClient', method: 'create' },
                         }),
@@ -414,7 +414,7 @@ function processMethodInvocations(
                             symbol: topic,
                             lineStart: mi.startPosition.row + 1,
                             lineEnd: mi.endPosition.row + 1,
-                            excerpt: mi.text.split('\n')[0] ?? mi.text,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
                             metadata: { client: 'KafkaTemplate' },
                         }),
@@ -431,8 +431,9 @@ function extractPackageName(root: SyntaxNode): string | undefined {
     const packageDecls = findNodes(root, 'package_declaration');
     if (packageDecls.length === 0) return undefined;
     const decl = packageDecls[0];
+    if (!decl) return undefined;
     // package_declaration: [package, identifier|scoped_identifier, ;]
-    const nameNode = decl?.children.find(
+    const nameNode = getChildren(decl).find(
         (c) => c.type === 'scoped_identifier' || (c.type === 'identifier' && c.text !== 'package'),
     );
     return nameNode?.text;
@@ -442,14 +443,20 @@ function extractPackageName(root: SyntaxNode): string | undefined {
 
 /**
  * Java/Kotlin 소스 파일에서 AST 기반 신호 추출 (Phase 2)
+ *
+ * 2-1-C1: .kt 파일은 tree-sitter-kotlin WASM grammar으로 파싱 (기존: Java grammar 오용)
+ *
  * @param filePath - 파일 절대 경로
  * @param content - 파일 내용
  */
-export function scanJavaKotlinAst(filePath: string, content: string): FileScanResult {
+export async function scanJavaKotlinAst(filePath: string, content: string): Promise<FileScanResult> {
     const sha256 = createHash('sha256').update(content).digest('hex');
-    const language = filePath.endsWith('.kt') ? 'kotlin' : 'java';
+    const isKotlin = filePath.endsWith('.kt') || filePath.endsWith('.kts');
+    const language = isKotlin ? 'kotlin' : 'java';
 
-    const parser = getParser();
+    // 2-1-C1: Kotlin 파일에는 kotlin grammar 사용 (이전: Java grammar로 파싱하여 대부분 실패)
+    const parserLang: SupportedLanguage = isKotlin ? 'kotlin' : 'java';
+    const parser = await getWasmParser(parserLang);
     const tree = parser.parse(content);
     const root = tree.rootNode;
 

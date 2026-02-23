@@ -23,31 +23,29 @@ export async function executeQuery(
   // 기본 generation_version은 호출자가 주입 (API 레이어에서 ACTIVE 조회 후 전달)
   const generationVersion = request.generationVersion ?? 0;
 
-  // 그래프 인덱스 구성 (캐시 적용)
-  const graph = await getOrBuildGraph(
-    db,
-    request.workspaceId,
-    generationVersion,
-    request.scope.level,
-  );
-
   let result: QueryResponse['result'];
 
   switch (request.queryType) {
-    case 'PATH_DISCOVERY':
+    case 'PATH_DISCOVERY': {
+      const graph = await getOrBuildGraph(db, request.workspaceId, generationVersion, request.scope.level);
       result = await findPaths(graph, request.params, request.scope);
       break;
+    }
 
-    case 'IMPACT_ANALYSIS':
+    case 'IMPACT_ANALYSIS': {
+      const graph = await getOrBuildGraph(db, request.workspaceId, generationVersion, request.scope.level);
       result = await analyzeImpact(graph, request.params, request.scope);
       break;
+    }
 
-    case 'USAGE_DISCOVERY':
+    case 'USAGE_DISCOVERY': {
+      const graph = await getOrBuildGraph(db, request.workspaceId, generationVersion, request.scope.level);
       result = await discoverUsage(db, graph, request.workspaceId, request.params, request.scope);
       break;
+    }
 
     case 'DOMAIN_SUMMARY':
-      // 결정론적 집계 → LLM 문장화는 API 레이어(route.ts)에서 처리
+      // DOMAIN_SUMMARY는 graph를 사용하지 않으므로 빌드 생략 (INT-C1)
       result = await summarizeDomain(db, request.workspaceId, generationVersion, request.params);
       break;
 
