@@ -38,52 +38,55 @@ export async function approveDomainCandidate(
 
     const reviewedAt = new Date();
 
-    // 상태 업데이트
-    await db
-        .update(domainCandidates)
-        .set({ status: action, reviewedAt })
-        .where(eq(domainCandidates.id, candidateId));
-
-    // 거부 시 종료
+    // 거부 시 상태만 업데이트
     if (action === 'REJECTED') {
+        await db
+            .update(domainCandidates)
+            .set({ status: action, reviewedAt })
+            .where(eq(domainCandidates.id, candidateId));
         return { success: true, status: 'REJECTED', affinityCount: 0 };
     }
 
-    // 승인: affinityMap → object_domain_affinities upsert
+    // 승인: 트랜잭션으로 status 업데이트 + affinities upsert 원자적 처리
     const affinityMap = (candidate.affinityMap ?? {}) as Record<string, number>;
     const entries = Object.entries(affinityMap);
 
-    if (entries.length === 0) {
-        return { success: true, status: 'APPROVED', affinityCount: 0 };
-    }
+    await db.transaction(async (tx) => {
+        // 상태 업데이트
+        await tx
+            .update(domainCandidates)
+            .set({ status: action, reviewedAt })
+            .where(eq(domainCandidates.id, candidateId));
 
-    const purity = candidate.purity;
+        // affinityMap → object_domain_affinities upsert
+        const purity = candidate.purity;
 
-    for (const [domainId, affinity] of entries) {
-        await db
-            .insert(objectDomainAffinities)
-            .values({
-                workspaceId: candidate.workspaceId,
-                objectId: candidate.objectId,
-                domainId,
-                affinity,
-                confidence: purity,
-                source: 'APPROVED_INFERENCE',
-            })
-            .onConflictDoUpdate({
-                target: [
-                    objectDomainAffinities.workspaceId,
-                    objectDomainAffinities.objectId,
-                    objectDomainAffinities.domainId,
-                ],
-                set: {
-                    affinity: sql`excluded.affinity`,
-                    confidence: sql`excluded.confidence`,
-                    source: sql`excluded.source`,
-                    updatedAt: sql`now()`,
-                },
-            });
-    }
+        for (const [domainId, affinity] of entries) {
+            await tx
+                .insert(objectDomainAffinities)
+                .values({
+                    workspaceId: candidate.workspaceId,
+                    objectId: candidate.objectId,
+                    domainId,
+                    affinity,
+                    confidence: purity,
+                    source: 'APPROVED_INFERENCE',
+                })
+                .onConflictDoUpdate({
+                    target: [
+                        objectDomainAffinities.workspaceId,
+                        objectDomainAffinities.objectId,
+                        objectDomainAffinities.domainId,
+                    ],
+                    set: {
+                        affinity: sql`excluded.affinity`,
+                        confidence: sql`excluded.confidence`,
+                        source: sql`excluded.source`,
+                        updatedAt: sql`now()`,
+                    },
+                });
+        }
+    });
 
     return { success: true, status: 'APPROVED', affinityCount: entries.length };
 }

@@ -1,7 +1,10 @@
 /**
  * Code Signal 추출 모듈
  * Phase 1: Regex 기반 패턴 매칭
- * Phase 2: AST 기반 정밀 추출 (tree-sitter)
+ *
+ * Phase 2 (AST) 는 tree-sitter 네이티브 의존성이 필요하므로
+ * 별도 진입점(./ast)에서 import해야 함.
+ * → WASM 전환 완료 후 다시 통합 예정 (docs/10-verification-report.md §5)
  */
 export { extractCodeSignals } from './codeSignalExtractor';
 export type {
@@ -11,9 +14,3 @@ export type {
     FileScanResult,
     SignalKind,
 } from './codeSignalExtractor';
-
-// Phase 2: AST Plugin
-export { extractAstCodeSignals } from './ast/extractAstCodeSignals';
-export { scanJavaKotlinAst } from './ast/astJavaKotlin';
-export { scanTypeScriptAst } from './ast/astTypeScript';
-export { scanPythonAst } from './ast/astPython';

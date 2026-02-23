@@ -1,5 +1,5 @@
 // LLM 추론 후보 필터링 모듈 — 공개 API
-export * from './types.js';
-export { buildRelationAssessmentPrompt } from './prompts.js';
-export { processBatch } from './batchProcessor.js';
-export { filterCandidates } from './candidateFilter.js';
+export * from './types';
+export { buildRelationAssessmentPrompt } from './prompts';
+export { processBatch } from './batchProcessor';
+export { filterCandidates } from './candidateFilter';

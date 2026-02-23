@@ -17,8 +17,8 @@ import type {
   LlmFilterResult,
   CandidateContext,
   EvidenceSummary,
-} from './types.js';
-import { processBatch } from './batchProcessor.js';
+} from './types';
+import { processBatch } from './batchProcessor';
 
 /**
  * PENDING 후보를 로딩 (이미 llmAssessment가 있는 것은 제외)
@@ -128,7 +128,7 @@ async function loadEvidencesForCandidates(
 async function saveAssessment(
   db: DbClient,
   candidateId: string,
-  assessment: NonNullable<import('./types.js').LlmAssessment>,
+  assessment: NonNullable<import('./types').LlmAssessment>,
   existingMetadata: Record<string, unknown>,
 ) {
   const updatedMeta = {

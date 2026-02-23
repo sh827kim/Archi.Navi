@@ -116,7 +116,7 @@ export async function runDiscovery(
     if (enabledLayers.includes('db')) actualInputLayers.push('db');
     if (enabledLayers.includes('msg')) actualInputLayers.push('msg');
 
-    // Discovery run 기록 시작
+    // Discovery run 기록 시작 (RUNNING 상태로 시작)
     await db.insert(domainDiscoveryRuns).values({
         id: runId,
         workspaceId,
@@ -130,9 +130,11 @@ export async function runDiscovery(
             edgeWeights,
         },
         graphStats: {},
-        status: 'DONE',
+        status: 'RUNNING',
         startedAt,
     });
+
+    try {
 
     // graphology 가중 그래프 구성
     const graph = new Graph({ multi: false, type: 'undirected' });
@@ -225,8 +227,16 @@ export async function runDiscovery(
         }
     }
 
-    // 그래프가 비어있으면 조기 반환
+    // 그래프가 비어있으면 DONE 처리 후 조기 반환
     if (graph.order === 0) {
+        await db
+            .update(domainDiscoveryRuns)
+            .set({
+                status: 'DONE',
+                finishedAt: new Date(),
+                graphStats: { nodeCount: 0, edgeCount: 0, clusterCount: 0 },
+            })
+            .where(eq(domainDiscoveryRuns.id, runId));
         return { runId, clusterCount: 0 };
     }
 
@@ -249,66 +259,82 @@ export async function runDiscovery(
         ([, members]) => members.length >= minClusterSize,
     );
 
-    for (const [clusterId, members] of validClusters) {
-        // Domain object 생성 (kind=DISCOVERED)
-        const domainId = generateId();
-        const clusterName = `cluster-${clusterId}`;
+    // 도메인 생성 + 멤버십 저장 + run 완료를 트랜잭션으로 원자적 처리
+    await db.transaction(async (tx) => {
+        for (const [clusterId, members] of validClusters) {
+            // Domain object 생성 (kind=DISCOVERED)
+            const domainId = generateId();
+            const clusterName = `cluster-${clusterId}`;
 
-        // 클러스터 멤버 이름 조회 → 라벨 후보 추출
-        const memberRows = await db
-            .select({ name: objects.name })
-            .from(objects)
-            .where(inArray(objects.id, members));
-        const memberNames = memberRows.map((r) => r.name);
-        const labelCandidates = extractLabelCandidates(memberNames);
+            // 클러스터 멤버 이름 조회 → 라벨 후보 추출
+            const memberRows = await tx
+                .select({ name: objects.name })
+                .from(objects)
+                .where(inArray(objects.id, members));
+            const memberNames = memberRows.map((r) => r.name);
+            const labelCandidates = extractLabelCandidates(memberNames);
 
-        await db.insert(objects).values({
-            id: domainId,
-            workspaceId,
-            objectType: 'domain',
-            category: null,
-            granularity: 'COMPOUND',
-            name: `discovered:${clusterName}`,
-            displayName: `Cluster ${clusterId}`,
-            path: `/${domainId}`,
-            depth: 0,
-            visibility: 'VISIBLE',
-            metadata: {
-                kind: 'DISCOVERED',
-                clusterId: `c-${clusterId}`,
-                algo: 'louvain',
-                algoVersion: '1.0',
-                inputLayers: actualInputLayers,
-                labelCandidates,
-            },
-        });
-
-        // 멤버십 저장
-        for (const memberId of members) {
-            await db.insert(domainDiscoveryMemberships).values({
-                id: generateId(),
+            await tx.insert(objects).values({
+                id: domainId,
                 workspaceId,
-                runId,
-                objectId: memberId,
-                domainId,
-                affinity: 1.0,
-                purity: null,
+                objectType: 'domain',
+                category: null,
+                granularity: 'COMPOUND',
+                name: `discovered:${clusterName}`,
+                displayName: `Cluster ${clusterId}`,
+                path: `/${domainId}`,
+                depth: 0,
+                visibility: 'VISIBLE',
+                metadata: {
+                    kind: 'DISCOVERED',
+                    clusterId: `c-${clusterId}`,
+                    algo: 'louvain',
+                    algoVersion: '1.0',
+                    inputLayers: actualInputLayers,
+                    labelCandidates,
+                },
             });
-        }
-    }
 
-    // run 완료 기록
-    await db
-        .update(domainDiscoveryRuns)
-        .set({
-            finishedAt: new Date(),
-            graphStats: {
-                nodeCount: graph.order,
-                edgeCount: graph.size,
-                clusterCount: validClusters.length,
-            },
-        })
-        .where(eq(domainDiscoveryRuns.id, runId));
+            // 멤버십 저장
+            for (const memberId of members) {
+                await tx.insert(domainDiscoveryMemberships).values({
+                    id: generateId(),
+                    workspaceId,
+                    runId,
+                    objectId: memberId,
+                    domainId,
+                    affinity: 1.0,
+                    purity: null,
+                });
+            }
+        }
+
+        // run 완료 기록 (DONE 상태로 전환)
+        await tx
+            .update(domainDiscoveryRuns)
+            .set({
+                status: 'DONE',
+                finishedAt: new Date(),
+                graphStats: {
+                    nodeCount: graph.order,
+                    edgeCount: graph.size,
+                    clusterCount: validClusters.length,
+                },
+            })
+            .where(eq(domainDiscoveryRuns.id, runId));
+    });
 
     return { runId, clusterCount: validClusters.length };
+
+    } catch (err) {
+        // 실패 시 FAILED 상태로 전환
+        await db
+            .update(domainDiscoveryRuns)
+            .set({
+                status: 'FAILED',
+                finishedAt: new Date(),
+            })
+            .where(eq(domainDiscoveryRuns.id, runId));
+        throw err;
+    }
 }

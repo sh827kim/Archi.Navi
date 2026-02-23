@@ -2,7 +2,7 @@
  * LLM 추론 후보 필터링 — 프롬프트 템플릿
  * 설계 참조: docs/09-llm-inference-filtering.md §4
  */
-import type { CandidateContext } from './types.js';
+import type { CandidateContext } from './types';
 
 /** Evidence excerpt 최대 길이 */
 const MAX_EXCERPT_LENGTH = 500;

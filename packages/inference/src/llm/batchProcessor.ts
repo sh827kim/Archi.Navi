@@ -7,9 +7,9 @@ import type {
   CandidateContext,
   GenerateAssessmentFn,
   BatchItemResult,
-} from './types.js';
-import { clampConfidenceAdjustment } from './types.js';
-import { buildRelationAssessmentPrompt } from './prompts.js';
+} from './types';
+import { clampConfidenceAdjustment } from './types';
+import { buildRelationAssessmentPrompt } from './prompts';
 
 /** 동시 LLM 호출 제한 */
 const MAX_CONCURRENCY = 3;

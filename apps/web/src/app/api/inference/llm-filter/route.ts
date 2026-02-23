@@ -114,8 +114,8 @@ export async function POST(req: Request) {
 
     const result = await filterCandidates(db, generateFn, {
       workspaceId: body.workspaceId ?? DEFAULT_WORKSPACE_ID,
-      candidateIds: body.candidateIds,
-      batchSize: body.batchSize,
+      ...(body.candidateIds ? { candidateIds: body.candidateIds } : {}),
+      ...(body.batchSize ? { batchSize: body.batchSize } : {}),
     });
 
     return NextResponse.json({ success: true, data: result });
