@@ -6,3 +6,5 @@ export { executeQuery } from './executor';
 export { findPaths } from './pathDiscovery';
 export { analyzeImpact } from './impactAnalysis';
 export { discoverUsage } from './usageDiscovery';
+export { summarizeDomain } from './domainSummary';
+export type { DomainSummaryData } from './domainSummary';

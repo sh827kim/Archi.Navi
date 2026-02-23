@@ -7,6 +7,7 @@ import { getOrBuildGraph } from '../graph-index/index';
 import { findPaths } from './pathDiscovery';
 import { analyzeImpact } from './impactAnalysis';
 import { discoverUsage } from './usageDiscovery';
+import { summarizeDomain } from './domainSummary';
 import { DEFAULTS } from '@archi-navi/shared';
 
 /**
@@ -46,8 +47,8 @@ export async function executeQuery(
       break;
 
     case 'DOMAIN_SUMMARY':
-      // DOMAIN_SUMMARY는 집계 결과 반환 (LLM 문장화는 API 레이어에서 처리)
-      result = { nodes: [], edges: [], summary: {} };
+      // 결정론적 집계 → LLM 문장화는 API 레이어(route.ts)에서 처리
+      result = await summarizeDomain(db, request.workspaceId, generationVersion, request.params);
       break;
 
     default:
