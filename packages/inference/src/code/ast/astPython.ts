@@ -159,7 +159,7 @@ function processDecorators(
                                 symbol: path,
                                 lineStart: dec.startPosition.row + 1,
                                 lineEnd: dec.endPosition.row + 1,
-                                excerpt: dec.text.split('\n')[0] ||dec.text,
+                                excerpt: dec.text.split('\n')[0] || dec.text,
                                 confidence: 0.9, // Phase 1: 0.8 → Phase 2: 0.9
                                 metadata: {
                                     method: httpMethod,
@@ -185,7 +185,7 @@ function processDecorators(
                             symbol: topic,
                             lineStart: dec.startPosition.row + 1,
                             lineEnd: dec.endPosition.row + 1,
-                            excerpt: dec.text.split('\n')[0] ||dec.text,
+                            excerpt: dec.text.split('\n')[0] || dec.text,
                             confidence: 0.9, // Phase 1: 0.8 → Phase 2: 0.9
                             metadata: { annotation: '@kafka_consumer' },
                         }),
@@ -236,7 +236,7 @@ function processCallStatements(
                                 symbol: url,
                                 lineStart: call.startPosition.row + 1,
                                 lineEnd: call.endPosition.row + 1,
-                                excerpt: call.text.split('\n')[0] ||call.text,
+                                excerpt: call.text.split('\n')[0] || call.text,
                                 confidence: 0.85, // Phase 1: 0.7 → Phase 2: 0.85
                                 metadata: {
                                     client: 'requests',
@@ -260,7 +260,7 @@ function processCallStatements(
                                 symbol: topic,
                                 lineStart: call.startPosition.row + 1,
                                 lineEnd: call.endPosition.row + 1,
-                                excerpt: call.text.split('\n')[0] ||call.text,
+                                excerpt: call.text.split('\n')[0] || call.text,
                                 confidence: 0.85, // Phase 1: 0.7 → Phase 2: 0.85
                                 metadata: { client: 'KafkaProducer' },
                             }),

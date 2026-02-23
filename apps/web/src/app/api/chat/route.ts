@@ -130,8 +130,8 @@ async function resolveDomainId(
     }
   }
 
-  // kebab-case 토큰 중 "domain"을 포함하는 것도 추가
-  const kebabTokens = [...message.matchAll(/\b([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)*)\b/g)]
+  // kebab-case 토큰(하이픈 포함 식별자만) 추가 — 단일 영단어는 false positive가 높으므로 제외
+  const kebabTokens = [...message.matchAll(/\b([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)+)\b/g)]
     .map((m) => m[1]?.toLowerCase())
     .filter((t): t is string => !!t);
   for (const token of kebabTokens) {
