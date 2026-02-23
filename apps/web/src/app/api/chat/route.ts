@@ -11,7 +11,14 @@ import { anthropic } from '@ai-sdk/anthropic';
 import { google } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { getDb } from '@archi-navi/db';
-import { executeQuery, assembleEvidenceChain, formatEvidenceChain, buildAnswerComposerSystemPrompt } from '@archi-navi/core';
+import {
+  executeQuery,
+  assembleEvidenceChain,
+  formatEvidenceChain,
+  buildAnswerComposerSystemPrompt,
+  formatDomainSummary,
+  buildDomainAnswerComposerPrompt,
+} from '@archi-navi/core';
 import type { QueryScope } from '@archi-navi/shared';
 import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
@@ -120,15 +127,35 @@ export async function POST(req: Request) {
           scope: defaultScope,
           params: {},
         });
+      } else if (
+        lastUserMessage.includes('도메인') ||
+        lastUserMessage.includes('domain') ||
+        lastUserMessage.includes('도메인 요약')
+      ) {
+        queryResponse = await executeQuery(db, {
+          queryType: 'DOMAIN_SUMMARY',
+          workspaceId,
+          scope: { ...defaultScope, level: 'DOMAIN_TO_DOMAIN' },
+          params: {},
+        });
       }
 
       if (queryResponse) {
-        // Evidence Chain 조립 → 구조화된 텍스트 + Answer Composer 형식 지침 주입
-        const chain = await assembleEvidenceChain(db, queryResponse);
-        const formatted = formatEvidenceChain(chain);
-        const composerPrompt = buildAnswerComposerSystemPrompt(chain);
-        if (formatted) {
-          queryContext = `\n\n${formatted}${composerPrompt}`;
+        if (queryResponse.queryType === 'DOMAIN_SUMMARY') {
+          // DOMAIN_SUMMARY: 집계 결과 포맷 + Answer Composer 형식 지침
+          const summaryText = formatDomainSummary(queryResponse.result.summary ?? {});
+          const composerPrompt = buildDomainAnswerComposerPrompt(queryResponse.result.summary ?? {});
+          if (summaryText) {
+            queryContext = `\n\n${summaryText}${composerPrompt}`;
+          }
+        } else {
+          // 그 외: Evidence Chain 조립 → 구조화된 텍스트 + Answer Composer 형식 지침 주입
+          const chain = await assembleEvidenceChain(db, queryResponse);
+          const formatted = formatEvidenceChain(chain);
+          const composerPrompt = buildAnswerComposerSystemPrompt(chain);
+          if (formatted) {
+            queryContext = `\n\n${formatted}${composerPrompt}`;
+          }
         }
       }
     } catch {
