@@ -11,7 +11,7 @@ import { anthropic } from '@ai-sdk/anthropic';
 import { google } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { getDb } from '@archi-navi/db';
-import { executeQuery, assembleEvidenceChain, formatEvidenceChain } from '@archi-navi/core';
+import { executeQuery, assembleEvidenceChain, formatEvidenceChain, buildAnswerComposerSystemPrompt } from '@archi-navi/core';
 import type { QueryScope } from '@archi-navi/shared';
 import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
@@ -123,11 +123,12 @@ export async function POST(req: Request) {
       }
 
       if (queryResponse) {
-        // Evidence Chain 조립 → 구조화된 텍스트로 변환
+        // Evidence Chain 조립 → 구조화된 텍스트 + Answer Composer 형식 지침 주입
         const chain = await assembleEvidenceChain(db, queryResponse);
         const formatted = formatEvidenceChain(chain);
+        const composerPrompt = buildAnswerComposerSystemPrompt(chain);
         if (formatted) {
-          queryContext = `\n\n${formatted}`;
+          queryContext = `\n\n${formatted}${composerPrompt}`;
         }
       }
     } catch {
