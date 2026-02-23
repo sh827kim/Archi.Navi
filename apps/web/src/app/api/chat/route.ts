@@ -11,7 +11,7 @@ import { anthropic } from '@ai-sdk/anthropic';
 import { google } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { getDb } from '@archi-navi/db';
-import { executeQuery } from '@archi-navi/core';
+import { executeQuery, assembleEvidenceChain, formatEvidenceChain } from '@archi-navi/core';
 import type { QueryScope } from '@archi-navi/shared';
 import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
@@ -75,28 +75,60 @@ export async function POST(req: Request) {
     const lastUserMessage =
       [...messages].reverse().find((m: ChatMessage) => m.role === 'user')?.content ?? '';
 
-    // 결정론적 쿼리로 컨텍스트 수집 (Best-effort)
+    // 결정론적 쿼리로 Evidence Chain 수집 (Best-effort)
     let queryContext = '';
     try {
       const db = await getDb();
+      const defaultScope: QueryScope = {
+        level: 'SERVICE_TO_SERVICE',
+        visibility: 'VISIBLE_ONLY',
+      };
 
-      // 영향 분석 키워드 감지
+      // 쿼리 타입 자동 감지 (키워드 기반)
+      let queryResponse = null;
+
       if (
         lastUserMessage.includes('영향') ||
         lastUserMessage.includes('impact') ||
         lastUserMessage.includes('의존')
       ) {
-        const defaultScope: QueryScope = {
-          level: 'SERVICE_TO_SERVICE',
-          visibility: 'VISIBLE_ONLY',
-        };
-        const result = await executeQuery(db, {
+        queryResponse = await executeQuery(db, {
           queryType: 'IMPACT_ANALYSIS',
           workspaceId,
           scope: defaultScope,
           params: { direction: 'DOWNSTREAM' },
         });
-        queryContext = `\n\n[쿼리 결과]\n${JSON.stringify(result.result.nodes.slice(0, 5), null, 2)}`;
+      } else if (
+        lastUserMessage.includes('경로') ||
+        lastUserMessage.includes('path') ||
+        lastUserMessage.includes('어떻게 연결')
+      ) {
+        queryResponse = await executeQuery(db, {
+          queryType: 'PATH_DISCOVERY',
+          workspaceId,
+          scope: defaultScope,
+          params: {},
+        });
+      } else if (
+        lastUserMessage.includes('사용') ||
+        lastUserMessage.includes('usage') ||
+        lastUserMessage.includes('호출')
+      ) {
+        queryResponse = await executeQuery(db, {
+          queryType: 'USAGE_DISCOVERY',
+          workspaceId,
+          scope: defaultScope,
+          params: {},
+        });
+      }
+
+      if (queryResponse) {
+        // Evidence Chain 조립 → 구조화된 텍스트로 변환
+        const chain = await assembleEvidenceChain(db, queryResponse);
+        const formatted = formatEvidenceChain(chain);
+        if (formatted) {
+          queryContext = `\n\n${formatted}`;
+        }
       }
     } catch {
       // DB 미연결 또는 쿼리 실패 시 무시 — LLM이 일반 답변

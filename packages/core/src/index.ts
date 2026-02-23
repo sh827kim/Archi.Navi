@@ -4,3 +4,4 @@ export * from './query-dsl/index';
 export * from './rollup/index';
 export * from './graph-index/index';
 export * from './graph-store/index';
+export * from './ai/index';
