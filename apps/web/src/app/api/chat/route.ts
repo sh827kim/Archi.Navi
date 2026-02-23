@@ -5,12 +5,15 @@
  * - ANTHROPIC_API_KEY → Claude Sonnet
  * - GOOGLE_GENERATIVE_AI_API_KEY → Gemini Pro
  */
-import { streamText } from 'ai';
+import { streamText, convertToModelMessages } from 'ai';
+import type { UIMessage } from 'ai';
 import { openai } from '@ai-sdk/openai';
 import { anthropic } from '@ai-sdk/anthropic';
 import { google } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
-import { getDb } from '@archi-navi/db';
+import { getDb, objects, objectRelations } from '@archi-navi/db';
+import { eq, and, ilike, or, inArray } from 'drizzle-orm';
+import type { DbClient } from '@archi-navi/db';
 import {
   executeQuery,
   assembleEvidenceChain,
@@ -50,6 +53,108 @@ function getModel(req: Request): LanguageModel {
   }
 }
 
+/**
+ * 메시지에서 서비스/오브젝트 이름 후보를 순서대로 추출
+ * 우선순위: xxx-service > xxx-db > xxx-gateway > 일반 kebab-case
+ */
+function extractMentionedNames(message: string): string[] {
+  // 하이픈 포함 영문 식별자 전체 추출 (캡처 그룹 m[1] 보장)
+  const allTokens = [...message.matchAll(/\b([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)+)\b/g)]
+    .map((m) => m[1])
+    .filter((t): t is string => t !== undefined)
+    .map((t) => t.toLowerCase());
+
+  // known suffix 우선 정렬
+  const priority = ['service', 'db', 'database', 'gateway', 'cluster', 'broker', 'server'];
+  const high = allTokens.filter((t) => priority.some((s) => t.endsWith(s) || t.endsWith(`-${s}`)));
+  const rest = allTokens.filter((t) => !high.includes(t));
+
+  // 중복 제거 유지
+  return [...new Set([...high, ...rest])];
+}
+
+/**
+ * DB에서 이름으로 Object ID 조회 (부분 일치, 대소문자 무시)
+ * 여러 이름 후보를 순서대로 시도해 첫 번째 매칭 반환
+ */
+async function resolveObjectId(
+  db: DbClient,
+  workspaceId: string,
+  names: string[],
+): Promise<string | null> {
+  if (names.length === 0) return null;
+
+  // 각 이름 후보를 OR 조건으로 한 번에 조회
+  const conditions = names.map((name) => ilike(objects.name, `%${name}%`));
+  const rows = await db
+    .select({ id: objects.id, name: objects.name })
+    .from(objects)
+    .where(and(eq(objects.workspaceId, workspaceId), or(...conditions)))
+    .limit(names.length);
+
+  if (rows.length === 0) return null;
+
+  // 우선순위 높은 이름부터 매칭되는 row 반환
+  for (const name of names) {
+    const matched = rows.find((r) => r.name.toLowerCase().includes(name));
+    if (matched) return matched.id;
+  }
+  return rows[0]?.id ?? null;
+}
+
+/**
+ * objectRelations 테이블 직접 조회 → LLM용 텍스트 컨텍스트 생성
+ * rollup 데이터(inference 실행)가 없어도 동작하는 fallback
+ *
+ * @param direction  OUTBOUND: 이 서비스가 의존하는 것(발신)
+ *                   INBOUND:  이 서비스에 의존하는 것(수신)
+ *                   BOTH:     양방향
+ */
+async function buildRawRelationContext(
+  db: DbClient,
+  workspaceId: string,
+  serviceId: string,
+  direction: 'OUTBOUND' | 'INBOUND' | 'BOTH',
+): Promise<string> {
+  // 방향에 따라 조건 결정
+  const condition =
+    direction === 'OUTBOUND'
+      ? eq(objectRelations.subjectObjectId, serviceId)
+      : direction === 'INBOUND'
+        ? eq(objectRelations.objectId, serviceId)
+        : or(
+            eq(objectRelations.subjectObjectId, serviceId),
+            eq(objectRelations.objectId, serviceId),
+          );
+
+  const rows = await db
+    .select({
+      subjectId: objectRelations.subjectObjectId,
+      targetId: objectRelations.objectId,
+      relationType: objectRelations.relationType,
+      confidence: objectRelations.confidence,
+    })
+    .from(objectRelations)
+    .where(and(eq(objectRelations.workspaceId, workspaceId), condition));
+
+  if (rows.length === 0) return '';
+
+  // 관련 오브젝트 이름 일괄 조회
+  const ids = [...new Set(rows.flatMap((r) => [r.subjectId, r.targetId]))];
+  const nameRows = await db
+    .select({ id: objects.id, name: objects.name })
+    .from(objects)
+    .where(and(eq(objects.workspaceId, workspaceId), inArray(objects.id, ids)));
+  const nameMap = Object.fromEntries(nameRows.map((o) => [o.id, o.name]));
+
+  const lines = rows.map(
+    (r) =>
+      `- ${nameMap[r.subjectId] ?? r.subjectId} --[${r.relationType}]--> ${nameMap[r.targetId] ?? r.targetId} (confidence: ${r.confidence ?? 0})`,
+  );
+
+  return `[관계 데이터 — objectRelations 직접 조회]\n총 ${rows.length}개의 관계:\n${lines.join('\n')}`;
+}
+
 /** 아키텍처 컨텍스트 시스템 프롬프트 */
 const SYSTEM_PROMPT = `당신은 MSA 아키텍처 전문가 어시스턴트 'Archi.Navi'입니다.
 사용자의 마이크로서비스 아키텍처에 대한 질문에 답하는 역할을 합니다.
@@ -66,21 +171,22 @@ const SYSTEM_PROMPT = `당신은 MSA 아키텍처 전문가 어시스턴트 'Arc
 - 구체적인 서비스 이름과 관계 타입을 포함합니다
 - 한국어로 답변합니다`;
 
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
 export async function POST(req: Request) {
   try {
+    // useChat hook은 UIMessage[] 형식으로 전송 — ModelMessage[]로 변환 필요
     const { messages, workspaceId = DEFAULT_WORKSPACE_ID } = (await req.json()) as {
-      messages: ChatMessage[];
+      messages: UIMessage[];
       workspaceId?: string;
     };
 
-    // findLast 대신 Array.from().reverse() 사용 (ES2022 호환)
-    const lastUserMessage =
-      [...messages].reverse().find((m: ChatMessage) => m.role === 'user')?.content ?? '';
+    // 마지막 사용자 메시지 텍스트 추출 (UIMessage의 parts 배열에서)
+    const lastUserMessage = [...messages]
+      .reverse()
+      .find((m) => m.role === 'user')
+      ?.parts
+      .filter((p) => p.type === 'text')
+      .map((p) => (p as { type: 'text'; text: string }).text)
+      .join('') ?? '';
 
     // 결정론적 쿼리로 Evidence Chain 수집 (Best-effort)
     let queryContext = '';
@@ -91,6 +197,22 @@ export async function POST(req: Request) {
         visibility: 'VISIBLE_ONLY',
       };
 
+      // 메시지에서 서비스명 추출 → Object ID 해석
+      const mentionedNames = extractMentionedNames(lastUserMessage);
+      const primaryId = await resolveObjectId(db, workspaceId, mentionedNames);
+
+      // 경로 탐색용 두 번째 서비스: 첫 번째와 다른 ID가 나오는 이름 탐색
+      let secondaryId: string | null = null;
+      for (let i = 1; i < mentionedNames.length; i++) {
+        const name = mentionedNames[i];
+        if (!name) continue;
+        const candidate = await resolveObjectId(db, workspaceId, [name]);
+        if (candidate && candidate !== primaryId) {
+          secondaryId = candidate;
+          break;
+        }
+      }
+
       // 쿼리 타입 자동 감지 (키워드 기반)
       let queryResponse = null;
 
@@ -99,11 +221,22 @@ export async function POST(req: Request) {
         lastUserMessage.includes('impact') ||
         lastUserMessage.includes('의존')
       ) {
+        // "영향받는" → 이 서비스에 의존하는 것 탐색 (UPSTREAM)
+        // "의존하는" → 이 서비스가 의존하는 것 탐색 (DOWNSTREAM)
+        const direction =
+          lastUserMessage.includes('영향') && !lastUserMessage.includes('의존')
+            ? 'UPSTREAM'
+            : 'DOWNSTREAM';
+
         queryResponse = await executeQuery(db, {
           queryType: 'IMPACT_ANALYSIS',
           workspaceId,
           scope: defaultScope,
-          params: { direction: 'DOWNSTREAM' },
+          // exactOptionalPropertyTypes: undefined를 직접 전달 불가 → 조건부 spread
+          params: {
+            ...(primaryId ? { targetObjectId: primaryId } : {}),
+            direction,
+          },
         });
       } else if (
         lastUserMessage.includes('경로') ||
@@ -114,7 +247,10 @@ export async function POST(req: Request) {
           queryType: 'PATH_DISCOVERY',
           workspaceId,
           scope: defaultScope,
-          params: {},
+          params: {
+            ...(primaryId ? { fromObjectId: primaryId } : {}),
+            ...(secondaryId ? { toObjectId: secondaryId } : {}),
+          },
         });
       } else if (
         lastUserMessage.includes('사용') ||
@@ -125,7 +261,9 @@ export async function POST(req: Request) {
           queryType: 'USAGE_DISCOVERY',
           workspaceId,
           scope: defaultScope,
-          params: {},
+          params: {
+            ...(primaryId ? { objectId: primaryId } : {}),
+          },
         });
       } else if (
         lastUserMessage.includes('도메인') ||
@@ -158,6 +296,22 @@ export async function POST(req: Request) {
           }
         }
       }
+
+      // Rollup 데이터가 없어 queryContext가 비어있으면 objectRelations 직접 조회로 fallback
+      // (inference 미실행 환경에서도 채팅이 동작하도록 보장)
+      if (!queryContext && primaryId) {
+        const direction =
+          lastUserMessage.includes('영향') && !lastUserMessage.includes('의존')
+            ? 'INBOUND'
+            : lastUserMessage.includes('호출') && lastUserMessage.includes('누가')
+              ? 'INBOUND'
+              : 'OUTBOUND';
+
+        const raw = await buildRawRelationContext(db, workspaceId, primaryId, direction);
+        if (raw) {
+          queryContext = `\n\n${raw}\n\n위 데이터를 바탕으로 질문에 답변해주세요. 관계 타입: call(API 호출), read(DB 읽기), write(DB 쓰기), produce(메시지 발행), consume(메시지 구독).`;
+        }
+      }
     } catch {
       // DB 미연결 또는 쿼리 실패 시 무시 — LLM이 일반 답변
     }
@@ -167,7 +321,8 @@ export async function POST(req: Request) {
     const result = streamText({
       model,
       system: SYSTEM_PROMPT + queryContext,
-      messages,
+      // UIMessage[] → ModelMessage[] 변환 (AI SDK v6 요구사항, async 함수)
+      messages: await convertToModelMessages(messages),
       maxOutputTokens: 2048,
       temperature: 0.3,
     });

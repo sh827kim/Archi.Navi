@@ -9,6 +9,8 @@ import { useRef, useEffect, useState, useCallback } from 'react';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
 import { AnimatePresence, motion } from 'framer-motion';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   MessageSquare,
   X,
@@ -365,7 +367,64 @@ export function FloatingChat() {
                             : 'bg-muted/80 text-foreground',
                         )}
                       >
-                        {text}
+                        {/* 사용자 메시지: plain text / AI 메시지: 마크다운 렌더링 */}
+                        {msg.role === 'user' ? (
+                          text
+                        ) : (
+                          <ReactMarkdown
+                            remarkPlugins={[remarkGfm]}
+                            components={{
+                              // 단락 — 기본 margin 제거해 버블 내 여백 통일
+                              p: ({ children }) => (
+                                <p className="mb-1.5 last:mb-0">{children}</p>
+                              ),
+                              // 굵은 글씨
+                              strong: ({ children }) => (
+                                <strong className="font-semibold text-foreground">{children}</strong>
+                              ),
+                              // 순서 없는 목록
+                              ul: ({ children }) => (
+                                <ul className="my-1 ml-3 list-disc space-y-0.5">{children}</ul>
+                              ),
+                              // 순서 있는 목록
+                              ol: ({ children }) => (
+                                <ol className="my-1 ml-3 list-decimal space-y-0.5">{children}</ol>
+                              ),
+                              // 목록 항목
+                              li: ({ children }) => (
+                                <li className="leading-relaxed">{children}</li>
+                              ),
+                              // 인라인 코드
+                              code: ({ children }) => (
+                                <code className="rounded bg-black/20 px-1 py-0.5 font-mono text-xs">
+                                  {children}
+                                </code>
+                              ),
+                              // 코드 블록
+                              pre: ({ children }) => (
+                                <pre className="my-1.5 overflow-x-auto rounded bg-black/30 p-2 font-mono text-xs">
+                                  {children}
+                                </pre>
+                              ),
+                              // 수평선 — 섹션 구분
+                              hr: () => <hr className="my-2 border-white/10" />,
+                              // 헤딩 (h1~h3)
+                              h1: ({ children }) => (
+                                <h1 className="mb-1 text-sm font-bold">{children}</h1>
+                              ),
+                              h2: ({ children }) => (
+                                <h2 className="mb-1 text-sm font-semibold">{children}</h2>
+                              ),
+                              h3: ({ children }) => (
+                                <h3 className="mb-0.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                                  {children}
+                                </h3>
+                              ),
+                            }}
+                          >
+                            {text}
+                          </ReactMarkdown>
+                        )}
                       </div>
 
                       {/* User 아이콘 */}

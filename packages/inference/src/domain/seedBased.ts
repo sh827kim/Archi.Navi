@@ -8,6 +8,7 @@ import type { DbClient } from '@archi-navi/db';
 import { domainCandidates, domainInferenceProfiles, objects } from '@archi-navi/db';
 import { normalizeAffinity, calculatePurity, getPrimaryDomain, getSecondaryDomains, generateId } from '@archi-navi/shared';
 import { computeDbScores } from '../db/dbSchemaSignal';
+import { computeMsgScores } from './msgSignal';
 
 interface SeedInferenceOptions {
   workspaceId: string;
@@ -76,6 +77,9 @@ export async function runSeedBasedInference(
     // DB 신호: 서비스가 접근하는 테이블 prefix → 도메인 매칭 점수 (1-3 구현)
     const dbScoreMap = await computeDbScores(db, service.id, domains, workspaceId);
 
+    // Message 신호: 토픽 네이밍 패턴 + producer/consumer 결합도 (2-5 구현)
+    const msgScoreMap = await computeMsgScores(db, service.id, domains, workspaceId);
+
     for (const domain of domains) {
       // Code 신호: 서비스 이름에 도메인 키워드가 포함되는지 (휴리스틱)
       const codeScore = service.name.toLowerCase().includes(domain.name.toLowerCase())
@@ -86,8 +90,9 @@ export async function runSeedBasedInference(
       const dbRaw = dbScoreMap[domain.id] ?? 0;
       const dbScore = dbRaw > 0 ? Math.min(1.0, dbRaw / 5) : 0; // 5회 이상 접근 시 1.0 상한
 
-      // Message 신호: 1-5에서 구현 예정
-      const msgScore = 0;
+      // Message 신호: 토픽 prefix 매칭 카운트를 0~1로 보정 (3건 이상 → 1.0)
+      const msgRaw = msgScoreMap[domain.id] ?? 0;
+      const msgScore = msgRaw > 0 ? Math.min(1.0, msgRaw / 3) : 0;
 
       const totalScore =
         weights.code * codeScore + weights.db * dbScore + weights.msg * msgScore;
@@ -105,7 +110,7 @@ export async function runSeedBasedInference(
     const primaryDomainId = getPrimaryDomain(affinity);
     const secondaryDomainIds = getSecondaryDomains(affinity, weights.secondaryThreshold);
 
-    // domain_candidates에 저장 (signals에 db 신호 포함)
+    // domain_candidates에 저장 (signals에 db + msg 신호 포함)
     await db.insert(domainCandidates).values({
       id: generateId(),
       workspaceId,
@@ -114,7 +119,7 @@ export async function runSeedBasedInference(
       purity,
       primaryDomainId: primaryDomainId ?? undefined,
       secondaryDomainIds,
-      signals: { code: rawScores, db: dbScoreMap },
+      signals: { code: rawScores, db: dbScoreMap, msg: msgScoreMap },
       status: 'PENDING',
     });
 
