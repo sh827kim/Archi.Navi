@@ -56,6 +56,14 @@ function getModel(req: Request): LanguageModel {
 }
 
 /**
+ * LIKE/ILIKE 패턴에서 특수문자를 이스케이프한다.
+ * 사용자 입력이 `%`, `_`, `\` 를 포함할 경우 와일드카드로 해석되는 것을 방지.
+ */
+function escapeLike(value: string): string {
+  return value.replace(/[%_\\]/g, (ch) => `\\${ch}`);
+}
+
+/**
  * 메시지에서 서비스/오브젝트 이름 후보를 순서대로 추출
  * 우선순위: xxx-service > xxx-db > xxx-gateway > 일반 kebab-case
  */
@@ -86,8 +94,8 @@ async function resolveObjectId(
 ): Promise<string | null> {
   if (names.length === 0) return null;
 
-  // 각 이름 후보를 OR 조건으로 한 번에 조회
-  const conditions = names.map((name) => ilike(objects.name, `%${name}%`));
+  // 각 이름 후보를 OR 조건으로 한 번에 조회 (LIKE 특수문자 이스케이프 적용)
+  const conditions = names.map((name) => ilike(objects.name, `%${escapeLike(name)}%`));
   const rows = await db
     .select({ id: objects.id, name: objects.name })
     .from(objects)
@@ -142,10 +150,11 @@ async function resolveDomainId(
 
   if (candidates.length === 0) return null;
 
-  // domain objectType인 것만 조회
-  const conditions = candidates.map((name) =>
-    or(ilike(objects.name, `%${name}%`), ilike(objects.displayName, `%${name}%`)),
-  );
+  // domain objectType인 것만 조회 (LIKE 특수문자 이스케이프 적용)
+  const conditions = candidates.map((name) => {
+    const escaped = escapeLike(name);
+    return or(ilike(objects.name, `%${escaped}%`), ilike(objects.displayName, `%${escaped}%`));
+  });
   const rows = await db
     .select({ id: objects.id, name: objects.name, displayName: objects.displayName })
     .from(objects)
