@@ -5,9 +5,9 @@
  */
 import { NextResponse } from 'next/server';
 import { generateObject } from 'ai';
-import { openai } from '@ai-sdk/openai';
-import { anthropic } from '@ai-sdk/anthropic';
-import { google } from '@ai-sdk/google';
+import { openai, createOpenAI } from '@ai-sdk/openai';
+import { anthropic, createAnthropic } from '@ai-sdk/anthropic';
+import { google, createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { z } from 'zod';
 import { getDb } from '@archi-navi/db';
@@ -45,21 +45,22 @@ function getModel(req: Request): { model: LanguageModel; modelName: string } | n
 
   if (!hasKey) return null;
 
+  // W-8.2: process.env 동적 덮어쓰기 대신 SDK factory로 인스턴스 생성
   switch (provider) {
     case 'anthropic': {
       const modelName = headerModel ?? 'claude-3-5-sonnet-20241022';
-      if (headerApiKey) process.env['ANTHROPIC_API_KEY'] = headerApiKey;
-      return { model: anthropic(modelName), modelName };
+      const sdk = headerApiKey ? createAnthropic({ apiKey: headerApiKey }) : anthropic;
+      return { model: sdk(modelName), modelName };
     }
     case 'google': {
       const modelName = headerModel ?? 'gemini-1.5-pro';
-      if (headerApiKey) process.env['GOOGLE_GENERATIVE_AI_API_KEY'] = headerApiKey;
-      return { model: google(modelName), modelName };
+      const sdk = headerApiKey ? createGoogleGenerativeAI({ apiKey: headerApiKey }) : google;
+      return { model: sdk(modelName), modelName };
     }
     default: {
       const modelName = headerModel ?? 'gpt-4o';
-      if (headerApiKey) process.env['OPENAI_API_KEY'] = headerApiKey;
-      return { model: openai(modelName), modelName };
+      const sdk = headerApiKey ? createOpenAI({ apiKey: headerApiKey }) : openai;
+      return { model: sdk(modelName), modelName };
     }
   }
 }

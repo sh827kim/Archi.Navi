@@ -43,6 +43,9 @@ Thumbs.db
 npm-debug.log*
 pnpm-debug.log*
 
+# WASM grammar 파일 (pnpm download:wasm으로 다운로드)
+packages/inference/wasm/*.wasm
+
 # 임시 파일
 *.tmp
 *.temp

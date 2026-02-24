@@ -2,44 +2,62 @@
  * AST 스캐너 공통 유틸리티
  * Phase 2: tree-sitter 기반 정밀 추출
  *
+ * web-tree-sitter (WASM) 전환 완료 — BUILD-C1
+ * W-7.2: findNodes 재귀+spread → 반복(iterative) 방식으로 스택오버플로우 해소
+ * W-7.3: Python triple-quote 문자열 처리 수정
+ *
  * 설계 참조: docs/03-inference-engine.md §6.2 Phase 2 AST 기반 정밀 추출
  */
 
-import type { SyntaxNode } from 'tree-sitter';
+import type { SyntaxNode } from 'web-tree-sitter';
 import type { ExtractedSignal } from '../codeSignalExtractor';
 
 // ─── AST 순회 유틸리티 ────────────────────────────────────────────────────────
 
 /**
- * AST 노드를 재귀 순회하여 특정 타입의 노드 목록 반환
+ * AST 노드를 반복(iterative) 순회하여 특정 타입의 노드 목록 반환.
+ * W-7.2: 재귀 + spread 방식에서 스택 기반 반복으로 전환하여
+ * 대형 파일에서 스택 오버플로우 위험 해소.
  */
 export function findNodes(node: SyntaxNode, type: string): SyntaxNode[] {
     const results: SyntaxNode[] = [];
-    if (node.type === type) results.push(node);
-    for (const child of node.children) {
-        results.push(...findNodes(child, type));
-    }
-    return results;
-}
+    const stack: SyntaxNode[] = [node];
 
-/**
- * 여러 타입 중 하나에 해당하는 노드 목록 반환
- */
-export function findNodesByTypes(node: SyntaxNode, types: string[]): SyntaxNode[] {
-    const typeSet = new Set(types);
-    const results: SyntaxNode[] = [];
-    if (typeSet.has(node.type)) results.push(node);
-    for (const child of node.children) {
-        results.push(...findNodesByTypes(child, types));
+    while (stack.length > 0) {
+        const current = stack.pop()!;
+        if (current.type === type) results.push(current);
+        // 자식을 역순으로 push하여 원래 순회 순서 유지 (DFS pre-order)
+        for (let i = current.childCount - 1; i >= 0; i--) {
+            const child = current.child(i);
+            if (child) stack.push(child);
+        }
     }
+
     return results;
 }
 
 /**
  * 자식 노드 중 특정 타입의 첫 번째 노드 반환
+ * web-tree-sitter는 children 배열 대신 child(i) 인덱스 접근 사용
  */
 export function findChildByType(node: SyntaxNode, type: string): SyntaxNode | null {
-    return node.children.find((c) => c.type === type) ?? null;
+    for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child?.type === type) return child;
+    }
+    return null;
+}
+
+/**
+ * 노드의 모든 자식을 배열로 반환 (web-tree-sitter 호환 헬퍼)
+ */
+export function getChildren(node: SyntaxNode): SyntaxNode[] {
+    const children: SyntaxNode[] = [];
+    for (let i = 0; i < node.childCount; i++) {
+        const child = node.child(i);
+        if (child) children.push(child);
+    }
+    return children;
 }
 
 /**
@@ -50,7 +68,15 @@ export function extractStringValue(node: SyntaxNode): string | null {
     const text = node.text;
     if (!text) return null;
 
-    // Java: "value" 또는 'value'
+    // W-7.3: Python triple-quote 우선 체크 ("""...""" 또는 '''...''')
+    if (
+        (text.startsWith('"""') && text.endsWith('"""')) ||
+        (text.startsWith("'''") && text.endsWith("'''"))
+    ) {
+        return text.slice(3, -3);
+    }
+
+    // Java/Python: "value" 또는 'value'
     if (
         (text.startsWith('"') && text.endsWith('"')) ||
         (text.startsWith("'") && text.endsWith("'"))

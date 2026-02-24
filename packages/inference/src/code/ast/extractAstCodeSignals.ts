@@ -240,7 +240,7 @@ export async function extractAstCodeSignals(
 
     async function processAll(
         files: string[],
-        scanner: (filePath: string, content: string) => FileScanResult,
+        scanner: (filePath: string, content: string) => FileScanResult | Promise<FileScanResult>,
     ) {
         for (const filePath of files) {
             let content: string;
@@ -254,7 +254,7 @@ export async function extractAstCodeSignals(
 
             let scanResult: FileScanResult;
             try {
-                scanResult = scanner(filePath, content);
+                scanResult = await scanner(filePath, content);
             } catch {
                 // AST 파싱 실패 시 스킵
                 continue;
