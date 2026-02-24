@@ -7,11 +7,12 @@
  * 3. SERVICE_TO_BROKER (produce/consume + parent → service-to-broker)
  * 4. DOMAIN_TO_DOMAIN (SERVICE_TO_SERVICE + affinities → domain-to-domain)
  */
-import { eq, and, inArray, sql } from 'drizzle-orm';
+import { eq, and, or, inArray, sql } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { objectRelations, objects, objectRollups, objectDomainAffinities, objectGraphStats } from '@archi-navi/db';
-import { createNewGeneration, activateGeneration } from './generationManager';
+import { createNewGeneration, activateGeneration, getActiveGeneration, updateGenerationMeta } from './generationManager';
 import { invalidateCache } from '../graph-index/index';
+import type { ChangeEvent, AffectedScope, AffectedRollupLevel } from './types';
 
 /**
  * 전체 Rollup 재빌드
@@ -396,6 +397,509 @@ async function buildObjectGraphStats(
     // 모든 관련 노드 ID 수집
     const allNodeIds = new Set([...outMap.keys(), ...inMap.keys()]);
 
+    const statsRows = [...allNodeIds].map((nodeId) => ({
+      workspaceId,
+      generationVersion,
+      rollupLevel: level,
+      objectId: nodeId,
+      outDegree: outMap.get(nodeId) ?? 0,
+      inDegree: inMap.get(nodeId) ?? 0,
+    }));
+
+    if (statsRows.length > 0) {
+      await db.insert(objectGraphStats).values(statsRows);
+    }
+  }
+}
+
+// ─── 증분 리빌드 ──────────────────────────────────────────────────────────────
+
+/**
+ * 증분 Rollup 리빌드
+ * 변경 이벤트 기반으로 영향받는 rollup edge만 부분 재계산한다.
+ * 동일 generation_version을 유지 (in-place update).
+ */
+export async function incrementalRebuild(
+  db: DbClient,
+  workspaceId: string,
+  events: ChangeEvent[],
+): Promise<number> {
+  // ACTIVE generation 확인 — 없으면 전체 리빌드 fallback
+  const activeVersion = await getActiveGeneration(db, workspaceId);
+  if (activeVersion === null) {
+    return rebuildRollups(db, workspaceId);
+  }
+
+  // 이벤트가 비어 있으면 변경 없음
+  if (events.length === 0) {
+    return activeVersion;
+  }
+
+  // 영향 범위 분석 (DB 역추적 포함)
+  const scope = await resolveAffectedScope(db, workspaceId, events);
+
+  if (scope.levels.size === 0) {
+    return activeVersion;
+  }
+
+  // S2S 증분 재계산
+  if (scope.levels.has('SERVICE_TO_SERVICE')) {
+    await incrementalBuildS2S(db, workspaceId, activeVersion, scope.s2sAffectedServiceIds);
+  }
+
+  // S2DB 증분 재계산
+  if (scope.levels.has('SERVICE_TO_DATABASE')) {
+    await incrementalBuildS2DB(db, workspaceId, activeVersion, scope.s2dbAffectedServiceIds);
+  }
+
+  // S2B 증분 재계산
+  if (scope.levels.has('SERVICE_TO_BROKER')) {
+    await incrementalBuildS2B(db, workspaceId, activeVersion, scope.s2bAffectedServiceIds);
+  }
+
+  // D2D — 전체 재계산 (domain 수가 적으므로 부분 대비 이득 없음)
+  if (scope.levels.has('DOMAIN_TO_DOMAIN')) {
+    await deleteRollupsByLevel(db, workspaceId, activeVersion, 'DOMAIN_TO_DOMAIN');
+    await buildDomainToDomain(db, workspaceId, activeVersion);
+  }
+
+  // 영향받는 level의 graph stats 재계산
+  await incrementalBuildGraphStats(db, workspaceId, activeVersion, scope.levels);
+
+  // generation meta 업데이트
+  await updateGenerationMeta(db, workspaceId, activeVersion, {
+    lastIncrementalAt: new Date().toISOString(),
+    eventCount: events.length,
+  });
+
+  // 그래프 캐시 무효화
+  invalidateCache(workspaceId);
+
+  return activeVersion;
+}
+
+/**
+ * 이벤트 분석 → 영향받는 rollup level + affected 서비스 ID 식별
+ * expose/parent 변경 시 DB 역추적으로 관련 서비스를 찾는다.
+ */
+async function resolveAffectedScope(
+  db: DbClient,
+  workspaceId: string,
+  events: ChangeEvent[],
+): Promise<AffectedScope> {
+  const levels = new Set<AffectedRollupLevel>();
+  const s2sAffected = new Set<string>();
+  const s2dbAffected = new Set<string>();
+  const s2bAffected = new Set<string>();
+
+  for (const event of events) {
+    switch (event.type) {
+      case 'RELATION_APPROVED':
+      case 'RELATION_DELETED': {
+        const { relationType, subjectObjectId } = event.payload;
+        if (relationType === 'call') {
+          levels.add('SERVICE_TO_SERVICE');
+          s2sAffected.add(subjectObjectId);
+        }
+        if (relationType === 'expose') {
+          levels.add('SERVICE_TO_SERVICE');
+          s2sAffected.add(subjectObjectId);
+        }
+        if (relationType === 'read' || relationType === 'write') {
+          levels.add('SERVICE_TO_DATABASE');
+          s2dbAffected.add(subjectObjectId);
+        }
+        if (relationType === 'produce' || relationType === 'consume') {
+          levels.add('SERVICE_TO_BROKER');
+          s2bAffected.add(subjectObjectId);
+        }
+        break;
+      }
+      case 'EXPOSE_CHANGED': {
+        levels.add('SERVICE_TO_SERVICE');
+        s2sAffected.add(event.payload.subjectObjectId);
+        // expose 변경 시, 해당 endpoint를 call하는 서비스도 영향
+        const callers = await findCallersOfEndpoint(db, workspaceId, event.payload.objectId);
+        for (const callerId of callers) s2sAffected.add(callerId);
+        break;
+      }
+      case 'OBJECT_PARENT_CHANGED': {
+        levels.add('SERVICE_TO_DATABASE');
+        levels.add('SERVICE_TO_BROKER');
+        // parent 변경된 object를 참조하는 relation의 subject를 역추적
+        const subjects = await findSubjectsReferencingObject(db, workspaceId, event.payload.objectId);
+        for (const sid of subjects) {
+          s2dbAffected.add(sid);
+          s2bAffected.add(sid);
+        }
+        break;
+      }
+      case 'DOMAIN_AFFINITY_CHANGED': {
+        levels.add('DOMAIN_TO_DOMAIN');
+        break;
+      }
+    }
+  }
+
+  // S2S 변경 시 D2D도 연쇄 재계산
+  if (levels.has('SERVICE_TO_SERVICE')) {
+    levels.add('DOMAIN_TO_DOMAIN');
+  }
+
+  return { levels, s2sAffectedServiceIds: s2sAffected, s2dbAffectedServiceIds: s2dbAffected, s2bAffectedServiceIds: s2bAffected };
+}
+
+/** 특정 endpoint를 call하는 서비스 ID 목록 조회 */
+async function findCallersOfEndpoint(
+  db: DbClient,
+  workspaceId: string,
+  endpointId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ subjectObjectId: objectRelations.subjectObjectId })
+    .from(objectRelations)
+    .where(
+      and(
+        eq(objectRelations.workspaceId, workspaceId),
+        eq(objectRelations.relationType, 'call'),
+        eq(objectRelations.objectId, endpointId),
+        eq(objectRelations.isDerived, false),
+      ),
+    );
+  return rows.map((r) => r.subjectObjectId);
+}
+
+/** 특정 object를 참조(read/write/produce/consume)하는 서비스 ID 목록 조회 */
+async function findSubjectsReferencingObject(
+  db: DbClient,
+  workspaceId: string,
+  objectId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ subjectObjectId: objectRelations.subjectObjectId })
+    .from(objectRelations)
+    .where(
+      and(
+        eq(objectRelations.workspaceId, workspaceId),
+        eq(objectRelations.objectId, objectId),
+        eq(objectRelations.isDerived, false),
+      ),
+    );
+  return rows.map((r) => r.subjectObjectId);
+}
+
+/** 특정 level의 rollup 전체 삭제 */
+async function deleteRollupsByLevel(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  rollupLevel: string,
+): Promise<void> {
+  await db.delete(objectRollups).where(
+    and(
+      eq(objectRollups.workspaceId, workspaceId),
+      eq(objectRollups.generationVersion, generationVersion),
+      eq(objectRollups.rollupLevel, rollupLevel),
+    ),
+  );
+}
+
+/** affected 노드 관련 rollup edge 삭제 (subject OR object가 affected set에 포함) */
+async function deleteRollupsByAffectedNodes(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  rollupLevel: string,
+  affectedIds: Set<string>,
+): Promise<void> {
+  if (affectedIds.size === 0) return;
+  const idArray = [...affectedIds];
+  await db.delete(objectRollups).where(
+    and(
+      eq(objectRollups.workspaceId, workspaceId),
+      eq(objectRollups.generationVersion, generationVersion),
+      eq(objectRollups.rollupLevel, rollupLevel),
+      or(
+        inArray(objectRollups.subjectObjectId, idArray),
+        inArray(objectRollups.objectId, idArray),
+      ),
+    ),
+  );
+}
+
+/**
+ * S2S 증분 재계산
+ * affected 서비스 관련 기존 edge 삭제 → 전체 call/expose 기반 재계산 후 affected 관련만 insert
+ */
+async function incrementalBuildS2S(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  affectedServiceIds: Set<string>,
+): Promise<void> {
+  if (affectedServiceIds.size === 0) return;
+
+  // 기존 affected 관련 S2S rollup 삭제
+  await deleteRollupsByAffectedNodes(db, workspaceId, generationVersion, 'SERVICE_TO_SERVICE', affectedServiceIds);
+
+  // 전체 call/expose relation 조회 (변경된 서비스의 edge를 정확히 재계산하려면 전체 필요)
+  const callRelations = await db
+    .select()
+    .from(objectRelations)
+    .where(
+      and(
+        eq(objectRelations.workspaceId, workspaceId),
+        eq(objectRelations.relationType, 'call'),
+        eq(objectRelations.isDerived, false),
+      ),
+    );
+
+  const exposeRelations = await db
+    .select()
+    .from(objectRelations)
+    .where(
+      and(
+        eq(objectRelations.workspaceId, workspaceId),
+        eq(objectRelations.relationType, 'expose'),
+        eq(objectRelations.isDerived, false),
+      ),
+    );
+
+  // endpoint → 서비스 매핑
+  const endpointToService = new Map<string, string>();
+  for (const expose of exposeRelations) {
+    endpointToService.set(expose.objectId, expose.subjectObjectId);
+  }
+
+  // S2S 집계 (affected 관련만 필터)
+  const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+  for (const call of callRelations) {
+    const callerServiceId = call.subjectObjectId;
+    const exposingServiceId = endpointToService.get(call.objectId);
+    if (!exposingServiceId || callerServiceId === exposingServiceId) continue;
+
+    // affected 서비스가 caller 또는 target인 경우만
+    if (!affectedServiceIds.has(callerServiceId) && !affectedServiceIds.has(exposingServiceId)) continue;
+
+    const key = `${callerServiceId}|${exposingServiceId}`;
+    const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+    existing.edgeWeight += 1;
+    if (call.confidence != null) existing.confidences.push(call.confidence);
+    rollupMap.set(key, existing);
+  }
+
+  const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+    const [subjectObjectId, objectId] = key.split('|') as [string, string];
+    const confidence = confidences.length > 0
+      ? confidences.reduce((a, b) => a + b, 0) / confidences.length
+      : null;
+    return {
+      workspaceId,
+      rollupLevel: 'SERVICE_TO_SERVICE',
+      relationType: 'call',
+      subjectObjectId,
+      objectId,
+      edgeWeight,
+      confidence,
+      generationVersion,
+    };
+  });
+
+  if (rollups.length > 0) {
+    await db.insert(objectRollups).values(rollups);
+  }
+}
+
+/**
+ * S2DB 증분 재계산
+ * affected 서비스의 read/write rollup만 삭제 후 재계산
+ */
+async function incrementalBuildS2DB(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  affectedServiceIds: Set<string>,
+): Promise<void> {
+  if (affectedServiceIds.size === 0) return;
+
+  // affected 서비스의 기존 S2DB rollup 삭제 (subject 기준)
+  const idArray = [...affectedServiceIds];
+  await db.delete(objectRollups).where(
+    and(
+      eq(objectRollups.workspaceId, workspaceId),
+      eq(objectRollups.generationVersion, generationVersion),
+      eq(objectRollups.rollupLevel, 'SERVICE_TO_DATABASE'),
+      inArray(objectRollups.subjectObjectId, idArray),
+    ),
+  );
+
+  // affected 서비스의 read/write relation 재조회 + parent join
+  for (const relType of ['read', 'write']) {
+    const relations = await db
+      .select({
+        relation: objectRelations,
+        tableParentId: objects.parentId,
+      })
+      .from(objectRelations)
+      .innerJoin(objects, eq(objectRelations.objectId, objects.id))
+      .where(
+        and(
+          eq(objectRelations.workspaceId, workspaceId),
+          eq(objectRelations.relationType, relType),
+          eq(objectRelations.isDerived, false),
+          inArray(objectRelations.subjectObjectId, idArray),
+        ),
+      );
+
+    const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+    for (const { relation, tableParentId } of relations) {
+      if (!tableParentId) continue;
+      const key = `${relation.subjectObjectId}|${tableParentId}`;
+      const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+      existing.edgeWeight += 1;
+      if (relation.confidence != null) existing.confidences.push(relation.confidence);
+      rollupMap.set(key, existing);
+    }
+
+    const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+      const [subjectObjectId, objectId] = key.split('|') as [string, string];
+      const confidence = confidences.length > 0
+        ? confidences.reduce((a, b) => a + b, 0) / confidences.length
+        : null;
+      return {
+        workspaceId,
+        rollupLevel: 'SERVICE_TO_DATABASE',
+        relationType: relType,
+        subjectObjectId,
+        objectId,
+        edgeWeight,
+        confidence,
+        generationVersion,
+      };
+    });
+
+    if (rollups.length > 0) {
+      await db.insert(objectRollups).values(rollups);
+    }
+  }
+}
+
+/**
+ * S2B 증분 재계산
+ * affected 서비스의 produce/consume rollup만 삭제 후 재계산
+ */
+async function incrementalBuildS2B(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  affectedServiceIds: Set<string>,
+): Promise<void> {
+  if (affectedServiceIds.size === 0) return;
+
+  const idArray = [...affectedServiceIds];
+  await db.delete(objectRollups).where(
+    and(
+      eq(objectRollups.workspaceId, workspaceId),
+      eq(objectRollups.generationVersion, generationVersion),
+      eq(objectRollups.rollupLevel, 'SERVICE_TO_BROKER'),
+      inArray(objectRollups.subjectObjectId, idArray),
+    ),
+  );
+
+  for (const relType of ['produce', 'consume']) {
+    const relations = await db
+      .select({
+        relation: objectRelations,
+        topicParentId: objects.parentId,
+      })
+      .from(objectRelations)
+      .innerJoin(objects, eq(objectRelations.objectId, objects.id))
+      .where(
+        and(
+          eq(objectRelations.workspaceId, workspaceId),
+          eq(objectRelations.relationType, relType),
+          eq(objectRelations.isDerived, false),
+          inArray(objectRelations.subjectObjectId, idArray),
+        ),
+      );
+
+    const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+    for (const { relation, topicParentId } of relations) {
+      if (!topicParentId) continue;
+      const key = `${relation.subjectObjectId}|${topicParentId}`;
+      const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+      existing.edgeWeight += 1;
+      if (relation.confidence != null) existing.confidences.push(relation.confidence);
+      rollupMap.set(key, existing);
+    }
+
+    const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+      const [subjectObjectId, objectId] = key.split('|') as [string, string];
+      const confidence = confidences.length > 0
+        ? confidences.reduce((a, b) => a + b, 0) / confidences.length
+        : null;
+      return {
+        workspaceId,
+        rollupLevel: 'SERVICE_TO_BROKER',
+        relationType: relType,
+        subjectObjectId,
+        objectId,
+        edgeWeight,
+        confidence,
+        generationVersion,
+      };
+    });
+
+    if (rollups.length > 0) {
+      await db.insert(objectRollups).values(rollups);
+    }
+  }
+}
+
+/**
+ * 영향받는 level의 graph stats만 삭제 후 재계산
+ */
+async function incrementalBuildGraphStats(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  affectedLevels: Set<AffectedRollupLevel>,
+): Promise<void> {
+  for (const level of affectedLevels) {
+    // 해당 level의 기존 stats 삭제
+    await db.delete(objectGraphStats).where(
+      and(
+        eq(objectGraphStats.workspaceId, workspaceId),
+        eq(objectGraphStats.generationVersion, generationVersion),
+        eq(objectGraphStats.rollupLevel, level),
+      ),
+    );
+
+    // 해당 level의 rollup 데이터 조회
+    const levelRollups = await db
+      .select({
+        subjectObjectId: objectRollups.subjectObjectId,
+        objectId: objectRollups.objectId,
+      })
+      .from(objectRollups)
+      .where(
+        and(
+          eq(objectRollups.workspaceId, workspaceId),
+          eq(objectRollups.generationVersion, generationVersion),
+          eq(objectRollups.rollupLevel, level),
+        ),
+      );
+
+    if (levelRollups.length === 0) continue;
+
+    const outMap = new Map<string, number>();
+    const inMap = new Map<string, number>();
+    for (const r of levelRollups) {
+      outMap.set(r.subjectObjectId, (outMap.get(r.subjectObjectId) ?? 0) + 1);
+      inMap.set(r.objectId, (inMap.get(r.objectId) ?? 0) + 1);
+    }
+
+    const allNodeIds = new Set([...outMap.keys(), ...inMap.keys()]);
     const statsRows = [...allNodeIds].map((nodeId) => ({
       workspaceId,
       generationVersion,

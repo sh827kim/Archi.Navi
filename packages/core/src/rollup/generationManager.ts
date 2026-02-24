@@ -50,6 +50,40 @@ export async function createNewGeneration(
 }
 
 /**
+ * generation meta 업데이트 (증분 리빌드 정보 기록)
+ */
+export async function updateGenerationMeta(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  metaPatch: Record<string, unknown>,
+): Promise<void> {
+  const result = await db
+    .select({ meta: rollupGenerations.meta })
+    .from(rollupGenerations)
+    .where(
+      and(
+        eq(rollupGenerations.workspaceId, workspaceId),
+        eq(rollupGenerations.generationVersion, generationVersion),
+      ),
+    );
+
+  const current = result[0];
+  if (!current) return;
+
+  const mergedMeta = { ...(current.meta as Record<string, unknown>), ...metaPatch };
+  await db
+    .update(rollupGenerations)
+    .set({ meta: mergedMeta })
+    .where(
+      and(
+        eq(rollupGenerations.workspaceId, workspaceId),
+        eq(rollupGenerations.generationVersion, generationVersion),
+      ),
+    );
+}
+
+/**
  * generation을 ACTIVE로 전환하고 이전 ACTIVE는 ARCHIVED로 변경
  */
 export async function activateGeneration(
