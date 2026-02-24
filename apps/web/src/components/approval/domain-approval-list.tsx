@@ -61,11 +61,12 @@ export function DomainApprovalList() {
   function handleAction(id: string, action: 'APPROVED' | 'REJECTED') {
     startTransition(async () => {
       try {
-        await fetch(`/api/inference/domain-candidates/${id}`, {
+        const res = await fetch(`/api/inference/domain-candidates/${id}`, {
           method: 'PATCH',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ status: action }),
         });
+        if (!res.ok) throw new Error(`서버 응답 오류: ${res.status}`);
         setCandidates((prev) => prev.filter((c) => c.id !== id));
         toast.success(action === 'APPROVED' ? '도메인 소속 승인됨' : '도메인 소속 거부됨');
         setRejectTarget(null);

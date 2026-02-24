@@ -40,12 +40,14 @@ export function formatDomainSummary(summary: Record<string, unknown>): string {
 
     // 전체 도메인 목록 케이스
     if (summary['type'] === 'DOMAIN_LIST') {
-        return formatDomainList(summary as unknown as DomainListSummary);
+        const data = parseDomainListSummary(summary);
+        if (!data) return '';
+        return formatDomainList(data);
     }
 
     // 단일 도메인 상세 집계 케이스
-    const data = summary as unknown as DomainSummaryData;
-    if (!data.domainId || data.memberCount === undefined) return '';
+    const data = parseDomainSummaryData(summary);
+    if (!data) return '';
 
     return formatSingleDomain(data);
 }
@@ -60,7 +62,8 @@ export function buildDomainAnswerComposerPrompt(summary: Record<string, unknown>
     if (!summary || typeof summary !== 'object') return '';
 
     if (summary['type'] === 'DOMAIN_LIST') {
-        const data = summary as unknown as DomainListSummary;
+        const data = parseDomainListSummary(summary);
+        if (!data) return '';
         return `
 
 ## Answer Composer 응답 형식 (도메인 목록)
@@ -81,8 +84,8 @@ export function buildDomainAnswerComposerPrompt(summary: Record<string, unknown>
 - 총 ${data.domainCount}개 도메인을 참고하세요`;
     }
 
-    const data = summary as unknown as DomainSummaryData;
-    if (!data.domainId) return '';
+    const data = parseDomainSummaryData(summary);
+    if (!data?.domainId) return '';
 
     const confidence = data.avgAffinity?.toFixed(2) ?? '0.00';
     const deepLink = `/mapping?highlight=${data.domainId}`;
@@ -104,6 +107,39 @@ export function buildDomainAnswerComposerPrompt(summary: Record<string, unknown>
 규칙:
 - 이 형식을 반드시 유지하세요
 - 집계 데이터에 없는 사실은 추가하지 마세요`;
+}
+
+// ─── 타입 파서 (unsafe 캐스팅 대체) ────────────────────────────────────────────
+
+/** Record<string, unknown> → DomainListSummary 안전 변환 */
+function parseDomainListSummary(raw: Record<string, unknown>): DomainListSummary | null {
+    if (raw['type'] !== 'DOMAIN_LIST') return null;
+    const domainCount = typeof raw['domainCount'] === 'number' ? raw['domainCount'] : 0;
+    const domains = Array.isArray(raw['domains'])
+        ? (raw['domains'] as Array<{ id: string; name: string; displayName?: string | null }>)
+        : [];
+    return { type: 'DOMAIN_LIST', domainCount, domains };
+}
+
+/** Record<string, unknown> → DomainSummaryData 안전 변환 */
+function parseDomainSummaryData(raw: Record<string, unknown>): DomainSummaryData | null {
+    const domainId = typeof raw['domainId'] === 'string' ? raw['domainId'] : '';
+    if (!domainId) return null;
+    return {
+        domainId,
+        domainName: typeof raw['domainName'] === 'string' ? raw['domainName'] : '',
+        memberCount: typeof raw['memberCount'] === 'number' ? raw['memberCount'] : 0,
+        membersByType: (raw['membersByType'] as Record<string, number>) ?? {},
+        avgPurity: typeof raw['avgPurity'] === 'number' ? raw['avgPurity'] : null,
+        avgAffinity: typeof raw['avgAffinity'] === 'number' ? raw['avgAffinity'] : 0,
+        topMembers: Array.isArray(raw['topMembers'])
+            ? (raw['topMembers'] as DomainSummaryData['topMembers'])
+            : [],
+        externalDependencies: Array.isArray(raw['externalDependencies'])
+            ? (raw['externalDependencies'] as DomainSummaryData['externalDependencies'])
+            : [],
+        relationDensity: typeof raw['relationDensity'] === 'number' ? raw['relationDensity'] : 0,
+    };
 }
 
 // ─── 내부 헬퍼 ────────────────────────────────────────────────────────────────

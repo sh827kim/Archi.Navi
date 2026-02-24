@@ -21,7 +21,21 @@ import {
     objectRelations,
     objectRollups,
 } from '@archi-navi/db';
-import type { QueryParams, QueryResponse } from '@archi-navi/shared';
+import type { QueryParams, QueryResponse, ObjectType, RelationType } from '@archi-navi/shared';
+import { OBJECT_TYPES, RELATION_TYPES } from '@archi-navi/shared';
+
+// ─── 타입 가드 ──────────────────────────────────────────────────────────────
+
+const objectTypeSet = new Set<string>(OBJECT_TYPES);
+const relationTypeSet = new Set<string>(RELATION_TYPES);
+
+function isObjectType(value: string): value is ObjectType {
+    return objectTypeSet.has(value);
+}
+
+function isRelationType(value: string): value is RelationType {
+    return relationTypeSet.has(value);
+}
 
 // ─── 타입 정의 ────────────────────────────────────────────────────────────────
 
@@ -262,26 +276,30 @@ async function summarizeSingleDomain(
         relationDensity,
     };
 
-    const nodes: QueryResponse['result']['nodes'] = memberObjects.map((obj) => {
-        const node: QueryResponse['result']['nodes'][0] = {
-            id: obj.id,
-            type: obj.objectType as QueryResponse['result']['nodes'][0]['type'],
-            name: obj.name,
-            metadata: { affinity: affinityByObjectId.get(obj.id) ?? 0 },
-        };
-        if (obj.displayName !== null) node.displayName = obj.displayName;
-        return node;
-    });
+    const nodes: QueryResponse['result']['nodes'] = memberObjects
+        .filter((obj) => isObjectType(obj.objectType))
+        .map((obj) => {
+            const node: QueryResponse['result']['nodes'][0] = {
+                id: obj.id,
+                type: obj.objectType as ObjectType,
+                name: obj.name,
+                metadata: { affinity: affinityByObjectId.get(obj.id) ?? 0 },
+            };
+            if (obj.displayName !== null) node.displayName = obj.displayName;
+            return node;
+        });
 
-    const edges: QueryResponse['result']['edges'] = externalRollupRows.map((r) => ({
-        subjectId: r.subjectObjectId,
-        objectId: r.objectId,
-        relationType: r.relationType as QueryResponse['result']['edges'][0]['relationType'],
-        level: 'DOMAIN_TO_DOMAIN' as const,
-        edgeWeight: r.edgeWeight,
-        confidence: r.confidence ?? 0,
-        provenance: { rollupId: r.id, baseRelationIds: [] },
-    }));
+    const edges: QueryResponse['result']['edges'] = externalRollupRows
+        .filter((r) => isRelationType(r.relationType))
+        .map((r) => ({
+            subjectId: r.subjectObjectId,
+            objectId: r.objectId,
+            relationType: r.relationType as RelationType,
+            level: 'DOMAIN_TO_DOMAIN' as const,
+            edgeWeight: r.edgeWeight,
+            confidence: r.confidence ?? 0,
+            provenance: { rollupId: r.id, baseRelationIds: [] },
+        }));
 
-    return { nodes, edges, summary: summaryData as unknown as Record<string, unknown> };
+    return { nodes, edges, summary: { ...summaryData } };
 }

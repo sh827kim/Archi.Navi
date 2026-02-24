@@ -116,7 +116,7 @@ export const objectRelations = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
 
-    relationType: text('relation_type').notNull(), // call, expose, read, write, produce, consume, depend_on
+    relationType: text('relation_type').notNull(), // call, expose, read, write, produce, consume, depend_on, fk_reference
     subjectObjectId: uuid('subject_object_id')
       .notNull()
       .references(() => objects.id, { onDelete: 'cascade' }),

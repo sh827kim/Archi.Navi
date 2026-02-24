@@ -325,14 +325,21 @@ export async function computeDbScores(
         }
     }
 
-    // 테이블명 → prefix → 도메인 매칭 → score 누적
-    const scores: Record<string, number> = {};
+    // 테이블명 → prefix → 도메인 매칭 → score 누적 (raw count)
+    const rawScores: Record<string, number> = {};
     for (const tableName of dbTableNames) {
         const prefix = extractTablePrefix(tableName);
         const domainId = matchDomainByPrefix(prefix, domains);
         if (domainId) {
-            scores[domainId] = (scores[domainId] ?? 0) + 1;
+            rawScores[domainId] = (rawScores[domainId] ?? 0) + 1;
         }
+    }
+
+    // 0~1 범위로 정규화 (max count 기준)
+    const maxScore = Math.max(...Object.values(rawScores), 1);
+    const scores: Record<string, number> = {};
+    for (const [domainId, raw] of Object.entries(rawScores)) {
+        scores[domainId] = raw / maxScore;
     }
 
     return scores;

@@ -14,7 +14,8 @@
     "test:unit:watch": "vitest",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "download:wasm": "node scripts/download-wasm-grammars.mjs"
+    "download:wasm": "node scripts/download-wasm-grammars.mjs",
+    "postinstall": "node scripts/download-wasm-grammars.mjs"
   },
   "dependencies": {
     "@archi-navi/core": "workspace:*",

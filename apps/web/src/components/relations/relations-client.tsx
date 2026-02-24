@@ -63,7 +63,7 @@ interface RelationItem {
 
 /* ─── 상수 / 헬퍼 ─── */
 const RELATION_TYPES = [
-  'call', 'expose', 'read', 'write', 'produce', 'consume', 'depend_on',
+  'call', 'expose', 'read', 'write', 'produce', 'consume', 'depend_on', 'fk_reference',
 ] as const;
 type RelationType = typeof RELATION_TYPES[number];
 

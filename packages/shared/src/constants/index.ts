@@ -32,6 +32,7 @@ export const RELATION_TYPES = [
   'produce',
   'consume',
   'depend_on',
+  'fk_reference',
 ] as const;
 
 // Relation Semantic Axis - interaction_kind
@@ -171,4 +172,5 @@ export const RELATION_SEMANTICS: Record<
   produce: { interactionKind: 'ASYNC', direction: 'OUT' },
   consume: { interactionKind: 'ASYNC', direction: 'IN' },
   depend_on: { interactionKind: 'STATIC', direction: 'OUT' },
+  fk_reference: { interactionKind: 'DATA', direction: 'OUT' },
 } as const;

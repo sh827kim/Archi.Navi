@@ -359,15 +359,16 @@ describe('computeDbScores', () => {
         expect(result[paymentDomain.id]).toBeUndefined();
     });
 
-    it('여러 테이블 접근 시 도메인별 score가 합산되어야 한다', async () => {
+    it('여러 테이블 접근 시 도메인별 score가 합산 후 정규화되어야 한다', async () => {
         const serviceId = await createService(db, 'order-service');
         await createDbSignal(serviceId, 'order_items', 'db_read');
         await createDbSignal(serviceId, 'order_payments', 'db_write');
         await createDbSignal(serviceId, 'orders', 'db_mapping');
 
         const result = await computeDbScores(db, serviceId, domains, workspaceId);
-        // order_items(1) + order_payments(payment→payment 도메인) + orders(order→order 도메인)
-        expect(result[orderDomain.id]).toBeGreaterThanOrEqual(2); // order_items + orders
+        // 정규화 후 0~1 범위, 최대 score를 가진 도메인은 1.0
+        expect(result[orderDomain.id]).toBeGreaterThan(0);
+        expect(result[orderDomain.id]).toBeLessThanOrEqual(1);
     });
 });
 

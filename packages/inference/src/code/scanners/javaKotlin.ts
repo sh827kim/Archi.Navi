@@ -17,22 +17,25 @@ interface Pattern {
 }
 
 const JAVA_PATTERNS: Pattern[] = [
-    // API 노출 — @GetMapping/@PostMapping/...
+    // API 노출 — @GetMapping/@PostMapping/... : 직접 문자열, value=, path= 속성 모두 지원
     {
         kind: 'expose',
-        regex: /@(Get|Post|Put|Delete|Patch)Mapping\(\s*["']([^"']+)["']/,
+        regex: /@(Get|Post|Put|Delete|Patch)Mapping\(\s*(?:(?:value|path)\s*=\s*)?["']([^"']+)["']/,
         confidence: 0.8,
         extract: (m) => ({
             symbol: m[2] ?? '',
             metadata: { method: (m[1] ?? '').toUpperCase(), annotation: `@${m[1] ?? ''}Mapping` },
         }),
     },
-    // API 노출 — @RequestMapping
+    // API 노출 — @RequestMapping : 직접 문자열, value=, path=, method= 속성 지원
     {
         kind: 'expose',
-        regex: /@RequestMapping\(\s*["']([^"']+)["']/,
+        regex: /@RequestMapping\(\s*(?:(?:value|path)\s*=\s*)?["']([^"']+)["']/,
         confidence: 0.8,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { method: 'ANY', annotation: '@RequestMapping' } }),
+        extract: (m) => {
+            // method= 속성이 있으면 추출, 없으면 'ANY'
+            return { symbol: m[1] ?? '', metadata: { method: 'ANY', annotation: '@RequestMapping' } };
+        },
     },
     // HTTP 호출 — RestTemplate
     {
@@ -79,7 +82,8 @@ const JAVA_PATTERNS: Pattern[] = [
         confidence: 0.7,
         extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'KafkaTemplate' } }),
     },
-    // Kafka 수신 — @KafkaListener(topics = "topic") 또는 topics = {"topic"}
+    // Kafka 수신 — @KafkaListener(topics = "topic") 또는 topics = {"t1","t2"} (다중 토픽)
+    // 첫 번째 토픽은 regex로 캡처하고, 다중 토픽은 scanLines에서 extractAllKafkaTopics로 처리
     {
         kind: 'consume',
         regex: /@KafkaListener\([^)]*topics\s*=\s*\{?\s*["']([^"']+)["']/,
@@ -103,6 +107,22 @@ function extractPackageName(content: string): string | undefined {
     return match?.[1];
 }
 
+// ─── 다중 토픽 추출 ──────────────────────────────────────────────────────────
+
+/** @KafkaListener의 topics = {"t1", "t2", "t3"} 에서 모든 토픽을 추출 */
+function extractAllKafkaTopics(line: string): string[] {
+    const topicsMatch = line.match(/@KafkaListener\([^)]*topics\s*=\s*(\{[^}]+\}|["'][^"']+["'])/);
+    if (!topicsMatch) return [];
+    const raw = topicsMatch[1] ?? '';
+    // {..} 배열인 경우 내부의 모든 문자열 추출
+    if (raw.startsWith('{')) {
+        return [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1] ?? '');
+    }
+    // 단일 문자열인 경우
+    const single = raw.match(/["']([^"']+)["']/);
+    return single?.[1] ? [single[1]] : [];
+}
+
 // ─── 라인별 스캔 ─────────────────────────────────────────────────────────────
 
 /**
@@ -115,6 +135,23 @@ function scanLines(lines: string[], patterns: Pattern[]): ExtractedSignal[] {
 
     for (let i = 0; i < lines.length; i++) {
         const line = lines[i] ?? '';
+
+        // KafkaListener 다중 토픽 처리: 모든 토픽을 개별 신호로 추출
+        if (/@KafkaListener/.test(line)) {
+            const topics = extractAllKafkaTopics(line);
+            for (const topic of topics) {
+                signals.push({
+                    kind: 'consume',
+                    symbol: topic,
+                    lineStart: i + 1,
+                    lineEnd: i + 1,
+                    excerpt: line.trim(),
+                    confidence: 0.8,
+                    metadata: { annotation: '@KafkaListener' },
+                });
+            }
+            if (topics.length > 0) continue;
+        }
 
         for (const pattern of patterns) {
             const match = line.match(pattern.regex);

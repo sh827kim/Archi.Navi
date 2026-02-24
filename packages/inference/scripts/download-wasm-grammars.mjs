@@ -16,16 +16,13 @@ import { fileURLToPath } from 'url';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WASM_DIR = join(__dirname, '..', 'wasm');
 
-/** GitHub releases 기반 WASM grammar URL */
+/** tree-sitter 공식 playground 레포에서 WASM grammar 다운로드 */
+const BASE_URL = 'https://raw.githubusercontent.com/tree-sitter/tree-sitter.github.io/master';
 const GRAMMAR_URLS = {
-    'tree-sitter-java.wasm':
-        'https://github.com/nicolo-ribaudo/tree-sitter-wasm-prebuilt/releases/latest/download/tree-sitter-java.wasm',
-    'tree-sitter-kotlin.wasm':
-        'https://github.com/nicolo-ribaudo/tree-sitter-wasm-prebuilt/releases/latest/download/tree-sitter-kotlin.wasm',
-    'tree-sitter-typescript.wasm':
-        'https://github.com/nicolo-ribaudo/tree-sitter-wasm-prebuilt/releases/latest/download/tree-sitter-typescript.wasm',
-    'tree-sitter-python.wasm':
-        'https://github.com/nicolo-ribaudo/tree-sitter-wasm-prebuilt/releases/latest/download/tree-sitter-python.wasm',
+    'tree-sitter-java.wasm': `${BASE_URL}/tree-sitter-java.wasm`,
+    'tree-sitter-kotlin.wasm': `${BASE_URL}/tree-sitter-kotlin.wasm`,
+    'tree-sitter-typescript.wasm': `${BASE_URL}/tree-sitter-typescript.wasm`,
+    'tree-sitter-python.wasm': `${BASE_URL}/tree-sitter-python.wasm`,
 };
 
 async function download(url, dest) {

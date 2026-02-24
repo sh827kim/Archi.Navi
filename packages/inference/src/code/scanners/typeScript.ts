@@ -41,9 +41,10 @@ const TS_PATTERNS: Pattern[] = [
         extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'axios' } }),
     },
     // HTTP 호출 — .get/.post/.put/.delete("url") (일반 HTTP 클라이언트 체인)
+    // URL/경로 형태(/, http)로 시작하는 문자열만 매칭하여 map.get(), cache.delete() 등 false positive 방지
     {
         kind: 'call',
-        regex: /\.(get|post|put|delete|patch)\(\s*["']([^"'`][^"'`]*?)["']\s*[,)]/,
+        regex: /\.(get|post|put|delete|patch)\(\s*["']((?:\/|https?:\/\/)[^"'`]*?)["']\s*[,)]/,
         confidence: 0.6,
         extract: (m) => ({ symbol: m[2] ?? '', metadata: { method: (m[1] ?? '').toUpperCase(), client: 'http-chain' } }),
     },
