@@ -203,7 +203,7 @@ export function SettingsClient() {
 
         {/* ─── 추론/Rollup 탭 ─── */}
         <TabsContent value="engine">
-          <EngineSettings />
+          <EngineSettings workspaceId={workspaceId} />
         </TabsContent>
 
         {/* ─── 코드 스캔 탭 ─── */}
@@ -962,7 +962,7 @@ function AiSettings() {
 /* ════════════════════════════════════════════════════════════════
    추론 / Rollup 설정
    ════════════════════════════════════════════════════════════════ */
-function EngineSettings() {
+function EngineSettings({ workspaceId }: { workspaceId: string }) {
   const [wCode, setWCode] = useState(() => readLocalStorageNumber(LS.INF_W_CODE, 0.5, parseFloat));
   const [wDb, setWDb] = useState(() => readLocalStorageNumber(LS.INF_W_DB, 0.3, parseFloat));
   const [wMsg, setWMsg] = useState(() => readLocalStorageNumber(LS.INF_W_MSG, 0.2, parseFloat));
@@ -972,6 +972,9 @@ function EngineSettings() {
   const [minCluster, setMinCluster] = useState(() =>
     readLocalStorageNumber(LS.ROLLUP_CLUSTER, 3, (value) => parseInt(value, 10)),
   );
+  const [profileId, setProfileId] = useState<string | null>(null);
+  const [syncingProfile, setSyncingProfile] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // 가중치 합계 검증
@@ -982,21 +985,80 @@ function EngineSettings() {
   const clamp = (val: number, min: number, max: number) =>
     Math.max(min, Math.min(max, isNaN(val) ? min : val));
 
-  const save = () => {
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadDefaultProfile() {
+      setSyncingProfile(true);
+      try {
+        const res = await fetch(`/api/inference/profiles/default?workspaceId=${workspaceId}`);
+        if (!res.ok) throw new Error();
+        const profile = (await res.json()) as {
+          id: string;
+          wCode: number;
+          wDb: number;
+          wMsg: number;
+          minClusterSize: number;
+        };
+        if (cancelled) return;
+        setProfileId(profile.id);
+        setWCode(clamp(profile.wCode, 0, 1));
+        setWDb(clamp(profile.wDb, 0, 1));
+        setWMsg(clamp(profile.wMsg, 0, 1));
+        setMinCluster(clamp(profile.minClusterSize, 2, 50));
+      } catch {
+        if (!cancelled) {
+          toast.error('기본 추론 프로필 로드 실패 (로컬 설정으로 동작)');
+        }
+      } finally {
+        if (!cancelled) setSyncingProfile(false);
+      }
+    }
+
+    void loadDefaultProfile();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
+
+  const save = async () => {
     if (!weightOk) {
       toast.error(
         `가중치 합계가 ${weightSum.toFixed(2)}입니다. 합이 1.00이 되어야 합니다.`,
       );
       return;
     }
-    localStorage.setItem(LS.INF_W_CODE, wCode.toString());
-    localStorage.setItem(LS.INF_W_DB, wDb.toString());
-    localStorage.setItem(LS.INF_W_MSG, wMsg.toString());
-    localStorage.setItem(LS.ROLLUP_HUB, hubThreshold.toString());
-    localStorage.setItem(LS.ROLLUP_CLUSTER, minCluster.toString());
-    setSaved(true);
-    toast.success('추론/Rollup 설정 저장됨');
-    setTimeout(() => setSaved(false), 2000);
+    setSavingProfile(true);
+    try {
+      const res = await fetch('/api/inference/profiles/default', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          wCode,
+          wDb,
+          wMsg,
+          minClusterSize: minCluster,
+        }),
+      });
+      const payload = (await res.json()) as { id?: string; error?: string };
+      if (!res.ok) throw new Error(payload.error ?? '프로필 저장 실패');
+
+      if (payload.id) setProfileId(payload.id);
+      localStorage.setItem(LS.INF_W_CODE, wCode.toString());
+      localStorage.setItem(LS.INF_W_DB, wDb.toString());
+      localStorage.setItem(LS.INF_W_MSG, wMsg.toString());
+      localStorage.setItem(LS.ROLLUP_HUB, hubThreshold.toString());
+      localStorage.setItem(LS.ROLLUP_CLUSTER, minCluster.toString());
+
+      setSaved(true);
+      toast.success('추론/Rollup 설정 저장됨 (기본 프로필 동기화 완료)');
+      setTimeout(() => setSaved(false), 2000);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '설정 저장 실패');
+    } finally {
+      setSavingProfile(false);
+    }
   };
 
   return (
@@ -1008,6 +1070,10 @@ function EngineSettings() {
           <CardDescription>도메인 추론 Track A/B 파라미터 (합계 = 1.00)</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>{syncingProfile ? '기본 프로필 동기화 중...' : '기본 프로필 동기화됨'}</span>
+            {profileId && <span className="font-mono">profile: {profileId.slice(0, 8)}…</span>}
+          </div>
           <WeightSlider
             label="w_code (코드 분석)"
             value={wCode}
@@ -1137,12 +1203,18 @@ function EngineSettings() {
       </Card>
 
       {/* 저장 버튼 */}
-      <Button onClick={save} className="w-full sm:w-auto" disabled={!weightOk}>
+      <Button
+        onClick={() => void save()}
+        className="w-full sm:w-auto"
+        disabled={!weightOk || savingProfile || syncingProfile}
+      >
         {saved ? (
           <>
             <Check className="h-4 w-4 mr-1.5" />
             저장됨
           </>
+        ) : savingProfile ? (
+          '저장 중...'
         ) : (
           '설정 저장'
         )}

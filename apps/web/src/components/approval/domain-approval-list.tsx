@@ -5,10 +5,11 @@
  */
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
-import { Check, X, Brain } from 'lucide-react';
+import { useEffect, useState, useTransition, useCallback } from 'react';
+import { Check, X, Brain, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button, Badge, Spinner, ConfirmDialog } from '@archi-navi/ui';
+import { useWorkspace } from '@/contexts/workspace-context';
 
 /** 도메인 후보 타입 */
 interface DomainCandidate {
@@ -36,27 +37,61 @@ function getTopAffinities(
 }
 
 export function DomainApprovalList() {
+  const { workspaceId } = useWorkspace();
   const [candidates, setCandidates] = useState<DomainCandidate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [runningInference, setRunningInference] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [rejectTarget, setRejectTarget] = useState<DomainCandidate | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/inference/domain-candidates?status=PENDING');
-        if (!res.ok) throw new Error();
-        const data = (await res.json()) as DomainCandidate[];
-        setCandidates(data);
-      } catch {
-        setCandidates([]);
-      } finally {
-        setLoading(false);
-      }
+  const loadCandidates = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/inference/domain-candidates?workspaceId=${workspaceId}&status=PENDING`);
+      if (!res.ok) throw new Error();
+      const data = (await res.json()) as DomainCandidate[];
+      setCandidates(data);
+    } catch {
+      setCandidates([]);
+    } finally {
+      setLoading(false);
     }
-    void load();
-  }, []);
+  }, [workspaceId]);
+
+  useEffect(() => {
+    void loadCandidates();
+  }, [loadCandidates]);
+
+  const runDomainInference = async () => {
+    setRunningInference(true);
+    try {
+      const res = await fetch('/api/inference/domain-run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          track: 'all',
+        }),
+      });
+      const payload = (await res.json()) as {
+        error?: string;
+        result?: {
+          seed?: { candidateCount?: number };
+          discovery?: { clusterCount?: number };
+        };
+      };
+      if (!res.ok) throw new Error(payload.error ?? '도메인 추론 실행 실패');
+
+      const seedCount = payload.result?.seed?.candidateCount ?? 0;
+      const clusterCount = payload.result?.discovery?.clusterCount ?? 0;
+      toast.success(`도메인 추론 완료 — 후보 ${seedCount}개, 클러스터 ${clusterCount}개`);
+      await loadCandidates();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '도메인 추론 실행 실패');
+    } finally {
+      setRunningInference(false);
+    }
+  };
 
   function handleAction(id: string, action: 'APPROVED' | 'REJECTED') {
     startTransition(async () => {
@@ -90,14 +125,32 @@ export function DomainApprovalList() {
         <Brain className="h-8 w-8 text-primary/60" />
         <p className="text-sm font-medium">승인 대기 중인 도메인 후보가 없습니다</p>
         <p className="text-xs">
-          CLI에서 anavi infer 를 실행하면 새 도메인 후보가 생성됩니다
+          아래 도메인 추론 실행으로 Track A/B 후보를 생성할 수 있습니다
         </p>
+        <Button
+          onClick={() => void runDomainInference()}
+          disabled={runningInference}
+          className="mt-2"
+        >
+          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+          {runningInference ? '도메인 추론 실행 중...' : '도메인 추론 실행'}
+        </Button>
       </div>
     );
   }
 
   return (
     <>
+      <div className="mb-3 flex justify-end">
+        <Button
+          variant="outline"
+          onClick={() => void runDomainInference()}
+          disabled={runningInference}
+        >
+          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+          {runningInference ? '도메인 추론 실행 중...' : '도메인 추론 실행'}
+        </Button>
+      </div>
       <div className="space-y-2">
         {candidates.map((cand) => {
           const topAffinities = getTopAffinities(cand.affinityMap);

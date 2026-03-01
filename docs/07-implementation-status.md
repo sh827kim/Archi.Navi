@@ -76,9 +76,10 @@
 - ✅ 관계 후보 승인 시 evidence 승격(`relation_candidate_evidences -> relation_evidences`) 구현 완료
 - ✅ rollup/query 응답의 `baseRelationIds` provenance 저장/조회 구현 완료
 
-### 2.3 설정 반영
+### 2.3 설정 반영 (완료)
 
-- ⚠️ Settings의 추론 가중치(localStorage)가 추론 실행 프로필(DB)과 직접 연결되지 않음
+- ✅ Settings > 추론/Rollup 저장 시 `domain_inference_profiles` 기본 프로필과 동기화
+- ✅ 도메인 추론 실행 API에서 profile 미지정 시 기본 프로필 자동 적용
 
 ### 2.4 AST 고도화
 
@@ -96,7 +97,10 @@
 - `PATCH /api/inference/candidates/:id`
 - `GET /api/inference/domain-candidates`
 - `PATCH /api/inference/domain-candidates/:id`
+- `POST /api/inference/domain-run`
 - `POST /api/inference/llm-filter`
+- `GET /api/inference/profiles/default`
+- `PUT /api/inference/profiles/default`
 - `POST /api/query`
 - `POST /api/chat`
 
