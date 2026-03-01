@@ -182,7 +182,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
             <div className="glass-card rounded-xl p-4">
               <div className="text-sm font-medium text-foreground">CLI로 코드 스캔</div>
               <code className="mt-2 block rounded-lg bg-muted/50 px-3 py-2 text-xs font-mono text-foreground">
-                npx archi-navi scan --path ./your-project
+                npx anavi scan --path ./your-project
               </code>
               <p className="mt-2 text-xs text-muted-foreground">
                 프로젝트 코드를 분석하여 서비스, API, DB를 자동으로 등록합니다.

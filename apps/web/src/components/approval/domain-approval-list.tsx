@@ -90,7 +90,7 @@ export function DomainApprovalList() {
         <Brain className="h-8 w-8 text-primary/60" />
         <p className="text-sm font-medium">승인 대기 중인 도메인 후보가 없습니다</p>
         <p className="text-xs">
-          CLI에서 archi-navi infer 를 실행하면 새 도메인 후보가 생성됩니다
+          CLI에서 anavi infer 를 실행하면 새 도메인 후보가 생성됩니다
         </p>
       </div>
     );

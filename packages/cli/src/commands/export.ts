@@ -1,7 +1,7 @@
 /**
  * export 커맨드
  * 아키텍처 데이터를 JSON/YAML/DOT 형식으로 내보냅니다
- * 사용법: archi-navi export --workspace <id> --format json --output ./arch.json
+ * 사용법: anavi export --workspace <id> --format json --output ./arch.json
  */
 import { Command } from 'commander';
 import chalk from 'chalk';

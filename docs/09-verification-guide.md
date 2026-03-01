@@ -93,7 +93,7 @@ done
 
 ```bash
 # 실제 레포 디렉토리 스캔 (예시)
-pnpm --filter @archi-navi/cli exec ts-node bin/archi-navi.ts scan \
+pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts scan \
   --workspace "$WS" \
   --path /path/to/your/spring-boot-project
 
@@ -112,7 +112,7 @@ curl -s "$BASE/api/inference/candidates?workspaceId=$WS&status=PENDING" | jq '.[
 
 ```bash
 # 실제 소스 디렉토리에서 코드 신호 추출 (CLI 필요)
-pnpm --filter @archi-navi/cli exec ts-node bin/archi-navi.ts scan \
+pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts scan \
   --workspace "$WS" \
   --path /path/to/your/project \
   --lang java
@@ -138,7 +138,7 @@ pnpm --filter @archi-navi/inference test:unit -- \
 ### 추론 실행
 
 ```bash
-pnpm --filter @archi-navi/cli exec ts-node bin/archi-navi.ts infer \
+pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts infer \
   --workspace "$WS" \
   --track a
 ```
@@ -200,7 +200,7 @@ curl -s -X PATCH "$BASE/api/inference/domain-candidates/$FIRST_ID" \
 **동작:** 서비스 간 call/db/msg 관계를 가중 그래프로 구성 → Louvain 커뮤니티 탐지
 
 ```bash
-pnpm --filter @archi-navi/cli exec ts-node bin/archi-navi.ts infer \
+pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts infer \
   --workspace "$WS" \
   --track b \
   --min-cluster-size 2 \
@@ -262,7 +262,7 @@ curl -s "$BASE/api/objects?workspaceId=$WS&objectType=domain" \
 cd packages/inference && pnpm rebuild
 
 # AST 기반 스캔 실행 (Regex보다 정밀)
-pnpm --filter @archi-navi/cli exec ts-node bin/archi-navi.ts scan \
+pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts scan \
   --workspace "$WS" \
   --path /path/to/your/project
 ```
@@ -356,7 +356,7 @@ seed 데이터에 Kafka 토픽과 produce/consume 관계가 포함되어 있으�
 
 ```bash
 # Track A 실행
-pnpm --filter @archi-navi/cli exec ts-node bin/archi-navi.ts infer \
+pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts infer \
   --workspace "$WS" --track a
 
 # msg 신호 확인

@@ -58,7 +58,7 @@ Local-first를 기본 전제로, 개발자 로컬 환경에서 단일 프로세�
 | **DB** | PostgreSQL + PGlite | 17.x + latest | Local-first 핵심. PGlite는 Node.js/WASM 네이티브 |
 | **ORM** | Drizzle ORM | latest | TypeScript 네이티브, 경량, PGlite 호환, 타입 안전 |
 | **그래프 알고리즘** | graphology | latest | BFS/DFS, 커뮤니티 탐지(Louvain/Leiden), 경로 탐색 |
-| **그래프 시각화** | React Flow | latest | 인터랙티브 노드/엣지, 줌/팬, 커스텀 노드 |
+| **그래프 시각화** | Cytoscape.js + D3 Force | latest | 레이어드 뷰(Cytoscape) + 매핑 그래프(D3) |
 | **AI/LLM** | Vercel AI SDK (`ai`) | latest | OpenAI, Claude, Gemini 멀티 프로바이더 지원, 스트리밍 |
 | **상태관리** | Zustand | latest | 경량, TypeScript 친화, 보일러플레이트 최소 |
 | **CLI** | Commander.js + tsx | latest | npm 배포 가능, TypeScript 직접 실행 |
@@ -121,8 +121,9 @@ archi-navi/
 │   │   ├── src/
 │   │   │   ├── relation/             # Relation 추론
 │   │   │   ├── domain/               # Domain 추론 (Track A/B)
-│   │   │   ├── signals/              # 신호 추출 (Code/DB/Message)
-│   │   │   └── ast/                  # AST 플러그인 (Tree-sitter)
+│   │   │   ├── code/                 # Code Signal 추출 (Regex/AST)
+│   │   │   ├── db/                   # DB Signal 추출
+│   │   │   └── llm/                  # 후보 LLM 필터링
 │   │   └── package.json
 │   │
 │   ├── db/                           # DB 스키마 + 마이그레이션
@@ -137,7 +138,7 @@ archi-navi/
 │   │   │   ├── commands/             # scan, infer, rebuild, export, snapshot
 │   │   │   └── index.ts              # CLI 엔트리포인트
 │   │   ├── bin/
-│   │   │   └── archi-navi.ts         # npx 실행 엔트리
+│   │   │   └── anavi.ts              # npx 실행 엔트리
 │   │   └── package.json
 │   │
 │   ├── shared/                       # 공유 타입/유틸리티
@@ -169,7 +170,7 @@ archi-navi/
 - **책임**: UI 렌더링, API 라우트, 사용자 인터랙션
 - **기술**: Next.js 16 App Router, React 19, TailwindCSS, shadcn/ui, Zustand
 - **주요 페이지**:
-  - Architecture View: Roll-up 그래프 시각화 (React Flow)
+  - Architecture View: 레이어드 아키텍처 시각화 (Cytoscape)
   - Object Mapping View: 타입 필터 + drill-down/roll-down
   - Service List: 서비스 목록 + CSV Export
   - Approval: 추론 후보 승인/반려
@@ -204,11 +205,11 @@ archi-navi/
 
 - **책임**: 터미널 기반 조작
 - **명령어**:
-  - `archi-navi scan` — 소스코드/설정 스캔
-  - `archi-navi infer` — 관계/도메인 추론 실행
-  - `archi-navi rebuild-rollup` — Roll-up 전체 재빌드
-  - `archi-navi export` — 데이터 내보내기 (JSON/CSV)
-  - `archi-navi snapshot` — 현재 상태 스냅샷 저장
+  - `anavi scan` — 소스코드/설정 스캔
+  - `anavi infer` — 도메인 추론 실행 (Track A/B)
+  - `anavi rebuild-rollup` — Roll-up 전체 재빌드
+  - `anavi export` — 데이터 내보내기 (JSON/DOT)
+  - `anavi snapshot` — 현재 상태 스냅샷 저장
 
 ### 4.6 `packages/shared` — 공유 코드
 
@@ -227,17 +228,17 @@ archi-navi/
 ### 5.1 Local-first (기본)
 
 ```bash
-# 방법 1: npx로 즉시 실행
-npx archi-navi up
+# 웹 앱 실행
+pnpm install
+pnpm dev
 
-# 방법 2: 글로벌 설치
-pnpm add -g archi-navi
-archi-navi up
+# 필요 시 CLI 실행
+pnpm --filter @archi-navi/cli exec anavi --help
 ```
 
 - PGlite를 내장 DB로 사용 (별도 DB 설치 불필요)
 - 단일 프로세스로 Next.js 앱 + API 실행
-- 데이터는 `~/.archi-navi/` 디렉토리에 저장
+- 데이터는 `PGLITE_DATA_DIR` 기준 경로에 저장 (기본: `.archi-navi/data`)
 
 ### 5.2 Docker (팀 배포)
 
@@ -282,16 +283,19 @@ volumes:
 ```
 /api/workspaces                    # 워크스페이스 CRUD
 /api/objects                       # Object CRUD + 검색
-/api/objects/:id/relations         # 특정 Object의 관계
+/api/objects/:id                   # Object 상세/수정/삭제
+/api/objects/:id/tags              # Object 태그 연결
 /api/relations                     # Relation CRUD
-/api/relations/candidates          # 추론 후보 조회/승인/반려
+/api/inference/candidates          # 관계 후보 조회
+/api/inference/candidates/:id      # 관계 후보 승인/거부
 /api/rollups                       # Rollup 그래프 조회
-/api/rollups/rebuild               # Rollup 재빌드 트리거
 /api/query                         # Deterministic Query Engine
 /api/inference/run                 # 추론 실행
-/api/domains                       # Domain 관리
-/api/domains/discovery             # Seed-less Discovery 실행
+/api/inference/domain-candidates   # 도메인 후보 조회
+/api/inference/domain-candidates/:id # 도메인 후보 승인/거부
+/api/domains                       # Domain 조회
 /api/chat                          # AI Chat (스트리밍)
+/api/scan                          # 프로젝트 스캔 + 서비스 등록
 ```
 
 ### 6.2 공통 응답 형식

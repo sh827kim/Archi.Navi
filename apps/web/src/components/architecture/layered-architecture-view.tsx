@@ -60,6 +60,13 @@ interface RelationData {
   relationType: string;
 }
 
+interface RollupEdgeData {
+  id: string;
+  source: string;
+  target: string;
+  relationType: string;
+}
+
 /* ─── 엣지 타입별 색상 (Cosmic 테마) ─── */
 const EDGE_COLORS: Record<string, string> = {
   call: '#818cf8',          // indigo
@@ -207,20 +214,50 @@ export function LayeredArchitectureView() {
     setLoading(true);
     try {
       const q = `workspaceId=${workspaceId}`;
-      const [layersRes, assignmentsRes, objectsRes, relationsRes, tagsRes] =
+      const [
+        layersRes,
+        assignmentsRes,
+        objectsRes,
+        tagsRes,
+        s2sRes,
+        s2dbRes,
+        s2bRes,
+        relationsRes,
+      ] =
         await Promise.all([
           fetch(`/api/layers?${q}`),
           fetch(`/api/layers/assignments?${q}`),
           fetch(`/api/objects?${q}`),
-          fetch(`/api/relations?${q}`),
           fetch(`/api/object-tags?${q}`), // Object별 태그 일괄 조회
+          fetch(`/api/rollups?${q}&level=SERVICE_TO_SERVICE`),
+          fetch(`/api/rollups?${q}&level=SERVICE_TO_DATABASE`),
+          fetch(`/api/rollups?${q}&level=SERVICE_TO_BROKER`),
+          fetch(`/api/relations?${q}`), // depend_on 보강용
         ]);
 
       const layers = (await layersRes.json()) as LayerData[];
       const assignments = (await assignmentsRes.json()) as AssignmentData[];
       const allObjects = (await objectsRes.json()) as ObjectData[];
-      const relations = (await relationsRes.json()) as RelationData[];
       const nodeTags = (await tagsRes.json()) as Record<string, TagData[]>;
+      const s2s = (await s2sRes.json()) as { edges?: RollupEdgeData[] };
+      const s2db = (await s2dbRes.json()) as { edges?: RollupEdgeData[] };
+      const s2b = (await s2bRes.json()) as { edges?: RollupEdgeData[] };
+      const directRelations = (await relationsRes.json()) as RelationData[];
+
+      const rollupEdges = [
+        ...(s2s.edges ?? []),
+        ...(s2db.edges ?? []),
+        ...(s2b.edges ?? []),
+      ];
+      const dependOnEdges = directRelations
+        .filter((rel) => rel.relationType === 'depend_on')
+        .map((rel) => ({
+          id: rel.id,
+          source: rel.subjectObjectId,
+          target: rel.objectId,
+          relationType: rel.relationType,
+        }));
+      const graphEdges = [...rollupEdges, ...dependOnEdges];
 
       if (layers.length === 0 && allObjects.length === 0) {
         setHasData(false);
@@ -326,21 +363,21 @@ export function LayeredArchitectureView() {
 
       // 엣지 — COMPOUND 오브젝트 간의 관계만
       const assignedIds = new Set(assignedObjects.map((o) => o.id));
-      for (const rel of relations) {
-        if (assignedIds.has(rel.subjectObjectId) && assignedIds.has(rel.objectId)) {
+      for (const edge of graphEdges) {
+        if (assignedIds.has(edge.source) && assignedIds.has(edge.target)) {
           /*
            * read / consume 은 데이터 흐름이 objectId → subjectObjectId 방향.
            * Cytoscape source/target을 swap하여 화살표가 데이터 목적지를 향하게 함.
            * source-arrow에 origin dot(ellipse)을 추가해 출처를 표시.
            */
-          const isReversed = ['read', 'consume'].includes(rel.relationType);
+          const isReversed = ['read', 'consume'].includes(edge.relationType);
           elements.push({
             data: {
-              id: `edge-${rel.id}`,
-              source: isReversed ? rel.objectId : rel.subjectObjectId,
-              target: isReversed ? rel.subjectObjectId : rel.objectId,
-              relationType: rel.relationType,
-              color: EDGE_COLORS[rel.relationType] ?? '#6b7280',
+              id: `edge-${edge.id}`,
+              source: isReversed ? edge.target : edge.source,
+              target: isReversed ? edge.source : edge.target,
+              relationType: edge.relationType,
+              color: EDGE_COLORS[edge.relationType] ?? '#6b7280',
               isReversed: isReversed ? '1' : '0', // Cytoscape 선택자는 string 비교
             },
           });
@@ -459,8 +496,7 @@ export function LayeredArchitectureView() {
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    cy.edges().style('curve-style' as any, curveStyle);
+    cy.edges().style('curve-style', curveStyle);
   }, [curveStyle]);
 
   /* ─── 줌 컨트롤 ─── */

@@ -162,11 +162,11 @@ relation에 metadata(JSON) 필드 추가
 
 # 11. CLI 확장 전략
 
--   archi-navi scan
--   archi-navi infer
--   archi-navi rebuild-rollup
--   archi-navi export
--   archi-navi snapshot
+-   anavi scan
+-   anavi infer
+-   anavi rebuild-rollup
+-   anavi export
+-   anavi snapshot
 
 ------------------------------------------------------------------------
 

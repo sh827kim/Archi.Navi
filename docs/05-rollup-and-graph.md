@@ -166,8 +166,8 @@ Full rebuild가 아닌, 영향받는 노드만 부분 재계산한다.
 ### 6.3 CLI 지원
 
 ```bash
-archi-navi rebuild-rollup              # 전체 재빌드
-archi-navi rebuild-rollup --incremental # 변경분만 재빌드
+anavi rebuild-rollup              # 전체 재빌드
+anavi rebuild-rollup --incremental # 변경분만 재빌드
 ```
 
 ---

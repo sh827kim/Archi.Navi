@@ -189,7 +189,7 @@ MSA/멀티 레포 환경에서는 아래 문제가 반복된다.
 ### 9.2 npm 배포
 
 - 가능
-- 권장 형태: CLI 실행형 배포(`npx archi-navi up`) + Docker 병행
+- 권장 형태: CLI 실행형 배포(`npx anavi up`) + Docker 병행
 
 ## 10. 성공 지표 (초안)
 

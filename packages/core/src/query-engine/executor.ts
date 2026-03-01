@@ -9,6 +9,7 @@ import { analyzeImpact } from './impactAnalysis';
 import { discoverUsage } from './usageDiscovery';
 import { summarizeDomain } from './domainSummary';
 import { DEFAULTS } from '@archi-navi/shared';
+import { getActiveGeneration } from '../rollup/generationManager';
 
 /**
  * 쿼리 실행 메인 진입점
@@ -20,8 +21,11 @@ export async function executeQuery(
 ): Promise<QueryResponse> {
   const startTime = Date.now();
 
-  // 기본 generation_version은 호출자가 주입 (API 레이어에서 ACTIVE 조회 후 전달)
-  const generationVersion = request.generationVersion ?? 0;
+  // generationVersion이 없으면 workspace의 ACTIVE generation을 사용한다.
+  const generationVersion =
+    request.generationVersion ??
+    (await getActiveGeneration(db, request.workspaceId)) ??
+    0;
 
   let result: QueryResponse['result'];
 

@@ -35,6 +35,9 @@ test-results/
 .DS_Store
 Thumbs.db
 
+# local-only-docs (로컬 전용 문서: GitHub에 올라가면 안 됨)
+local-only-docs/
+
 # PGlite 데이터 (로컬 전용)
 .archi-navi/
 

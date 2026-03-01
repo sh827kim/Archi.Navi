@@ -73,6 +73,7 @@ async function buildServiceToService(
         eq(objectRelations.workspaceId, workspaceId),
         eq(objectRelations.relationType, 'call'),
         eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
       ),
     );
 
@@ -85,6 +86,7 @@ async function buildServiceToService(
         eq(objectRelations.workspaceId, workspaceId),
         eq(objectRelations.relationType, 'expose'),
         eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
       ),
     );
 
@@ -156,6 +158,7 @@ async function buildServiceToDatabase(
           eq(objectRelations.workspaceId, workspaceId),
           eq(objectRelations.relationType, relType),
           eq(objectRelations.isDerived, false),
+          eq(objectRelations.status, 'APPROVED'),
         ),
       );
 
@@ -215,6 +218,7 @@ async function buildServiceToBroker(
           eq(objectRelations.workspaceId, workspaceId),
           eq(objectRelations.relationType, relType),
           eq(objectRelations.isDerived, false),
+          eq(objectRelations.status, 'APPROVED'),
         ),
       );
 
@@ -564,6 +568,7 @@ async function findCallersOfEndpoint(
         eq(objectRelations.relationType, 'call'),
         eq(objectRelations.objectId, endpointId),
         eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
       ),
     );
   return rows.map((r) => r.subjectObjectId);
@@ -583,6 +588,7 @@ async function findSubjectsReferencingObject(
         eq(objectRelations.workspaceId, workspaceId),
         eq(objectRelations.objectId, objectId),
         eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
       ),
     );
   return rows.map((r) => r.subjectObjectId);
@@ -651,6 +657,7 @@ async function incrementalBuildS2S(
         eq(objectRelations.workspaceId, workspaceId),
         eq(objectRelations.relationType, 'call'),
         eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
       ),
     );
 
@@ -662,6 +669,7 @@ async function incrementalBuildS2S(
         eq(objectRelations.workspaceId, workspaceId),
         eq(objectRelations.relationType, 'expose'),
         eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
       ),
     );
 
@@ -747,6 +755,7 @@ async function incrementalBuildS2DB(
           eq(objectRelations.workspaceId, workspaceId),
           eq(objectRelations.relationType, relType),
           eq(objectRelations.isDerived, false),
+          eq(objectRelations.status, 'APPROVED'),
           inArray(objectRelations.subjectObjectId, idArray),
         ),
       );
@@ -819,6 +828,7 @@ async function incrementalBuildS2B(
           eq(objectRelations.workspaceId, workspaceId),
           eq(objectRelations.relationType, relType),
           eq(objectRelations.isDerived, false),
+          eq(objectRelations.status, 'APPROVED'),
           inArray(objectRelations.subjectObjectId, idArray),
         ),
       );

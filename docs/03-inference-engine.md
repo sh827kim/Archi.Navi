@@ -60,7 +60,9 @@
 ### 2.1 추론 파이프라인 — 전체 흐름
 
 ```
-CLI: archi-navi scan --mode <mode>
+CLI/Web: 프로젝트 스캔으로 service Object + scanPath 등록
+  - CLI: anavi scan --workspace <id> [--path|--workspace-dir|--github-repo|--github-org]
+  - Web: POST /api/scan
       ↓
 Signal Collector 실행 (소스별)
       ↓
@@ -68,7 +70,9 @@ evidences 테이블에 근거 저장
       ↓
 code_call_edges / code_import_edges에 구조 데이터 저장
       ↓
-CLI: archi-navi infer --track relations
+Web API: POST /api/inference/run
+  - modes: config | code | db
+  - repoRoots 또는 service.metadata.scanPath 기반 실행
       ↓
 Relation Inference Engine 실행
   - Signal Store 조회
@@ -91,14 +95,18 @@ Signal Collector는 **원본 데이터를 분석하여 구조화된 신호로 �
 #### 수집 모드별 CLI 호출
 
 ```bash
-# 코드 신호 수집 (Phase 1: Regex / Phase 2: AST)
-archi-navi scan --mode code-signals --workspace <id> --repo-root <path>
+# 1) 서비스 등록(스캔)
+anavi scan --workspace <workspaceId> --path /path/to/repo
 
-# 설정 파일 신호 수집
-archi-navi scan --mode config-signals --workspace <id> --repo-root <path>
+# 2) 관계 추론 실행 (API)
+curl -X POST http://localhost:3000/api/inference/run \
+  -H 'Content-Type: application/json' \
+  -d '{"workspaceId":"<workspaceId>","modes":["config","db"],"useServiceMetadataPaths":true}'
 
-# DB 스키마 신호 수집
-archi-navi scan --mode db-signals --workspace <id> --connection <dsn>
+# 3) (선택) 코드 신호 포함 실행
+curl -X POST http://localhost:3000/api/inference/run \
+  -H 'Content-Type: application/json' \
+  -d '{"workspaceId":"<workspaceId>","modes":["config","code","db"],"repoRoots":["/abs/repo/path"]}'
 ```
 
 #### 수집 결과 저장 위치
@@ -465,7 +473,7 @@ Phase 1은 빠르게 구현하여 추론 파이프라인 전체를 동작시키�
 #### 6.1.4 수집 흐름
 
 ```
-archi-navi scan --mode code-signals --repo-root <path>
+POST /api/inference/run  (modes에 code 포함)
       ↓
 1. 파일 탐색 (언어별 확장자 필터: .java, .kt, .ts, .js, .py)
       ↓
@@ -615,7 +623,7 @@ services:
 ### 7.4 수집 흐름
 
 ```
-archi-navi scan --mode config-signals --repo-root <path>
+POST /api/inference/run  (modes에 config 포함)
       ↓
 1. 설정 파일 탐색
    - **/application*.yml, **/application*.properties
@@ -674,8 +682,6 @@ relation_candidates (PENDING)
 |--------|------|------|
 | `GET` | `/api/inference/domain-candidates?workspaceId=&status=PENDING` | 도메인 후보 목록 조회 |
 | `PATCH` | `/api/inference/domain-candidates/:id` | 승인/거부 (body: `{ status }`) |
-| `GET` | `/api/inference/discovery-runs?workspaceId=` | Discovery 실행 이력 조회 |
-| `POST` | `/api/inference/discovery-runs/:runId/apply` | Discovery 결과 적용 (→ affinities) |
 
 #### 승인 흐름
 
@@ -702,16 +708,16 @@ domain_candidates (PENDING)
 
 ## 9. 구현 로드맵
 
-### Phase 1 — 추론 파이프라인 MVP (v2.0)
+### Phase 1 — 추론 파이프라인 MVP (2026-03-01 기준)
 
-| 순서 | 작업 | 예상 효과 |
-|------|------|----------|
-| 1 | Config 기반 Relation 추론 (`configBased.ts` 구현) | 서비스↔DB, 서비스↔Broker 관계 자동 발견 (30~40%) |
-| 2 | Regex 기반 Code Signal 추출 | 서비스↔서비스 call, expose, produce/consume (30~40%) |
-| 3 | DB Signal 구현 (`seedBased.ts`의 `dbScore`) | Domain 추론 정확도 향상 |
-| 4 | Domain Candidates 승인 API + UI | Track A/B 결과 활용 |
-| 5 | Discovery 다중 레이어 통합 | Track B 정확도 향상 |
-| 6 | 클러스터 Label 자동 추출 | Discovery UX 개선 |
+| 순서 | 작업 | 상태 |
+|------|------|------|
+| 1 | Config 기반 Relation 추론 (`configBased.ts`) | ✅ 구현 |
+| 2 | Regex 기반 Code Signal 추출 | ✅ 구현 |
+| 3 | DB Signal 구현 (`dbScore`, FK 후보) | ✅ 구현 |
+| 4 | Domain Candidates 승인 API + UI | ✅ 구현 |
+| 5 | Discovery 다중 레이어 통합 | ⚠️ 부분 구현 |
+| 6 | 클러스터 Label 자동 추출 | ⚠️ 부분 구현 |
 
 **Phase 1 완료 시 목표: 전체 Relation의 60~80% 자동 추론**
 

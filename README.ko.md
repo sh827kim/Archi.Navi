@@ -98,7 +98,7 @@ archi-navi/
 |------|------|
 | 프론트엔드 | Next.js 16 (App Router) + React 19 + TypeScript |
 | UI 라이브러리 | TailwindCSS 4 + shadcn/ui |
-| 그래프 시각화 | Cytoscape.js + React Flow |
+| 그래프 시각화 | Cytoscape.js + D3 Force |
 | 상태 관리 | Zustand |
 | 데이터베이스 | PGlite (로컬) / PostgreSQL 17 (팀 배포) |
 | ORM | Drizzle ORM |
@@ -181,23 +181,32 @@ pnpm db:studio      # Drizzle Studio 열기 (DB 브라우저)
 CLI는 소스코드 스캔, 추론 실행, 데이터 관리에 사용합니다.
 
 ```bash
-# 소스코드 및 설정 파일 스캔
-archi-navi scan --path /path/to/project --mode code
+# 소스코드/레포 스캔 (서비스 등록)
+anavi scan --workspace <workspaceId> --path /path/to/project
 
-# 관계/도메인 추론 실행
-archi-navi infer --workspace <workspaceId>
+# (옵션) 워크스페이스 폴더 일괄 스캔
+anavi scan --workspace <workspaceId> --workspace-dir /path/to/workspace
+
+# 도메인 추론 실행 (Track A/B)
+anavi infer --workspace <workspaceId> --track all
 
 # Rollup 그래프 재빌드
-archi-navi rebuild-rollup --workspace <workspaceId>
+anavi rebuild-rollup --workspace <workspaceId>
 
 # 데이터 내보내기
-archi-navi export --format json --output ./export.json
+anavi export --workspace <workspaceId> --format json --output ./export.json
 
 # 현재 상태 스냅샷 저장
-archi-navi snapshot
+anavi snapshot save --output ./anavi-snapshot.db
 ```
 
-스캔 모드: `code` | `db` | `config` | `all`
+관계 추론(후보 생성)은 Web API로 실행:
+
+```bash
+curl -X POST http://localhost:3000/api/inference/run \
+  -H 'Content-Type: application/json' \
+  -d '{"workspaceId":"<workspaceId>","modes":["config","db"],"useServiceMetadataPaths":true}'
+```
 
 ---
 
@@ -251,9 +260,9 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 | 도메인 추론 Track A (Seed 기반) | ✅ 완료 |
 | 도메인 추론 Track B (Louvain Discovery) | ✅ 완료 |
 | AI Chat (스트리밍, 멀티 프로바이더) | ✅ 완료 |
-| DB 시그널 추출 (추론 정밀도 향상) | 🔜 v2 로드맵 |
-| AST 플러그인 (Tree-sitter) | 🔜 v2 로드맵 |
-| Evidence Assembler (AI Chat 연동) | 🔜 v2 로드맵 |
+| DB 시그널 추출 (추론 정밀도 향상) | ✅ 완료 |
+| AST 플러그인 (Tree-sitter/WASM) | ⚠️ 부분 구현 (기본 파이프라인은 Regex 중심) |
+| Evidence Assembler (AI Chat 연동) | ✅ 완료 |
 
 ---
 

@@ -5,10 +5,11 @@
  */
 'use client';
 
-import { useEffect, useState, useTransition } from 'react';
-import { Check, X } from 'lucide-react';
+import { useEffect, useState, useTransition, useCallback } from 'react';
+import { Check, X, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button, Badge, Spinner, ConfirmDialog } from '@archi-navi/ui';
+import { useWorkspace } from '@/contexts/workspace-context';
 
 /** 후보 관계 타입 */
 interface RelationCandidate {
@@ -22,27 +23,58 @@ interface RelationCandidate {
 }
 
 export function ApprovalList() {
+  const { workspaceId } = useWorkspace();
   const [candidates, setCandidates] = useState<RelationCandidate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [runningInference, setRunningInference] = useState(false);
   const [isPending, startTransition] = useTransition();
   const [rejectTarget, setRejectTarget] = useState<RelationCandidate | null>(null);
 
-  useEffect(() => {
-    async function load() {
-      setLoading(true);
-      try {
-        const res = await fetch('/api/inference/candidates?status=PENDING');
-        if (!res.ok) throw new Error();
-        const data = (await res.json()) as RelationCandidate[];
-        setCandidates(data);
-      } catch {
-        setCandidates([]);
-      } finally {
-        setLoading(false);
-      }
+  const loadCandidates = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await fetch(`/api/inference/candidates?workspaceId=${workspaceId}&status=PENDING`);
+      if (!res.ok) throw new Error();
+      const data = (await res.json()) as RelationCandidate[];
+      setCandidates(data);
+    } catch {
+      setCandidates([]);
+    } finally {
+      setLoading(false);
     }
-    void load();
-  }, []);
+  }, [workspaceId]);
+
+  useEffect(() => {
+    void loadCandidates();
+  }, [loadCandidates]);
+
+  const runInference = async () => {
+    setRunningInference(true);
+    try {
+      const res = await fetch('/api/inference/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          modes: ['config', 'db'],
+          useServiceMetadataPaths: true,
+        }),
+      });
+      const payload = (await res.json()) as {
+        error?: string;
+        summary?: { relationCandidatesCreated?: number };
+      };
+      if (!res.ok) throw new Error(payload.error ?? '추론 실행 실패');
+
+      const created = payload.summary?.relationCandidatesCreated ?? 0;
+      toast.success(`추론 실행 완료 — 관계 후보 ${created}개 생성`);
+      await loadCandidates();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '추론 실행 실패');
+    } finally {
+      setRunningInference(false);
+    }
+  };
 
   function handleAction(id: string, action: 'APPROVED' | 'REJECTED') {
     startTransition(async () => {
@@ -75,14 +107,33 @@ export function ApprovalList() {
         <Check className="h-8 w-8 text-green-500" />
         <p className="text-sm font-medium">승인 대기 중인 관계가 없습니다</p>
         <p className="text-xs">
-          CLI에서 archi-navi infer 를 실행하면 새 후보가 생성됩니다
+          먼저 코드 스캔으로 서비스 경로를 등록한 뒤, 아래 추론 실행으로 후보를 생성하세요
         </p>
+        <Button
+          onClick={() => void runInference()}
+          disabled={runningInference}
+          className="mt-2"
+        >
+          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+          {runningInference ? '추론 실행 중...' : '추론 실행'}
+        </Button>
       </div>
     );
   }
 
   return (
     <>
+      <div className="mb-3 flex justify-end">
+        <Button
+          variant="outline"
+          onClick={() => void runInference()}
+          disabled={runningInference}
+        >
+          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+          {runningInference ? '추론 실행 중...' : '추론 실행'}
+        </Button>
+      </div>
+
       <div className="space-y-2">
         {candidates.map((cand) => (
           <div

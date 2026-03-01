@@ -5,7 +5,7 @@
  */
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTheme } from 'next-themes';
@@ -59,12 +59,13 @@ const navItems = [
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { theme, setTheme } = useTheme();
-
-  // 하이드레이션 불일치 방지 — 서버에서는 테마를 알 수 없으므로 마운트 후에만 렌더링
-  const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
-  const isDark = mounted ? theme === 'dark' : false;
+  const { theme, resolvedTheme, setTheme } = useTheme();
+  const hydrated = useSyncExternalStore(
+    () => () => {},
+    () => true,
+    () => false,
+  );
+  const isDark = hydrated && (resolvedTheme ?? theme) === 'dark';
 
   return (
     <aside className="flex h-screen w-64 flex-col glass-panel">

@@ -82,6 +82,17 @@ type ViewLevel =
   | 'DOMAIN_TO_DOMAIN'
   | 'COMPOUND_VIEW';
 
+type RollupLevelKey = Exclude<ViewLevel, 'COMPOUND_VIEW'>;
+
+interface RollupEdgeApiItem {
+  id: string;
+  source: string;
+  target: string;
+  relationType: string;
+}
+
+type RollupRelationMap = Record<RollupLevelKey, RelationItem[]>;
+
 const LEVEL_TYPES: Partial<Record<ViewLevel, string[]>> = {
   SERVICE_TO_SERVICE: ['service'],
   SERVICE_TO_DATABASE: ['service', 'database'],
@@ -239,22 +250,62 @@ export function RollupGraph() {
   const [rollDownInfo, setRollDownInfo] = useState<RollDownPanelItem[]>([]);
 
   /* 전체 데이터 캐시 */
-  const dataRef = useRef<{ objects: ObjectItem[]; relations: RelationItem[] }>({
+  const dataRef = useRef<{
+    objects: ObjectItem[];
+    relations: RelationItem[];
+    rollups: RollupRelationMap;
+  }>({
     objects: [],
     relations: [],
+    rollups: {
+      SERVICE_TO_SERVICE: [],
+      SERVICE_TO_DATABASE: [],
+      SERVICE_TO_BROKER: [],
+      DOMAIN_TO_DOMAIN: [],
+    },
   });
 
   /* ─── 데이터 fetch (workspaceId 변경 시 갱신) ─── */
   const fetchData = useCallback(async () => {
-    const [objRes, relRes] = await Promise.all([
+    const rollupLevels: RollupLevelKey[] = [
+      'SERVICE_TO_SERVICE',
+      'SERVICE_TO_DATABASE',
+      'SERVICE_TO_BROKER',
+      'DOMAIN_TO_DOMAIN',
+    ];
+
+    const [objRes, relRes, ...rollupResList] = await Promise.all([
       fetch(`/api/objects?workspaceId=${workspaceId}`),
       fetch(`/api/relations?workspaceId=${workspaceId}`),
+      ...rollupLevels.map((level) => fetch(`/api/rollups?workspaceId=${workspaceId}&level=${level}`)),
     ]);
-    if (!objRes.ok || !relRes.ok) throw new Error('데이터 로드 실패');
+    if (!objRes.ok || !relRes.ok || rollupResList.some((res) => !res.ok)) {
+      throw new Error('데이터 로드 실패');
+    }
+
     const allObjects = (await objRes.json()) as ObjectItem[];
     const allRelations = (await relRes.json()) as RelationItem[];
-    dataRef.current = { objects: allObjects, relations: allRelations };
-    return { allObjects, allRelations };
+
+    const rollups: RollupRelationMap = {
+      SERVICE_TO_SERVICE: [],
+      SERVICE_TO_DATABASE: [],
+      SERVICE_TO_BROKER: [],
+      DOMAIN_TO_DOMAIN: [],
+    };
+
+    for (let idx = 0; idx < rollupLevels.length; idx++) {
+      const level = rollupLevels[idx]!;
+      const payload = (await rollupResList[idx]!.json()) as { edges?: RollupEdgeApiItem[] };
+      rollups[level] = (payload.edges ?? []).map((edge) => ({
+        id: `rollup-${edge.id}`,
+        subjectObjectId: edge.source,
+        objectId: edge.target,
+        relationType: edge.relationType,
+      }));
+    }
+
+    dataRef.current = { objects: allObjects, relations: allRelations, rollups };
+    return { allObjects, allRelations, allRollups: rollups };
   }, [workspaceId]);
 
   /* ─── D3 그래프 빌드 ─── */
@@ -271,7 +322,7 @@ export function RollupGraph() {
       simulationRef.current = null;
 
       try {
-        const { allObjects, allRelations } = await fetchData();
+        const { allObjects, allRelations, allRollups } = await fetchData();
 
         /* ── Roll-down LR Flow 패널 데이터 계산 (allObjects/allRelations 전체 기준) ── */
         if (expanded.size > 0) {
@@ -332,10 +383,16 @@ export function RollupGraph() {
               };
             });
 
-            /* ② Outbound: 대상 COMPOUND의 ATOMIC이 호출하는 외부 Atomic (관계 타입 필터 적용) */
+            /*
+             * ② Outbound: 대상 COMPOUND가 참조하는 외부 Atomic
+             *   - legacy: 자식 ATOMIC → 외부 Atomic
+             *   - canonical: COMPOUND(service) → 외부 endpoint/table/topic
+             */
             const refMap = new Map<string, ReferencedAtomicInfo>();
             allRelations
-              .filter((r) => atomicChildIds.has(r.subjectObjectId))
+              .filter(
+                (r) => atomicChildIds.has(r.subjectObjectId) || r.subjectObjectId === compoundId,
+              )
               .forEach((r) => {
                 // 뷰 레벨에 맞지 않는 관계 타입 제외
                 if (allowedRelTypes && !allowedRelTypes.has(r.relationType)) return;
@@ -382,16 +439,28 @@ export function RollupGraph() {
 
         if (level === 'COMPOUND_VIEW') {
           /*
-           * 전체 통합 뷰: 서비스↔서비스, 서비스↔DB, 서비스↔브로커 등
-           * 타입 구분 없이 모든 depth=0 최상위 오브젝트 + 이들 사이의 모든 관계를 표시.
-           * Roll-down(부모-자식 전개) 없음 → containsLinks 생성 안 함.
+           * 전체 통합 뷰:
+           *   - 상위 객체(depth=0)만 표시
+           *   - 기본 엣지: S2S/S2DB/S2B rollup + static depend_on
            */
           filteredObjects = allObjects.filter((o) => o.depth === 0);
-          containsLinks = []; // 이 뷰는 상위 레벨 관계만 표시
+          containsLinks = [];
           const idSet = new Set(filteredObjects.map((o) => o.id));
-          filteredRelations = allRelations.filter(
-            (r) => idSet.has(r.subjectObjectId) && idSet.has(r.objectId),
+
+          const rollupCompoundRelations = [
+            ...allRollups.SERVICE_TO_SERVICE,
+            ...allRollups.SERVICE_TO_DATABASE,
+            ...allRollups.SERVICE_TO_BROKER,
+          ];
+          const staticCompoundRelations = allRelations.filter(
+            (r) => r.relationType === 'depend_on',
           );
+
+          const relationMap = new Map<string, RelationItem>();
+          [...rollupCompoundRelations, ...staticCompoundRelations]
+            .filter((r) => idSet.has(r.subjectObjectId) && idSet.has(r.objectId))
+            .forEach((r) => relationMap.set(r.id, r));
+          filteredRelations = [...relationMap.values()];
         } else {
           const allowedTypes = LEVEL_TYPES[level] ?? [];
           const baseObjects = allObjects.filter(
@@ -417,9 +486,27 @@ export function RollupGraph() {
             }));
 
           const idSet = new Set(filteredObjects.map((o) => o.id));
-          filteredRelations = allRelations.filter(
+          const rollupRelations = allRollups[level].filter(
             (r) => idSet.has(r.subjectObjectId) && idSet.has(r.objectId),
           );
+          const staticServiceDeps = level === 'SERVICE_TO_SERVICE'
+            ? allRelations.filter(
+              (r) =>
+                r.relationType === 'depend_on' &&
+                idSet.has(r.subjectObjectId) &&
+                idSet.has(r.objectId),
+            )
+            : [];
+          const drillDownRelations = expanded.size > 0
+            ? allRelations.filter(
+              (r) => idSet.has(r.subjectObjectId) && idSet.has(r.objectId),
+            )
+            : [];
+
+          const relationMap = new Map<string, RelationItem>();
+          [...rollupRelations, ...staticServiceDeps, ...drillDownRelations]
+            .forEach((r) => relationMap.set(r.id, r));
+          filteredRelations = [...relationMap.values()];
         }
 
         if (filteredObjects.length === 0) {

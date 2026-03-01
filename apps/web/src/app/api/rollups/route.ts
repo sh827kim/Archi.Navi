@@ -78,8 +78,11 @@ export async function GET(req: NextRequest) {
       id: e.id,
       source: e.subjectObjectId,
       target: e.objectId,
+      relationType: e.relationType,
+      rollupLevel: e.rollupLevel,
       label: level.split('_TO_')[0]?.toLowerCase() ?? 'edge',
       weight: e.edgeWeight,
+      confidence: e.confidence,
     }));
 
     return NextResponse.json({ nodes, edges });

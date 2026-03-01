@@ -1,8 +1,8 @@
 /**
  * snapshot 커맨드
  * PGlite DB 파일을 백업/복원합니다
- * 사용법: archi-navi snapshot save --output ./backup.db
- *         archi-navi snapshot restore --input ./backup.db
+ * 사용법: anavi snapshot save --output ./backup.db
+ *         anavi snapshot restore --input ./backup.db
  */
 import { Command } from 'commander';
 import chalk from 'chalk';
@@ -23,7 +23,7 @@ export function createSnapshotCommand(): Command {
     .command('save')
     .description('현재 DB 상태를 파일로 저장합니다')
     .option('--db-path <path>', 'DB 파일 경로', DEFAULT_DB_PATH)
-    .option('-o, --output <path>', '출력 경로', './archi-navi-snapshot.db')
+    .option('-o, --output <path>', '출력 경로', './anavi-snapshot.db')
     .action(async (options: { dbPath: string; output: string }) => {
       const spinner = ora('스냅샷 저장 중...').start();
 
@@ -52,7 +52,7 @@ export function createSnapshotCommand(): Command {
     .command('restore')
     .description('스냅샷 파일에서 DB를 복원합니다')
     .option('--db-path <path>', 'DB 파일 경로', DEFAULT_DB_PATH)
-    .option('-i, --input <path>', '입력 스냅샷 경로', './archi-navi-snapshot.db')
+    .option('-i, --input <path>', '입력 스냅샷 경로', './anavi-snapshot.db')
     .action(async (options: { dbPath: string; input: string }) => {
       const spinner = ora('스냅샷 복원 중...').start();
 

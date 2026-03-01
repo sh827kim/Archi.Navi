@@ -183,19 +183,19 @@ The CLI is used to scan source code, run inference, and manage data.
 
 ```bash
 # Scan source code and configuration files
-archi-navi scan --path /path/to/project --mode code
+anavi scan --path /path/to/project --mode code
 
 # Run relation/domain inference
-archi-navi infer --workspace <workspaceId>
+anavi infer --workspace <workspaceId>
 
 # Rebuild rollup graph
-archi-navi rebuild-rollup --workspace <workspaceId>
+anavi rebuild-rollup --workspace <workspaceId>
 
 # Export data
-archi-navi export --format json --output ./export.json
+anavi export --format json --output ./export.json
 
 # Save a snapshot of the current state
-archi-navi snapshot
+anavi snapshot
 ```
 
 Scan modes: `code` | `db` | `config` | `all`

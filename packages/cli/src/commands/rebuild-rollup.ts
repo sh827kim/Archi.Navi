@@ -2,8 +2,8 @@
  * rebuild-rollup 커맨드
  * Roll-up 집계 테이블을 재계산합니다
  * 사용법:
- *   archi-navi rebuild-rollup --workspace <id>              # 전체 재빌드
- *   archi-navi rebuild-rollup --workspace <id> --incremental # 증분 재빌드 (변경분만)
+ *   anavi rebuild-rollup --workspace <id>              # 전체 재빌드
+ *   anavi rebuild-rollup --workspace <id> --incremental # 증분 재빌드 (변경분만)
  */
 import { Command } from 'commander';
 import chalk from 'chalk';

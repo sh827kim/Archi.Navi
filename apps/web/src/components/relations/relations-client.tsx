@@ -738,7 +738,7 @@ function CompoundRelationDetail({
         <LinkIcon className="h-8 w-8 opacity-20" />
         <p className="text-sm">등록된 관계가 없습니다</p>
         <p className="text-xs text-center">
-          우측 상단 "관계 등록" 버튼으로 첫 관계를 등록하세요.
+          우측 상단 &quot;관계 등록&quot; 버튼으로 첫 관계를 등록하세요.
         </p>
       </div>
     );

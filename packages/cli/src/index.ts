@@ -1,5 +1,5 @@
 /**
- * archi-navi CLI 메인 진입점
+ * anavi CLI 메인 진입점
  * Commander.js 기반 CLI 구성
  */
 import { Command } from 'commander';
@@ -13,7 +13,7 @@ import { createSnapshotCommand } from './commands/snapshot';
 const program = new Command();
 
 program
-  .name('archi-navi')
+  .name('anavi')
   .description(
     chalk.bold('Archi.Navi') +
       ' — MSA 아키텍처 내비게이션 도구\n' +
@@ -31,7 +31,7 @@ program.addCommand(createSnapshotCommand());
 // 알 수 없는 커맨드 처리
 program.on('command:*', (operands: string[]) => {
   console.error(chalk.red(`알 수 없는 커맨드: ${operands.join(' ')}`));
-  console.log(chalk.dim('archi-navi --help 를 실행하여 사용법을 확인하세요.'));
+  console.log(chalk.dim('anavi --help 를 실행하여 사용법을 확인하세요.'));
   process.exit(1);
 });
 

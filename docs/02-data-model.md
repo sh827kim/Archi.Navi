@@ -110,6 +110,13 @@ Relation Type에 의미 축을 추가하여 확장성과 필터링을 강화한�
 - `service → service`는 직접 저장하지 않고 **Roll-up으로 파생 계산**한다.
 - 저장소/채널 관계도 동일하게 원자 객체 기준으로 저장하고 상위 객체 관계는 파생 계산한다.
 
+### 2.3.1 운영 규약 고정 (2026-03-01)
+
+- 샘플 시드(`POST /api/dev/seed`)도 정규 저장 원칙을 따른다.
+- 아키텍처 뷰의 서비스/DB/브로커 엣지는 `object_relations` 직접 조회가 아니라
+  `object_rollups`(SERVICE_TO_SERVICE/SERVICE_TO_DATABASE/SERVICE_TO_BROKER)를 기본 소스로 사용한다.
+- `depend_on`처럼 원자 관계로 환원하기 어려운 정적 의존만 COMPOUND 직접 관계로 예외 허용한다.
+
 ### 2.4 Relation Metadata
 
 Relation에 부가 정보를 JSON으로 저장할 수 있다.

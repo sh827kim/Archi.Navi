@@ -1,7 +1,7 @@
 /**
  * infer 커맨드
  * 수집된 신호를 바탕으로 도메인/관계 추론을 실행
- * 사용법: archi-navi infer --workspace <id> [--track a|b|all]
+ * 사용법: anavi infer --workspace <id> [--track a|b|all]
  */
 import { Command } from 'commander';
 import chalk from 'chalk';

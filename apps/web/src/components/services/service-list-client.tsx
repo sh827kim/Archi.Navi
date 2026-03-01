@@ -301,16 +301,24 @@ function ObjectDetailSheet({
   const [allTags, setAllTags] = useState<TagInfo[]>([]);
   const [showTagPicker, setShowTagPicker] = useState(false);
 
-  /* Object 상세 로드 */
-  useEffect(() => {
+  const loadDetail = useCallback(async () => {
     if (!objectId || !open) return;
     setLoading(true);
-    fetch(`/api/objects/${objectId}?workspaceId=${workspaceId}`)
-      .then((r) => r.json())
-      .then((data: ObjectDetail) => setDetail(data))
-      .catch(() => toast.error('상세 정보 로드 실패'))
-      .finally(() => setLoading(false));
+    try {
+      const res = await fetch(`/api/objects/${objectId}?workspaceId=${workspaceId}`);
+      const data = (await res.json()) as ObjectDetail;
+      setDetail(data);
+    } catch {
+      toast.error('상세 정보 로드 실패');
+    } finally {
+      setLoading(false);
+    }
   }, [objectId, workspaceId, open]);
+
+  /* Object 상세 로드 */
+  useEffect(() => {
+    void loadDetail();
+  }, [loadDetail]);
 
   /* 태그 로드 (Object 태그 + 전체 태그) */
   useEffect(() => {

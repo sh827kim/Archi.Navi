@@ -1,0 +1,255 @@
+/**
+ * POST /api/inference/run — 관계 추론 실행 오케스트레이션
+ * - config: 설정 파일 기반 relation_candidates 생성
+ * - code: 코드 신호 추출(code_artifacts, code_call_edges, evidences)
+ * - db: db_table metadata 기반 fk_reference 후보 생성
+ */
+import { type NextRequest, NextResponse } from 'next/server';
+import { existsSync, statSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { and, eq } from 'drizzle-orm';
+import { getDb, objects } from '@archi-navi/db';
+import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
+import {
+  inferRelationsFromConfig,
+  extractCodeSignals,
+  extractDbSchemaSignals,
+} from '@archi-navi/inference';
+
+type InferenceMode = 'config' | 'code' | 'db';
+
+interface RunInferenceRequest {
+  workspaceId?: string;
+  modes?: string[];
+  repoRoots?: string[];
+  useServiceMetadataPaths?: boolean;
+}
+
+const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
+
+function isInferenceMode(value: string): value is InferenceMode {
+  return value === 'config' || value === 'code' || value === 'db';
+}
+
+function isLikelyRemotePath(pathValue: string): boolean {
+  return /^https?:\/\//i.test(pathValue) || /^git@/i.test(pathValue);
+}
+
+function isLocalDirectory(pathValue: string): boolean {
+  if (isLikelyRemotePath(pathValue)) return false;
+  if (!existsSync(pathValue)) return false;
+  try {
+    return statSync(pathValue).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+function normalizeModes(input?: string[]): InferenceMode[] {
+  const requested = (input ?? ['config', 'db']).map((m) => m.toLowerCase().trim());
+  const valid = requested.filter(isInferenceMode);
+  const deduped = [...new Set(valid)];
+  return deduped.length > 0 ? deduped : ['config', 'db'];
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = (await req.json().catch(() => ({}))) as RunInferenceRequest;
+    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const modes = normalizeModes(body.modes);
+    const modeSet = new Set<InferenceMode>(modes);
+
+    const db = await getDb();
+
+    const providedRoots = (body.repoRoots ?? [])
+      .map((p) => p.trim())
+      .filter((p) => p.length > 0);
+
+    const discoveredFromServices: string[] = [];
+    if (body.useServiceMetadataPaths !== false) {
+      const services = await db
+        .select({ metadata: objects.metadata })
+        .from(objects)
+        .where(
+          and(
+            eq(objects.workspaceId, workspaceId),
+            eq(objects.objectType, 'service'),
+          ),
+        );
+
+      for (const svc of services) {
+        const metadata = (svc.metadata ?? {}) as Record<string, unknown>;
+        const rawPath = metadata['scanPath'];
+        if (typeof rawPath === 'string' && rawPath.trim().length > 0) {
+          discoveredFromServices.push(rawPath.trim());
+        }
+      }
+    }
+
+    const mergedRoots = [...providedRoots, ...discoveredFromServices];
+    const usedRepoRoots: string[] = [];
+    const skippedNonLocalRoots: string[] = [];
+    const skippedMissingRoots: string[] = [];
+
+    for (const repoRoot of mergedRoots) {
+      if (isLikelyRemotePath(repoRoot)) {
+        if (!skippedNonLocalRoots.includes(repoRoot)) skippedNonLocalRoots.push(repoRoot);
+        continue;
+      }
+
+      const normalized = resolve(repoRoot);
+      if (!isLocalDirectory(normalized)) {
+        if (!skippedMissingRoots.includes(normalized)) skippedMissingRoots.push(normalized);
+        continue;
+      }
+
+      if (!usedRepoRoots.includes(normalized)) usedRepoRoots.push(normalized);
+    }
+
+    if ((modeSet.has('config') || modeSet.has('code')) && usedRepoRoots.length === 0) {
+      return NextResponse.json(
+        {
+          error:
+            'config/code 추론을 실행할 로컬 repoRoot가 없습니다. 먼저 코드 스캔으로 service.metadata.scanPath를 등록하거나 repoRoots를 직접 전달하세요.',
+          details: {
+            providedRoots,
+            discoveredFromServices,
+            skippedNonLocalRoots,
+            skippedMissingRoots,
+          },
+        },
+        { status: 400 },
+      );
+    }
+
+    const startedAt = Date.now();
+    const warnings: string[] = [];
+    const errors: Array<{ mode: InferenceMode; repoRoot?: string; message: string }> = [];
+
+    const configResult = {
+      repoCount: 0,
+      candidateCount: 0,
+      objectCount: 0,
+    };
+    const codeResult = {
+      repoCount: 0,
+      fileCount: 0,
+      artifactCount: 0,
+      signalCount: 0,
+      skippedCount: 0,
+    };
+    let dbResult:
+      | null
+      | {
+          tableCount: number;
+          fkCandidateCount: number;
+          implicitFkCandidateCount: number;
+        } = null;
+
+    if (modeSet.has('config')) {
+      for (const repoRoot of usedRepoRoots) {
+        try {
+          const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot });
+          configResult.repoCount += 1;
+          configResult.candidateCount += result.candidateCount;
+          configResult.objectCount += result.objectCount;
+        } catch (error) {
+          errors.push({
+            mode: 'config',
+            repoRoot,
+            message: error instanceof Error ? error.message : 'unknown error',
+          });
+        }
+      }
+    }
+
+    if (modeSet.has('code')) {
+      for (const repoRoot of usedRepoRoots) {
+        try {
+          const result = await extractCodeSignals(db, { workspaceId, repoRoot });
+          codeResult.repoCount += 1;
+          codeResult.fileCount += result.fileCount;
+          codeResult.artifactCount += result.artifactCount;
+          codeResult.signalCount += result.signalCount;
+          codeResult.skippedCount += result.skippedCount;
+        } catch (error) {
+          errors.push({
+            mode: 'code',
+            repoRoot,
+            message: error instanceof Error ? error.message : 'unknown error',
+          });
+        }
+      }
+    }
+
+    if (modeSet.has('db')) {
+      try {
+        dbResult = await extractDbSchemaSignals(db, { workspaceId });
+      } catch (error) {
+        errors.push({
+          mode: 'db',
+          message: error instanceof Error ? error.message : 'unknown error',
+        });
+      }
+    }
+
+    if (skippedNonLocalRoots.length > 0) {
+      warnings.push(
+        `원격 경로(${skippedNonLocalRoots.length}개)는 현재 /api/inference/run에서 직접 처리하지 않아 제외되었습니다.`,
+      );
+    }
+
+    if (skippedMissingRoots.length > 0) {
+      warnings.push(
+        `존재하지 않는 경로(${skippedMissingRoots.length}개)가 제외되었습니다.`,
+      );
+    }
+
+    const dbCandidateCount =
+      (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
+
+    const relationCandidatesCreated = configResult.candidateCount + dbCandidateCount;
+    const hasAnySuccess =
+      configResult.repoCount > 0 ||
+      codeResult.repoCount > 0 ||
+      dbResult !== null;
+
+    if (!hasAnySuccess && errors.length > 0) {
+      return NextResponse.json(
+        {
+          error: '추론 실행에 실패했습니다.',
+          errors,
+        },
+        { status: 500 },
+      );
+    }
+
+    return NextResponse.json({
+      ok: true,
+      workspaceId,
+      requestedModes: ALL_MODES.filter((mode) => modeSet.has(mode)),
+      repoRoots: {
+        provided: providedRoots,
+        discoveredFromServices,
+        used: usedRepoRoots,
+        skippedNonLocal: skippedNonLocalRoots,
+        skippedMissing: skippedMissingRoots,
+      },
+      results: {
+        config: configResult,
+        code: codeResult,
+        db: dbResult,
+      },
+      summary: {
+        relationCandidatesCreated,
+        executionMs: Date.now() - startedAt,
+      },
+      warnings,
+      errors,
+    });
+  } catch (error) {
+    console.error('[POST /api/inference/run]', error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
+

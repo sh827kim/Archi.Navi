@@ -99,6 +99,23 @@ const DEFAULT_MODELS: Record<string, string> = {
   custom: '',
 };
 
+function readLocalStorage(key: string, fallback: string): string {
+  if (typeof window === 'undefined') return fallback;
+  return localStorage.getItem(key) ?? fallback;
+}
+
+function readLocalStorageNumber(
+  key: string,
+  fallback: number,
+  parser: (value: string) => number = Number,
+): number {
+  if (typeof window === 'undefined') return fallback;
+  const raw = localStorage.getItem(key);
+  if (raw === null) return fallback;
+  const parsed = parser(raw);
+  return Number.isFinite(parsed) ? parsed : fallback;
+}
+
 /* ════════════════════════════════════════════════════════════════
    루트 컴포넌트
    ════════════════════════════════════════════════════════════════ */
@@ -254,8 +271,26 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
         body: JSON.stringify({ workspaceId }),
       });
       if (!res.ok) throw new Error('reset failed');
+      const data = (await res.json()) as {
+        deleted?: {
+          objects?: number;
+          layers?: number;
+          tags?: number;
+          relations?: number;
+          relationCandidates?: number;
+        };
+      };
       setResetOpen(false);
-      toast.success('워크스페이스 데이터 초기화 완료');
+      const deleted = data.deleted;
+      if (deleted) {
+        toast.success(
+          `워크스페이스 초기화 완료 — Object ${deleted.objects ?? 0}, 레이어 ${deleted.layers ?? 0}, 태그 ${deleted.tags ?? 0}, 관계 ${deleted.relations ?? 0}, 후보 ${deleted.relationCandidates ?? 0} 삭제`,
+        );
+      } else {
+        toast.success('워크스페이스 데이터 초기화 완료');
+      }
+      // 이미 로드된 클라이언트 상태(목록/그래프)를 모두 갱신하기 위해 새로고침
+      window.location.reload();
     } catch {
       toast.error('초기화 실패');
     } finally {
@@ -785,22 +820,15 @@ function TagManagement({ workspaceId }: { workspaceId: string }) {
    AI 설정
    ════════════════════════════════════════════════════════════════ */
 function AiSettings() {
-  const [provider, setProvider] = useState('openai');
-  const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('gpt-4o');
+  const [provider, setProvider] = useState(() => readLocalStorage(LS.AI_PROVIDER, 'openai'));
+  const [apiKey, setApiKey] = useState(() => readLocalStorage(LS.AI_API_KEY, ''));
+  const [model, setModel] = useState(() => {
+    const savedProvider = readLocalStorage(LS.AI_PROVIDER, 'openai');
+    const fallbackModel = DEFAULT_MODELS[savedProvider] ?? '';
+    return readLocalStorage(LS.AI_MODEL, fallbackModel);
+  });
   const [showKey, setShowKey] = useState(false);
   const [saved, setSaved] = useState(false);
-
-  // localStorage 초기값 로드
-  useEffect(() => {
-    const savedProvider = localStorage.getItem(LS.AI_PROVIDER) ?? 'openai';
-    const savedKey = localStorage.getItem(LS.AI_API_KEY) ?? '';
-    const savedModel =
-      localStorage.getItem(LS.AI_MODEL) ?? DEFAULT_MODELS[savedProvider] ?? '';
-    setProvider(savedProvider);
-    setApiKey(savedKey);
-    setModel(savedModel);
-  }, []);
 
   // 제공자 변경 시 기본 모델 자동 설정
   const handleProviderChange = (val: string) => {
@@ -935,21 +963,16 @@ function AiSettings() {
    추론 / Rollup 설정
    ════════════════════════════════════════════════════════════════ */
 function EngineSettings() {
-  const [wCode, setWCode] = useState(0.5);
-  const [wDb, setWDb] = useState(0.3);
-  const [wMsg, setWMsg] = useState(0.2);
-  const [hubThreshold, setHubThreshold] = useState(50);
-  const [minCluster, setMinCluster] = useState(3);
+  const [wCode, setWCode] = useState(() => readLocalStorageNumber(LS.INF_W_CODE, 0.5, parseFloat));
+  const [wDb, setWDb] = useState(() => readLocalStorageNumber(LS.INF_W_DB, 0.3, parseFloat));
+  const [wMsg, setWMsg] = useState(() => readLocalStorageNumber(LS.INF_W_MSG, 0.2, parseFloat));
+  const [hubThreshold, setHubThreshold] = useState(() =>
+    readLocalStorageNumber(LS.ROLLUP_HUB, 50, (value) => parseInt(value, 10)),
+  );
+  const [minCluster, setMinCluster] = useState(() =>
+    readLocalStorageNumber(LS.ROLLUP_CLUSTER, 3, (value) => parseInt(value, 10)),
+  );
   const [saved, setSaved] = useState(false);
-
-  // localStorage 초기값 로드
-  useEffect(() => {
-    setWCode(parseFloat(localStorage.getItem(LS.INF_W_CODE) ?? '0.5'));
-    setWDb(parseFloat(localStorage.getItem(LS.INF_W_DB) ?? '0.3'));
-    setWMsg(parseFloat(localStorage.getItem(LS.INF_W_MSG) ?? '0.2'));
-    setHubThreshold(parseInt(localStorage.getItem(LS.ROLLUP_HUB) ?? '50', 10));
-    setMinCluster(parseInt(localStorage.getItem(LS.ROLLUP_CLUSTER) ?? '3', 10));
-  }, []);
 
   // 가중치 합계 검증
   const weightSum = Math.round((wCode + wDb + wMsg) * 100) / 100;
