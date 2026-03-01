@@ -53,13 +53,6 @@ interface AssignmentData {
   layerId: string;
 }
 
-interface RelationData {
-  id: string;
-  subjectObjectId: string;
-  objectId: string;
-  relationType: string;
-}
-
 interface RollupEdgeData {
   id: string;
   source: string;
@@ -222,7 +215,6 @@ export function LayeredArchitectureView() {
         s2sRes,
         s2dbRes,
         s2bRes,
-        relationsRes,
       ] =
         await Promise.all([
           fetch(`/api/layers?${q}`),
@@ -232,7 +224,6 @@ export function LayeredArchitectureView() {
           fetch(`/api/rollups?${q}&level=SERVICE_TO_SERVICE`),
           fetch(`/api/rollups?${q}&level=SERVICE_TO_DATABASE`),
           fetch(`/api/rollups?${q}&level=SERVICE_TO_BROKER`),
-          fetch(`/api/relations?${q}`), // depend_on 보강용
         ]);
 
       const layers = (await layersRes.json()) as LayerData[];
@@ -242,22 +233,13 @@ export function LayeredArchitectureView() {
       const s2s = (await s2sRes.json()) as { edges?: RollupEdgeData[] };
       const s2db = (await s2dbRes.json()) as { edges?: RollupEdgeData[] };
       const s2b = (await s2bRes.json()) as { edges?: RollupEdgeData[] };
-      const directRelations = (await relationsRes.json()) as RelationData[];
 
       const rollupEdges = [
         ...(s2s.edges ?? []),
         ...(s2db.edges ?? []),
         ...(s2b.edges ?? []),
       ];
-      const dependOnEdges = directRelations
-        .filter((rel) => rel.relationType === 'depend_on')
-        .map((rel) => ({
-          id: rel.id,
-          source: rel.subjectObjectId,
-          target: rel.objectId,
-          relationType: rel.relationType,
-        }));
-      const graphEdges = [...rollupEdges, ...dependOnEdges];
+      const graphEdges = rollupEdges;
 
       if (layers.length === 0 && allObjects.length === 0) {
         setHasData(false);

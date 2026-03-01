@@ -225,11 +225,11 @@ describe('rebuildRollups (전체 리빌드)', () => {
             }));
 
         const selectResponses: Array<unknown[]> = [
-            [], [],    // call, expose (S2S)
-            readJoined,  // read + join
-            [],          // write + join
-            [], [],      // produce, consume (S2B)
-            [],          // S2S for D2D
+            [], [], [],  // call, expose, depend_on (S2S)
+            readJoined,   // read + join
+            [],           // write + join
+            [], [],       // produce, consume (S2B)
+            [],           // S2S for D2D
             [], [], [], [], // graphStats
         ];
 
@@ -257,8 +257,8 @@ describe('rebuildRollups (전체 리빌드)', () => {
             }));
 
         const selectResponses: Array<unknown[]> = [
-            [], [],      // S2S
-            [], [],      // S2DB read, write
+            [], [], [],   // S2S (call, expose, depend_on)
+            [], [],       // S2DB read, write
             produceJoined, // produce + join
             [],            // consume + join
             [],            // D2D
@@ -292,11 +292,11 @@ describe('rebuildRollups (전체 리빌드)', () => {
         }];
 
         const selectResponses: Array<unknown[]> = [
-            [], [],      // S2S (빈 call/expose - S2S rollup은 이미 있다 가정)
+            [], [], [],  // S2S (빈 call/expose/depend_on - S2S rollup은 이미 있다 가정)
             [], [],      // S2DB
             [], [],      // S2B
             s2sRollup,   // D2D: S2S rollup 조회
-            affinities,  // D2D: affinity 조회
+            affinities,  // D2D: affinity 조회 (mock rollup id가 없어 provenance 조회는 생략)
             // graphStats: 4 levels (S2S에서 rollup 없으므로 빈 결과)
             [], [], [], [],
         ];
@@ -463,6 +463,7 @@ describe('incrementalRebuild (증분 리빌드)', () => {
         // 2. incrementalBuildS2S:
         //    - delete rollups (affected nodes)
         //    - select call relations
+        //    - select depend_on relations
         //    - select expose relations
         // 3. D2D (S2S 변경 → D2D 연쇄):
         //    - delete D2D rollups
@@ -477,6 +478,7 @@ describe('incrementalRebuild (증분 리빌드)', () => {
         const selectResponses: Array<unknown[]> = [
             // S2S rebuild
             callRels,     // call relations
+            [],           // depend_on relations
             exposeRels,   // expose relations
             // D2D rebuild (S2S rollup 조회 — 아직 insert 전이므로 빈 결과)
             [],           // S2S rollups for D2D
@@ -725,7 +727,7 @@ describe('incrementalRebuild (증분 리빌드)', () => {
 
         const selectResponses: Array<unknown[]> = [
             // S2S rebuild
-            callRels, exposeRels,
+            callRels, [], exposeRels,
             // S2DB rebuild
             readJoined, // read
             [],         // write

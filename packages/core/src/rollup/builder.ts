@@ -146,6 +146,19 @@ async function buildServiceToService(
       ),
     );
 
+  // depend_on 관계 조회 (service → service)
+  const dependOnRelations = await db
+    .select()
+    .from(objectRelations)
+    .where(
+      and(
+        eq(objectRelations.workspaceId, workspaceId),
+        eq(objectRelations.relationType, 'depend_on'),
+        eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
+      ),
+    );
+
   // endpoint별 expose 서비스 매핑
   const endpointToService = new Map<string, string>();
   for (const expose of exposeRelations) {
@@ -153,9 +166,15 @@ async function buildServiceToService(
   }
 
   // A --call--> E, E --expose--> B → A --call--> B 집계
+  // + service --depend_on--> service 직접 관계 집계
   const rollupMap = new Map<
     string,
-    { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+    {
+      relationType: 'call' | 'depend_on';
+      edgeWeight: number;
+      confidences: number[];
+      baseRelationIds: Set<string>;
+    }
   >();
 
   for (const call of callRelations) {
@@ -165,8 +184,9 @@ async function buildServiceToService(
 
     if (!exposingServiceId || callerServiceId === exposingServiceId) continue;
 
-    const key = `${callerServiceId}|${exposingServiceId}`;
+    const key = `call|${callerServiceId}|${exposingServiceId}`;
     const existing = rollupMap.get(key) ?? {
+      relationType: 'call',
       edgeWeight: 0,
       confidences: [],
       baseRelationIds: new Set<string>(),
@@ -177,15 +197,30 @@ async function buildServiceToService(
     rollupMap.set(key, existing);
   }
 
+  for (const dep of dependOnRelations) {
+    if (dep.subjectObjectId === dep.objectId) continue;
+    const key = `depend_on|${dep.subjectObjectId}|${dep.objectId}`;
+    const existing = rollupMap.get(key) ?? {
+      relationType: 'depend_on',
+      edgeWeight: 0,
+      confidences: [],
+      baseRelationIds: new Set<string>(),
+    };
+    existing.edgeWeight += 1;
+    if (dep.confidence != null) existing.confidences.push(dep.confidence);
+    existing.baseRelationIds.add(dep.id);
+    rollupMap.set(key, existing);
+  }
+
   const rollups = [...rollupMap.entries()].map(
-    ([key, { edgeWeight, confidences, baseRelationIds }]) => {
-    const [subjectObjectId, objectId] = key.split('|') as [string, string];
+    ([key, { relationType, edgeWeight, confidences, baseRelationIds }]) => {
+    const [, subjectObjectId, objectId] = key.split('|') as [string, string, string];
     const confidence = confidences.length > 0
       ? confidences.reduce((a, b) => a + b, 0) / confidences.length
       : null;
     return {
       rollupLevel: 'SERVICE_TO_SERVICE',
-      relationType: 'call',
+      relationType,
       subjectObjectId,
       objectId,
       edgeWeight,
@@ -349,6 +384,7 @@ async function buildDomainToDomain(
         eq(objectRollups.workspaceId, workspaceId),
         eq(objectRollups.generationVersion, generationVersion),
         eq(objectRollups.rollupLevel, 'SERVICE_TO_SERVICE'),
+        eq(objectRollups.relationType, 'call'),
       ),
     );
 
@@ -622,6 +658,10 @@ async function resolveAffectedScope(
           levels.add('SERVICE_TO_SERVICE');
           s2sAffected.add(subjectObjectId);
         }
+        if (relationType === 'depend_on') {
+          levels.add('SERVICE_TO_SERVICE');
+          s2sAffected.add(subjectObjectId);
+        }
         if (relationType === 'read' || relationType === 'write') {
           levels.add('SERVICE_TO_DATABASE');
           s2dbAffected.add(subjectObjectId);
@@ -761,7 +801,7 @@ async function incrementalBuildS2S(
   // 기존 affected 관련 S2S rollup 삭제
   await deleteRollupsByAffectedNodes(db, workspaceId, generationVersion, 'SERVICE_TO_SERVICE', affectedServiceIds);
 
-  // 전체 call/expose relation 조회 (변경된 서비스의 edge를 정확히 재계산하려면 전체 필요)
+  // 전체 call/expose/depend_on relation 조회 (변경된 서비스의 edge를 정확히 재계산하려면 전체 필요)
   const callRelations = await db
     .select()
     .from(objectRelations)
@@ -769,6 +809,18 @@ async function incrementalBuildS2S(
       and(
         eq(objectRelations.workspaceId, workspaceId),
         eq(objectRelations.relationType, 'call'),
+        eq(objectRelations.isDerived, false),
+        eq(objectRelations.status, 'APPROVED'),
+      ),
+    );
+
+  const dependOnRelations = await db
+    .select()
+    .from(objectRelations)
+    .where(
+      and(
+        eq(objectRelations.workspaceId, workspaceId),
+        eq(objectRelations.relationType, 'depend_on'),
         eq(objectRelations.isDerived, false),
         eq(objectRelations.status, 'APPROVED'),
       ),
@@ -795,7 +847,12 @@ async function incrementalBuildS2S(
   // S2S 집계 (affected 관련만 필터)
   const rollupMap = new Map<
     string,
-    { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+    {
+      relationType: 'call' | 'depend_on';
+      edgeWeight: number;
+      confidences: number[];
+      baseRelationIds: Set<string>;
+    }
   >();
   for (const call of callRelations) {
     const callerServiceId = call.subjectObjectId;
@@ -805,8 +862,9 @@ async function incrementalBuildS2S(
     // affected 서비스가 caller 또는 target인 경우만
     if (!affectedServiceIds.has(callerServiceId) && !affectedServiceIds.has(exposingServiceId)) continue;
 
-    const key = `${callerServiceId}|${exposingServiceId}`;
+    const key = `call|${callerServiceId}|${exposingServiceId}`;
     const existing = rollupMap.get(key) ?? {
+      relationType: 'call',
       edgeWeight: 0,
       confidences: [],
       baseRelationIds: new Set<string>(),
@@ -817,15 +875,36 @@ async function incrementalBuildS2S(
     rollupMap.set(key, existing);
   }
 
+  for (const dep of dependOnRelations) {
+    if (dep.subjectObjectId === dep.objectId) continue;
+    if (
+      !affectedServiceIds.has(dep.subjectObjectId) &&
+      !affectedServiceIds.has(dep.objectId)
+    ) {
+      continue;
+    }
+    const key = `depend_on|${dep.subjectObjectId}|${dep.objectId}`;
+    const existing = rollupMap.get(key) ?? {
+      relationType: 'depend_on',
+      edgeWeight: 0,
+      confidences: [],
+      baseRelationIds: new Set<string>(),
+    };
+    existing.edgeWeight += 1;
+    if (dep.confidence != null) existing.confidences.push(dep.confidence);
+    existing.baseRelationIds.add(dep.id);
+    rollupMap.set(key, existing);
+  }
+
   const rollups = [...rollupMap.entries()].map(
-    ([key, { edgeWeight, confidences, baseRelationIds }]) => {
-    const [subjectObjectId, objectId] = key.split('|') as [string, string];
+    ([key, { relationType, edgeWeight, confidences, baseRelationIds }]) => {
+    const [, subjectObjectId, objectId] = key.split('|') as [string, string, string];
     const confidence = confidences.length > 0
       ? confidences.reduce((a, b) => a + b, 0) / confidences.length
       : null;
     return {
       rollupLevel: 'SERVICE_TO_SERVICE',
-      relationType: 'call',
+      relationType,
       subjectObjectId,
       objectId,
       edgeWeight,

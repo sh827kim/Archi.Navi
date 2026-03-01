@@ -266,7 +266,7 @@ export function RollupGraph() {
   });
 
   /* ─── 데이터 fetch (workspaceId 변경 시 갱신) ─── */
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (includeRelations: boolean) => {
     const rollupLevels: RollupLevelKey[] = [
       'SERVICE_TO_SERVICE',
       'SERVICE_TO_DATABASE',
@@ -274,17 +274,21 @@ export function RollupGraph() {
       'DOMAIN_TO_DOMAIN',
     ];
 
-    const [objRes, relRes, ...rollupResList] = await Promise.all([
+    const [objRes, ...rollupResList] = await Promise.all([
       fetch(`/api/objects?workspaceId=${workspaceId}`),
-      fetch(`/api/relations?workspaceId=${workspaceId}`),
       ...rollupLevels.map((level) => fetch(`/api/rollups?workspaceId=${workspaceId}&level=${level}`)),
     ]);
-    if (!objRes.ok || !relRes.ok || rollupResList.some((res) => !res.ok)) {
+    if (!objRes.ok || rollupResList.some((res) => !res.ok)) {
       throw new Error('데이터 로드 실패');
     }
 
     const allObjects = (await objRes.json()) as ObjectItem[];
-    const allRelations = (await relRes.json()) as RelationItem[];
+    let allRelations: RelationItem[] = [];
+    if (includeRelations) {
+      const relRes = await fetch(`/api/relations?workspaceId=${workspaceId}`);
+      if (!relRes.ok) throw new Error('관계 데이터 로드 실패');
+      allRelations = (await relRes.json()) as RelationItem[];
+    }
 
     const rollups: RollupRelationMap = {
       SERVICE_TO_SERVICE: [],
@@ -322,7 +326,7 @@ export function RollupGraph() {
       simulationRef.current = null;
 
       try {
-        const { allObjects, allRelations, allRollups } = await fetchData();
+        const { allObjects, allRelations, allRollups } = await fetchData(expanded.size > 0);
 
         /* ── Roll-down LR Flow 패널 데이터 계산 (allObjects/allRelations 전체 기준) ── */
         if (expanded.size > 0) {
@@ -441,7 +445,7 @@ export function RollupGraph() {
           /*
            * 전체 통합 뷰:
            *   - 상위 객체(depth=0)만 표시
-           *   - 기본 엣지: S2S/S2DB/S2B rollup + static depend_on
+           *   - 기본 엣지: S2S/S2DB/S2B rollup
            */
           filteredObjects = allObjects.filter((o) => o.depth === 0);
           containsLinks = [];
@@ -452,12 +456,9 @@ export function RollupGraph() {
             ...allRollups.SERVICE_TO_DATABASE,
             ...allRollups.SERVICE_TO_BROKER,
           ];
-          const staticCompoundRelations = allRelations.filter(
-            (r) => r.relationType === 'depend_on',
-          );
 
           const relationMap = new Map<string, RelationItem>();
-          [...rollupCompoundRelations, ...staticCompoundRelations]
+          [...rollupCompoundRelations]
             .filter((r) => idSet.has(r.subjectObjectId) && idSet.has(r.objectId))
             .forEach((r) => relationMap.set(r.id, r));
           filteredRelations = [...relationMap.values()];
@@ -489,14 +490,6 @@ export function RollupGraph() {
           const rollupRelations = allRollups[level].filter(
             (r) => idSet.has(r.subjectObjectId) && idSet.has(r.objectId),
           );
-          const staticServiceDeps = level === 'SERVICE_TO_SERVICE'
-            ? allRelations.filter(
-              (r) =>
-                r.relationType === 'depend_on' &&
-                idSet.has(r.subjectObjectId) &&
-                idSet.has(r.objectId),
-            )
-            : [];
           const drillDownRelations = expanded.size > 0
             ? allRelations.filter(
               (r) => idSet.has(r.subjectObjectId) && idSet.has(r.objectId),
@@ -504,7 +497,7 @@ export function RollupGraph() {
             : [];
 
           const relationMap = new Map<string, RelationItem>();
-          [...rollupRelations, ...staticServiceDeps, ...drillDownRelations]
+          [...rollupRelations, ...drillDownRelations]
             .forEach((r) => relationMap.set(r.id, r));
           filteredRelations = [...relationMap.values()];
         }
