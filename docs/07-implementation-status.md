@@ -50,7 +50,7 @@
 - ✅ Relation 추론(구현 존재)
   - Config 기반: `inferRelationsFromConfig`
   - Code Signal(Regex): `extractCodeSignals`
-  - DB Signal: `extractDbSchemaSignals`
+  - DB Signal: `extractDbSchemaSignals` (FK/implicit 후보 + schema evidence 연결)
 - ✅ Domain 추론
   - Track A(Seed-based): `runSeedBasedInference`
   - Track B(Discovery): `runDiscovery`
@@ -71,7 +71,7 @@
 - ⚠️ `/api/inference/run`은 구현되었지만, 현재는 로컬 repo 경로(`repoRoots` 또는 `service.metadata.scanPath`) 의존
 - ⚠️ 조직 단위/원격 소스까지 포함하는 운영 오케스트레이션은 보강 필요
 
-### 2.2 Evidence-first 체인 강화
+### 2.2 Evidence-first 체인 강화 (완료)
 
 - ✅ 관계 후보 승인 시 evidence 승격(`relation_candidate_evidences -> relation_evidences`) 구현 완료
 - ✅ rollup/query 응답의 `baseRelationIds` provenance 저장/조회 구현 완료

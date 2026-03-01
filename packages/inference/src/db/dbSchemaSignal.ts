@@ -7,7 +7,14 @@
  */
 import { eq, and, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
-import { objects, relationCandidates, codeArtifacts, codeCallEdges, evidences } from '@archi-navi/db';
+import {
+    objects,
+    relationCandidates,
+    relationCandidateEvidences,
+    codeArtifacts,
+    codeCallEdges,
+    evidences,
+} from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 
 // ─── 타입 정의 ────────────────────────────────────────────────────────────────
@@ -135,8 +142,10 @@ export async function extractDbSchemaSignals(
 
     // 테이블명 → objectId 인덱스 (빠른 조회)
     const tableNameIndex = new Map<string, string>();
+    const tableIdToName = new Map<string, string>();
     for (const t of dbTables) {
         tableNameIndex.set(t.name.toLowerCase(), t.id);
+        tableIdToName.set(t.id, t.name);
     }
 
     let fkCandidateCount = 0;
@@ -169,20 +178,52 @@ export async function extractDbSchemaSignals(
         objectId: string,
         confidence: number,
         meta: Record<string, unknown>,
+        evidenceMeta: {
+            kind: 'db_schema_fk' | 'db_schema_implicit_fk';
+            excerpt: string;
+            uri: string;
+            metadata: Record<string, unknown>;
+        },
     ) {
         const key = pendingKey(subjectId, objectId, 'fk_reference');
         if (pendingSet.has(key)) return false;
         pendingSet.add(key);
-        await db.insert(relationCandidates).values({
-            id: generateId(),
-            workspaceId,
-            relationType: 'fk_reference',
-            subjectObjectId: subjectId,
-            objectId,
-            confidence,
-            metadata: meta,
-            status: 'PENDING',
+
+        const candidateId = generateId();
+        const evidenceId = generateId();
+
+        await db.transaction(async (tx) => {
+            await tx.insert(relationCandidates).values({
+                id: candidateId,
+                workspaceId,
+                relationType: 'fk_reference',
+                subjectObjectId: subjectId,
+                objectId,
+                confidence,
+                metadata: meta,
+                status: 'PENDING',
+            });
+
+            await tx.insert(evidences).values({
+                id: evidenceId,
+                workspaceId,
+                evidenceType: 'SCHEMA',
+                excerpt: evidenceMeta.excerpt,
+                uri: evidenceMeta.uri,
+                metadata: {
+                    kind: evidenceMeta.kind,
+                    confidence,
+                    ...evidenceMeta.metadata,
+                },
+            });
+
+            await tx.insert(relationCandidateEvidences).values({
+                workspaceId,
+                candidateId,
+                evidenceId,
+            });
         });
+
         return true;
     }
 
@@ -201,6 +242,17 @@ export async function extractDbSchemaSignals(
                 references_table: fk.references_table,
                 references_column: fk.references_column,
                 source: 'fk_constraint',
+            }, {
+                kind: 'db_schema_fk',
+                excerpt: `${table.name}.${fk.column} -> ${fk.references_table}.${fk.references_column}`,
+                uri: `db-table://${table.name}`,
+                metadata: {
+                    source: 'fk_constraint',
+                    subject_table: table.name,
+                    object_table: tableIdToName.get(refTableId) ?? fk.references_table,
+                    column: fk.column,
+                    references_column: fk.references_column,
+                },
             });
             if (inserted) fkCandidateCount++;
         }
@@ -229,6 +281,17 @@ export async function extractDbSchemaSignals(
                     column: col.name,
                     inferred_table: candidateTable,
                     source: 'column_pattern',
+                }, {
+                    kind: 'db_schema_implicit_fk',
+                    excerpt: `${table.name}.${col.name} ~= ${candidateTable}`,
+                    uri: `db-table://${table.name}`,
+                    metadata: {
+                        source: 'column_pattern',
+                        subject_table: table.name,
+                        object_table: tableIdToName.get(refTableId) ?? candidateTable,
+                        column: col.name,
+                        inferred_table: candidateTable,
+                    },
                 });
                 if (inserted) implicitFkCandidateCount++;
                 break; // 첫 번째 매칭 테이블에서 중단

@@ -10,6 +10,7 @@ import {
     objects,
     workspaces,
     relationCandidates,
+    relationCandidateEvidences,
     codeArtifacts,
     codeCallEdges,
     evidences,
@@ -159,6 +160,20 @@ describe('extractDbSchemaSignals', () => {
         expect(candidates[0]!.confidence).toBeCloseTo(0.95);
         expect(candidates[0]!.objectId).toBe(ordersId);
         expect(candidates[0]!.status).toBe('PENDING');
+
+        const candidateLinks = await db
+            .select()
+            .from(relationCandidateEvidences)
+            .where(eq(relationCandidateEvidences.candidateId, candidates[0]!.id));
+        expect(candidateLinks).toHaveLength(1);
+
+        const evidenceRows = await db
+            .select()
+            .from(evidences)
+            .where(eq(evidences.workspaceId, workspaceId));
+        expect(evidenceRows).toHaveLength(1);
+        expect(evidenceRows[0]!.evidenceType).toBe('SCHEMA');
+        expect((evidenceRows[0]!.metadata as Record<string, unknown>)['kind']).toBe('db_schema_fk');
     });
 
     it('동일 FK를 두 번 실행해도 relation_candidate가 중복 생성되지 않아야 한다', async () => {
@@ -178,6 +193,18 @@ describe('extractDbSchemaSignals', () => {
             .from(relationCandidates)
             .where(eq(relationCandidates.workspaceId, workspaceId));
         expect(candidates).toHaveLength(1); // 중복 없음
+
+        const candidateLinks = await db
+            .select()
+            .from(relationCandidateEvidences)
+            .where(eq(relationCandidateEvidences.workspaceId, workspaceId));
+        expect(candidateLinks).toHaveLength(1); // candidate와 함께 1회만 생성
+
+        const evidenceRows = await db
+            .select()
+            .from(evidences)
+            .where(eq(evidences.workspaceId, workspaceId));
+        expect(evidenceRows).toHaveLength(1); // 중복 생성되지 않음
     });
 
     it('컬럼명 *_id 패턴에서 implicit FK를 생성해야 한다 (confidence 0.5)', async () => {
@@ -200,6 +227,13 @@ describe('extractDbSchemaSignals', () => {
         expect(candidates).toHaveLength(1);
         expect(candidates[0]!.confidence).toBeCloseTo(0.5);
         expect(candidates[0]!.objectId).toBe(ordersId);
+
+        const evidenceRows = await db
+            .select()
+            .from(evidences)
+            .where(eq(evidences.workspaceId, workspaceId));
+        expect(evidenceRows).toHaveLength(1);
+        expect((evidenceRows[0]!.metadata as Record<string, unknown>)['kind']).toBe('db_schema_implicit_fk');
     });
 
     it('컬럼명 *_no 패턴에서 implicit FK를 생성해야 한다', async () => {
@@ -263,6 +297,11 @@ describe('extractDbSchemaSignals', () => {
 
         const result = await extractDbSchemaSignals(db, { workspaceId });
         expect(result.fkCandidateCount).toBe(0);
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(0);
+        const evidenceRows = await db.select().from(evidences);
+        expect(evidenceRows).toHaveLength(0);
     });
 });
 
