@@ -5,7 +5,12 @@
  * - ANTHROPIC_API_KEY → Claude Sonnet
  * - GOOGLE_GENERATIVE_AI_API_KEY → Gemini Pro
  */
-import { streamText, convertToModelMessages } from 'ai';
+import {
+  streamText,
+  convertToModelMessages,
+  createUIMessageStream,
+  createUIMessageStreamResponse,
+} from 'ai';
 import type { UIMessage } from 'ai';
 import { openai, createOpenAI } from '@ai-sdk/openai';
 import { anthropic, createAnthropic } from '@ai-sdk/anthropic';
@@ -250,6 +255,20 @@ const SYSTEM_PROMPT = `당신은 MSA 아키텍처 전문가 어시스턴트 'Arc
 - 구체적인 서비스 이름과 관계 타입을 포함합니다
 - 한국어로 답변합니다`;
 
+function createMockChatResponse(content: string): Response {
+  const stream = createUIMessageStream({
+    execute: ({ writer }) => {
+      writer.write({ type: 'start' });
+      writer.write({ type: 'text-start', id: 'mock-text-0' });
+      writer.write({ type: 'text-delta', id: 'mock-text-0', delta: content });
+      writer.write({ type: 'text-end', id: 'mock-text-0' });
+      writer.write({ type: 'finish', finishReason: 'stop' });
+    },
+  });
+
+  return createUIMessageStreamResponse({ stream });
+}
+
 export async function POST(req: Request) {
   try {
     // useChat hook은 UIMessage[] 형식으로 전송 — ModelMessage[]로 변환 필요
@@ -266,6 +285,19 @@ export async function POST(req: Request) {
       .filter((p) => p.type === 'text')
       .map((p) => (p as { type: 'text'; text: string }).text)
       .join('') ?? '';
+
+    // 테스트/로컬 검증용 mock 응답 (외부 LLM API 키 없이 Chat 카드 렌더링 검증 가능)
+    if (process.env['ARCHI_NAVI_CHAT_MOCK'] === '1') {
+      const mockText = [
+        '**결론:** order-service는 payment-service에 의존합니다.',
+        '**신뢰도:** 0.91',
+        '**증거 목록:**',
+        '- order-service --[depend_on]--> payment-service',
+        '**요약:** 설정 파일 기반 추론 결과를 승인 후 rollup과 query에서 동일 경로를 확인했습니다.',
+        '**딥링크:** /mapping-graph',
+      ].join('\n');
+      return createMockChatResponse(mockText);
+    }
 
     // 결정론적 쿼리로 Evidence Chain 수집 (Best-effort)
     let queryContext = '';

@@ -1,12 +1,13 @@
 import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 /**
  * GET /api/rollups — Roll-up 그래프 데이터 조회 (React Flow용 변환)
+ * POST /api/rollups — Roll-up 재빌드 실행
  */
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@archi-navi/db';
 import { objectRollups, objects } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
-import { getActiveGeneration } from '@archi-navi/core';
+import { getActiveGeneration, rebuildRollups } from '@archi-navi/core';
 
 export async function GET(req: NextRequest) {
   try {
@@ -88,6 +89,25 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ nodes, edges });
   } catch (error) {
     console.error('[GET /api/rollups]', error);
+    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+  }
+}
+
+export async function POST(req: NextRequest) {
+  try {
+    const body = (await req.json().catch(() => ({}))) as { workspaceId?: string };
+    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+
+    const db = await getDb();
+    const generationVersion = await rebuildRollups(db, workspaceId);
+
+    return NextResponse.json({
+      ok: true,
+      workspaceId,
+      generationVersion,
+    });
+  } catch (error) {
+    console.error('[POST /api/rollups]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }

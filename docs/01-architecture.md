@@ -191,10 +191,14 @@ archi-navi/
 
 - **책임**: Relation 추론, Domain 추론 (Track A/B)
 - **모듈**:
-  - `relation`: 코드/설정 기반 Relation 후보 생성
-  - `domain`: Seed 기반 Affinity 계산 + Seed-less Discovery
-  - `signals`: Code/DB/Message 신호 추출기
-  - `ast`: Tree-sitter 기반 AST 파싱 플러그인
+  - `relation`: 설정 파일 기반 관계 후보 생성 + 후보 승인 시 확정 관계 승격
+  - `domain`: Seed 기반 Affinity 계산 + Seed-less Discovery + 후보 승인 처리
+  - `code`: 코드 신호 추출(Regex 기본, `code/ast`에 AST 파서 모듈)
+  - `db`: DB 스키마 신호(FK/implicit) 추출 및 후보/근거 저장
+  - `llm`: 후보 후처리(필터링/배치) 모듈
+- **디렉토리 정합 메모(2026-03-01)**:
+  - 실제 구현 파일은 `src/relation`, `src/domain`, `src/code`, `src/db`, `src/llm`에 위치
+  - `src/signals`, `src/ast` 디렉토리는 현재 placeholder 상태(실행 모듈 없음)
 
 ### 4.4 `packages/db` — 데이터베이스
 

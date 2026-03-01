@@ -55,6 +55,21 @@
 
 ---
 
+## 1.2 구현 디렉토리 매핑 (2026-03-01)
+
+`packages/inference/src`의 실제 실행 모듈은 아래와 같다.
+
+- `relation/`: Config 기반 관계 후보 생성, 후보 승인/거부 처리
+- `domain/`: Track A/B 도메인 추론, 도메인 후보 승인
+- `code/`: Regex 기반 코드 신호 추출 + `code/ast/` AST 파서
+- `db/`: DB 스키마 신호(FK/implicit FK) 추출
+- `llm/`: 후보 LLM 필터링/배치 처리
+
+참고:
+- `src/signals/`, `src/ast/`는 현재 placeholder 디렉토리이며 실행 파일은 없다.
+
+---
+
 ## 2. Relation 추론
 
 ### 2.1 추론 파이프라인 — 전체 흐름

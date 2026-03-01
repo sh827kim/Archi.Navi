@@ -3,16 +3,10 @@
  * Next.js 16 App Router — ThemeProvider + Toaster
  */
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
 import { ThemeProvider } from '@/components/providers/theme-provider';
 import { Toaster } from 'sonner';
 import { CommandPalette } from '@/components/command-palette';
 import './globals.css';
-
-const inter = Inter({
-  subsets: ['latin'],
-  variable: '--font-inter',
-});
 
 export const metadata: Metadata = {
   title: {
@@ -32,7 +26,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="ko" suppressHydrationWarning>
-      <body className={`${inter.variable} font-sans antialiased overflow-hidden`}>
+      <body className="font-sans antialiased overflow-hidden">
         <ThemeProvider>
           {children}
           <CommandPalette />

@@ -26,6 +26,8 @@
 - ✅ `Settings > 개발자 도구`
   - `POST /api/dev/seed`: 샘플 주입 + rollup 재빌드
   - `POST /api/dev/reset`: 워크스페이스 데이터 초기화(rollup 포함)
+- ✅ Rollup 재빌드 API
+  - `POST /api/rollups`: 승인 관계 반영 후 generation 재생성
 - ✅ `Approval > 관계 후보`
   - `POST /api/inference/run` 호출 버튼 제공
   - 실행 후 PENDING 후보 즉시 재조회
@@ -61,6 +63,12 @@
 - ✅ Chat 스트리밍 API (`/api/chat`)
 - ✅ Evidence Assembler / Answer Composer 연동
 - ✅ LLM 후보 필터 API (`/api/inference/llm-filter`)
+
+### 1.5 E2E 시나리오 테스트
+
+- ✅ Playwright 시나리오 추가
+  - 파일: `apps/web/tests/e2e/inference-approval-rollup-query-chat.spec.ts`
+  - 검증 플로우: 추론 실행 → 관계 후보 승인 → rollup 재빌드 → query(provenance) → chat 카드 렌더링
 
 ---
 
@@ -103,6 +111,7 @@
 - `PUT /api/inference/profiles/default`
 - `POST /api/query`
 - `POST /api/chat`
+- `POST /api/rollups`
 
 ### 3.2 CLI
 

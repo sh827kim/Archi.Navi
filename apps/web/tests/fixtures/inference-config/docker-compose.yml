@@ -1,0 +1,10 @@
+version: '3.8'
+
+services:
+  order-service:
+    image: order-service:latest
+    depends_on:
+      - payment-service
+
+  payment-service:
+    image: payment-service:latest
