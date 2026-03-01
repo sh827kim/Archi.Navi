@@ -132,7 +132,7 @@ function RelationRow({
   onDelete,
 }: {
   rel: RelationItem;
-  mode: 'inbound' | 'outbound';
+  mode: 'inbound' | 'outbound' | 'expose';
   compound: ObjectItem;
   objMap: Map<string, ObjectItem>;
   onDelete: (rel: RelationItem) => void;
@@ -152,6 +152,10 @@ function RelationRow({
   const externalObj      = objMap.get(externalId);
   const internalObj      = objMap.get(internalId);
   const externalCompound = getOwner(externalId);
+  const subjectObj = objMap.get(rel.subjectObjectId);
+  const objectObj = objMap.get(rel.objectId);
+  const subjectCompound = getOwner(rel.subjectObjectId);
+  const objectCompound = getOwner(rel.objectId);
   /* compound 자신이 아니면 atomic */
   const isInternalAtomic = internalObj?.id !== compound.id;
 
@@ -173,7 +177,7 @@ function RelationRow({
               </span>
             )}
           </div>
-        ) : (
+        ) : mode === 'outbound' ? (
           /* 무엇을 통해 참조하는지 → 내부 Atomic */
           isInternalAtomic ? (
             <span className={cn('truncate', typeColor(internalObj?.objectType ?? ''))}>
@@ -182,6 +186,19 @@ function RelationRow({
           ) : (
             <span className="text-muted-foreground/40 italic text-[10px]">Compound 단위</span>
           )
+        ) : (
+          /* expose: 노출 주체 (subject) */
+          <div className="flex items-center gap-1 min-w-0">
+            <span className={cn('font-medium truncate', typeColor(subjectCompound?.objectType ?? ''))}>
+              {label(subjectCompound ?? subjectObj)}
+            </span>
+            {subjectObj && subjectObj.id !== subjectCompound?.id && (
+              <span className="text-muted-foreground truncate">
+                <span className="mx-0.5">/</span>
+                {label(subjectObj)}
+              </span>
+            )}
+          </div>
         )}
       </div>
 
@@ -204,7 +221,7 @@ function RelationRow({
           ) : (
             <span className="text-muted-foreground/40 italic text-[10px]">Compound 단위</span>
           )
-        ) : (
+        ) : mode === 'outbound' ? (
           /* 어디를 참조하는지 → 외부 Compound + Atomic */
           <div className="flex items-center justify-end gap-1 min-w-0">
             {externalObj && externalObj.id !== externalCompound?.id && (
@@ -215,6 +232,19 @@ function RelationRow({
             )}
             <span className={cn('font-medium truncate', typeColor(externalCompound?.objectType ?? ''))}>
               {label(externalCompound ?? externalObj)}
+            </span>
+          </div>
+        ) : (
+          /* expose: 노출 대상 (object) */
+          <div className="flex items-center justify-end gap-1 min-w-0">
+            {objectObj && objectObj.id !== objectCompound?.id && (
+              <span className="text-muted-foreground truncate">
+                {label(objectObj)}
+                <span className="mx-0.5">/</span>
+              </span>
+            )}
+            <span className={cn('font-medium truncate', typeColor(objectCompound?.objectType ?? ''))}>
+              {label(objectCompound ?? objectObj)}
             </span>
           </div>
         )}
@@ -720,19 +750,34 @@ function CompoundRelationDetail({
     [objMap],
   );
 
-  /* Inbound: 이 Compound 또는 그 Atomic이 objectId인 관계 (숨김 관계 제외) */
+  /* Expose: inbound/outbound와 분리 표시 */
+  const expose = useMemo(
+    () => relations.filter(
+      (r) =>
+        r.relationType === 'expose'
+        && (memberIds.has(r.subjectObjectId) || memberIds.has(r.objectId))
+        && !isHiddenRelation(r),
+    ),
+    [relations, memberIds, isHiddenRelation],
+  );
+
+  /* Inbound: 이 Compound 또는 그 Atomic이 objectId인 관계 (expose 제외, 숨김 관계 제외) */
   const inbound = useMemo(
-    () => relations.filter((r) => memberIds.has(r.objectId) && !isHiddenRelation(r)),
+    () => relations.filter(
+      (r) => r.relationType !== 'expose' && memberIds.has(r.objectId) && !isHiddenRelation(r),
+    ),
     [relations, memberIds, isHiddenRelation],
   );
 
-  /* Outbound: 이 Compound 또는 그 Atomic이 subjectObjectId인 관계 (숨김 관계 제외) */
+  /* Outbound: 이 Compound 또는 그 Atomic이 subjectObjectId인 관계 (expose 제외, 숨김 관계 제외) */
   const outbound = useMemo(
-    () => relations.filter((r) => memberIds.has(r.subjectObjectId) && !isHiddenRelation(r)),
+    () => relations.filter(
+      (r) => r.relationType !== 'expose' && memberIds.has(r.subjectObjectId) && !isHiddenRelation(r),
+    ),
     [relations, memberIds, isHiddenRelation],
   );
 
-  if (inbound.length === 0 && outbound.length === 0) {
+  if (expose.length === 0 && inbound.length === 0 && outbound.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
         <LinkIcon className="h-8 w-8 opacity-20" />
@@ -746,6 +791,41 @@ function CompoundRelationDetail({
 
   return (
     <div className="space-y-6">
+      {/* ── Expose ── */}
+      {expose.length > 0 && (
+        <section>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="text-emerald-400 text-base">↗</span>
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+              Expose
+            </h3>
+            <span className="text-[10px] text-muted-foreground/50 bg-muted/20 px-1.5 py-0.5 rounded-full">
+              {expose.length}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-3 px-3 pb-1 text-[10px] text-muted-foreground/50 uppercase tracking-wider">
+            <span className="flex-1">노출 주체</span>
+            <span className="w-16 text-center shrink-0">타입</span>
+            <span className="flex-1 text-right">노출 대상</span>
+            <span className="w-5 shrink-0" />
+          </div>
+
+          <div className="space-y-0.5">
+            {expose.map((rel) => (
+              <RelationRow
+                key={rel.id}
+                rel={rel}
+                mode="expose"
+                compound={compound}
+                objMap={objMap}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+        </section>
+      )}
+
       {/* ── Inbound ── */}
       {inbound.length > 0 && (
         <section>

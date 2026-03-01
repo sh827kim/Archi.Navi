@@ -2,6 +2,11 @@ import { defineConfig } from '@playwright/test';
 
 const PORT = Number(process.env['PLAYWRIGHT_PORT'] ?? '3100');
 const BASE_URL = process.env['PLAYWRIGHT_BASE_URL'] ?? `http://127.0.0.1:${PORT}`;
+const PROCESS_ENV_STRINGS = Object.fromEntries(
+  Object.entries(process.env).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string',
+  ),
+);
 
 export default defineConfig({
   testDir: './tests/e2e',
@@ -16,12 +21,12 @@ export default defineConfig({
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: `pnpm exec next dev --turbopack --port ${PORT} --hostname 127.0.0.1`,
+    command: `pnpm exec next dev --port ${PORT} --hostname 127.0.0.1`,
     url: BASE_URL,
     reuseExistingServer: !process.env['CI'],
     timeout: 180_000,
     env: {
-      ...process.env,
+      ...PROCESS_ENV_STRINGS,
       ARCHI_NAVI_CHAT_MOCK: '1',
       NEXT_DISABLE_GOOGLE_FONTS: '1',
       HOME: '/Users/spark',

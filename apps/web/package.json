@@ -12,7 +12,8 @@
     "next-env.d.ts"
   ],
   "scripts": {
-    "dev": "next dev --turbopack",
+    "dev": "next dev",
+    "dev:turbopack": "next dev --turbopack",
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
