@@ -106,6 +106,7 @@
 
 ### 3.2 CLI
 
+- `anavi up [--port <n>] [--prod]`
 - `anavi scan --workspace <id> [--path|--workspace-dir|--github-repo|--github-org]`
 - `anavi infer --workspace <id> [--track a|b|all]`
 - `anavi rebuild-rollup --workspace <id> [--incremental]`

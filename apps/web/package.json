@@ -1,7 +1,16 @@
 {
   "name": "@archi-navi/web",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
+  "files": [
+    "src",
+    "public",
+    "next.config.ts",
+    "tsconfig.json",
+    "postcss.config.mjs",
+    "eslint.config.mjs",
+    "next-env.d.ts"
+  ],
   "scripts": {
     "dev": "next dev --turbopack",
     "build": "next build",
@@ -53,5 +62,8 @@
     "eslint-config-next": "^16.1.6",
     "tailwindcss": "^4.2.0",
     "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

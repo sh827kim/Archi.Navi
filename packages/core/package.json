@@ -1,20 +1,28 @@
 {
   "name": "@archi-navi/core",
   "version": "0.1.0",
-  "private": true,
+  "private": false,
   "description": "Core graph engine: query, rollup, and graph index for Archi.Navi",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
     ".": {
-      "import": "./src/index.ts",
-      "require": "./src/index.ts"
+      "import": "./dist/index.js",
+      "require": "./dist/index.js",
+      "types": "./dist/index.d.ts"
     }
   },
   "scripts": {
-    "test:unit": "vitest run",
-    "test:unit:watch": "vitest",
+    "build": "tsc",
+    "test:unit": "vitest run src/__tests__",
+    "test:unit:watch": "vitest src/__tests__",
     "lint": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepack": "pnpm run clean && pnpm run build"
   },
+  "files": [
+    "dist"
+  ],
   "dependencies": {
     "@archi-navi/db": "workspace:*",
     "@archi-navi/shared": "workspace:*",
@@ -27,5 +35,8 @@
     "@types/node": "^25.3.0",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

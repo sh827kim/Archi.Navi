@@ -15,7 +15,10 @@
     "clean": "turbo run clean && rm -rf node_modules",
     "db:generate": "turbo run db:generate --filter=@archi-navi/db",
     "db:migrate": "turbo run db:migrate --filter=@archi-navi/db",
-    "db:studio": "turbo run db:studio --filter=@archi-navi/db"
+    "db:studio": "turbo run db:studio --filter=@archi-navi/db",
+    "release:pack:npm": "bash ./scripts/release/pack-npm.sh",
+    "release:publish:npm:dry-run": "bash ./scripts/release/publish-npm.sh --dry-run",
+    "release:publish:npm": "bash ./scripts/release/publish-npm.sh"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.0",

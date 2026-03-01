@@ -176,3 +176,4 @@ MSA/멀티 레포 환경에서는 아래 문제가 반복된다.
 | [04-query-engine.md](./04-query-engine.md) | Deterministic Query Engine + AI 레이어 |
 | [05-rollup-and-graph.md](./05-rollup-and-graph.md) | Roll-up 전략, 그래프 성능 |
 | [06-development-guide.md](./06-development-guide.md) | 개발 가이드, CLI, 컨벤션 |
+| [10-npm-distribution.md](./10-npm-distribution.md) | npm 배포/설치 절차, `anavi up` 실행 가이드 |

@@ -10,6 +10,8 @@
  * 이 디렉티브 없으면 Dialog, Button 등 UI 패키지의 유틸리티 클래스가 CSS에 미생성됨
  */
 @source "../../../../packages/ui/src";
+/* npm 설치 실행 시 node_modules 내 @archi-navi/ui 소스도 함께 스캔 */
+@source "../../../node_modules/@archi-navi/ui/src";
 
 /*
  * TailwindCSS v4 — CSS 변수 → 유틸리티 클래스 매핑

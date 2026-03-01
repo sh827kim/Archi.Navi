@@ -40,7 +40,7 @@ Local-first를 기본 전제로, 개발자 로컬 환경에서 단일 프로세�
 ├─────────────────────────────────────────────────┤
 │                  CLI Layer                        │
 │            Commander.js + tsx                     │
-│      (scan, infer, rebuild-rollup, export)       │
+│   (up, scan, infer, rebuild-rollup, export)      │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -135,7 +135,7 @@ archi-navi/
 │   │
 │   ├── cli/                          # CLI 도구
 │   │   ├── src/
-│   │   │   ├── commands/             # scan, infer, rebuild, export, snapshot
+│   │   │   ├── commands/             # up, scan, infer, rebuild, export, snapshot
 │   │   │   └── index.ts              # CLI 엔트리포인트
 │   │   ├── bin/
 │   │   │   └── anavi.ts              # npx 실행 엔트리
@@ -205,6 +205,7 @@ archi-navi/
 
 - **책임**: 터미널 기반 조작
 - **명령어**:
+  - `anavi up` — 웹 앱 실행 (모노레포 또는 설치된 web 패키지 자동 탐색)
   - `anavi scan` — 소스코드/설정 스캔
   - `anavi infer` — 도메인 추론 실행 (Track A/B)
   - `anavi rebuild-rollup` — Roll-up 전체 재빌드

@@ -4,19 +4,26 @@
   "private": false,
   "description": "CLI tool for Archi.Navi",
   "bin": {
-    "anavi": "./bin/anavi.js"
+    "anavi": "./dist/bin/anavi.js"
   },
+  "main": "./dist/src/index.js",
+  "types": "./dist/src/index.d.ts",
   "exports": {
     ".": {
-      "import": "./src/index.ts",
-      "require": "./src/index.ts"
+      "import": "./dist/src/index.js",
+      "require": "./dist/src/index.js",
+      "types": "./dist/src/index.d.ts"
     }
   },
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
     "lint": "tsc --noEmit",
-    "clean": "rm -rf dist"
+    "clean": "rm -rf dist",
+    "prepack": "pnpm --filter @archi-navi/shared build && pnpm --filter @archi-navi/db build && pnpm --filter @archi-navi/core build && pnpm --filter @archi-navi/inference build && pnpm run clean && pnpm run build"
   },
   "dependencies": {
     "@archi-navi/core": "workspace:*",
@@ -32,5 +39,8 @@
     "@types/node": "^25.3.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }

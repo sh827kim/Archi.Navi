@@ -180,9 +180,35 @@ pnpm db:studio      # Open Drizzle Studio (DB browser)
 ## CLI Usage
 
 The CLI is used to scan source code, run inference, and manage data.
-App startup is handled by `pnpm dev`.
+
+For npm-only usage (without cloning the monorepo), install both packages:
 
 ```bash
+npm install -g @archi-navi/cli @archi-navi/web
+```
+
+Run the web app from anywhere:
+
+```bash
+anavi up --port 3000
+```
+
+Runtime defaults in npm-installed mode:
+- `PGLITE_DATA_DIR`: `~/.archi-navi/data`
+- `MIGRATIONS_FOLDER`: auto-resolved from installed `@archi-navi/db`
+
+Optional overrides:
+
+```bash
+PGLITE_DATA_DIR="$HOME/.archi-navi/data" \
+MIGRATIONS_FOLDER="/custom/path/to/migrations" \
+anavi up --port 3000
+```
+
+```bash
+# Run web app (auto-detect monorepo or installed @archi-navi/web package)
+anavi up --port 3000
+
 # Scan source code and configuration files
 anavi scan --path /path/to/project --mode code
 
@@ -200,6 +226,19 @@ anavi snapshot
 ```
 
 Scan modes: `code` | `db` | `config` | `all`
+
+### npm Publish (Maintainers)
+
+```bash
+# 1) Build+pack all publish targets
+pnpm release:pack:npm
+
+# 2) Dry-run publish sequence
+pnpm release:publish:npm:dry-run
+
+# 3) Real publish (public scope)
+pnpm release:publish:npm
+```
 
 ---
 

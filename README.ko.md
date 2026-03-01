@@ -179,9 +179,35 @@ pnpm db:studio      # Drizzle Studio 열기 (DB 브라우저)
 ## CLI 사용법
 
 CLI는 소스코드 스캔, 추론 실행, 데이터 관리에 사용합니다.
-앱 실행은 `pnpm dev`를 사용합니다.
+
+모노레포를 클론하지 않고 npm 패키지로만 사용할 때:
 
 ```bash
+npm install -g @archi-navi/cli @archi-navi/web
+```
+
+어디서든 웹 앱 실행:
+
+```bash
+anavi up --port 3000
+```
+
+npm 설치 실행 시 기본 런타임 경로:
+- `PGLITE_DATA_DIR`: `~/.archi-navi/data`
+- `MIGRATIONS_FOLDER`: 설치된 `@archi-navi/db`에서 자동 탐색
+
+필요 시 환경변수로 덮어쓰기:
+
+```bash
+PGLITE_DATA_DIR="$HOME/.archi-navi/data" \
+MIGRATIONS_FOLDER="/custom/path/to/migrations" \
+anavi up --port 3000
+```
+
+```bash
+# 웹 앱 실행 (모노레포 또는 설치된 @archi-navi/web 자동 탐색)
+anavi up --port 3000
+
 # 소스코드/레포 스캔 (서비스 등록)
 anavi scan --workspace <workspaceId> --path /path/to/project
 
@@ -207,6 +233,19 @@ anavi snapshot save --output ./anavi-snapshot.db
 curl -X POST http://localhost:3000/api/inference/run \
   -H 'Content-Type: application/json' \
   -d '{"workspaceId":"<workspaceId>","modes":["config","db"],"useServiceMetadataPaths":true}'
+```
+
+### npm 배포 (메인테이너)
+
+```bash
+# 1) 배포 대상 패키지 pack 검증
+pnpm release:pack:npm
+
+# 2) publish dry-run
+pnpm release:publish:npm:dry-run
+
+# 3) 실제 npm publish
+pnpm release:publish:npm
 ```
 
 ---

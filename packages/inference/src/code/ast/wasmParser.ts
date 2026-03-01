@@ -9,8 +9,7 @@
  * 설계 참조: docs/10-verification-report.md §5
  */
 import Parser from 'web-tree-sitter';
-import { join, dirname } from 'path';
-import { fileURLToPath } from 'url';
+import { join } from 'path';
 
 // ─── 타입 정의 ────────────────────────────────────────────────────────────────
 
@@ -31,14 +30,8 @@ function getWasmDir(): string {
         return process.env['TREE_SITTER_WASM_DIR'];
     }
 
-    // ESM / CJS 호환 — 패키지 루트 기준 wasm/ 디렉토리
-    try {
-        const currentDir = dirname(fileURLToPath(import.meta.url));
-        return join(currentDir, '..', '..', '..', 'wasm');
-    } catch {
-        // CJS fallback
-        return join(__dirname, '..', '..', '..', 'wasm');
-    }
+    // src/code/ast 또는 dist/code/ast 기준으로 패키지 루트의 wasm/ 디렉토리까지 이동
+    return join(__dirname, '..', '..', '..', 'wasm');
 }
 
 /** 언어별 WASM 파일명 매핑 */

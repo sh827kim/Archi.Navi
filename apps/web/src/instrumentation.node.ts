@@ -3,12 +3,31 @@
  * 서버 시작 시 한 번 실행 — DB 마이그레이션 + 기본 워크스페이스 생성
  */
 import { resolve } from 'path';
+import { existsSync } from 'fs';
 import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
-/** 마이그레이션 폴더 — MIGRATIONS_FOLDER 환경변수 또는 모노레포 상대경로 */
-const MIGRATIONS_FOLDER =
-  process.env['MIGRATIONS_FOLDER'] ??
-  resolve(process.cwd(), '../../packages/db/src/migrations');
+function resolveMigrationsFolder(): string {
+  if (process.env['MIGRATIONS_FOLDER']) {
+    return process.env['MIGRATIONS_FOLDER'];
+  }
+
+  const candidates = [
+    resolve(process.cwd(), '../../packages/db/src/migrations'),
+    resolve(process.cwd(), 'node_modules/@archi-navi/db/src/migrations'),
+    resolve(process.cwd(), '../node_modules/@archi-navi/db/src/migrations'),
+  ];
+
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return candidates[0];
+}
+
+/** 마이그레이션 폴더 — env > monorepo 경로 > 설치된 @archi-navi/db 경로 */
+const MIGRATIONS_FOLDER = resolveMigrationsFolder();
 
 export async function register() {
   const { getDb } = await import('@archi-navi/db');

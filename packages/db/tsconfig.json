@@ -3,10 +3,10 @@
   "compilerOptions": {
     "lib": ["ES2022"],
     "types": ["node"],
-    "module": "ESNext",
-    "moduleResolution": "Bundler",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
     "outDir": "./dist",
-    "rootDir": "."
+    "rootDir": "./src"
   },
-  "include": ["src", "drizzle.config.ts"]
+  "include": ["src"]
 }
