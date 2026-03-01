@@ -289,6 +289,12 @@ export function RollupGraph() {
   /* Roll-down LR Flow 패널 데이터 */
   const [rollDownInfo, setRollDownInfo] = useState<RollDownPanelItem[]>([]);
 
+  useEffect(() => {
+    setSelectedDomain(null);
+    setSelectedService(null);
+    setExpandedSet(new Set());
+  }, [workspaceId]);
+
   /* 전체 데이터 캐시 */
   const dataRef = useRef<{
     objects: ObjectItem[];
@@ -435,8 +441,16 @@ export function RollupGraph() {
         } = await fetchData(expanded.size > 0);
 
         const domainObjects = allObjects.filter((o) => o.objectType === 'domain' && o.depth === 0);
+        const domainIdSet = new Set(domainObjects.map((domain) => domain.id));
+        const activeSelectedDomain =
+          selectedDomain && domainIdSet.has(selectedDomain.id) ? selectedDomain : null;
         const hasDomainData = domainObjects.length > 0;
         setHasDomainObjects(hasDomainData);
+
+        if (selectedDomain && activeSelectedDomain === null) {
+          setSelectedDomain(null);
+          if (selectedService !== null) setSelectedService(null);
+        }
 
         if (level === 'DOMAIN_TO_DOMAIN' && !hasDomainData) {
           if (selectedDomain !== null) setSelectedDomain(null);
@@ -586,7 +600,7 @@ export function RollupGraph() {
             (o) => allowedTypes.includes(o.objectType) && o.depth === 0,
           );
 
-          if (level === 'SERVICE_TO_SERVICE' && selectedDomain) {
+          if (level === 'SERVICE_TO_SERVICE' && activeSelectedDomain) {
             const bestDomainByService = new Map<string, { domainId: string; affinity: number }>();
             for (const row of allDomainAffinities) {
               const prev = bestDomainByService.get(row.objectId);
@@ -598,7 +612,7 @@ export function RollupGraph() {
               }
             }
             baseObjects = baseObjects.filter(
-              (o) => bestDomainByService.get(o.id)?.domainId === selectedDomain.id,
+              (o) => bestDomainByService.get(o.id)?.domainId === activeSelectedDomain.id,
             );
           }
 
