@@ -100,6 +100,12 @@ interface GraphStatApiItem {
   outDegree: number;
 }
 
+interface DomainAffinityApiItem {
+  objectId: string;
+  domainId: string;
+  affinity: number;
+}
+
 type RollupRelationMap = Record<RollupLevelKey, RelationItem[]>;
 type RollupGraphStatsMap = Record<RollupLevelKey, GraphStatApiItem[]>;
 
@@ -270,13 +276,16 @@ export function RollupGraph() {
   /* UI 상태 */
   const [loading, setLoading] = useState(true);
   const [isEmpty, setIsEmpty] = useState(false);
-  const [viewLevel, setViewLevel] = useState<ViewLevel>('SERVICE_TO_SERVICE');
+  const [viewLevel, setViewLevel] = useState<ViewLevel>('DOMAIN_TO_DOMAIN');
   const [expandedSet, setExpandedSet] = useState<Set<string>>(new Set());
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
   const [hubThreshold, setHubThreshold] = useState(DEFAULT_HUB_THRESHOLD);
   const [isHubCollapsed, setIsHubCollapsed] = useState(false);
   const [hubNodeCount, setHubNodeCount] = useState(0);
   const [edgeRenderProgress, setEdgeRenderProgress] = useState<{ rendered: number; total: number } | null>(null);
+  const [selectedDomain, setSelectedDomain] = useState<{ id: string; label: string } | null>(null);
+  const [selectedService, setSelectedService] = useState<{ id: string; label: string } | null>(null);
+  const [hasDomainObjects, setHasDomainObjects] = useState(false);
   /* Roll-down LR Flow 패널 데이터 */
   const [rollDownInfo, setRollDownInfo] = useState<RollDownPanelItem[]>([]);
 
@@ -286,6 +295,7 @@ export function RollupGraph() {
     relations: RelationItem[];
     rollups: RollupRelationMap;
     graphStats: RollupGraphStatsMap;
+    domainAffinities: DomainAffinityApiItem[];
   }>({
     objects: [],
     relations: [],
@@ -301,6 +311,7 @@ export function RollupGraph() {
       SERVICE_TO_BROKER: [],
       DOMAIN_TO_DOMAIN: [],
     },
+    domainAffinities: [],
   });
 
   useEffect(() => {
@@ -334,15 +345,17 @@ export function RollupGraph() {
       'DOMAIN_TO_DOMAIN',
     ];
 
-    const [objRes, ...rollupResList] = await Promise.all([
+    const [objRes, affinityRes, ...rollupResList] = await Promise.all([
       fetch(`/api/objects?workspaceId=${workspaceId}`),
+      fetch(`/api/domain-affinities?workspaceId=${workspaceId}`),
       ...rollupLevels.map((level) => fetch(`/api/rollups?workspaceId=${workspaceId}&level=${level}`)),
     ]);
-    if (!objRes.ok || rollupResList.some((res) => !res.ok)) {
+    if (!objRes.ok || !affinityRes.ok || rollupResList.some((res) => !res.ok)) {
       throw new Error('데이터 로드 실패');
     }
 
     const allObjects = (await objRes.json()) as ObjectItem[];
+    const allDomainAffinities = (await affinityRes.json()) as DomainAffinityApiItem[];
     let allRelations: RelationItem[] = [];
     if (includeRelations) {
       const relRes = await fetch(`/api/relations?workspaceId=${workspaceId}`);
@@ -378,8 +391,20 @@ export function RollupGraph() {
       graphStats[level] = payload.graphStats ?? [];
     }
 
-    dataRef.current = { objects: allObjects, relations: allRelations, rollups, graphStats };
-    return { allObjects, allRelations, allRollups: rollups, allGraphStats: graphStats };
+    dataRef.current = {
+      objects: allObjects,
+      relations: allRelations,
+      rollups,
+      graphStats,
+      domainAffinities: allDomainAffinities,
+    };
+    return {
+      allObjects,
+      allRelations,
+      allRollups: rollups,
+      allGraphStats: graphStats,
+      allDomainAffinities,
+    };
   }, [workspaceId]);
 
   /* ─── D3 그래프 빌드 ─── */
@@ -406,7 +431,20 @@ export function RollupGraph() {
           allRelations,
           allRollups,
           allGraphStats,
+          allDomainAffinities,
         } = await fetchData(expanded.size > 0);
+
+        const domainObjects = allObjects.filter((o) => o.objectType === 'domain' && o.depth === 0);
+        const hasDomainData = domainObjects.length > 0;
+        setHasDomainObjects(hasDomainData);
+
+        if (level === 'DOMAIN_TO_DOMAIN' && !hasDomainData) {
+          if (selectedDomain !== null) setSelectedDomain(null);
+          if (selectedService !== null) setSelectedService(null);
+          if (expanded.size > 0) setExpandedSet(new Set());
+          setViewLevel('SERVICE_TO_SERVICE');
+          return;
+        }
 
         /* ── Roll-down LR Flow 패널 데이터 계산 (allObjects/allRelations 전체 기준) ── */
         if (expanded.size > 0) {
@@ -544,9 +582,25 @@ export function RollupGraph() {
           filteredRelations = [...relationMap.values()];
         } else {
           const allowedTypes = LEVEL_TYPES[level] ?? [];
-          const baseObjects = allObjects.filter(
+          let baseObjects = allObjects.filter(
             (o) => allowedTypes.includes(o.objectType) && o.depth === 0,
           );
+
+          if (level === 'SERVICE_TO_SERVICE' && selectedDomain) {
+            const bestDomainByService = new Map<string, { domainId: string; affinity: number }>();
+            for (const row of allDomainAffinities) {
+              const prev = bestDomainByService.get(row.objectId);
+              if (!prev || row.affinity > prev.affinity) {
+                bestDomainByService.set(row.objectId, {
+                  domainId: row.domainId,
+                  affinity: row.affinity,
+                });
+              }
+            }
+            baseObjects = baseObjects.filter(
+              (o) => bestDomainByService.get(o.id)?.domainId === selectedDomain.id,
+            );
+          }
 
           const expandedChildren: ObjectItem[] = [];
           expanded.forEach((parentId) => {
@@ -1208,6 +1262,25 @@ export function RollupGraph() {
             return;
           }
 
+          if (level === 'DOMAIN_TO_DOMAIN' && d.objectType === 'domain') {
+            setSelectedDomain({ id: d.id, label: d.label });
+            setSelectedService(null);
+            setExpandedSet(new Set());
+            setViewLevel('SERVICE_TO_SERVICE');
+            return;
+          }
+
+          if (
+            level === 'SERVICE_TO_SERVICE' &&
+            selectedDomain &&
+            d.objectType === 'service' &&
+            d.isCompound
+          ) {
+            setSelectedService({ id: d.id, label: d.label });
+            setExpandedSet(new Set([d.id]));
+            return;
+          }
+
           /* COMPOUND 노드 → Roll-down 토글 (전체 통합 뷰에서는 비활성) */
           if (d.isCompound && level !== 'COMPOUND_VIEW') {
             setExpandedSet((prev) => {
@@ -1416,7 +1489,7 @@ export function RollupGraph() {
         setLoading(false);
       }
     },
-    [fetchData, hubThreshold, isHubCollapsed],
+    [fetchData, hubThreshold, isHubCollapsed, selectedDomain, selectedService],
   );
 
   /* ── 뷰 레벨/전개 상태 변경 시 재빌드 ── */
@@ -1433,6 +1506,25 @@ export function RollupGraph() {
 
   /* ── 레벨 변경 시 전개 초기화 ── */
   const handleLevelChange = (level: ViewLevel) => {
+    // Domain-first 데이터가 있는 경우, 단계 이동은 브레드크럼/상위로 흐름을 강제한다.
+    if (hasDomainObjects) {
+      if (!selectedDomain) {
+        if (level !== 'DOMAIN_TO_DOMAIN') return;
+      } else {
+        if (level === 'DOMAIN_TO_DOMAIN') {
+          setSelectedDomain(null);
+          setSelectedService(null);
+          setExpandedSet(new Set());
+          setViewLevel('DOMAIN_TO_DOMAIN');
+          return;
+        }
+        if (level !== 'SERVICE_TO_SERVICE') return;
+      }
+    }
+
+    if (level !== 'SERVICE_TO_SERVICE') {
+      setSelectedService(null);
+    }
     setExpandedSet(new Set());
     setViewLevel(level);
   };
@@ -1450,31 +1542,109 @@ export function RollupGraph() {
 
   return (
     <div ref={containerRef} className="relative h-full w-full bg-[#0f0f11]">
-      {/* 레벨 선택 버튼 */}
-      <div className="absolute left-4 top-4 z-10 flex flex-wrap gap-2">
-        {VIEW_LEVELS.map((level) => (
-          <button
-            key={level.value}
-            onClick={() => handleLevelChange(level.value)}
-            className={cn(
-              'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
-              'border backdrop-blur-sm whitespace-nowrap',
-              viewLevel === level.value
-                ? 'border-primary bg-primary/20 text-primary'
-                : 'border-white/10 bg-black/40 text-zinc-400 hover:text-white hover:border-white/20',
+      {/* Domain-first 브레드크럼 + 레벨 버튼 */}
+      <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-20rem)] flex-col gap-2">
+        {hasDomainObjects && (
+          <div className="flex items-center gap-1.5 rounded-full border border-zinc-700/80 bg-zinc-950/80 px-3 py-1.5 text-[11px] text-zinc-200 backdrop-blur-sm">
+            <button
+              onClick={() => {
+                setSelectedDomain(null);
+                setSelectedService(null);
+                setExpandedSet(new Set());
+                setViewLevel('DOMAIN_TO_DOMAIN');
+              }}
+              className={cn(
+                'rounded px-1.5 py-0.5 font-semibold',
+                !selectedDomain ? 'text-primary' : 'text-zinc-300 hover:text-white',
+              )}
+            >
+              Domain
+            </button>
+            {selectedDomain && (
+              <>
+                <span className="text-zinc-500">/</span>
+                <button
+                  onClick={() => {
+                    setSelectedService(null);
+                    setExpandedSet(new Set());
+                    setViewLevel('SERVICE_TO_SERVICE');
+                  }}
+                  className={cn(
+                    'max-w-[12rem] truncate rounded px-1.5 py-0.5 font-semibold',
+                    !selectedService ? 'text-primary' : 'text-zinc-300 hover:text-white',
+                  )}
+                  title={selectedDomain.label}
+                >
+                  {selectedDomain.label}
+                </button>
+              </>
             )}
-          >
-            <span
-              className="inline-block h-2 w-2 rounded-full shrink-0"
-              style={{ backgroundColor: level.color }}
-            />
-            {level.label}
-          </button>
-        ))}
+            {selectedService && (
+              <>
+                <span className="text-zinc-500">/</span>
+                <span className="max-w-[12rem] truncate rounded px-1.5 py-0.5 font-semibold text-primary" title={selectedService.label}>
+                  {selectedService.label}
+                </span>
+              </>
+            )}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          {VIEW_LEVELS.map((level) => {
+            const disabledByDomainFlow =
+              hasDomainObjects &&
+              (
+                (!selectedDomain && level.value !== 'DOMAIN_TO_DOMAIN') ||
+                (selectedDomain !== null && !['DOMAIN_TO_DOMAIN', 'SERVICE_TO_SERVICE'].includes(level.value))
+              );
+            return (
+              <button
+                key={level.value}
+                onClick={() => handleLevelChange(level.value)}
+                disabled={disabledByDomainFlow}
+                title={disabledByDomainFlow ? 'Domain-first 단계에서 자동 전환됩니다.' : undefined}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
+                  'border backdrop-blur-sm whitespace-nowrap transition-opacity',
+                  viewLevel === level.value
+                    ? 'border-primary bg-primary/20 text-primary'
+                    : 'border-white/10 bg-black/40 text-zinc-400 hover:text-white hover:border-white/20',
+                  disabledByDomainFlow && 'cursor-not-allowed opacity-45 hover:text-zinc-400 hover:border-white/10',
+                )}
+              >
+                <span
+                  className="inline-block h-2 w-2 rounded-full shrink-0"
+                  style={{ backgroundColor: level.color }}
+                />
+                {level.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
       {/* 핀 고정 카운트 + 모두 접기 버튼 (우상단) */}
       <div className="absolute right-4 top-4 z-10 flex flex-col items-end gap-1.5">
+        {hasDomainObjects && (selectedDomain || selectedService) && (
+          <button
+            onClick={() => {
+              if (selectedService) {
+                setSelectedService(null);
+                setExpandedSet(new Set());
+                setViewLevel('SERVICE_TO_SERVICE');
+                return;
+              }
+              setSelectedDomain(null);
+              setExpandedSet(new Set());
+              setViewLevel('DOMAIN_TO_DOMAIN');
+            }}
+            className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border border-indigo-500/30 bg-indigo-500/10 text-indigo-200 backdrop-blur-sm hover:bg-indigo-500/20"
+          >
+            ↑ 상위로
+          </button>
+        )}
+
         {viewLevel !== 'COMPOUND_VIEW' && hubNodeCount > 0 && (
           <button
             onClick={() => setIsHubCollapsed((prev) => !prev)}
@@ -1510,7 +1680,10 @@ export function RollupGraph() {
 
         {expandedSet.size > 0 && (
           <button
-            onClick={() => setExpandedSet(new Set())}
+            onClick={() => {
+              setExpandedSet(new Set());
+              if (selectedService) setSelectedService(null);
+            }}
             className="flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border border-rose-500/30 bg-rose-500/10 text-rose-400 backdrop-blur-sm hover:bg-rose-500/20"
           >
             ↩ 모두 접기 ({expandedSet.size})
