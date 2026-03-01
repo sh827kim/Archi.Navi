@@ -8,10 +8,10 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { createPgliteClient } from '@archi-navi/db';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { objects, relationCandidates, evidences, workspaces } from '@archi-navi/db';
+import { objects, relationCandidates, objectRelations, evidences, workspaces } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { inferRelationsFromConfig } from '../../relation/configBased';
-import { generateId } from '@archi-navi/shared';
+import { generateId, buildUrn } from '@archi-navi/shared';
 
 // vitest는 package 루트(packages/inference/)에서 실행됨
 // 따라서 migrations 폴더는 ../db/src/migrations 로 상대 참조 가능
@@ -225,6 +225,83 @@ spring:
       const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
       expect(result.candidateCount).toBe(0);
     });
+
+    it('서비스명 정규화(하이픈/언더스코어) 매칭이 동작해야 한다', async () => {
+      await createTestFixtures(db, workspaceId);
+
+      writeFileSync(
+        join(tempDir, 'bootstrap.yaml'),
+        `
+spring:
+  application:
+    name: order_service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+      expect(result.candidateCount).toBe(2);
+      expect(result.objectCount).toBe(1);
+    });
+
+    it('MANUAL 관계가 있으면 동일 후보 생성을 건너뛰어야 한다', async () => {
+      const { orderServiceId } = await createTestFixtures(db, workspaceId);
+
+      const dbObjectId = generateId();
+      await db.insert(objects).values({
+        id: dbObjectId,
+        workspaceId,
+        objectType: 'database',
+        category: 'STORAGE',
+        granularity: 'COMPOUND',
+        name: 'order_db',
+        urn: buildUrn(workspaceId, 'storage', 'database', 'db-host:order_db'),
+        path: `/${dbObjectId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      });
+
+      await db.insert(objectRelations).values({
+        id: generateId(),
+        workspaceId,
+        relationType: 'read',
+        subjectObjectId: orderServiceId,
+        objectId: dbObjectId,
+        status: 'APPROVED',
+        source: 'MANUAL',
+        isDerived: false,
+        metadata: {},
+      });
+
+      writeFileSync(
+        join(tempDir, 'application.yml'),
+        `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      // read는 MANUAL로 막히고, write만 생성
+      expect(result.candidateCount).toBe(1);
+
+      const readCandidates = await db
+        .select()
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, workspaceId),
+            eq(relationCandidates.relationType, 'read'),
+          ),
+        );
+      expect(readCandidates).toHaveLength(0);
+    });
   });
 
   // ─── docker-compose.yml 처리 ───────────────────────────────────────────────────
@@ -319,6 +396,99 @@ services:
         .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'database')));
       expect(dbObjects).toHaveLength(1);
       expect(dbObjects[0]?.name).toBe('order_db');
+    });
+
+    it('Broker 이미지 서비스도 message_broker Object로 생성되어야 한다', async () => {
+      await db.insert(workspaces).values({ id: workspaceId, name: 'test-workspace' });
+      const orderSvcId = generateId();
+      await db.insert(objects).values({
+        id: orderSvcId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'order-service',
+        path: `/${orderSvcId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      });
+
+      writeFileSync(
+        join(tempDir, 'docker-compose.yaml'),
+        `
+services:
+  order-service:
+    image: order:latest
+    depends_on:
+      - kafka-broker
+  kafka-broker:
+    image: confluentinc/cp-kafka:7.0
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      expect(result.objectCount).toBe(1); // message_broker
+      expect(result.candidateCount).toBe(1); // depend_on
+
+      const brokers = await db
+        .select()
+        .from(objects)
+        .where(
+          and(
+            eq(objects.workspaceId, workspaceId),
+            eq(objects.objectType, 'message_broker'),
+          ),
+        );
+      expect(brokers).toHaveLength(1);
+      expect(brokers[0]?.name).toBe('kafka-broker');
+    });
+  });
+
+  describe('k8s manifest 처리', () => {
+    it('k8s Deployment env에서 DB/Kafka 관계를 추론해야 한다', async () => {
+      await createTestFixtures(db, workspaceId);
+      const k8sDir = join(tempDir, 'k8s');
+      mkdirSync(k8sDir, { recursive: true });
+
+      writeFileSync(
+        join(k8sDir, 'deployment.yaml'),
+        `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: order:latest
+          env:
+            - name: DB_URL
+              value: jdbc:mysql://db-host:3306/order_db
+            - name: KAFKA_BROKERS
+              value: kafka:9092, kafka2:9092
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      expect(result.objectCount).toBe(2); // database + message_broker
+      expect(result.candidateCount).toBe(3); // read + write + produce
+
+      const readWrite = await db
+        .select()
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, workspaceId),
+            eq(relationCandidates.relationType, 'read'),
+          ),
+        );
+      expect(readWrite).toHaveLength(1);
+      expect(readWrite[0]?.confidence).toBeCloseTo(0.7);
     });
   });
 
@@ -434,6 +604,26 @@ spring:
 
     const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
 
+    expect(result.candidateCount).toBe(0);
+    expect(result.objectCount).toBe(0);
+  });
+
+  it('node_modules 내부 설정 파일은 스캔에서 제외해야 한다', async () => {
+    await createTestFixtures(db, workspaceId);
+    const hiddenDir = join(tempDir, 'node_modules', 'fake-service');
+    mkdirSync(hiddenDir, { recursive: true });
+    writeFileSync(
+      join(hiddenDir, 'application.yml'),
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+    );
+
+    const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
     expect(result.candidateCount).toBe(0);
     expect(result.objectCount).toBe(0);
   });
