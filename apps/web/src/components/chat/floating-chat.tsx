@@ -22,6 +22,7 @@ import {
   ArrowUpRight,
 } from 'lucide-react';
 import { cn, Button, Input } from '@archi-navi/ui';
+import { useWorkspace } from '@/contexts/workspace-context';
 
 /** 예시 질문 목록 */
 const EXAMPLE_QUESTIONS = [
@@ -190,6 +191,7 @@ export function FloatingChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
+  const { workspaceId } = useWorkspace();
 
   // AI SDK v6: DefaultChatTransport + sendMessage 패턴
   const {
@@ -200,7 +202,8 @@ export function FloatingChat() {
   } = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
-      headers: getAiHeaders(),
+      headers: getAiHeaders,
+      body: () => (workspaceId ? { workspaceId } : {}),
     }),
   });
 
@@ -233,19 +236,20 @@ export function FloatingChat() {
     (e: React.FormEvent) => {
       e.preventDefault();
       const trimmed = input.trim();
-      if (!trimmed) return;
+      if (!trimmed || !workspaceId) return;
       sendMessage({ text: trimmed });
       setInput('');
     },
-    [input, sendMessage],
+    [input, sendMessage, workspaceId],
   );
 
   /** 예시 질문 클릭 → 바로 전송 */
   const handleExampleClick = useCallback(
     (question: string) => {
+      if (!workspaceId) return;
       sendMessage({ text: question });
     },
-    [sendMessage],
+    [sendMessage, workspaceId],
   );
 
   return (

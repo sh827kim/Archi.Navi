@@ -1,15 +1,14 @@
 import path from 'node:path';
 import { test, expect, type APIRequestContext } from '@playwright/test';
 
-const WORKSPACE_ID = '00000000-0000-0000-0000-000000000001';
-
 async function createService(
   request: APIRequestContext,
+  workspaceId: string,
   name: string,
 ): Promise<string> {
   const res = await request.post('/api/objects', {
     data: {
-      workspaceId: WORKSPACE_ID,
+      workspaceId,
       objectType: 'service',
       granularity: 'COMPOUND',
       name,
@@ -23,9 +22,20 @@ async function createService(
 }
 
 test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오', async ({ request, page }) => {
-  await test.step('워크스페이스 초기화', async () => {
+  const workspaceName = `e2e-inference-${Date.now()}`;
+  let workspaceId = '';
+
+  await test.step('워크스페이스 생성 + 초기화', async () => {
+    const create = await request.post('/api/workspaces', {
+      data: { name: workspaceName },
+    });
+    expect(create.ok()).toBeTruthy();
+    const created = (await create.json()) as { id: string };
+    workspaceId = created.id;
+    expect(workspaceId).toBeTruthy();
+
     const reset = await request.post('/api/dev/reset', {
-      data: { workspaceId: WORKSPACE_ID },
+      data: { workspaceId },
     });
     expect(reset.ok()).toBeTruthy();
   });
@@ -34,8 +44,8 @@ test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오',
   let paymentServiceId = '';
 
   await test.step('서비스 오브젝트 생성 + config 추론 실행', async () => {
-    orderServiceId = await createService(request, 'order-service');
-    paymentServiceId = await createService(request, 'payment-service');
+    orderServiceId = await createService(request, workspaceId, 'order-service');
+    paymentServiceId = await createService(request, workspaceId, 'payment-service');
 
     const fixtureRepoRoot = path.resolve(
       __dirname,
@@ -46,7 +56,7 @@ test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오',
 
     const infer = await request.post('/api/inference/run', {
       data: {
-        workspaceId: WORKSPACE_ID,
+        workspaceId,
         modes: ['config'],
         repoRoots: [fixtureRepoRoot],
         useServiceMetadataPaths: false,
@@ -66,7 +76,7 @@ test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오',
 
   await test.step('관계 후보 승인', async () => {
     const candidatesRes = await request.get(
-      `/api/inference/candidates?workspaceId=${WORKSPACE_ID}&status=PENDING`,
+      `/api/inference/candidates?workspaceId=${workspaceId}&status=PENDING`,
     );
     expect(candidatesRes.ok()).toBeTruthy();
     const candidates = (await candidatesRes.json()) as Array<{
@@ -99,7 +109,7 @@ test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오',
 
   await test.step('롤업 재빌드 + Query 검증(경로/근거)', async () => {
     const rebuild = await request.post('/api/rollups', {
-      data: { workspaceId: WORKSPACE_ID },
+      data: { workspaceId },
     });
     expect(rebuild.ok()).toBeTruthy();
     const rebuildJson = (await rebuild.json()) as {
@@ -111,7 +121,7 @@ test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오',
 
     const query = await request.post('/api/query', {
       data: {
-        workspaceId: WORKSPACE_ID,
+        workspaceId,
         queryType: 'PATH_DISCOVERY',
         scope: {
           level: 'SERVICE_TO_SERVICE',
@@ -143,7 +153,11 @@ test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오',
   });
 
   await test.step('채팅 카드 렌더링 검증', async () => {
-    await page.goto('/architecture');
+    await page.goto('/workspaces');
+    const workspaceButton = page.getByRole('button', { name: new RegExp(workspaceName) }).first();
+    await expect(workspaceButton).toBeVisible();
+    await workspaceButton.click();
+    await expect(page).toHaveURL(/\/architecture/);
 
     await page.locator('button[title^="AI 채팅"]').click();
     await page.getByPlaceholder('질문을 입력하세요...').fill('order-service가 의존하는 서비스는?');
