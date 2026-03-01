@@ -60,6 +60,45 @@ interface RollupEdgeData {
   relationType: string;
 }
 
+function formatTagSummary(tags: TagData[]): string {
+  if (tags.length === 0) return '';
+  const visible = tags.slice(0, 2).map((t) => `#${t.name}`);
+  const moreCount = tags.length - visible.length;
+  return `${visible.join(' · ')}${moreCount > 0 ? ` +${moreCount}` : ''}`;
+}
+
+function sortTags(tags: TagData[]): TagData[] {
+  return [...tags].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function pickReadableTextColor(bgColor: string | null | undefined): string {
+  if (!bgColor) return '#ffffff';
+  const hex = bgColor.trim();
+  const normalized = hex.startsWith('#') ? hex.slice(1) : hex;
+  const raw = normalized.length === 3
+    ? normalized.split('').map((ch) => ch + ch).join('')
+    : normalized;
+  if (!/^[0-9a-fA-F]{6}$/.test(raw)) return '#ffffff';
+
+  const r = parseInt(raw.slice(0, 2), 16);
+  const g = parseInt(raw.slice(2, 4), 16);
+  const b = parseInt(raw.slice(4, 6), 16);
+  // W3C relative luminance approximation for UI contrast threshold.
+  const luminance = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
+  return luminance > 0.62 ? '#0f172a' : '#ffffff';
+}
+
+function calcLayerTitleWidth(label: string): number {
+  const LAYER_TITLE_MIN_WIDTH = 96;
+  const LAYER_TITLE_MAX_WIDTH = 220;
+  const APPROX_CHAR_WIDTH = 7;
+  const SIDE_PADDING = 22;
+  return Math.max(
+    LAYER_TITLE_MIN_WIDTH,
+    Math.min(LAYER_TITLE_MAX_WIDTH, (label.length * APPROX_CHAR_WIDTH) + SIDE_PADDING),
+  );
+}
+
 /* ─── 엣지 타입별 색상 (Cosmic 테마) ─── */
 const EDGE_COLORS: Record<string, string> = {
   call: '#818cf8',          // indigo
@@ -93,20 +132,36 @@ const cytoscapeStyles: StylesheetCSS[] = [
     selector: 'node[nodeType="layer"]',
     css: {
       'background-color': 'data(bgColor)' as unknown as string,
-      'background-opacity': 0.15,
+      'background-opacity': 0.13,
       'border-width': 2,
       'border-color': 'data(borderColor)' as unknown as string,
-      'border-opacity': 0.6,
+      'border-opacity': 0.55,
+      shape: 'round-rectangle',
+      padding: '18px',
+      'padding-top': '34px',
+      label: '',
+      'z-compound-depth': 'bottom',
+    },
+  },
+  {
+    selector: 'node[nodeType="layer-title"]',
+    css: {
+      'background-opacity': 0,
+      'border-width': 0,
       shape: 'round-rectangle',
       width: 'data(width)' as unknown as number,
-      height: 50,
+      height: 18,
       label: 'data(label)',
       'text-valign': 'center',
       'text-halign': 'center',
-      'font-size': 14,
+      'font-size': 11,
       'font-weight': 'bold',
       color: '#ffffff',
-      'text-opacity': 0.8,
+      'text-opacity': 0.9,
+      'text-outline-color': '#020617',
+      'text-outline-width': 2,
+      'text-outline-opacity': 0.45,
+      events: 'no',
     },
   },
   {
@@ -122,16 +177,43 @@ const cytoscapeStyles: StylesheetCSS[] = [
       label: 'data(label)',
       'text-valign': 'center',
       'text-halign': 'center',
-      'font-size': 11,
-      color: '#ffffff',
-      'text-wrap': 'wrap',       // 태그 라인을 위해 wrap으로 변경
+      'font-size': 12,
+      color: 'data(textColor)',
+      'text-wrap': 'wrap',
       'text-max-width': '128px',
     },
   },
-  // 태그가 있는 노드 — 높이를 늘려 태그 라인 공간 확보
   {
-    selector: 'node[nodeType="object"][hasTags="1"]',
-    css: { height: 58 },
+    selector: 'node[nodeType="layer-anchor"]',
+    css: {
+      width: 1,
+      height: 1,
+      opacity: 0,
+      'background-opacity': 0,
+      'border-width': 0,
+      label: '',
+      events: 'no',
+    },
+  },
+  {
+    selector: 'node[nodeType="tag"]',
+    css: {
+      'background-color': '#0f172a',
+      'background-opacity': 0.55,
+      'border-width': 1,
+      'border-color': '#334155',
+      'border-opacity': 0.7,
+      shape: 'round-rectangle',
+      width: 128,
+      height: 20,
+      label: 'data(label)',
+      'text-valign': 'center',
+      'text-halign': 'center',
+      'font-size': 8,
+      color: '#cbd5e1',
+      'text-wrap': 'wrap',
+      'text-max-width': '118px',
+    },
   },
   {
     selector: 'edge',
@@ -196,6 +278,8 @@ export function LayeredArchitectureView() {
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set());
+  const [showTagBadges, setShowTagBadges] = useState(true);
+  const [exportBg, setExportBg] = useState<'dark' | 'white'>('dark');
   const [hasData, setHasData] = useState(false);
   const [curveStyle, setCurveStyle] = useState<CurveStyle>('bezier');
   // 레이어 목록 (뷰 내 visibility 토글용)
@@ -278,9 +362,14 @@ export function LayeredArchitectureView() {
       }
 
       // 레이아웃 계산
-      const LAYER_GAP_Y = 160;
+      const LAYER_GAP_Y = 190;
       const NODE_GAP_X = 180;
       const CANVAS_PADDING = 60;
+      const LAYER_TITLE_LEFT_INSET = -44;
+      const LAYER_TITLE_TOP_OFFSET = 36;
+      const LAYER_ANCHOR_Y_OFFSET = 56;
+      const OBJECT_NODE_Y_OFFSET = 76;
+      const TAG_NODE_Y_OFFSET = 108;
       const maxObjectsPerLayer = Math.max(
         ...newActiveLayers.map((l) => (layerObjectsMap.get(l.id) ?? []).length),
         1,
@@ -294,18 +383,58 @@ export function LayeredArchitectureView() {
       newActiveLayers.forEach((layer, layerIdx) => {
         const yPos = CANVAS_PADDING + layerIdx * LAYER_GAP_Y;
         const color = layer.color ?? LAYER_COLORS[layerIdx % LAYER_COLORS.length]!;
+        const layerLabel = layer.displayName ?? layer.name;
+        const layerTitleWidth = calcLayerTitleWidth(layerLabel);
 
         elements.push({
           data: {
             id: `layer-${layer.id}`,
-            label: layer.displayName ?? layer.name,
+            searchText: layerLabel,
             nodeType: 'layer',
             layerId: layer.id, // visibility 토글에서 사용
             bgColor: color,
             borderColor: color,
-            width: canvasWidth - CANVAS_PADDING * 2,
           },
-          position: { x: canvasWidth / 2, y: yPos },
+          locked: true,
+          grabbable: false,
+        });
+
+        elements.push({
+          data: {
+            id: `layer-title-${layer.id}`,
+            label: layerLabel,
+            nodeType: 'layer-title',
+            layerId: layer.id,
+            width: layerTitleWidth,
+          },
+          position: {
+            x: CANVAS_PADDING + LAYER_TITLE_LEFT_INSET + (layerTitleWidth / 2),
+            y: yPos + LAYER_TITLE_TOP_OFFSET,
+          },
+          locked: true,
+          grabbable: false,
+        });
+
+        // Compound parent(layer)가 영역처럼 보이도록 좌우 anchor를 넣어 폭을 확보한다.
+        elements.push({
+          data: {
+            id: `layer-anchor-left-${layer.id}`,
+            nodeType: 'layer-anchor',
+            layerId: layer.id,
+            parent: `layer-${layer.id}`,
+          },
+          position: { x: CANVAS_PADDING, y: yPos + LAYER_ANCHOR_Y_OFFSET },
+          locked: true,
+          grabbable: false,
+        });
+        elements.push({
+          data: {
+            id: `layer-anchor-right-${layer.id}`,
+            nodeType: 'layer-anchor',
+            layerId: layer.id,
+            parent: `layer-${layer.id}`,
+          },
+          position: { x: canvasWidth - CANVAS_PADDING, y: yPos + LAYER_ANCHOR_Y_OFFSET },
           locked: true,
           grabbable: false,
         });
@@ -316,30 +445,49 @@ export function LayeredArchitectureView() {
           const totalWidth = layerObjects.length * NODE_GAP_X;
           const startX = (canvasWidth - totalWidth) / 2 + NODE_GAP_X / 2;
 
-          // 태그 정보 — 태그 이름을 두 번째 줄로 표시
-          const tags = nodeTags[obj.id] ?? [];
-          const tagLine = tags.length > 0
-            ? tags.map((t) => `#${t.name}`).join('  ')
-            : '';
-          const label = tagLine
-            ? `${obj.displayName ?? obj.name}\n${tagLine}`
-            : (obj.displayName ?? obj.name);
+          // 태그는 별도 보조 배지 노드로 표시한다.
+          const tags = sortTags(nodeTags[obj.id] ?? []);
+          const objectLabel = obj.displayName ?? obj.name;
+          const tagSummary = formatTagSummary(tags);
+          const primaryTagColor = tags[0]?.color ?? null;
+          const objectBgColor = primaryTagColor ?? NODE_COLORS[obj.objectType] ?? NODE_COLORS['default'];
 
           elements.push({
             data: {
               id: obj.id,
-              label,
+              label: objectLabel,
+              searchText: `${objectLabel} ${tags.map((t) => t.name).join(' ')}`.trim(),
               nodeType: 'object',
               objectType: obj.objectType,
               layerId: layer.id, // visibility 토글에서 레이어별 노드 숨김에 사용
-              bgColor: NODE_COLORS[obj.objectType] ?? NODE_COLORS['default'],
-              hasTags: tags.length > 0 ? '1' : '0', // Cytoscape 선택자용 string
+              parent: `layer-${layer.id}`,
+              bgColor: objectBgColor,
+              textColor: pickReadableTextColor(objectBgColor),
             },
             position: {
               x: startX + objIdx * NODE_GAP_X,
-              y: yPos + 56,
+              y: yPos + OBJECT_NODE_Y_OFFSET,
             },
           });
+
+          if (tagSummary) {
+            elements.push({
+              data: {
+                id: `tag-${obj.id}`,
+                label: tagSummary,
+                nodeType: 'tag',
+                layerId: layer.id,
+                parentObjectId: obj.id,
+                parent: `layer-${layer.id}`,
+              },
+              position: {
+                x: startX + objIdx * NODE_GAP_X,
+                y: yPos + TAG_NODE_Y_OFFSET,
+              },
+              locked: true,
+              grabbable: false,
+            });
+          }
         });
       });
 
@@ -415,8 +563,17 @@ export function LayeredArchitectureView() {
       cy.nodes(`[layerId = "${layerId}"]`).style('display', 'none');
     });
 
+    if (!showTagBadges) {
+      cy.nodes('[nodeType = "tag"]').style('display', 'none');
+    }
+
     // 한쪽이라도 숨겨진 노드에 연결된 엣지 숨김
     cy.edges().forEach((edge) => {
+      const type = edge.data('relationType') as string;
+      if (hiddenEdgeTypes.has(type)) {
+        edge.style('display', 'none');
+        return;
+      }
       if (
         edge.source().style('display') === 'none' ||
         edge.target().style('display') === 'none'
@@ -424,7 +581,7 @@ export function LayeredArchitectureView() {
         edge.style('display', 'none');
       }
     });
-  }, [hiddenLayerIds]);
+  }, [hiddenLayerIds, showTagBadges, hiddenEdgeTypes]);
 
   /* ─── 검색 하이라이트 ─── */
   useEffect(() => {
@@ -438,8 +595,10 @@ export function LayeredArchitectureView() {
 
     const query = searchQuery.toLowerCase();
     const matched = cy.nodes().filter((n) => {
-      const label = (n.data('label') as string || '').toLowerCase();
-      return label.includes(query);
+      const nodeType = n.data('nodeType') as string | undefined;
+      if (nodeType === 'tag' || nodeType === 'layer-title') return false;
+      const searchText = ((n.data('searchText') as string | undefined) ?? (n.data('label') as string | undefined) ?? '').toLowerCase();
+      return searchText.includes(query);
     });
 
     if (matched.length > 0) {
@@ -488,10 +647,10 @@ export function LayeredArchitectureView() {
   const exportPng = () => {
     const cy = cyRef.current;
     if (!cy) return;
-    const png = cy.png({ full: true, scale: 2, bg: '#050508' });
+    const png = cy.png({ full: true, scale: 2, bg: exportBg === 'white' ? '#ffffff' : '#050508' });
     const link = document.createElement('a');
     link.href = png;
-    link.download = 'architecture-view.png';
+    link.download = `architecture-view-${exportBg}.png`;
     link.click();
   };
 
@@ -583,6 +742,25 @@ export function LayeredArchitectureView() {
               })}
             </div>
 
+            {/* 태그 표시 토글 */}
+            <div className="flex flex-wrap gap-1">
+              <button
+                onClick={() => setShowTagBadges((prev) => !prev)}
+                className={cn(
+                  'flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[10px] font-medium transition-all glass-card',
+                  showTagBadges ? 'opacity-100' : 'opacity-40',
+                )}
+                title={showTagBadges ? '태그 숨기기' : '태그 표시'}
+              >
+                {showTagBadges ? (
+                  <Eye className="h-3 w-3 shrink-0" />
+                ) : (
+                  <EyeOff className="h-3 w-3 shrink-0" />
+                )}
+                태그
+              </button>
+            </div>
+
             {/* 엣지 타입 토글 버튼 */}
             <div className="flex flex-wrap gap-1">
               {Object.entries(EDGE_COLORS).map(([type, color]) => (
@@ -611,9 +789,9 @@ export function LayeredArchitectureView() {
           </div>
 
           {/* 우상단 — 화살표 스타일 + 줌 컨트롤 */}
-          <div className="absolute right-4 top-4 z-20 flex flex-col gap-1">
+          <div className="absolute right-4 top-4 z-20 flex flex-col items-end gap-1">
             {/* 화살표 곡선 스타일 토글 */}
-            <div className="flex flex-col gap-0.5 mb-2 rounded-lg overflow-hidden border border-white/10">
+            <div className="flex flex-col gap-0.5 rounded-lg overflow-hidden border border-white/10">
               {CURVE_STYLES.map(({ value, icon: Icon, title }) => (
                 <Button
                   key={value}
@@ -631,6 +809,35 @@ export function LayeredArchitectureView() {
                   <Icon className="h-3.5 w-3.5" />
                 </Button>
               ))}
+            </div>
+            {/* PNG 배경 모드 */}
+            <div className="flex flex-col rounded-lg overflow-hidden border border-white/10">
+              <button
+                type="button"
+                onClick={() => setExportBg('dark')}
+                className={cn(
+                  'h-6 w-8 text-[8px] font-medium tracking-tight transition-colors',
+                  exportBg === 'dark'
+                    ? 'bg-primary/20 text-primary'
+                    : 'glass-card text-muted-foreground hover:text-foreground',
+                )}
+                title="PNG 배경: 다크"
+              >
+                Dark
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportBg('white')}
+                className={cn(
+                  'h-6 w-8 text-[8px] font-medium tracking-tight transition-colors border-t border-white/10',
+                  exportBg === 'white'
+                    ? 'bg-primary/20 text-primary'
+                    : 'glass-card text-muted-foreground hover:text-foreground',
+                )}
+                title="PNG 배경: 화이트"
+              >
+                White
+              </button>
             </div>
             {/* 줌 컨트롤 */}
             <Button variant="ghost" size="icon" onClick={zoomIn} className="h-8 w-8 glass-card" title="확대">

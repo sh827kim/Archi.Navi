@@ -6,7 +6,7 @@
  */
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, tags, objectTags } from '@archi-navi/db';
-import { eq } from 'drizzle-orm';
+import { asc, eq } from 'drizzle-orm';
 import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 export async function GET(req: NextRequest) {
@@ -26,7 +26,8 @@ export async function GET(req: NextRequest) {
       })
       .from(objectTags)
       .innerJoin(tags, eq(objectTags.tagId, tags.id))
-      .where(eq(objectTags.workspaceId, workspaceId));
+      .where(eq(objectTags.workspaceId, workspaceId))
+      .orderBy(asc(objectTags.objectId), asc(tags.name));
 
     // objectId 기준으로 그룹화 → Record<objectId, Tag[]>
     const result: Record<string, { id: string; name: string; color: string | null }[]> = {};
