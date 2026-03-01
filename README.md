@@ -180,6 +180,7 @@ pnpm db:studio      # Open Drizzle Studio (DB browser)
 ## CLI Usage
 
 The CLI is used to scan source code, run inference, and manage data.
+App startup is handled by `pnpm dev`.
 
 ```bash
 # Scan source code and configuration files

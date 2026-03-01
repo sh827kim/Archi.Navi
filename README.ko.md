@@ -179,6 +179,7 @@ pnpm db:studio      # Drizzle Studio 열기 (DB 브라우저)
 ## CLI 사용법
 
 CLI는 소스코드 스캔, 추론 실행, 데이터 관리에 사용합니다.
+앱 실행은 `pnpm dev`를 사용합니다.
 
 ```bash
 # 소스코드/레포 스캔 (서비스 등록)
