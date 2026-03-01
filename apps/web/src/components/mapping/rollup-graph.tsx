@@ -105,6 +105,8 @@ type RollupGraphStatsMap = Record<RollupLevelKey, GraphStatApiItem[]>;
 
 const ROLLUP_HUB_THRESHOLD_KEY = 'archi-navi:rollup:hub-threshold';
 const DEFAULT_HUB_THRESHOLD = 50;
+const PROGRESSIVE_EDGE_THRESHOLD = 2000;
+const PROGRESSIVE_EDGE_BATCH = 200;
 
 const LEVEL_TYPES: Partial<Record<ViewLevel, string[]>> = {
   SERVICE_TO_SERVICE: ['service'],
@@ -259,6 +261,7 @@ export function RollupGraph() {
 
   /* 시뮬레이션 ref (cleanup용) */
   const simulationRef = useRef<d3.Simulation<GraphNode, GraphLink> | null>(null);
+  const progressiveRenderRafRef = useRef<number | null>(null);
 
   /* 핀 고정 노드 집합 */
   const [pinnedCount, setPinnedCount] = useState(0);
@@ -273,6 +276,7 @@ export function RollupGraph() {
   const [hubThreshold, setHubThreshold] = useState(DEFAULT_HUB_THRESHOLD);
   const [isHubCollapsed, setIsHubCollapsed] = useState(false);
   const [hubNodeCount, setHubNodeCount] = useState(0);
+  const [edgeRenderProgress, setEdgeRenderProgress] = useState<{ rendered: number; total: number } | null>(null);
   /* Roll-down LR Flow 패널 데이터 */
   const [rollDownInfo, setRollDownInfo] = useState<RollDownPanelItem[]>([]);
 
@@ -386,10 +390,15 @@ export function RollupGraph() {
       setLoading(true);
       setIsEmpty(false);
       setTooltip(null);
+      setEdgeRenderProgress(null);
 
       /* 이전 시뮬레이션 정리 */
       simulationRef.current?.stop();
       simulationRef.current = null;
+      if (progressiveRenderRafRef.current !== null) {
+        cancelAnimationFrame(progressiveRenderRafRef.current);
+        progressiveRenderRafRef.current = null;
+      }
 
       try {
         const {
@@ -790,59 +799,89 @@ export function RollupGraph() {
         const linkGroup = zoomGroup.append('g').attr('class', 'links');
         const linkLabelGroup = zoomGroup.append('g').attr('class', 'link-labels');
         const nodeGroup = zoomGroup.append('g').attr('class', 'nodes');
+        const progressiveEdgeRendering = links.length >= PROGRESSIVE_EDGE_THRESHOLD;
+        let renderedLinksCount = progressiveEdgeRendering
+          ? Math.min(PROGRESSIVE_EDGE_BATCH, links.length)
+          : links.length;
 
-        /* ── 엣지 경로 ── */
-        const linkPaths = linkGroup
-          .selectAll<SVGPathElement, GraphLink>('path.link-path')
-          .data(links)
-          .join('path')
-          .attr('class', 'link-path')
-          .attr('id', (d) => `link-${d.id}`)
-          .attr('stroke', (d) => d.color)
-          .attr('stroke-width', (d) => (d.isContains ? 1 : 1.5))
-          .attr('stroke-opacity', (d) => (d.isContains ? 0.35 : 0.55))
-          /* 선 스타일: contains=점선 / 메시징=긴점선 / 데이터접근=짧은점선 / RPC=실선 */
-          .attr('stroke-dasharray', (d) => (d.isContains ? '4,4' : edgeDash(d.relationType)))
-          .attr('fill', 'none')
-          /* marker-end: 경로 끝(데이터 목적지)에 화살표 */
-          .attr('marker-end', (d) =>
-            d.isContains ? 'none' : `url(#${markerId(d.relationType)})`,
-          )
-          /* marker-start: read/consume의 데이터 출처에 원형 점 표시 */
-          .attr('marker-start', (d) =>
-            d.isReversed ? `url(#origin-dot-${d.relationType})` : 'none',
-          );
+        let linkPaths = linkGroup
+          .selectAll<SVGPathElement, GraphLink>('path.link-path');
+        let linkHitAreas = linkGroup
+          .selectAll<SVGPathElement, GraphLink>('path.hit-area');
+        let linkLabels = linkLabelGroup
+          .selectAll<SVGTextElement, GraphLink>('text.link-label');
 
-        /*
-         * ── 엣지 호버 히트 영역 (ATOMIC-ATOMIC 엣지 체인 하이라이트용) ──
-         * 실제 엣지(1.5px)는 너무 얇아 hover 감지가 어려우므로,
-         * 투명한 넓은 스트로크(14px) path를 overlaying해 hover 영역을 확장.
-         */
-        const linkHitAreas = linkGroup
-          .selectAll<SVGPathElement, GraphLink>('path.hit-area')
-          .data(links.filter((l) => l.isAtomicToAtomic), (d) => d.id)
-          .join('path')
-          .attr('class', 'hit-area')
-          .attr('stroke', 'transparent')
-          .attr('stroke-width', 14)
-          .attr('fill', 'none')
-          .attr('cursor', 'pointer');
+        const syncVisibleEdges = (count: number) => {
+          const visibleLinks = links.slice(0, count);
 
-        /* ── 엣지 라벨 (contains 제외) ── */
-        const linkLabels = linkLabelGroup
-          .selectAll<SVGTextElement, GraphLink>('text')
-          .data(links.filter((l) => !l.isContains))
-          .join('text')
-          .attr('font-size', '9px')
-          .attr('font-family', 'ui-monospace, monospace')
-          .attr('fill', '#71717a')
-          .attr('text-anchor', 'middle')
-          .attr('dy', '-3px')
-          .attr('pointer-events', 'none')
-          .append('textPath')
-          .attr('href', (d) => `#link-${d.id}`)
-          .attr('startOffset', '50%')
-          .text((d) => d.relationType);
+          linkPaths = linkGroup
+            .selectAll<SVGPathElement, GraphLink>('path.link-path')
+            .data(visibleLinks, (d) => d.id)
+            .join(
+              (enter) => enter.append('path').attr('class', 'link-path'),
+              (update) => update,
+              (exit) => exit.remove(),
+            )
+            .attr('id', (d) => `link-${d.id}`)
+            .attr('stroke', (d) => d.color)
+            .attr('stroke-width', (d) => (d.isContains ? 1 : 1.5))
+            .attr('stroke-opacity', (d) => (d.isContains ? 0.35 : 0.55))
+            .attr('stroke-dasharray', (d) => (d.isContains ? '4,4' : edgeDash(d.relationType)))
+            .attr('fill', 'none')
+            .attr('marker-end', (d) =>
+              d.isContains ? 'none' : `url(#${markerId(d.relationType)})`,
+            )
+            .attr('marker-start', (d) =>
+              d.isReversed ? `url(#origin-dot-${d.relationType})` : 'none',
+            );
+
+          linkHitAreas = linkGroup
+            .selectAll<SVGPathElement, GraphLink>('path.hit-area')
+            .data(visibleLinks.filter((l) => l.isAtomicToAtomic), (d) => d.id)
+            .join(
+              (enter) => enter.append('path').attr('class', 'hit-area'),
+              (update) => update,
+              (exit) => exit.remove(),
+            )
+            .attr('stroke', 'transparent')
+            .attr('stroke-width', 14)
+            .attr('fill', 'none')
+            .attr('cursor', 'pointer');
+
+          linkLabels = linkLabelGroup
+            .selectAll<SVGTextElement, GraphLink>('text.link-label')
+            .data(visibleLinks.filter((l) => !l.isContains), (d) => d.id)
+            .join(
+              (enter) => enter.append('text').attr('class', 'link-label'),
+              (update) => update,
+              (exit) => exit.remove(),
+            )
+            .attr('font-size', '9px')
+            .attr('font-family', 'ui-monospace, monospace')
+            .attr('fill', '#71717a')
+            .attr('text-anchor', 'middle')
+            .attr('dy', '-3px')
+            .attr('pointer-events', 'none')
+            .each(function (d) {
+              const text = d3.select(this);
+              text
+                .selectAll<SVGTextPathElement, GraphLink>('textPath')
+                .data([d])
+                .join('textPath')
+                .attr('href', `#link-${d.id}`)
+                .attr('startOffset', '50%')
+                .text(d.relationType);
+            });
+
+          if (progressiveEdgeRendering) {
+            setEdgeRenderProgress({ rendered: count, total: links.length });
+          }
+        };
+
+        syncVisibleEdges(renderedLinksCount);
+        if (!progressiveEdgeRendering) {
+          setEdgeRenderProgress(null);
+        }
 
         /* ── 노드 그룹 ── */
         const nodeSel = nodeGroup
@@ -1204,85 +1243,107 @@ export function RollupGraph() {
          * 호버 시: COMPOUND → ATOMIC → (엣지) → ATOMIC → COMPOUND 체인 강조
          * 이탈 시: Roll-down 포커스 상태로 복원
          */
-        linkHitAreas
-          .on('mouseenter', function (event: MouseEvent, d: GraphLink) {
-            const srcId =
-              typeof d.source === 'object'
-                ? (d.source as GraphNode).id
-                : String(d.source);
-            const tgtId =
-              typeof d.target === 'object'
-                ? (d.target as GraphNode).id
-                : String(d.target);
+        const bindLinkHitAreaHover = () => {
+          linkHitAreas
+            .on('mouseenter', function (event: MouseEvent, d: GraphLink) {
+              const srcId =
+                typeof d.source === 'object'
+                  ? (d.source as GraphNode).id
+                  : String(d.source);
+              const tgtId =
+                typeof d.target === 'object'
+                  ? (d.target as GraphNode).id
+                  : String(d.target);
 
-            // 체인 구성: 양 ATOMIC의 부모 COMPOUND까지 포함
-            const chainNodeIds = new Set<string>([srcId, tgtId]);
-            const parentSrcId = parentMap.get(srcId);
-            const parentTgtId = parentMap.get(tgtId);
-            if (parentSrcId) chainNodeIds.add(parentSrcId);
-            if (parentTgtId) chainNodeIds.add(parentTgtId);
+              // 체인 구성: 양 ATOMIC의 부모 COMPOUND까지 포함
+              const chainNodeIds = new Set<string>([srcId, tgtId]);
+              const parentSrcId = parentMap.get(srcId);
+              const parentTgtId = parentMap.get(tgtId);
+              if (parentSrcId) chainNodeIds.add(parentSrcId);
+              if (parentTgtId) chainNodeIds.add(parentTgtId);
 
-            // 체인에 포함된 contains 엣지 ID (parent → atomic)
-            const chainLinkIds = new Set<string>([d.id]);
-            links.forEach((l) => {
-              if (!l.isContains) return;
-              const lSrc =
-                typeof l.source === 'object'
-                  ? (l.source as GraphNode).id
-                  : String(l.source);
-              const lTgt =
-                typeof l.target === 'object'
-                  ? (l.target as GraphNode).id
-                  : String(l.target);
-              if (chainNodeIds.has(lSrc) && chainNodeIds.has(lTgt)) {
-                chainLinkIds.add(l.id);
-              }
-            });
+              // 체인에 포함된 contains 엣지 ID (parent → atomic)
+              const chainLinkIds = new Set<string>([d.id]);
+              links.forEach((l) => {
+                if (!l.isContains) return;
+                const lSrc =
+                  typeof l.source === 'object'
+                    ? (l.source as GraphNode).id
+                    : String(l.source);
+                const lTgt =
+                  typeof l.target === 'object'
+                    ? (l.target as GraphNode).id
+                    : String(l.target);
+                if (chainNodeIds.has(lSrc) && chainNodeIds.has(lTgt)) {
+                  chainLinkIds.add(l.id);
+                }
+              });
 
-            /* 체인 노드 → 밝게, 나머지 → dim */
-            nodeSel
-              .select('circle')
-              .attr('fill-opacity', (n: GraphNode) =>
-                chainNodeIds.has(n.id) ? 1 : 0.06,
-              )
-              .attr('stroke-opacity', (n: GraphNode) =>
-                chainNodeIds.has(n.id) ? 1 : 0.04,
+              /* 체인 노드 → 밝게, 나머지 → dim */
+              nodeSel
+                .select('circle')
+                .attr('fill-opacity', (n: GraphNode) =>
+                  chainNodeIds.has(n.id) ? 1 : 0.06,
+                )
+                .attr('stroke-opacity', (n: GraphNode) =>
+                  chainNodeIds.has(n.id) ? 1 : 0.04,
+                );
+
+              /* 체인 엣지 → 강조, 나머지 → dim */
+              linkPaths.attr('stroke-opacity', (l: GraphLink) => {
+                if (l.id === d.id) return 0.95; // 호버 중인 엣지
+                if (chainLinkIds.has(l.id)) return 0.55; // contains 체인 엣지
+                return 0.04;
+              });
+
+              linkLabels.attr('opacity', (l: GraphLink) =>
+                l.id === d.id ? 1 : 0.04,
               );
 
-            /* 체인 엣지 → 강조, 나머지 → dim */
-            linkPaths.attr('stroke-opacity', (l: GraphLink) => {
-              if (l.id === d.id) return 0.95; // 호버 중인 엣지
-              if (chainLinkIds.has(l.id)) return 0.55; // contains 체인 엣지
-              return 0.04;
+              /* 툴팁: [ParentA] AtomicA → AtomicB [ParentB] */
+              const srcNode = nodeMap.get(srcId);
+              const tgtNode2 = nodeMap.get(tgtId);
+              const parentSrcNode = parentSrcId ? nodeMap.get(parentSrcId) : null;
+              const parentTgtNode = parentTgtId ? nodeMap.get(parentTgtId) : null;
+
+              const srcLabel = srcNode?.label ?? srcId;
+              const tgtLabel = tgtNode2?.label ?? tgtId;
+              const pSrcLabel = parentSrcNode ? `[${parentSrcNode.label}]` : '';
+              const pTgtLabel = parentTgtNode ? `[${parentTgtNode.label}]` : '';
+
+              const rect = svgEl.getBoundingClientRect();
+              setTooltip({
+                label: d.relationType,
+                detail: `${pSrcLabel} ${srcLabel} → ${tgtLabel} ${pTgtLabel}`.trim(),
+                x: event.clientX - rect.left,
+                y: event.clientY - rect.top - 36,
+              });
+            })
+            .on('mouseleave', function () {
+              setTooltip(null);
+              applyRollDownFocus();
             });
+        };
 
-            linkLabels.attr('opacity', (l: GraphLink) =>
-              l.id === d.id ? 1 : 0.04,
-            );
+        bindLinkHitAreaHover();
 
-            /* 툴팁: [ParentA] AtomicA → AtomicB [ParentB] */
-            const srcNode = nodeMap.get(srcId);
-            const tgtNode2 = nodeMap.get(tgtId);
-            const parentSrcNode = parentSrcId ? nodeMap.get(parentSrcId) : null;
-            const parentTgtNode = parentTgtId ? nodeMap.get(parentTgtId) : null;
-
-            const srcLabel = srcNode?.label ?? srcId;
-            const tgtLabel = tgtNode2?.label ?? tgtId;
-            const pSrcLabel = parentSrcNode ? `[${parentSrcNode.label}]` : '';
-            const pTgtLabel = parentTgtNode ? `[${parentTgtNode.label}]` : '';
-
-            const rect = svgEl.getBoundingClientRect();
-            setTooltip({
-              label: d.relationType,
-              detail: `${pSrcLabel} ${srcLabel} → ${tgtLabel} ${pTgtLabel}`.trim(),
-              x: event.clientX - rect.left,
-              y: event.clientY - rect.top - 36,
-            });
-          })
-          .on('mouseleave', function () {
-            setTooltip(null);
+        if (progressiveEdgeRendering && renderedLinksCount < links.length) {
+          const renderNextBatch = () => {
+            renderedLinksCount = Math.min(renderedLinksCount + PROGRESSIVE_EDGE_BATCH, links.length);
+            syncVisibleEdges(renderedLinksCount);
             applyRollDownFocus();
-          });
+            bindLinkHitAreaHover();
+
+            if (renderedLinksCount < links.length) {
+              progressiveRenderRafRef.current = requestAnimationFrame(renderNextBatch);
+            } else {
+              progressiveRenderRafRef.current = null;
+              setEdgeRenderProgress(null);
+            }
+          };
+
+          progressiveRenderRafRef.current = requestAnimationFrame(renderNextBatch);
+        }
 
         /* ── 포스 시뮬레이션 ── */
         const simulation = d3
@@ -1363,6 +1424,10 @@ export function RollupGraph() {
     void buildGraph(viewLevel, expandedSet);
     return () => {
       simulationRef.current?.stop();
+      if (progressiveRenderRafRef.current !== null) {
+        cancelAnimationFrame(progressiveRenderRafRef.current);
+        progressiveRenderRafRef.current = null;
+      }
     };
   }, [viewLevel, expandedSet, buildGraph]);
 
@@ -1450,6 +1515,12 @@ export function RollupGraph() {
           >
             ↩ 모두 접기 ({expandedSet.size})
           </button>
+        )}
+
+        {edgeRenderProgress && (
+          <div className="rounded-full border border-zinc-500/30 bg-zinc-900/80 px-3 py-1 text-[11px] font-mono text-zinc-300 backdrop-blur-sm">
+            edge {edgeRenderProgress.rendered}/{edgeRenderProgress.total}
+          </div>
         )}
       </div>
 

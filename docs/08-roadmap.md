@@ -139,11 +139,12 @@
   - Hub 노드에 in-degree 카운트 배지 표시
   - `/api/rollups` 응답에 `graphStats` 포함하여 UI 판정에 활용
 
-### 3-3. 프로그레시브 렌더링
+### ✅ 3-3. 프로그레시브 렌더링 (완료)
 - **파일:** `apps/web/src/components/mapping/rollup-graph.tsx`
-- **현재:** 전체 엣지 한번에 렌더
-- **목표:** 200 엣지/배치 → requestAnimationFrame으로 분할
-- **기준:** 2000+ 엣지에서 UI 버벅임 방지
+- **구현 완료:**
+  - 2000+ 엣지에서 `requestAnimationFrame` 기반 점진 렌더링 자동 활성화
+  - 200 엣지/배치로 렌더링하며 진행 상태(`edge rendered/total`) 표시
+  - 소규모 그래프는 기존 즉시 렌더링 경로 유지
 
 ### 3-4. Domain-first 내비게이션
 - **현재:** 뷰 레벨 필터는 있으나 drill-down 순서 미강제
