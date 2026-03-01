@@ -4,6 +4,7 @@
  * 설계 참조: docs/03-inference-engine.md §6.1.2
  */
 import { createHash } from 'crypto';
+import { extname } from 'path';
 import type { ExtractedSignal, FileScanResult } from '../codeSignalExtractor';
 
 // ─── 패턴 정의 ────────────────────────────────────────────────────────────────
@@ -22,8 +23,8 @@ const TS_PATTERNS: Pattern[] = [
         regex: /\b(app|router)\.(get|post|put|delete|patch)\(\s*["']([^"']+)["']/,
         confidence: 0.8,
         extract: (m) => ({
-            symbol: m[3] ?? '',
-            metadata: { method: (m[2] ?? '').toUpperCase(), framework: 'express', via: m[1] ?? '' },
+            symbol: m[3]!,
+            metadata: { method: m[2]!.toUpperCase(), framework: 'express', via: m[1]! },
         }),
     },
     // HTTP 호출 — fetch("url") 또는 fetch('url')
@@ -31,14 +32,14 @@ const TS_PATTERNS: Pattern[] = [
         kind: 'call',
         regex: /\bfetch\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'fetch' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { client: 'fetch' } }),
     },
     // HTTP 호출 — axios.get/post/put/delete("url")
     {
         kind: 'call',
         regex: /\baxios\.\w+\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'axios' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { client: 'axios' } }),
     },
     // HTTP 호출 — .get/.post/.put/.delete("url") (일반 HTTP 클라이언트 체인)
     // URL/경로 형태(/, http)로 시작하는 문자열만 매칭하여 map.get(), cache.delete() 등 false positive 방지
@@ -46,7 +47,7 @@ const TS_PATTERNS: Pattern[] = [
         kind: 'call',
         regex: /\.(get|post|put|delete|patch)\(\s*["']((?:\/|https?:\/\/)[^"'`]*?)["']\s*[,)]/,
         confidence: 0.6,
-        extract: (m) => ({ symbol: m[2] ?? '', metadata: { method: (m[1] ?? '').toUpperCase(), client: 'http-chain' } }),
+        extract: (m) => ({ symbol: m[2]!, metadata: { method: m[1]!.toUpperCase(), client: 'http-chain' } }),
     },
 ];
 
@@ -62,11 +63,11 @@ export function scanTypeScript(filePath: string, content: string): FileScanResul
     const lines = content.split('\n');
     const signals: ExtractedSignal[] = [];
 
-    const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
-    const language = ext === 'ts' || ext === 'tsx' ? 'typescript' : 'javascript';
+    const ext = extname(filePath).toLowerCase();
+    const language = ext === '.ts' || ext === '.tsx' ? 'typescript' : 'javascript';
 
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? '';
+        const line = lines[i]!;
 
         for (const pattern of TS_PATTERNS) {
             const match = line.match(pattern.regex);

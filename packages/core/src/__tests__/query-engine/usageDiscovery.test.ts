@@ -83,5 +83,36 @@ describe('discoverUsage', () => {
     expect(result.edges[0]?.relationType).toBe('read');
     expect(result.edges[0]?.confidence).toBe(0);
   });
-});
 
+  it('rollup edge 속성이 비어있거나 타입이 다르면 기본값으로 보정해야 한다', async () => {
+    const graph = new Graph({ multi: false, type: 'directed' });
+    ['svc-a', 'topic-1'].forEach((id) => graph.addNode(id));
+    graph.addDirectedEdgeWithKey('rollup-raw', 'svc-a', 'topic-1', {
+      baseRelationIds: 'not-array',
+    });
+
+    const { db } = createMockDb([]);
+    const result = await discoverUsage(db, graph, 'ws-1', { objectId: 'topic-1' }, scope);
+    const edge = result.edges[0];
+
+    expect(edge).toMatchObject({
+      subjectId: 'svc-a',
+      objectId: 'topic-1',
+      relationType: 'call',
+      edgeWeight: 1,
+      confidence: 0,
+      provenance: { rollupId: '', baseRelationIds: [] },
+    });
+  });
+
+  it('그래프에 대상 노드가 있지만 inbound edge가 없어도 대상 노드는 포함되어야 한다', async () => {
+    const graph = new Graph({ multi: false, type: 'directed' });
+    graph.addNode('topic-1');
+
+    const { db } = createMockDb([]);
+    const result = await discoverUsage(db, graph, 'ws-1', { objectId: 'topic-1' }, scope);
+
+    expect(result.nodes).toEqual([{ id: 'topic-1', type: 'service', name: 'topic-1' }]);
+    expect(result.edges).toEqual([]);
+  });
+});

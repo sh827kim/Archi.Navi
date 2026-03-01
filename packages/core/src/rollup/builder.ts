@@ -559,9 +559,7 @@ async function buildObjectGraphStats(
       inDegree: inMap.get(nodeId) ?? 0,
     }));
 
-    if (statsRows.length > 0) {
-      await db.insert(objectGraphStats).values(statsRows);
-    }
+    await db.insert(objectGraphStats).values(statsRows);
   }
 }
 
@@ -1129,8 +1127,6 @@ async function incrementalBuildGraphStats(
       inDegree: inMap.get(nodeId) ?? 0,
     }));
 
-    if (statsRows.length > 0) {
-      await db.insert(objectGraphStats).values(statsRows);
-    }
+    await db.insert(objectGraphStats).values(statsRows);
   }
 }

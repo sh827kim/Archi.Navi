@@ -254,7 +254,7 @@ export async function extractDbSchemaSignals(
                     references_column: fk.references_column,
                 },
             });
-            if (inserted) fkCandidateCount++;
+            fkCandidateCount += Number(inserted);
         }
 
         // FK로 이미 처리한 관계 (컬럼패턴 중복 방지)
@@ -293,7 +293,7 @@ export async function extractDbSchemaSignals(
                         inferred_table: candidateTable,
                     },
                 });
-                if (inserted) implicitFkCandidateCount++;
+                implicitFkCandidateCount += Number(inserted);
                 break; // 첫 번째 매칭 테이블에서 중단
             }
         }

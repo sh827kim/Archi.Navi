@@ -327,4 +327,74 @@ describe('filterCandidates', () => {
     const assessment = meta.llmAssessment as LlmAssessment;
     expect(assessment.confidenceAdjustment).toBe(0.2); // clamped to max
   });
+
+  it('T14: 연결된 evidence가 없어도 정상 처리되어야 한다', async () => {
+    const subjectId = await createService(db, 'missing-ev-subject');
+    const objectId = await createService(db, 'missing-ev-object');
+    const candidateId = await createCandidate(db, subjectId, objectId);
+
+    const result = await filterCandidates(db, mockLlmValid(), {
+      workspaceId,
+      candidateIds: [candidateId],
+    });
+
+    expect(result.processedCount).toBe(1);
+    expect(result.stats.likelyValid).toBe(1);
+  });
+
+  it('T15: 객체 이름이 없으면 objectId를 fallback 이름으로 사용해야 한다', async () => {
+    const otherWorkspaceId = generateId();
+    await db.insert(workspaces).values({ id: otherWorkspaceId, name: 'other-workspace' });
+
+    const unknownSubjectId = generateId();
+    const unknownObjectId = generateId();
+    await db.insert(objects).values([
+      {
+        id: unknownSubjectId,
+        workspaceId: otherWorkspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'other-subject',
+        path: `/${unknownSubjectId}`,
+        depth: 0,
+        metadata: {},
+      },
+      {
+        id: unknownObjectId,
+        workspaceId: otherWorkspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'other-object',
+        path: `/${unknownObjectId}`,
+        depth: 0,
+        metadata: {},
+      },
+    ]);
+
+    const candidateId = await createCandidate(db, unknownSubjectId, unknownObjectId);
+
+    let captured: CandidateContext | null = null;
+    const captureMock: GenerateAssessmentFn = async (_prompt, context) => {
+      captured = context;
+      return {
+        verdict: 'UNCERTAIN',
+        confidenceAdjustment: 0,
+        reasoning: 'fallback-name-check',
+        reviewPriority: 'MEDIUM',
+        model: 'mock-model',
+        assessedAt: new Date().toISOString(),
+      };
+    };
+
+    const result = await filterCandidates(db, captureMock, {
+      workspaceId,
+      candidateIds: [candidateId],
+    });
+
+    expect(result.processedCount).toBe(1);
+    expect(captured?.subjectName).toBe(unknownSubjectId);
+    expect(captured?.objectName).toBe(unknownObjectId);
+  });
 });

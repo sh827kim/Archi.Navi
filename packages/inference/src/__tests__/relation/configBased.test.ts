@@ -3,7 +3,7 @@
  * PGlite 인메모리 DB + 임시 파일 시스템으로 실제 추론 흐름 검증
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, writeFileSync, rmSync } from 'fs';
+import { mkdirSync, writeFileSync, rmSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { createPgliteClient } from '@archi-navi/db';
@@ -302,6 +302,64 @@ spring:
         );
       expect(readCandidates).toHaveLength(0);
     });
+
+    it('기존 PENDING 후보보다 높은 confidence가 들어오면 confidence를 업데이트해야 한다', async () => {
+      const { orderServiceId } = await createTestFixtures(db, workspaceId);
+
+      const dbObjectId = generateId();
+      await db.insert(objects).values({
+        id: dbObjectId,
+        workspaceId,
+        objectType: 'database',
+        category: 'STORAGE',
+        granularity: 'COMPOUND',
+        name: 'order_db',
+        urn: buildUrn(workspaceId, 'storage', 'database', 'db-host:order_db'),
+        path: `/${dbObjectId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      });
+
+      await db.insert(relationCandidates).values({
+        id: generateId(),
+        workspaceId,
+        relationType: 'read',
+        subjectObjectId: orderServiceId,
+        objectId: dbObjectId,
+        confidence: 0.1, // 새 confidence(0.9)보다 낮음
+        status: 'PENDING',
+        metadata: { source: 'old' },
+      });
+
+      writeFileSync(
+        join(tempDir, 'application.yml'),
+        `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+      );
+
+      await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      const readCandidates = await db
+        .select()
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, workspaceId),
+            eq(relationCandidates.relationType, 'read'),
+            eq(relationCandidates.subjectObjectId, orderServiceId),
+            eq(relationCandidates.objectId, dbObjectId),
+          ),
+        );
+
+      expect(readCandidates).toHaveLength(1);
+      expect(readCandidates[0]?.confidence).toBeCloseTo(0.9);
+    });
   });
 
   // ─── docker-compose.yml 처리 ───────────────────────────────────────────────────
@@ -444,6 +502,36 @@ services:
       expect(brokers).toHaveLength(1);
       expect(brokers[0]?.name).toBe('kafka-broker');
     });
+
+    it('docker-compose에서 매칭되지 않는 서비스/의존성은 건너뛰어야 한다', async () => {
+      await createTestFixtures(db, workspaceId); // order-service만 존재
+
+      writeFileSync(
+        join(tempDir, 'docker-compose.yml'),
+        `
+services:
+  order-service:
+    image: order:latest
+    depends_on:
+      - unknown-dependency
+  mysql-db:
+    image: mysql:8.0
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      // mysql-db는 dbName 미지정이므로 서비스명 fallback 사용
+      const dbObjects = await db
+        .select()
+        .from(objects)
+        .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'database')));
+      expect(dbObjects).toHaveLength(1);
+      expect(dbObjects[0]?.name).toBe('mysql-db');
+
+      // unknown-dependency는 objectId를 찾지 못해 candidate 생성되지 않아야 함
+      expect(result.candidateCount).toBe(0);
+    });
   });
 
   describe('k8s manifest 처리', () => {
@@ -489,6 +577,46 @@ spec:
         );
       expect(readWrite).toHaveLength(1);
       expect(readWrite[0]?.confidence).toBeCloseTo(0.7);
+    });
+
+    it('k8s에서 service 매칭 실패 또는 잘못된 DB_URL은 건너뛰어야 한다', async () => {
+      await createTestFixtures(db, workspaceId);
+      const k8sDir = join(tempDir, 'k8s');
+      mkdirSync(k8sDir, { recursive: true });
+
+      writeFileSync(
+        join(k8sDir, 'invalid-deployment.yaml'),
+        `
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: order-service
+spec:
+  template:
+    spec:
+      containers:
+        - name: app
+          image: order:latest
+          env:
+            - name: DB_URL
+              value: not-a-valid-jdbc-url
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      const dbReadCandidates = await db
+        .select()
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, workspaceId),
+            eq(relationCandidates.relationType, 'read'),
+          ),
+        );
+
+      expect(result.candidateCount).toBe(0);
+      expect(dbReadCandidates).toHaveLength(0);
     });
   });
 
@@ -626,5 +754,31 @@ spring:
     const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
     expect(result.candidateCount).toBe(0);
     expect(result.objectCount).toBe(0);
+  });
+
+  it('설정 파일 읽기 실패(application/docker/k8s) 시 해당 파일을 건너뛰고 계속 진행해야 한다', async () => {
+    await createTestFixtures(db, workspaceId);
+    const k8sDir = join(tempDir, 'k8s');
+    mkdirSync(k8sDir, { recursive: true });
+
+    const appPath = join(tempDir, 'application.yml');
+    const composePath = join(tempDir, 'docker-compose.yml');
+    const k8sPath = join(k8sDir, 'deployment.yaml');
+
+    writeFileSync(appPath, 'spring:\n  application:\n    name: order-service\n');
+    writeFileSync(composePath, 'services:\n  order-service:\n    image: order:latest\n');
+    writeFileSync(k8sPath, 'apiVersion: apps/v1\nkind: Deployment\n');
+
+    chmodSync(appPath, 0o000);
+    chmodSync(composePath, 0o000);
+    chmodSync(k8sPath, 0o000);
+
+    const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+    expect(result.candidateCount).toBe(0);
+    expect(result.objectCount).toBe(0);
+
+    chmodSync(appPath, 0o644);
+    chmodSync(composePath, 0o644);
+    chmodSync(k8sPath, 0o644);
   });
 });

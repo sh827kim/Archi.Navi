@@ -383,6 +383,27 @@ describe('assembleEvidenceChain', () => {
         const dbItem = chain.items.find((i) => i.type === 'db');
         expect(dbItem).toBeDefined();
     });
+
+    it('알 수 없는 evidenceType은 rollup 타입으로 매핑되어야 한다', async () => {
+        const evidenceRow = {
+            id: 'ev-unknown',
+            workspaceId: 'ws-1',
+            evidenceType: 'UNKNOWN_KIND',
+            filePath: null,
+            lineStart: null,
+            lineEnd: null,
+            excerpt: null,
+            uri: null,
+            metadata: {},
+            createdAt: new Date(),
+        };
+        const db = createMockDb([evidenceRow]);
+        const response = makeQueryResponse();
+        const chain = await assembleEvidenceChain(db, response);
+
+        const mapped = chain.items.find((i) => i.sourceId === 'order-service' && i.targetId === 'payment-service');
+        expect(mapped?.type).toBe('rollup');
+    });
 });
 
 // ─── formatEvidenceChain 테스트 ───────────────────────────────────────────────

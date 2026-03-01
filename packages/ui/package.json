@@ -14,6 +14,8 @@
     }
   },
   "scripts": {
+    "test:unit": "vitest run src/__tests__",
+    "test:unit:coverage": "vitest run src/__tests__ --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --coverage.thresholds.lines=80 --coverage.thresholds.functions=80 --coverage.thresholds.branches=80 --coverage.thresholds.statements=80 --coverage.thresholds.perFile=true",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist"
   },
@@ -40,8 +42,10 @@
   "devDependencies": {
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "@vitest/coverage-v8": "^4.0.18",
     "tailwindcss": "^4.2.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   },
   "publishConfig": {
     "access": "public"

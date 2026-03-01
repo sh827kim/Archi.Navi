@@ -149,6 +149,14 @@ describe('summarizeDomain — 도메인 없이 호출 시 (전체 목록)', () =
         const domains = summary['domains'] as Array<Record<string, unknown>>;
         expect(domains[0]).toMatchObject({ id: 'domain-1', name: 'order-domain' });
     });
+
+    it('displayName이 null인 도메인은 노드 displayName 필드가 없어야 한다', async () => {
+        const db = createMockDbAllDomains([{ ...DOMAIN_ROW, displayName: null }]);
+        const result = await summarizeDomain(db, 'ws-1', 1, {});
+
+        expect(result.nodes).toHaveLength(1);
+        expect('displayName' in result.nodes[0]!).toBe(false);
+    });
 });
 
 describe('summarizeDomain — 특정 도메인 요약', () => {
@@ -363,5 +371,98 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
 
         const summary = result.summary as unknown as DomainSummaryData;
         expect(summary.domainName).toBe('주문 도메인'); // displayName 우선
+    });
+
+    it('rollup provenance가 있으면 edge provenance.baseRelationIds에 반영되어야 한다', async () => {
+        const rollups = [
+            { ...ROLLUP_ROWS[0]!, id: 'rollup-1', relationType: 'call' },
+            { ...ROLLUP_ROWS[0]!, id: 'rollup-2', objectId: 'domain-3', relationType: 'depend_on' },
+        ];
+        const rollupProvenances = [
+            { rollupId: 'rollup-1', baseRelationId: 'rel-a' },
+            { rollupId: 'rollup-1', baseRelationId: 'rel-b' },
+            { rollupId: 'rollup-2', baseRelationId: 'rel-c' },
+        ];
+        const db = createMockDbWithMembers({
+            domainRow: DOMAIN_ROW,
+            affinityRows: AFFINITY_ROWS,
+            memberRows: MEMBER_ROWS,
+            candidateRows: [],
+            relationRows: [],
+            rollupRows: rollups,
+            rollupProvenanceRows: rollupProvenances,
+        });
+        const result = await summarizeDomain(db, 'ws-1', 1, { domainId: 'domain-1' });
+
+        const edge1 = result.edges.find((e) => e.provenance.rollupId === 'rollup-1');
+        const edge2 = result.edges.find((e) => e.provenance.rollupId === 'rollup-2');
+        expect(edge1?.provenance.baseRelationIds.sort()).toEqual(['rel-a', 'rel-b']);
+        expect(edge2?.provenance.baseRelationIds).toEqual(['rel-c']);
+    });
+
+    it('유효하지 않은 objectType 멤버는 result.nodes에서 제외해야 한다', async () => {
+        const affinities = [
+            ...AFFINITY_ROWS,
+            { ...AFFINITY_ROWS[0]!, id: 'aff-unknown', objectId: 'obj-unknown', affinity: 0.4 },
+        ];
+        const members = [
+            ...MEMBER_ROWS,
+            { ...MEMBER_ROWS[0]!, id: 'obj-unknown', objectType: 'not_a_type', name: 'unknown-object' },
+        ];
+        const db = createMockDbWithMembers({
+            domainRow: DOMAIN_ROW,
+            affinityRows: affinities,
+            memberRows: members,
+            candidateRows: [],
+            relationRows: [],
+            rollupRows: [],
+        });
+        const result = await summarizeDomain(db, 'ws-1', 1, { domainId: 'domain-1' });
+
+        expect(result.nodes.map((n) => n.id)).not.toContain('obj-unknown');
+        expect((result.summary as DomainSummaryData).memberCount).toBe(4);
+    });
+
+    it('유효하지 않은 relationType rollup은 result.edges에서 제외해야 한다', async () => {
+        const db = createMockDbWithMembers({
+            domainRow: DOMAIN_ROW,
+            affinityRows: AFFINITY_ROWS,
+            memberRows: MEMBER_ROWS,
+            candidateRows: [],
+            relationRows: [],
+            rollupRows: [{ ...ROLLUP_ROWS[0]!, relationType: 'unknown_type' }],
+        });
+        const result = await summarizeDomain(db, 'ws-1', 1, { domainId: 'domain-1' });
+
+        expect(result.edges).toHaveLength(0);
+        const summary = result.summary as DomainSummaryData;
+        expect(summary.externalDependencies).toHaveLength(1);
+    });
+
+    it('displayName/confidence/provenance 누락 시 요약 기본값으로 보정해야 한다', async () => {
+        const domainRowWithoutDisplay = { ...DOMAIN_ROW, displayName: null, name: 'order-domain-fallback' };
+        const memberRowsWithNullDisplay = [{ ...MEMBER_ROWS[0]!, displayName: null }];
+        const affinityRows = [{ ...AFFINITY_ROWS[0]!, objectId: MEMBER_ROWS[0]!.id }];
+        const rollupRows = [{ ...ROLLUP_ROWS[0]!, id: 'rollup-no-prov', confidence: null }];
+
+        const db = createMockDbWithMembers({
+            domainRow: domainRowWithoutDisplay,
+            affinityRows,
+            memberRows: memberRowsWithNullDisplay,
+            candidateRows: [],
+            relationRows: [],
+            rollupRows,
+            rollupProvenanceRows: [],
+        });
+        const result = await summarizeDomain(db, 'ws-1', 1, { domainId: 'domain-1' });
+        const summary = result.summary as DomainSummaryData;
+
+        expect(summary.domainName).toBe('order-domain-fallback');
+        expect(result.nodes).toHaveLength(1);
+        expect('displayName' in result.nodes[0]!).toBe(false);
+        expect(result.edges[0]).toMatchObject({
+            confidence: 0,
+            provenance: { rollupId: 'rollup-no-prov', baseRelationIds: [] },
+        });
     });
 });

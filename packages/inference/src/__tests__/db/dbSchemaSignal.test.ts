@@ -362,6 +362,27 @@ describe('computeDbScores', () => {
         expect(result).toEqual({});
     });
 
+    it('domains가 비어있으면 즉시 빈 결과를 반환해야 한다', async () => {
+        const serviceId = await createService(db, 'order-service');
+        const result = await computeDbScores(db, serviceId, [], workspaceId);
+        expect(result).toEqual({});
+    });
+
+    it('artifact는 있지만 code_call_edges가 없으면 빈 결과를 반환해야 한다', async () => {
+        const serviceId = await createService(db, 'edge-empty-service');
+        await db.insert(codeArtifacts).values({
+            id: generateId(),
+            workspaceId,
+            language: 'java',
+            filePath: '/service/NoEdges.java',
+            ownerObjectId: serviceId,
+            sha256: generateId(),
+        });
+
+        const result = await computeDbScores(db, serviceId, domains, workspaceId);
+        expect(result).toEqual({});
+    });
+
     it('db_read calleeSymbol order_items → prefix order → order 도메인 score를 반환해야 한다', async () => {
         const serviceId = await createService(db, 'order-service');
         await createDbSignal(serviceId, 'order_items', 'db_read');
@@ -408,6 +429,104 @@ describe('computeDbScores', () => {
         // 정규화 후 0~1 범위, 최대 score를 가진 도메인은 1.0
         expect(result[orderDomain.id]).toBeGreaterThan(0);
         expect(result[orderDomain.id]).toBeLessThanOrEqual(1);
+    });
+
+    it('evidenceId가 모두 null이면 빈 결과를 반환해야 한다', async () => {
+        const serviceId = await createService(db, 'null-evidence-service');
+        const artifactId = generateId();
+        await db.insert(codeArtifacts).values({
+            id: artifactId,
+            workspaceId,
+            language: 'java',
+            filePath: '/service/NullEvidence.java',
+            ownerObjectId: serviceId,
+            sha256: generateId(),
+        });
+        await db.insert(codeCallEdges).values({
+            id: generateId(),
+            workspaceId,
+            callerArtifactId: artifactId,
+            calleeSymbol: 'order_items',
+            weight: 1,
+            evidenceId: null,
+        });
+
+        const result = await computeDbScores(db, serviceId, domains, workspaceId);
+        expect(result).toEqual({});
+    });
+
+    it('db_* kind가 없는 evidence만 있으면 빈 결과를 반환해야 한다', async () => {
+        const serviceId = await createService(db, 'non-db-evidence-service');
+        const artifactId = generateId();
+        await db.insert(codeArtifacts).values({
+            id: artifactId,
+            workspaceId,
+            language: 'java',
+            filePath: '/service/NoDbSignal.java',
+            ownerObjectId: serviceId,
+            sha256: generateId(),
+        });
+
+        const evidenceId = generateId();
+        await db.insert(evidences).values({
+            id: evidenceId,
+            workspaceId,
+            evidenceType: 'FILE',
+            filePath: '/service/NoDbSignal.java',
+            lineStart: 1,
+            lineEnd: 1,
+            excerpt: 'http call',
+            metadata: { kind: 'http_call' },
+        });
+        await db.insert(codeCallEdges).values({
+            id: generateId(),
+            workspaceId,
+            callerArtifactId: artifactId,
+            calleeSymbol: 'order_items',
+            weight: 1,
+            evidenceId,
+        });
+
+        const result = await computeDbScores(db, serviceId, domains, workspaceId);
+        expect(result).toEqual({});
+    });
+
+    it('DB 증거/비DB 증거가 섞여 있어도 DB 증거만 점수에 반영해야 한다', async () => {
+        const serviceId = await createService(db, 'mixed-evidence-service');
+        await createDbSignal(serviceId, 'order_items', 'db_read');
+
+        const artifactId = generateId();
+        await db.insert(codeArtifacts).values({
+            id: artifactId,
+            workspaceId,
+            language: 'java',
+            filePath: '/service/Mixed.java',
+            ownerObjectId: serviceId,
+            sha256: generateId(),
+        });
+        const nonDbEvidenceId = generateId();
+        await db.insert(evidences).values({
+            id: nonDbEvidenceId,
+            workspaceId,
+            evidenceType: 'FILE',
+            filePath: '/service/Mixed.java',
+            lineStart: 10,
+            lineEnd: 10,
+            excerpt: 'non-db',
+            metadata: { kind: 'http_call' },
+        });
+        await db.insert(codeCallEdges).values({
+            id: generateId(),
+            workspaceId,
+            callerArtifactId: artifactId,
+            calleeSymbol: 'payment_history',
+            weight: 1,
+            evidenceId: nonDbEvidenceId,
+        });
+
+        const result = await computeDbScores(db, serviceId, domains, workspaceId);
+        expect(result[orderDomain.id]).toBeGreaterThan(0);
+        expect(result[paymentDomain.id]).toBeUndefined();
     });
 });
 

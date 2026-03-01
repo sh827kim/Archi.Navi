@@ -8,7 +8,7 @@
     "build": "turbo run build",
     "test": "turbo run test",
     "test:unit": "turbo run test:unit",
-    "test:coverage": "pnpm --filter @archi-navi/core test:unit:coverage && pnpm --filter @archi-navi/inference test:unit:coverage",
+    "test:coverage": "pnpm --filter @archi-navi/shared test:unit:coverage && pnpm --filter @archi-navi/db test:unit:coverage && pnpm --filter @archi-navi/cli test:unit:coverage && pnpm --filter @archi-navi/ui test:unit:coverage && pnpm --filter @archi-navi/core test:unit:coverage && pnpm --filter @archi-navi/inference test:unit:coverage",
     "test:e2e": "turbo run test:e2e",
     "lint": "turbo run lint",
     "format": "prettier --write \"**/*.{ts,tsx,md,json}\" --ignore-path .gitignore",

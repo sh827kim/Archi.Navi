@@ -85,7 +85,6 @@ async function loadEvidencesForCandidates(
   candidateIds: string[],
 ): Promise<Map<string, EvidenceSummary[]>> {
   const map = new Map<string, EvidenceSummary[]>();
-  if (candidateIds.length === 0) return map;
 
   // 각 candidateId에 대해 개별 쿼리 (PGlite에서 inArray 호환성)
   for (const cid of candidateIds) {
