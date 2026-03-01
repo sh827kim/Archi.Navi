@@ -50,6 +50,9 @@ interface GraphNode extends d3.SimulationNodeDatum {
   objectType: string;
   isCompound: boolean;
   isChild: boolean;
+  isHub: boolean;
+  inDegree: number;
+  outDegree: number;
   color: string;
   radius: number;
 }
@@ -91,7 +94,17 @@ interface RollupEdgeApiItem {
   relationType: string;
 }
 
+interface GraphStatApiItem {
+  objectId: string;
+  inDegree: number;
+  outDegree: number;
+}
+
 type RollupRelationMap = Record<RollupLevelKey, RelationItem[]>;
+type RollupGraphStatsMap = Record<RollupLevelKey, GraphStatApiItem[]>;
+
+const ROLLUP_HUB_THRESHOLD_KEY = 'archi-navi:rollup:hub-threshold';
+const DEFAULT_HUB_THRESHOLD = 50;
 
 const LEVEL_TYPES: Partial<Record<ViewLevel, string[]>> = {
   SERVICE_TO_SERVICE: ['service'],
@@ -225,6 +238,17 @@ function calcParallelCurve(
   return `M${sx},${sy} Q${cx},${cy} ${tx},${ty}`;
 }
 
+function parseHubThreshold(value: string | null): number {
+  const parsed = Number.parseInt(value ?? '', 10);
+  if (!Number.isFinite(parsed)) return DEFAULT_HUB_THRESHOLD;
+  return Math.min(500, Math.max(5, parsed));
+}
+
+function formatHubBadgeCount(value: number): string {
+  if (value > 99) return '99+';
+  return String(value);
+}
+
 /* ─── 메인 컴포넌트 ─── */
 export function RollupGraph() {
   const { workspaceId } = useWorkspace();
@@ -246,6 +270,9 @@ export function RollupGraph() {
   const [viewLevel, setViewLevel] = useState<ViewLevel>('SERVICE_TO_SERVICE');
   const [expandedSet, setExpandedSet] = useState<Set<string>>(new Set());
   const [tooltip, setTooltip] = useState<TooltipState | null>(null);
+  const [hubThreshold, setHubThreshold] = useState(DEFAULT_HUB_THRESHOLD);
+  const [isHubCollapsed, setIsHubCollapsed] = useState(false);
+  const [hubNodeCount, setHubNodeCount] = useState(0);
   /* Roll-down LR Flow 패널 데이터 */
   const [rollDownInfo, setRollDownInfo] = useState<RollDownPanelItem[]>([]);
 
@@ -254,6 +281,7 @@ export function RollupGraph() {
     objects: ObjectItem[];
     relations: RelationItem[];
     rollups: RollupRelationMap;
+    graphStats: RollupGraphStatsMap;
   }>({
     objects: [],
     relations: [],
@@ -263,7 +291,35 @@ export function RollupGraph() {
       SERVICE_TO_BROKER: [],
       DOMAIN_TO_DOMAIN: [],
     },
+    graphStats: {
+      SERVICE_TO_SERVICE: [],
+      SERVICE_TO_DATABASE: [],
+      SERVICE_TO_BROKER: [],
+      DOMAIN_TO_DOMAIN: [],
+    },
   });
+
+  useEffect(() => {
+    const syncThreshold = () => {
+      const nextValue = parseHubThreshold(window.localStorage.getItem(ROLLUP_HUB_THRESHOLD_KEY));
+      setHubThreshold(nextValue);
+    };
+
+    syncThreshold();
+
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === ROLLUP_HUB_THRESHOLD_KEY) {
+        syncThreshold();
+      }
+    };
+
+    window.addEventListener('storage', onStorage);
+    window.addEventListener('focus', syncThreshold);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener('focus', syncThreshold);
+    };
+  }, []);
 
   /* ─── 데이터 fetch (workspaceId 변경 시 갱신) ─── */
   const fetchData = useCallback(async (includeRelations: boolean) => {
@@ -296,20 +352,30 @@ export function RollupGraph() {
       SERVICE_TO_BROKER: [],
       DOMAIN_TO_DOMAIN: [],
     };
+    const graphStats: RollupGraphStatsMap = {
+      SERVICE_TO_SERVICE: [],
+      SERVICE_TO_DATABASE: [],
+      SERVICE_TO_BROKER: [],
+      DOMAIN_TO_DOMAIN: [],
+    };
 
     for (let idx = 0; idx < rollupLevels.length; idx++) {
       const level = rollupLevels[idx]!;
-      const payload = (await rollupResList[idx]!.json()) as { edges?: RollupEdgeApiItem[] };
+      const payload = (await rollupResList[idx]!.json()) as {
+        edges?: RollupEdgeApiItem[];
+        graphStats?: GraphStatApiItem[];
+      };
       rollups[level] = (payload.edges ?? []).map((edge) => ({
         id: `rollup-${edge.id}`,
         subjectObjectId: edge.source,
         objectId: edge.target,
         relationType: edge.relationType,
       }));
+      graphStats[level] = payload.graphStats ?? [];
     }
 
-    dataRef.current = { objects: allObjects, relations: allRelations, rollups };
-    return { allObjects, allRelations, allRollups: rollups };
+    dataRef.current = { objects: allObjects, relations: allRelations, rollups, graphStats };
+    return { allObjects, allRelations, allRollups: rollups, allGraphStats: graphStats };
   }, [workspaceId]);
 
   /* ─── D3 그래프 빌드 ─── */
@@ -326,7 +392,12 @@ export function RollupGraph() {
       simulationRef.current = null;
 
       try {
-        const { allObjects, allRelations, allRollups } = await fetchData(expanded.size > 0);
+        const {
+          allObjects,
+          allRelations,
+          allRollups,
+          allGraphStats,
+        } = await fetchData(expanded.size > 0);
 
         /* ── Roll-down LR Flow 패널 데이터 계산 (allObjects/allRelations 전체 기준) ── */
         if (expanded.size > 0) {
@@ -502,6 +573,28 @@ export function RollupGraph() {
           filteredRelations = [...relationMap.values()];
         }
 
+        const graphStatsForLevel: GraphStatApiItem[] =
+          level === 'COMPOUND_VIEW' ? [] : allGraphStats[level];
+        const graphStatMap = new Map(graphStatsForLevel.map((row) => [row.objectId, row]));
+        const visibleObjectIdsBeforeHubFilter = new Set(filteredObjects.map((o) => o.id));
+        const hubNodeIds = new Set(
+          graphStatsForLevel
+            .filter((row) => row.inDegree >= hubThreshold && visibleObjectIdsBeforeHubFilter.has(row.objectId))
+            .map((row) => row.objectId),
+        );
+        setHubNodeCount(hubNodeIds.size);
+
+        if (isHubCollapsed && hubNodeIds.size > 0) {
+          filteredObjects = filteredObjects.filter((o) => !hubNodeIds.has(o.id));
+          const visibleAfterCollapse = new Set(filteredObjects.map((o) => o.id));
+          filteredRelations = filteredRelations.filter(
+            (r) => visibleAfterCollapse.has(r.subjectObjectId) && visibleAfterCollapse.has(r.objectId),
+          );
+          containsLinks = containsLinks.filter(
+            (r) => visibleAfterCollapse.has(r.subjectObjectId) && visibleAfterCollapse.has(r.objectId),
+          );
+        }
+
         if (filteredObjects.length === 0) {
           setIsEmpty(true);
           /* SVG 초기화 */
@@ -524,12 +617,18 @@ export function RollupGraph() {
         const nodes: GraphNode[] = filteredObjects.map((obj) => {
           const isCompound = obj.granularity === 'COMPOUND';
           const isChild = obj.parentId !== null;
+          const graphStat = graphStatMap.get(obj.id);
+          const inDegree = graphStat?.inDegree ?? 0;
+          const outDegree = graphStat?.outDegree ?? 0;
           const node: GraphNode = {
             id: obj.id,
             label: obj.displayName ?? obj.name,
             objectType: obj.objectType,
             isCompound,
             isChild,
+            isHub: hubNodeIds.has(obj.id),
+            inDegree,
+            outDegree,
             color: NODE_COLORS[obj.objectType] ?? NODE_COLORS['default']!,
             radius: isCompound ? 22 : isChild ? 12 : 16,
             // 기존 핀 고정 위치 유지
@@ -793,6 +892,32 @@ export function RollupGraph() {
           .attr('stroke-opacity', 0.3)
           .attr('stroke-dasharray', '3,3');
 
+        /* Hub 배지: in-degree 임계치 이상 */
+        const hubBadge = nodeSel
+          .filter((d) => d.isHub)
+          .append('g')
+          .attr('class', 'hub-badge')
+          .attr('transform', (d) => `translate(${d.radius - 3},${-d.radius + 3})`)
+          .attr('pointer-events', 'none');
+
+        hubBadge
+          .append('circle')
+          .attr('r', 8)
+          .attr('fill', '#ef4444')
+          .attr('stroke', '#0f0f11')
+          .attr('stroke-width', 1.2)
+          .attr('fill-opacity', 0.95);
+
+        hubBadge
+          .append('text')
+          .attr('text-anchor', 'middle')
+          .attr('dy', '0.31em')
+          .attr('font-size', '7px')
+          .attr('font-family', 'ui-monospace, monospace')
+          .attr('font-weight', 700)
+          .attr('fill', '#ffffff')
+          .text((d) => formatHubBadgeCount(d.inDegree));
+
         /* 노드 라벨 */
         nodeSel
           .append('text')
@@ -1013,10 +1138,13 @@ export function RollupGraph() {
             const rect = svgEl.getBoundingClientRect();
             setTooltip({
               label: d.label,
-              detail:
-                d.isCompound && level !== 'COMPOUND_VIEW'
-                  ? '🔽 클릭: Roll-down'
-                  : d.objectType,
+              detail: (() => {
+                const base =
+                  d.isCompound && level !== 'COMPOUND_VIEW'
+                    ? '클릭: Roll-down'
+                    : d.objectType;
+                return d.isHub ? `${base} · HUB(in:${d.inDegree}, out:${d.outDegree})` : base;
+              })(),
               x: event.clientX - rect.left,
               y: event.clientY - rect.top - 36,
             });
@@ -1227,7 +1355,7 @@ export function RollupGraph() {
         setLoading(false);
       }
     },
-    [fetchData],
+    [fetchData, hubThreshold, isHubCollapsed],
   );
 
   /* ── 뷰 레벨/전개 상태 변경 시 재빌드 ── */
@@ -1282,6 +1410,21 @@ export function RollupGraph() {
 
       {/* 핀 고정 카운트 + 모두 접기 버튼 (우상단) */}
       <div className="absolute right-4 top-4 z-10 flex flex-col items-end gap-1.5">
+        {viewLevel !== 'COMPOUND_VIEW' && hubNodeCount > 0 && (
+          <button
+            onClick={() => setIsHubCollapsed((prev) => !prev)}
+            className={cn(
+              'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium border backdrop-blur-sm',
+              isHubCollapsed
+                ? 'border-sky-500/30 bg-sky-500/10 text-sky-300 hover:bg-sky-500/20'
+                : 'border-cyan-500/30 bg-cyan-500/10 text-cyan-300 hover:bg-cyan-500/20',
+            )}
+          >
+            {isHubCollapsed ? `Hub 펼치기 (${hubNodeCount})` : `Hub 접기 (${hubNodeCount})`}
+            <span className="text-[10px] text-cyan-100/80">in≥{hubThreshold}</span>
+          </button>
+        )}
+
         {pinnedCount > 0 && (
           <button
             onClick={() => {

@@ -110,15 +110,17 @@
 - **구조:** 결론 → 신뢰도 → 증거 목록 → 요약 → deep-link
 - **UI:** `floating-chat.tsx`에 evidence 카드 렌더링
 
-### 2-4. DOMAIN_SUMMARY 쿼리 완성
+### ✅ 2-4. DOMAIN_SUMMARY 쿼리 완성 (완료)
 - **파일:** `packages/core/src/query-engine/executor.ts`
-- **현재:** stub 반환
-- **구현:** deterministic 집계 + LLM 포맷팅 (도메인별 서비스 수, 관계 밀도, purity 통계)
+- **구현 완료:**
+  - deterministic 집계 + LLM 포맷팅 (도메인별 서비스 수, 관계 밀도, purity 통계)
+  - Query Engine `DOMAIN_SUMMARY` 실응답 경로 연동
 
-### 2-5. Message 시그널 추출
+### ✅ 2-5. Message 시그널 추출 (완료)
 - **파일:** `packages/inference/src/domain/seedBased.ts`
-- **현재:** msgScore=0 하드코딩
-- **구현:** 토픽 네이밍 패턴 분석 → producer/consumer 결합도 → 도메인 affinity
+- **구현 완료:**
+  - 토픽 네이밍 패턴 분석 → producer/consumer 결합도 → 도메인 affinity
+  - `msgScore` 계산값을 Seed-based 도메인 추론에 실제 반영
 
 ---
 
@@ -130,10 +132,12 @@
 - **목표:** 변경 영향 범위만 부분 재계산
 - **트리거:** 관계 승인/삭제, 부모 변경, expose 변경
 
-### 3-2. Hub 처리 UI
-- **기준:** object_graph_stats.inDegree > threshold (기본 200)
-- **UI:** Hub 노드 접기/펼치기, 카운트 배지 표시
-- **의존:** object_graph_stats 활용 (이미 계산됨)
+### ✅ 3-2. Hub 처리 UI (완료)
+- **기준:** `object_graph_stats.inDegree >= threshold` (기본 50, 설정에서 조정 가능)
+- **구현 완료:**
+  - Mapping 그래프 우상단 `Hub 접기/펼치기` 토글
+  - Hub 노드에 in-degree 카운트 배지 표시
+  - `/api/rollups` 응답에 `graphStats` 포함하여 UI 판정에 활용
 
 ### 3-3. 프로그레시브 렌더링
 - **파일:** `apps/web/src/components/mapping/rollup-graph.tsx`
@@ -153,6 +157,16 @@
 ### 3-6. DB 추론 확장
 - **인덱스 패턴:** 복합 인덱스에 포함된 컬럼 → 조인 관계 힌트
 - **Unique 제약조건:** 유니크 키 패턴 → 엔티티 식별 관계
+
+### 3-7. Object Mapping 3D 렌더러 전환
+- **목표 라이브러리:** `3d-force-graph`
+- **목표:**
+  - 대규모 그래프 탐색성 개선(회전/줌/깊이 분리)
+  - 기존 핵심 기능(레벨 전환, Roll-down, 허브 토글) 동등성 유지
+- **전환 전략:**
+  - 데이터 어댑터 분리 후 2D(D3)/3D 병행 제공
+  - feature flag 또는 뷰 토글로 점진 전환
+- **참조:** `local-only-docs/plans/2026-03-01-object-mapping-3d-force-graph-plan.md`
 
 ---
 

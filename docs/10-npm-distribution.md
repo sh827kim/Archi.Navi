@@ -8,6 +8,7 @@
 ## 1. 목표
 
 - 개발자가 npm에서 패키지를 설치한 뒤 `anavi up`으로 웹 앱을 바로 실행할 수 있어야 한다.
+- `anavi up` 실행 후 초기 진입은 워크스페이스 목록 화면(`/workspaces`)이어야 한다.
 - 배포 단위는 아래 7개 패키지다.
   - `@archi-navi/shared`
   - `@archi-navi/db`
@@ -25,6 +26,8 @@
 npm install -g @archi-navi/cli @archi-navi/web
 anavi up --port 3000
 ```
+
+초기 화면에서 워크스페이스를 직접 생성한 뒤 사용한다.
 
 기본 런타임 경로:
 - `PGLITE_DATA_DIR=~/.archi-navi/data`
@@ -74,5 +77,5 @@ publish 순서(의존성 순):
 
 1. `pnpm release:pack:npm` 결과로 `.release/tarballs/*.tgz`가 생성된다.
 2. 패키지 tarball 내부 `package.json`의 내부 의존성이 `workspace:*`가 아닌 실제 버전(예: `0.1.0`)으로 치환된다.
-3. `anavi up` 실행 시 마이그레이션이 정상 수행되고, 기본 워크스페이스가 자동 생성된다.
-4. 초기 화면 접속(`http://localhost:3000`) 및 기본 API 응답(`/api/workspaces`)이 정상이다.
+3. `anavi up` 실행 시 마이그레이션이 정상 수행되고, `/workspaces` 목록 화면이 열린다.
+4. 초기 화면 접속(`http://localhost:3000/workspaces`) 및 API 응답(`GET /api/workspaces`, `POST /api/workspaces`)이 정상이다.

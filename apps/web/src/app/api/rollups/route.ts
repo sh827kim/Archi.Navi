@@ -4,7 +4,7 @@
  */
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@archi-navi/db';
-import { objectRollups, objects } from '@archi-navi/db';
+import { objectGraphStats, objectRollups, objects } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { getActiveGeneration, rebuildRollups } from '@archi-navi/core';
 
@@ -22,7 +22,7 @@ export async function GET(req: NextRequest) {
     // 활성 Generation 번호 조회 (number | null)
     const genVersion = await getActiveGeneration(db, workspaceId);
     if (!genVersion) {
-      return NextResponse.json({ nodes: [], edges: [] });
+      return NextResponse.json({ nodes: [], edges: [], graphStats: [] });
     }
 
     // 롤업 엣지 조회
@@ -38,7 +38,7 @@ export async function GET(req: NextRequest) {
       );
 
     if (rollupEdges.length === 0) {
-      return NextResponse.json({ nodes: [], edges: [] });
+      return NextResponse.json({ nodes: [], edges: [], graphStats: [] });
     }
 
     // 관련 Object ID 수집
@@ -88,7 +88,22 @@ export async function GET(req: NextRequest) {
       confidence: e.confidence,
     }));
 
-    return NextResponse.json({ nodes, edges });
+    const graphStats = await db
+      .select({
+        objectId: objectGraphStats.objectId,
+        inDegree: objectGraphStats.inDegree,
+        outDegree: objectGraphStats.outDegree,
+      })
+      .from(objectGraphStats)
+      .where(
+        and(
+          eq(objectGraphStats.workspaceId, workspaceId),
+          eq(objectGraphStats.generationVersion, genVersion),
+          eq(objectGraphStats.rollupLevel, level),
+        ),
+      );
+
+    return NextResponse.json({ nodes, edges, graphStats });
   } catch (error) {
     console.error('[GET /api/rollups]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

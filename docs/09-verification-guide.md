@@ -3,6 +3,7 @@
 > 작성일: 2026-02-23
 > 대상: 로드맵 `docs/08-roadmap.md` 의 P1(1-1~1-6) + P2 일부(2-1~2-5)
 > 전제: `pnpm dev` 로 웹 서버 실행 중 (`http://localhost:3000`)
+> 주의: 기본 워크스페이스는 더 이상 자동 생성되지 않음
 
 ---
 
@@ -18,12 +19,22 @@ ANTHROPIC_API_KEY=sk-ant-...    # 또는 UI 설정 화면에서 입력 가능
 
 > UI 오른쪽 상단 설정(⚙) 버튼 → API 키 / 제공자 / 모델 직접 입력 가능
 
-### 편의 변수
+### 편의 변수 + 워크스페이스 생성
 
 ```bash
-WS="00000000-0000-0000-0000-000000000001"
 BASE="http://localhost:3000"
+WS_NAME="verification-$(date +%Y%m%d-%H%M%S)"
+
+# 검증 전용 워크스페이스 생성
+WS=$(curl -s -X POST "$BASE/api/workspaces" \
+  -H "Content-Type: application/json" \
+  -d "{\"name\":\"$WS_NAME\"}" \
+  | jq -r '.id')
+
+echo "workspaceId=$WS"
 ```
+
+> `WS`가 비어 있거나 `null`이면 서버 로그를 확인한 뒤 `POST /api/workspaces` 호출부터 다시 실행하세요.
 
 ---
 
@@ -377,6 +388,7 @@ curl -s "$BASE/api/inference/domain-candidates?workspaceId=$WS&status=PENDING" \
 ## 전체 워크플로우 한눈에
 
 ```
+[0] POST /api/workspaces         → 검증용 워크스페이스 생성
 [1] POST /api/dev/reset          → DB 초기화
 [2] POST /api/dev/seed           → 샘플 데이터 주입 (52 objects, 51 relations)
 [3] POST /api/objects ×4         → 도메인 seed 등록 (order/payment/user/product)
