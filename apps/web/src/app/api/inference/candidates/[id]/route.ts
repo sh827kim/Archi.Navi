@@ -4,9 +4,7 @@
  */
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@archi-navi/db';
-import { relationCandidates, objectRelations } from '@archi-navi/db';
-import { eq } from 'drizzle-orm';
-import { generateId } from '@archi-navi/shared';
+import { approveRelationCandidate } from '@archi-navi/inference';
 
 export async function PATCH(
   req: NextRequest,
@@ -25,39 +23,12 @@ export async function PATCH(
 
     const db = await getDb();
 
-    // 후보 조회
-    const [candidate] = await db
-      .select()
-      .from(relationCandidates)
-      .where(eq(relationCandidates.id, id))
-      .limit(1);
-
-    if (!candidate) {
+    const result = await approveRelationCandidate(db, id, body.status);
+    return NextResponse.json(result);
+  } catch (error) {
+    if (error instanceof Error && error.message === 'candidate not found') {
       return NextResponse.json({ error: '후보를 찾을 수 없습니다' }, { status: 404 });
     }
-
-    // 상태 업데이트
-    await db
-      .update(relationCandidates)
-      .set({ status: body.status })
-      .where(eq(relationCandidates.id, id));
-
-    // 승인 시 → object_relations에 확정 관계 생성
-    if (body.status === 'APPROVED') {
-      await db.insert(objectRelations).values({
-        id: generateId(),
-        workspaceId: candidate.workspaceId,
-        subjectObjectId: candidate.subjectObjectId,
-        relationType: candidate.relationType,
-        objectId: candidate.objectId,
-        confidence: candidate.confidence,
-        status: 'APPROVED',
-        metadata: { approvedFromCandidate: id },
-      });
-    }
-
-    return NextResponse.json({ success: true, status: body.status });
-  } catch (error) {
     console.error('[PATCH /api/inference/candidates/:id]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
