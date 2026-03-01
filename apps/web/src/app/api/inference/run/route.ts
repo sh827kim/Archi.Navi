@@ -22,6 +22,7 @@ interface RunInferenceRequest {
   modes?: string[];
   repoRoots?: string[];
   useServiceMetadataPaths?: boolean;
+  incremental?: boolean;
 }
 
 const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
@@ -127,9 +128,13 @@ export async function POST(req: NextRequest) {
     const startedAt = Date.now();
     const warnings: string[] = [];
     const errors: Array<{ mode: InferenceMode; repoRoot?: string; message: string }> = [];
+    const incremental = body.incremental !== false;
 
     const configResult = {
       repoCount: 0,
+      fileCount: 0,
+      processedFileCount: 0,
+      skippedFileCount: 0,
       candidateCount: 0,
       objectCount: 0,
     };
@@ -151,8 +156,11 @@ export async function POST(req: NextRequest) {
     if (modeSet.has('config')) {
       for (const repoRoot of usedRepoRoots) {
         try {
-          const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot });
+          const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot, incremental });
           configResult.repoCount += 1;
+          configResult.fileCount += result.fileCount;
+          configResult.processedFileCount += result.processedFileCount;
+          configResult.skippedFileCount += result.skippedFileCount;
           configResult.candidateCount += result.candidateCount;
           configResult.objectCount += result.objectCount;
         } catch (error) {
@@ -186,7 +194,7 @@ export async function POST(req: NextRequest) {
 
     if (modeSet.has('db')) {
       try {
-        dbResult = await extractDbSchemaSignals(db, { workspaceId });
+        dbResult = await extractDbSchemaSignals(db, { workspaceId, incremental });
       } catch (error) {
         errors.push({
           mode: 'db',
@@ -230,6 +238,7 @@ export async function POST(req: NextRequest) {
       ok: true,
       workspaceId,
       requestedModes: ALL_MODES.filter((mode) => modeSet.has(mode)),
+      incremental,
       repoRoots: {
         provided: providedRoots,
         discoveredFromServices,

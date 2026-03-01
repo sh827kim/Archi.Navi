@@ -6,6 +6,7 @@
  * 설계 참조: docs/03-inference-engine.md §5 DB 스키마 신호 추출
  */
 import { eq, and, inArray } from 'drizzle-orm';
+import { createHash } from 'crypto';
 import type { DbClient } from '@archi-navi/db';
 import {
     objects,
@@ -42,6 +43,8 @@ interface DbTableMetadata {
 /** extractDbSchemaSignals 입력 옵션 */
 export interface DbSchemaSignalOptions {
     workspaceId: string;
+    /** true: 변경된 db_table만 재처리, false: 전체 재처리 */
+    incremental?: boolean;
 }
 
 /** extractDbSchemaSignals 반환 결과 */
@@ -109,6 +112,35 @@ function inferReferencedTables(columnName: string): string[] {
     return [`${base}s`, base];
 }
 
+interface DbSchemaArtifactEntry {
+    id: string;
+    filePath: string;
+    sha256: string | null;
+}
+
+function stableStringify(value: unknown): string {
+    if (Array.isArray(value)) {
+        return `[${value.map((item) => stableStringify(item)).join(',')}]`;
+    }
+    if (value && typeof value === 'object') {
+        const entries = Object.entries(value as Record<string, unknown>)
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([key, v]) => `${JSON.stringify(key)}:${stableStringify(v)}`);
+        return `{${entries.join(',')}}`;
+    }
+    return JSON.stringify(value);
+}
+
+function hashDbTableSchema(tableName: string, metadata: DbTableMetadata): string {
+    // 테이블명 변경도 영향이 있으므로 해시에 포함한다.
+    const payload = { tableName, metadata };
+    return createHash('sha256').update(stableStringify(payload)).digest('hex');
+}
+
+function dbSchemaArtifactPath(tableId: string): string {
+    return `db-table://${tableId}`;
+}
+
 // ─── 메인 함수들 ──────────────────────────────────────────────────────────────
 
 /**
@@ -123,7 +155,7 @@ export async function extractDbSchemaSignals(
     db: DbClient,
     options: DbSchemaSignalOptions,
 ): Promise<DbSchemaSignalResult> {
-    const { workspaceId } = options;
+    const { workspaceId, incremental = false } = options;
 
     // db_table 타입 objects 조회
     const dbTables = await db
@@ -146,6 +178,56 @@ export async function extractDbSchemaSignals(
     for (const t of dbTables) {
         tableNameIndex.set(t.name.toLowerCase(), t.id);
         tableIdToName.set(t.id, t.name);
+    }
+
+    // 증분 판단용: db_schema artifact 조회
+    const artifactPaths = dbTables.map((t) => dbSchemaArtifactPath(t.id));
+    const existingArtifacts = artifactPaths.length > 0
+        ? await db
+            .select({
+                id: codeArtifacts.id,
+                filePath: codeArtifacts.filePath,
+                sha256: codeArtifacts.sha256,
+            })
+            .from(codeArtifacts)
+            .where(
+                and(
+                    eq(codeArtifacts.workspaceId, workspaceId),
+                    eq(codeArtifacts.language, 'db_schema'),
+                    inArray(codeArtifacts.filePath, artifactPaths),
+                ),
+            )
+        : [];
+    const artifactMap = new Map<string, DbSchemaArtifactEntry>(
+        existingArtifacts.map((a) => [a.filePath, a]),
+    );
+
+    const tablesToProcess = dbTables.filter((table) => {
+        if (!incremental) return true;
+        const meta = (table.metadata ?? {}) as DbTableMetadata;
+        const hash = hashDbTableSchema(table.name, meta);
+        const existing = artifactMap.get(dbSchemaArtifactPath(table.id));
+        return existing?.sha256 !== hash;
+    });
+
+    if (tablesToProcess.length === 0) {
+        return { tableCount: dbTables.length, fkCandidateCount: 0, implicitFkCandidateCount: 0 };
+    }
+
+    // 증분 모드에서만: 변경된 테이블의 기존 PENDING fk_reference 후보를 정리 후 재계산한다.
+    if (incremental) {
+        for (const table of tablesToProcess) {
+            await db
+                .delete(relationCandidates)
+                .where(
+                    and(
+                        eq(relationCandidates.workspaceId, workspaceId),
+                        eq(relationCandidates.status, 'PENDING'),
+                        eq(relationCandidates.relationType, 'fk_reference'),
+                        eq(relationCandidates.subjectObjectId, table.id),
+                    ),
+                );
+        }
     }
 
     let fkCandidateCount = 0;
@@ -228,7 +310,7 @@ export async function extractDbSchemaSignals(
     }
 
     // 각 테이블 처리
-    for (const table of dbTables) {
+    for (const table of tablesToProcess) {
         const meta = (table.metadata ?? {}) as DbTableMetadata;
 
         // ── FK 제약조건 처리 ─────────────────────────────────────────────
@@ -296,6 +378,32 @@ export async function extractDbSchemaSignals(
                 implicitFkCandidateCount += Number(inserted);
                 break; // 첫 번째 매칭 테이블에서 중단
             }
+        }
+
+        // 처리 완료된 테이블의 해시를 artifact에 반영
+        const artifactPath = dbSchemaArtifactPath(table.id);
+        const schemaHash = hashDbTableSchema(table.name, meta);
+        const existingArtifact = artifactMap.get(artifactPath);
+        if (existingArtifact) {
+            await db
+                .update(codeArtifacts)
+                .set({
+                    sha256: schemaHash,
+                    repoRoot: 'db-meta',
+                    ownerObjectId: table.id,
+                    updatedAt: new Date(),
+                })
+                .where(eq(codeArtifacts.id, existingArtifact.id));
+        } else {
+            await db.insert(codeArtifacts).values({
+                id: generateId(),
+                workspaceId,
+                language: 'db_schema',
+                repoRoot: 'db-meta',
+                filePath: artifactPath,
+                ownerObjectId: table.id,
+                sha256: schemaHash,
+            });
         }
     }
 

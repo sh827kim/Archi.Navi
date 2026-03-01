@@ -7,9 +7,10 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname } from 'path';
-import { eq, and, or } from 'drizzle-orm';
+import { createHash } from 'crypto';
+import { eq, and, or, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
-import { objects, relationCandidates, objectRelations, evidences, relationCandidateEvidences } from '@archi-navi/db';
+import { objects, relationCandidates, objectRelations, evidences, relationCandidateEvidences, codeArtifacts } from '@archi-navi/db';
 import { generateId, buildUrn } from '@archi-navi/shared';
 import { parseApplicationYml } from './parsers/applicationYml';
 import { parseDockerCompose } from './parsers/dockerCompose';
@@ -35,6 +36,8 @@ export interface ConfigInferenceOptions {
   workspaceId: string;
   /** 탐색 대상 리포 루트 경로 */
   repoRoot: string;
+  /** true: SHA256 기반 변경 파일만 처리, false: 전체 재처리 */
+  incremental?: boolean;
 }
 
 /** 추론 결과 */
@@ -43,6 +46,12 @@ export interface ConfigInferenceResult {
   candidateCount: number;
   /** 생성된 Object 수 (database, message_broker, topic) */
   objectCount: number;
+  /** 스캔 대상 config 파일 수 */
+  fileCount: number;
+  /** 실제 파싱/처리한 파일 수 */
+  processedFileCount: number;
+  /** SHA256 미변경으로 건너뛴 파일 수 */
+  skippedFileCount: number;
 }
 
 // ─── 파일 탐색 유틸리티 ───────────────────────────────────────────────────────
@@ -123,6 +132,75 @@ function findK8sManifests(repoRoot: string): string[] {
       base.startsWith('service')
     );
   });
+}
+
+interface ConfigArtifactEntry {
+  id: string;
+  sha256: string | null;
+}
+
+function hashContentSha256(content: string): string {
+  return createHash('sha256').update(content).digest('hex');
+}
+
+async function loadConfigArtifactMap(
+  db: DbClient,
+  workspaceId: string,
+  filePaths: string[],
+): Promise<Map<string, ConfigArtifactEntry>> {
+  if (filePaths.length === 0) return new Map();
+
+  const rows = await db
+    .select({
+      id: codeArtifacts.id,
+      filePath: codeArtifacts.filePath,
+      sha256: codeArtifacts.sha256,
+    })
+    .from(codeArtifacts)
+    .where(
+      and(
+        eq(codeArtifacts.workspaceId, workspaceId),
+        eq(codeArtifacts.language, 'config'),
+        inArray(codeArtifacts.filePath, filePaths),
+      ),
+    );
+
+  return new Map(
+    rows.map((row) => [row.filePath, { id: row.id, sha256: row.sha256 }]),
+  );
+}
+
+async function upsertConfigArtifact(
+  db: DbClient,
+  params: {
+    workspaceId: string;
+    repoRoot: string;
+    filePath: string;
+    sha256: string;
+    existingId?: string;
+  },
+): Promise<string> {
+  const { workspaceId, repoRoot, filePath, sha256, existingId } = params;
+
+  if (existingId) {
+    await db
+      .update(codeArtifacts)
+      .set({ sha256, repoRoot, updatedAt: new Date() })
+      .where(eq(codeArtifacts.id, existingId));
+    return existingId;
+  }
+
+  const artifactId = generateId();
+  await db.insert(codeArtifacts).values({
+    id: artifactId,
+    workspaceId,
+    language: 'config',
+    repoRoot,
+    filePath,
+    sha256,
+    ownerObjectId: null,
+  });
+  return artifactId;
 }
 
 // ─── Object 생성/조회 ─────────────────────────────────────────────────────────
@@ -759,7 +837,7 @@ export async function inferRelationsFromConfig(
   db: DbClient,
   options: ConfigInferenceOptions,
 ): Promise<ConfigInferenceResult> {
-  const { workspaceId, repoRoot } = options;
+  const { workspaceId, repoRoot, incremental = false } = options;
 
   // 워크스페이스의 서비스 Object 목록 미리 조회
   const allServices = await db
@@ -775,8 +853,17 @@ export async function inferRelationsFromConfig(
   const ctx: ProcessContext = { db, workspaceId, allServices };
   const stats: ProcessStats = { candidateCount: 0, objectCount: 0 };
 
-  // 1. application.yml 파일 처리
   const appYmlFiles = findApplicationYmls(repoRoot);
+  const dockerComposeFiles = findDockerComposeFiles(repoRoot);
+  const k8sFiles = findK8sManifests(repoRoot);
+
+  const allConfigFiles = [...appYmlFiles, ...dockerComposeFiles, ...k8sFiles];
+  const artifactMap = await loadConfigArtifactMap(db, workspaceId, allConfigFiles);
+
+  let processedFileCount = 0;
+  let skippedFileCount = 0;
+
+  // 1. application.yml 파일 처리
   for (const filePath of appYmlFiles) {
     let content: string;
     try {
@@ -784,12 +871,28 @@ export async function inferRelationsFromConfig(
     } catch {
       continue;
     }
+
+    const sha256 = hashContentSha256(content);
+    const existingArtifact = artifactMap.get(filePath);
+    if (incremental && existingArtifact?.sha256 === sha256) {
+      skippedFileCount += 1;
+      continue;
+    }
+
     const signal = parseApplicationYml(filePath, content);
     await processAppYmlSignal(signal, ctx, stats);
+    const artifactId = await upsertConfigArtifact(db, {
+      workspaceId,
+      repoRoot,
+      filePath,
+      sha256,
+      ...(existingArtifact?.id ? { existingId: existingArtifact.id } : {}),
+    });
+    artifactMap.set(filePath, { id: artifactId, sha256 });
+    processedFileCount += 1;
   }
 
   // 2. docker-compose.yml 파일 처리
-  const dockerComposeFiles = findDockerComposeFiles(repoRoot);
   for (const filePath of dockerComposeFiles) {
     let content: string;
     try {
@@ -797,12 +900,28 @@ export async function inferRelationsFromConfig(
     } catch {
       continue;
     }
+
+    const sha256 = hashContentSha256(content);
+    const existingArtifact = artifactMap.get(filePath);
+    if (incremental && existingArtifact?.sha256 === sha256) {
+      skippedFileCount += 1;
+      continue;
+    }
+
     const signal = parseDockerCompose(filePath, content);
     await processDockerComposeSignal(signal, ctx, stats);
+    const artifactId = await upsertConfigArtifact(db, {
+      workspaceId,
+      repoRoot,
+      filePath,
+      sha256,
+      ...(existingArtifact?.id ? { existingId: existingArtifact.id } : {}),
+    });
+    artifactMap.set(filePath, { id: artifactId, sha256 });
+    processedFileCount += 1;
   }
 
   // 3. K8s manifest 파일 처리
-  const k8sFiles = findK8sManifests(repoRoot);
   for (const filePath of k8sFiles) {
     let content: string;
     try {
@@ -810,11 +929,33 @@ export async function inferRelationsFromConfig(
     } catch {
       continue;
     }
+
+    const sha256 = hashContentSha256(content);
+    const existingArtifact = artifactMap.get(filePath);
+    if (incremental && existingArtifact?.sha256 === sha256) {
+      skippedFileCount += 1;
+      continue;
+    }
+
     const k8sSignals = parseK8sManifest(filePath, content);
     for (const signal of k8sSignals) {
       await processK8sSignal(signal, ctx, stats);
     }
+    const artifactId = await upsertConfigArtifact(db, {
+      workspaceId,
+      repoRoot,
+      filePath,
+      sha256,
+      ...(existingArtifact?.id ? { existingId: existingArtifact.id } : {}),
+    });
+    artifactMap.set(filePath, { id: artifactId, sha256 });
+    processedFileCount += 1;
   }
 
-  return stats;
+  return {
+    ...stats,
+    fileCount: allConfigFiles.length,
+    processedFileCount,
+    skippedFileCount,
+  };
 }

@@ -8,7 +8,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import { createPgliteClient } from '@archi-navi/db';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { objects, relationCandidates, objectRelations, evidences, workspaces } from '@archi-navi/db';
+import { objects, relationCandidates, objectRelations, evidences, workspaces, codeArtifacts } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { inferRelationsFromConfig } from '../../relation/configBased';
 import { generateId, buildUrn } from '@archi-navi/shared';
@@ -677,6 +677,134 @@ spring:
 
     // 중복 없이 2개 (read + write)만 있어야 함
     expect(candidates).toHaveLength(2);
+  });
+
+  it('SHA256 미변경 설정 파일은 두 번째 실행에서 스킵해야 한다', async () => {
+    await createTestFixtures(db, workspaceId);
+
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+    );
+
+    const first = await inferRelationsFromConfig(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      incremental: true,
+    });
+    expect(first.fileCount).toBe(1);
+    expect(first.processedFileCount).toBe(1);
+    expect(first.skippedFileCount).toBe(0);
+    expect(first.candidateCount).toBe(2);
+
+    const firstEvidenceCount = (
+      await db.select().from(evidences).where(eq(evidences.workspaceId, workspaceId))
+    ).length;
+
+    const artifacts = await db
+      .select()
+      .from(codeArtifacts)
+      .where(
+        and(
+          eq(codeArtifacts.workspaceId, workspaceId),
+          eq(codeArtifacts.language, 'config'),
+        ),
+      );
+    expect(artifacts).toHaveLength(1);
+    expect(artifacts[0]?.sha256).toBeTruthy();
+
+    const second = await inferRelationsFromConfig(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      incremental: true,
+    });
+    expect(second.fileCount).toBe(1);
+    expect(second.processedFileCount).toBe(0);
+    expect(second.skippedFileCount).toBe(1);
+    expect(second.candidateCount).toBe(0);
+    expect(second.objectCount).toBe(0);
+
+    const secondEvidenceCount = (
+      await db.select().from(evidences).where(eq(evidences.workspaceId, workspaceId))
+    ).length;
+    expect(secondEvidenceCount).toBe(firstEvidenceCount);
+  });
+
+  it('SHA256 변경 시 설정 파일을 재처리하고 해시를 갱신해야 한다', async () => {
+    await createTestFixtures(db, workspaceId);
+    const appPath = join(tempDir, 'application.yml');
+
+    writeFileSync(
+      appPath,
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+    );
+
+    await inferRelationsFromConfig(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      incremental: true,
+    });
+
+    const firstArtifact = await db
+      .select({ id: codeArtifacts.id, sha256: codeArtifacts.sha256 })
+      .from(codeArtifacts)
+      .where(
+        and(
+          eq(codeArtifacts.workspaceId, workspaceId),
+          eq(codeArtifacts.language, 'config'),
+          eq(codeArtifacts.filePath, appPath),
+        ),
+      )
+      .limit(1);
+    expect(firstArtifact[0]).toBeDefined();
+
+    writeFileSync(
+      appPath,
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db_v2
+`,
+    );
+
+    const second = await inferRelationsFromConfig(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      incremental: true,
+    });
+    expect(second.fileCount).toBe(1);
+    expect(second.processedFileCount).toBe(1);
+    expect(second.skippedFileCount).toBe(0);
+    expect(second.candidateCount).toBeGreaterThan(0);
+
+    const secondArtifact = await db
+      .select({ id: codeArtifacts.id, sha256: codeArtifacts.sha256 })
+      .from(codeArtifacts)
+      .where(
+        and(
+          eq(codeArtifacts.workspaceId, workspaceId),
+          eq(codeArtifacts.language, 'config'),
+          eq(codeArtifacts.filePath, appPath),
+        ),
+      )
+      .limit(1);
+    expect(secondArtifact[0]).toBeDefined();
+    expect(secondArtifact[0]?.id).toBe(firstArtifact[0]?.id);
+    expect(secondArtifact[0]?.sha256).not.toBe(firstArtifact[0]?.sha256);
   });
 
   it('REJECTED 상태 후보만 존재할 때 신규 후보를 생성해야 한다 (설계 §2.5)', async () => {

@@ -154,9 +154,15 @@
   - 브레드크럼 내비게이션 + `상위로` 버튼으로 단계 복귀
   - `object_domain_affinities` 기반 도메인별 서비스 필터링 적용
 
-### 3-5. 증분 추론
-- **현재:** 전체 파일 재스캔
-- **목표:** SHA256 해시 비교 → 변경된 파일만 재분석, 기존 결과 유지
+### ✅ 3-5. 증분 추론 (완료)
+- **구현 완료:**
+  - Config 추론 경로(`inferRelationsFromConfig`)에 SHA256 기반 파일 변경 감지 적용
+  - 변경 없는 설정 파일은 파싱/추론을 건너뛰고 기존 결과를 유지
+  - 변경된 설정 파일만 재처리 후 해시 갱신
+  - DB 스키마 추론 경로(`extractDbSchemaSignals`)에 db_table 메타 해시 기반 증분 처리 적용
+  - 변경된 테이블만 재처리하고, 해당 테이블의 기존 `PENDING fk_reference` 후보를 갱신
+  - `/api/inference/run`에서 `incremental` 옵션으로 config/db 증분 추론 동시 제어
+  - `/api/inference/run` 응답에 config 스캔 통계(`fileCount`, `processedFileCount`, `skippedFileCount`) 노출
 
 ### 3-6. DB 추론 확장
 - **인덱스 패턴:** 복합 인덱스에 포함된 컬럼 → 조인 관계 힌트
