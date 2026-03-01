@@ -50,7 +50,9 @@ export async function analyzeImpact(
       const edgeKey =
         direction === 'UPSTREAM'
           ? graph.edge(neighbor, current.nodeId)
-          : graph.edge(current.nodeId, neighbor);
+          : direction === 'DOWNSTREAM'
+            ? graph.edge(current.nodeId, neighbor)
+            : graph.edge(neighbor, current.nodeId) ?? graph.edge(current.nodeId, neighbor);
       if (edgeKey) visitedEdges.add(edgeKey);
 
       if (!visitedNodes.has(neighbor)) {

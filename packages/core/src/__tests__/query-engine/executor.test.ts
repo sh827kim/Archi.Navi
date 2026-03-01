@@ -88,5 +88,38 @@ describe('executeQuery generationVersion resolution', () => {
     expect(summarizeDomain).toHaveBeenCalledWith(db, 'ws-1', 0, {});
     expect(result.meta.generationVersion).toBe(0);
   });
-});
 
+  it('DOMAIN_SUMMARY는 그래프를 빌드하지 않아야 한다', async () => {
+    vi.mocked(getActiveGeneration).mockResolvedValue(5);
+
+    const result = await executeQuery(db, {
+      queryType: 'DOMAIN_SUMMARY',
+      workspaceId: 'ws-1',
+      scope: { level: 'DOMAIN_TO_DOMAIN', visibility: 'VISIBLE_ONLY' },
+      params: { domainId: 'domain-1' },
+    });
+
+    expect(getOrBuildGraph).not.toHaveBeenCalled();
+    expect(summarizeDomain).toHaveBeenCalledWith(db, 'ws-1', 5, { domainId: 'domain-1' });
+    expect(result.queryType).toBe('DOMAIN_SUMMARY');
+  });
+
+  it('알 수 없는 queryType이면 빈 결과를 반환해야 한다', async () => {
+    vi.mocked(getActiveGeneration).mockResolvedValue(2);
+
+    const result = await executeQuery(db, {
+      queryType: 'UNKNOWN_QUERY' as unknown as 'PATH_DISCOVERY',
+      workspaceId: 'ws-1',
+      scope: { level: 'SERVICE_TO_SERVICE', visibility: 'VISIBLE_ONLY' },
+      params: {},
+    });
+
+    expect(getOrBuildGraph).not.toHaveBeenCalled();
+    expect(findPaths).not.toHaveBeenCalled();
+    expect(analyzeImpact).not.toHaveBeenCalled();
+    expect(discoverUsage).not.toHaveBeenCalled();
+    expect(summarizeDomain).not.toHaveBeenCalled();
+    expect(result.result).toEqual({ nodes: [], edges: [] });
+    expect(result.meta.generationVersion).toBe(2);
+  });
+});
