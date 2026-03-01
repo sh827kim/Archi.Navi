@@ -126,79 +126,26 @@ function getApplicableRelTypes(objectType: string): RelationType[] {
    ════════════════════════════════════════════════════════════════ */
 function RelationRow({
   rel,
-  mode,
-  compound,
   objMap,
   onDelete,
 }: {
   rel: RelationItem;
-  mode: 'inbound' | 'outbound' | 'expose';
-  compound: ObjectItem;
   objMap: Map<string, ObjectItem>;
   onDelete: (rel: RelationItem) => void;
 }) {
-  /** id의 소속 Compound 반환 (COMPOUND면 자신, ATOMIC이면 부모) */
-  const getOwner = (id: string): ObjectItem | undefined => {
-    const obj = objMap.get(id);
-    if (!obj) return undefined;
-    return obj.parentId ? objMap.get(obj.parentId) : obj;
-  };
-
-  /* 외부 측 (이 Compound가 아닌 쪽) */
-  const externalId       = mode === 'inbound' ? rel.subjectObjectId : rel.objectId;
-  /* 내부 측 (이 Compound 소속) */
-  const internalId       = mode === 'inbound' ? rel.objectId        : rel.subjectObjectId;
-
-  const externalObj      = objMap.get(externalId);
-  const internalObj      = objMap.get(internalId);
-  const externalCompound = getOwner(externalId);
-  const subjectObj = objMap.get(rel.subjectObjectId);
-  const objectObj = objMap.get(rel.objectId);
-  const subjectCompound = getOwner(rel.subjectObjectId);
-  const objectCompound = getOwner(rel.objectId);
-  /* compound 자신이 아니면 atomic */
-  const isInternalAtomic = internalObj?.id !== compound.id;
+  const atomicObj = [rel.objectId, rel.subjectObjectId]
+    .map((id) => objMap.get(id))
+    .find((obj): obj is ObjectItem => !!obj && obj.granularity === 'ATOMIC');
 
   return (
     <div className="group flex items-center gap-3 rounded-lg px-3 py-2 hover:bg-white/5 text-xs transition-colors">
-
-      {/* 왼쪽: inbound=외부 Compound(+Atomic) / outbound=내부 Atomic */}
       <div className="flex-1 min-w-0">
-        {mode === 'inbound' ? (
-          /* 누가 참조하는지 → 외부 Compound + Atomic */
-          <div className="flex items-center gap-1 min-w-0">
-            <span className={cn('font-medium truncate', typeColor(externalCompound?.objectType ?? ''))}>
-              {label(externalCompound ?? externalObj)}
-            </span>
-            {externalObj && externalObj.id !== externalCompound?.id && (
-              <span className="text-muted-foreground truncate">
-                <span className="mx-0.5">/</span>
-                {label(externalObj)}
-              </span>
-            )}
-          </div>
-        ) : mode === 'outbound' ? (
-          /* 무엇을 통해 참조하는지 → 내부 Atomic */
-          isInternalAtomic ? (
-            <span className={cn('truncate', typeColor(internalObj?.objectType ?? ''))}>
-              {label(internalObj)}
-            </span>
-          ) : (
-            <span className="text-muted-foreground/40 italic text-[10px]">Compound 단위</span>
-          )
+        {atomicObj ? (
+          <span className={cn('truncate', typeColor(atomicObj.objectType))}>
+            {label(atomicObj)}
+          </span>
         ) : (
-          /* expose: 노출 주체 (subject) */
-          <div className="flex items-center gap-1 min-w-0">
-            <span className={cn('font-medium truncate', typeColor(subjectCompound?.objectType ?? ''))}>
-              {label(subjectCompound ?? subjectObj)}
-            </span>
-            {subjectObj && subjectObj.id !== subjectCompound?.id && (
-              <span className="text-muted-foreground truncate">
-                <span className="mx-0.5">/</span>
-                {label(subjectObj)}
-              </span>
-            )}
-          </div>
+          <span className="text-muted-foreground/40 italic text-[10px]">Compound 단위</span>
         )}
       </div>
 
@@ -210,46 +157,6 @@ function RelationRow({
         {rel.relationType}
       </Badge>
 
-      {/* 오른쪽: inbound=내부 Atomic / outbound=외부 Compound(+Atomic) */}
-      <div className="flex-1 min-w-0 text-right">
-        {mode === 'inbound' ? (
-          /* 어떤 Atomic이 참조받는지 */
-          isInternalAtomic ? (
-            <span className={cn('truncate', typeColor(internalObj?.objectType ?? ''))}>
-              {label(internalObj)}
-            </span>
-          ) : (
-            <span className="text-muted-foreground/40 italic text-[10px]">Compound 단위</span>
-          )
-        ) : mode === 'outbound' ? (
-          /* 어디를 참조하는지 → 외부 Compound + Atomic */
-          <div className="flex items-center justify-end gap-1 min-w-0">
-            {externalObj && externalObj.id !== externalCompound?.id && (
-              <span className="text-muted-foreground truncate">
-                {label(externalObj)}
-                <span className="mx-0.5">/</span>
-              </span>
-            )}
-            <span className={cn('font-medium truncate', typeColor(externalCompound?.objectType ?? ''))}>
-              {label(externalCompound ?? externalObj)}
-            </span>
-          </div>
-        ) : (
-          /* expose: 노출 대상 (object) */
-          <div className="flex items-center justify-end gap-1 min-w-0">
-            {objectObj && objectObj.id !== objectCompound?.id && (
-              <span className="text-muted-foreground truncate">
-                {label(objectObj)}
-                <span className="mx-0.5">/</span>
-              </span>
-            )}
-            <span className={cn('font-medium truncate', typeColor(objectCompound?.objectType ?? ''))}>
-              {label(objectCompound ?? objectObj)}
-            </span>
-          </div>
-        )}
-      </div>
-
       {/* 삭제 버튼 (hover 시 표시) */}
       <button
         type="button"
@@ -260,6 +167,49 @@ function RelationRow({
         <Trash2 className="h-3 w-3" />
       </button>
     </div>
+  );
+}
+
+function CollapsibleRelationGroup({
+  title,
+  relations,
+  objMap,
+  onDelete,
+}: {
+  title: string;
+  relations: RelationItem[];
+  objMap: Map<string, ObjectItem>;
+  onDelete: (rel: RelationItem) => void;
+}) {
+  return (
+    <details className="rounded-lg border border-white/10 bg-background/40 overflow-hidden">
+      <summary className="list-none cursor-pointer px-3 py-2.5 hover:bg-white/5 transition-colors">
+        <div className="flex items-center gap-3 text-xs">
+          <span className="min-w-0 flex-1 font-medium truncate">{title}</span>
+          <span className="shrink-0 text-[10px] text-muted-foreground/70 bg-muted/20 px-1.5 py-0.5 rounded-full">
+            {relations.length}
+          </span>
+        </div>
+      </summary>
+
+      <div className="border-t border-white/5 px-2 py-2">
+        <div className="flex items-center gap-3 px-3 pb-1 text-[10px] text-muted-foreground/60 uppercase tracking-wider">
+          <span className="flex-1">아토믹</span>
+          <span className="w-16 text-center shrink-0">타입</span>
+          <span className="w-5 shrink-0" />
+        </div>
+        <div className="space-y-0.5">
+        {relations.map((rel) => (
+          <RelationRow
+            key={rel.id}
+            rel={rel}
+            objMap={objMap}
+            onDelete={onDelete}
+          />
+        ))}
+        </div>
+      </div>
+    </details>
   );
 }
 
@@ -720,11 +670,20 @@ function CompoundRelationDetail({
   relations: RelationItem[];
   onDelete: (rel: RelationItem) => void;
 }) {
+  const [showExpose, setShowExpose] = useState(false);
+
   /* id → ObjectItem 맵 */
   const objMap = useMemo(
     () => new Map(allObjects.map((o) => [o.id, o])),
     [allObjects],
   );
+
+  /** id의 소속 Compound 반환 (COMPOUND면 자신, ATOMIC이면 부모) */
+  const getOwner = useCallback((id: string): ObjectItem | undefined => {
+    const obj = objMap.get(id);
+    if (!obj) return undefined;
+    return obj.parentId ? objMap.get(obj.parentId) : obj;
+  }, [objMap]);
 
   /* 이 Compound 소속 ID 집합 (compound 자신 + 모든 atomic 자식) */
   const memberIds = useMemo(() => {
@@ -777,6 +736,42 @@ function CompoundRelationDetail({
     [relations, memberIds, isHiddenRelation],
   );
 
+  const inboundGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; title: string; items: RelationItem[] }>();
+    inbound.forEach((rel) => {
+      const externalObj = objMap.get(rel.subjectObjectId);
+      const externalComp = getOwner(rel.subjectObjectId);
+      const key = externalComp?.id ?? externalObj?.id ?? rel.subjectObjectId;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          title: label(externalComp ?? externalObj),
+          items: [],
+        });
+      }
+      groups.get(key)?.items.push(rel);
+    });
+    return Array.from(groups.values()).sort((a, b) => b.items.length - a.items.length);
+  }, [inbound, objMap, getOwner]);
+
+  const outboundGroups = useMemo(() => {
+    const groups = new Map<string, { key: string; title: string; items: RelationItem[] }>();
+    outbound.forEach((rel) => {
+      const externalObj = objMap.get(rel.objectId);
+      const externalComp = getOwner(rel.objectId);
+      const key = externalComp?.id ?? externalObj?.id ?? rel.objectId;
+      if (!groups.has(key)) {
+        groups.set(key, {
+          key,
+          title: label(externalComp ?? externalObj),
+          items: [],
+        });
+      }
+      groups.get(key)?.items.push(rel);
+    });
+    return Array.from(groups.values()).sort((a, b) => b.items.length - a.items.length);
+  }, [outbound, objMap, getOwner]);
+
   if (expose.length === 0 && inbound.length === 0 && outbound.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
@@ -794,35 +789,53 @@ function CompoundRelationDetail({
       {/* ── Expose ── */}
       {expose.length > 0 && (
         <section>
-          <div className="flex items-center gap-2 mb-2">
-            <span className="text-emerald-400 text-base">↗</span>
-            <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Expose
-            </h3>
-            <span className="text-[10px] text-muted-foreground/50 bg-muted/20 px-1.5 py-0.5 rounded-full">
-              {expose.length}
-            </span>
+          <div className="flex items-center justify-between gap-2 mb-2">
+            <div className="flex items-center gap-2">
+              <span className="text-emerald-400 text-base">↗</span>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                Expose
+              </h3>
+              <span className="text-[10px] text-muted-foreground/50 bg-muted/20 px-1.5 py-0.5 rounded-full">
+                {expose.length}
+              </span>
+            </div>
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-7 px-2 text-[11px]"
+              onClick={() => setShowExpose((v) => !v)}
+            >
+              {showExpose ? '숨기기' : '보기'}
+            </Button>
           </div>
 
-          <div className="flex items-center gap-3 px-3 pb-1 text-[10px] text-muted-foreground/50 uppercase tracking-wider">
-            <span className="flex-1">노출 주체</span>
-            <span className="w-16 text-center shrink-0">타입</span>
-            <span className="flex-1 text-right">노출 대상</span>
-            <span className="w-5 shrink-0" />
-          </div>
-
-          <div className="space-y-0.5">
-            {expose.map((rel) => (
-              <RelationRow
-                key={rel.id}
-                rel={rel}
-                mode="expose"
-                compound={compound}
-                objMap={objMap}
-                onDelete={onDelete}
-              />
-            ))}
-          </div>
+          {showExpose && (
+            <div className="space-y-1">
+              {expose.map((rel) => {
+                const exposeAtomic = [rel.objectId, rel.subjectObjectId]
+                  .map((id) => objMap.get(id))
+                  .find((obj): obj is ObjectItem => !!obj && obj.granularity === 'ATOMIC');
+                return (
+                <div
+                  key={rel.id}
+                  className="group flex items-center justify-between rounded-lg px-3 py-2 hover:bg-white/5 text-xs transition-colors"
+                >
+                  <span className={cn('truncate', typeColor(exposeAtomic?.objectType ?? ''))}>
+                    {exposeAtomic ? label(exposeAtomic) : 'Compound 단위'}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => onDelete(rel)}
+                    className="shrink-0 rounded p-1 opacity-0 group-hover:opacity-100 transition-opacity text-destructive hover:bg-destructive/10"
+                    title="삭제"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+                );
+              })}
+            </div>
+          )}
         </section>
       )}
 
@@ -839,21 +852,12 @@ function CompoundRelationDetail({
             </span>
           </div>
 
-          {/* 컬럼 헤더 */}
-          <div className="flex items-center gap-3 px-3 pb-1 text-[10px] text-muted-foreground/50 uppercase tracking-wider">
-            <span className="flex-1">참조하는 곳</span>
-            <span className="w-16 text-center shrink-0">타입</span>
-            <span className="flex-1 text-right">참조받는 Atomic</span>
-            <span className="w-5 shrink-0" />
-          </div>
-
-          <div className="space-y-0.5">
-            {inbound.map((rel) => (
-              <RelationRow
-                key={rel.id}
-                rel={rel}
-                mode="inbound"
-                compound={compound}
+          <div className="space-y-2">
+            {inboundGroups.map((group) => (
+              <CollapsibleRelationGroup
+                key={`inbound-${group.key}`}
+                title={group.title}
+                relations={group.items}
                 objMap={objMap}
                 onDelete={onDelete}
               />
@@ -875,21 +879,12 @@ function CompoundRelationDetail({
             </span>
           </div>
 
-          {/* 컬럼 헤더 */}
-          <div className="flex items-center gap-3 px-3 pb-1 text-[10px] text-muted-foreground/50 uppercase tracking-wider">
-            <span className="flex-1">참조하는 Atomic</span>
-            <span className="w-16 text-center shrink-0">타입</span>
-            <span className="flex-1 text-right">참조되는 곳</span>
-            <span className="w-5 shrink-0" />
-          </div>
-
-          <div className="space-y-0.5">
-            {outbound.map((rel) => (
-              <RelationRow
-                key={rel.id}
-                rel={rel}
-                mode="outbound"
-                compound={compound}
+          <div className="space-y-2">
+            {outboundGroups.map((group) => (
+              <CollapsibleRelationGroup
+                key={`outbound-${group.key}`}
+                title={group.title}
+                relations={group.items}
                 objMap={objMap}
                 onDelete={onDelete}
               />
