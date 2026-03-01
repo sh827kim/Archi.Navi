@@ -146,10 +146,13 @@
   - 200 엣지/배치로 렌더링하며 진행 상태(`edge rendered/total`) 표시
   - 소규모 그래프는 기존 즉시 렌더링 경로 유지
 
-### 3-4. Domain-first 내비게이션
-- **현재:** 뷰 레벨 필터는 있으나 drill-down 순서 미강제
-- **목표:** DOMAIN_TO_DOMAIN → 클릭 → SERVICE_TO_SERVICE → 클릭 → Atomic 자동 전환
-- **UI:** 브레드크럼 내비게이션 + "상위로" 버튼
+### ✅ 3-4. Domain-first 내비게이션 (완료)
+- **구현 완료:**
+  - 기본 진입 레벨을 `DOMAIN_TO_DOMAIN`으로 전환 (도메인 데이터 없으면 `SERVICE_TO_SERVICE` fallback)
+  - `DOMAIN_TO_DOMAIN`에서 도메인 클릭 시 `SERVICE_TO_SERVICE` 자동 전환
+  - `SERVICE_TO_SERVICE`에서 서비스 클릭 시 Atomic(Roll-down) 자동 전환
+  - 브레드크럼 내비게이션 + `상위로` 버튼으로 단계 복귀
+  - `object_domain_affinities` 기반 도메인별 서비스 필터링 적용
 
 ### 3-5. 증분 추론
 - **현재:** 전체 파일 재스캔
