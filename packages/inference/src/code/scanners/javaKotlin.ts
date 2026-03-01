@@ -23,8 +23,8 @@ const JAVA_PATTERNS: Pattern[] = [
         regex: /@(Get|Post|Put|Delete|Patch)Mapping\(\s*(?:(?:value|path)\s*=\s*)?["']([^"']+)["']/,
         confidence: 0.8,
         extract: (m) => ({
-            symbol: m[2] ?? '',
-            metadata: { method: (m[1] ?? '').toUpperCase(), annotation: `@${m[1] ?? ''}Mapping` },
+            symbol: m[2]!,
+            metadata: { method: m[1]!.toUpperCase(), annotation: `@${m[1]!}Mapping` },
         }),
     },
     // API 노출 — @RequestMapping : 직접 문자열, value=, path=, method= 속성 지원
@@ -34,7 +34,7 @@ const JAVA_PATTERNS: Pattern[] = [
         confidence: 0.8,
         extract: (m) => {
             // method= 속성이 있으면 추출, 없으면 'ANY'
-            return { symbol: m[1] ?? '', metadata: { method: 'ANY', annotation: '@RequestMapping' } };
+            return { symbol: m[1]!, metadata: { method: 'ANY', annotation: '@RequestMapping' } };
         },
     },
     // HTTP 호출 — RestTemplate
@@ -42,28 +42,28 @@ const JAVA_PATTERNS: Pattern[] = [
         kind: 'call',
         regex: /\brestTemplate\.\w+\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'RestTemplate' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { client: 'RestTemplate' } }),
     },
     // HTTP 호출 — WebClient
     {
         kind: 'call',
         regex: /\bwebClient\b.*?\.uri\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'WebClient' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { client: 'WebClient' } }),
     },
     // HTTP 호출 — @FeignClient(name = "service")
     {
         kind: 'call',
         regex: /@FeignClient\([^)]*name\s*=\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'FeignClient' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { client: 'FeignClient' } }),
     },
     // HTTP 호출 — RestClient (Spring 6.1+): restClient.get().uri("url") 또는 RestClient.create("url")
     {
         kind: 'call',
         regex: /\brestClient\b.*?\.uri\(\s*["']([^"']+)["']|RestClient\.create\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? m[2] ?? '', metadata: { client: 'RestClient' } }),
+        extract: (m) => ({ symbol: (m[1] || m[2])!, metadata: { client: 'RestClient' } }),
     },
     // HTTP 호출 — HttpInterface (Spring 6+): @GetExchange/@PostExchange/... 선언적 HTTP
     {
@@ -71,8 +71,8 @@ const JAVA_PATTERNS: Pattern[] = [
         regex: /@(Get|Post|Put|Delete|Patch)Exchange\(\s*["']([^"']+)["']/,
         confidence: 0.8,
         extract: (m) => ({
-            symbol: m[2] ?? '',
-            metadata: { client: 'HttpInterface', method: (m[1] ?? '').toUpperCase(), annotation: `@${m[1] ?? ''}Exchange` },
+            symbol: m[2]!,
+            metadata: { client: 'HttpInterface', method: m[1]!.toUpperCase(), annotation: `@${m[1]!}Exchange` },
         }),
     },
     // Kafka 발행 — kafkaTemplate.send("topic", ...)
@@ -80,7 +80,7 @@ const JAVA_PATTERNS: Pattern[] = [
         kind: 'produce',
         regex: /\bkafkaTemplate\.send\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'KafkaTemplate' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { client: 'KafkaTemplate' } }),
     },
     // Kafka 수신 — @KafkaListener(topics = "topic") 또는 topics = {"t1","t2"} (다중 토픽)
     // 첫 번째 토픽은 regex로 캡처하고, 다중 토픽은 scanLines에서 extractAllKafkaTopics로 처리
@@ -88,14 +88,14 @@ const JAVA_PATTERNS: Pattern[] = [
         kind: 'consume',
         regex: /@KafkaListener\([^)]*topics\s*=\s*\{?\s*["']([^"']+)["']/,
         confidence: 0.8,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { annotation: '@KafkaListener' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { annotation: '@KafkaListener' } }),
     },
     // JPA 테이블 매핑 — @Table(name = "table_name")
     {
         kind: 'db_mapping',
         regex: /@Table\([^)]*name\s*=\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { annotation: '@Table' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { annotation: '@Table' } }),
     },
 ];
 
@@ -113,10 +113,10 @@ function extractPackageName(content: string): string | undefined {
 function extractAllKafkaTopics(line: string): string[] {
     const topicsMatch = line.match(/@KafkaListener\([^)]*topics\s*=\s*(\{[^}]+\}|["'][^"']+["'])/);
     if (!topicsMatch) return [];
-    const raw = topicsMatch[1] ?? '';
+    const raw = topicsMatch[1]!;
     // 다중 토픽 배열만 여기서 처리, 단일 문자열은 일반 패턴 매칭으로 처리
     if (!raw.startsWith('{')) return [];
-    return [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1] ?? '');
+    return [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]!);
 }
 
 // ─── 라인별 스캔 ─────────────────────────────────────────────────────────────
@@ -130,7 +130,7 @@ function scanLines(lines: string[], patterns: Pattern[]): ExtractedSignal[] {
     const signals: ExtractedSignal[] = [];
 
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? '';
+        const line = lines[i]!;
 
         // KafkaListener 다중 토픽 처리: 모든 토픽을 개별 신호로 추출
         if (/@KafkaListener/.test(line)) {
@@ -201,12 +201,10 @@ function extractSelectTables(sql: string): string[] {
     const fromMatches = [...sql.matchAll(/\bFROM\s+([a-z_][a-z0-9_]*)/gi)];
     const joinMatches = [...sql.matchAll(/\bJOIN\s+([a-z_][a-z0-9_]*)/gi)];
     for (const m of fromMatches) {
-        const t = m[1];
-        if (t) tables.add(t.toLowerCase());
+        tables.add(m[1]!.toLowerCase());
     }
     for (const m of joinMatches) {
-        const t = m[1];
-        if (t) tables.add(t.toLowerCase());
+        tables.add(m[1]!.toLowerCase());
     }
     return [...tables];
 }
@@ -218,8 +216,7 @@ function extractWriteTables(sql: string): string[] {
     const updateMatches = [...sql.matchAll(/\bUPDATE\s+([a-z_][a-z0-9_]*)/gi)];
     const deleteMatches = [...sql.matchAll(/\bDELETE\s+FROM\s+([a-z_][a-z0-9_]*)/gi)];
     for (const m of [...insertMatches, ...updateMatches, ...deleteMatches]) {
-        const t = m[1];
-        if (t) tables.add(t.toLowerCase());
+        tables.add(m[1]!.toLowerCase());
     }
     return [...tables];
 }
@@ -243,14 +240,12 @@ export function scanMyBatisXml(filePath: string, content: string): FileScanResul
     let tagStartLine = 0;
 
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? '';
+        const line = lines[i]!;
 
         if (!currentTag) {
             const openMatch = line.match(/<(select|insert|update|delete)\b/i);
             if (openMatch) {
-                const tagName = openMatch[1]?.toLowerCase();
-                if (!tagName) continue;
-                currentTag = tagName;
+                currentTag = openMatch[1]!.toLowerCase();
                 tagStartLine = i + 1;
                 sqlBuffer = line;
 

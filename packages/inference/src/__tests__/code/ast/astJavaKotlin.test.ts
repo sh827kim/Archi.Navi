@@ -67,6 +67,22 @@ public class ProductController {}`;
         expect(expose?.metadata).toMatchObject({ method: 'ANY', annotation: '@RequestMapping' });
     });
 
+    it('@GetMapping(value = "...") 형태도 expose 신호를 추출해야 한다', async () => {
+        const content = `@GetMapping(value = "/api/v2/orders")
+public class OrderController {}`;
+        const result = await scanJavaKotlinAst('/src/OrderController.java', content);
+        const expose = result.signals.find((s) => s.kind === 'expose');
+        expect(expose?.symbol).toBe('/api/v2/orders');
+    });
+
+    it('@RequestMapping(path = {"...", "..."}) 배열 형태도 expose를 추출해야 한다', async () => {
+        const content = `@RequestMapping(path = {"/api/v1/products", "/api/v1/items"})
+public class ProductController {}`;
+        const result = await scanJavaKotlinAst('/src/ProductController.java', content);
+        const expose = result.signals.find((s) => s.kind === 'expose');
+        expect(expose?.symbol).toBe('/api/v1/products');
+    });
+
     // ─── 멀티라인 어노테이션 처리 (Phase 2 핵심 개선) ────────────────────────
 
     it('멀티라인 @GetMapping 어노테이션을 정확히 추출해야 한다', async () => {
@@ -123,6 +139,28 @@ String response = restTemplate.getForObject("http://payment-service/pay", String
         expect(call?.metadata).toMatchObject({ client: 'RestTemplate' });
     });
 
+    it('webClient 체인(uri)에서 call 신호를 추출해야 한다', async () => {
+        const content = `
+webClient.get().uri("http://inventory-service/stock").retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/InventoryClient.java', content);
+        const call = result.signals.find(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'WebClient',
+        );
+        expect(call?.symbol).toBe('http://inventory-service/stock');
+    });
+
+    it('restClient 체인(uri)에서 call 신호를 추출해야 한다', async () => {
+        const content = `
+restClient.get().uri("http://payment-service/pay").retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/PaymentClient.java', content);
+        const call = result.signals.find(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'RestClient',
+        );
+        expect(call?.symbol).toBe('http://payment-service/pay');
+    });
+
     it('@FeignClient(name = "service")에서 call 신호를 추출해야 한다', async () => {
         const content = `
 @FeignClient(name = "payment-service", url = "http://payment:8080")
@@ -134,6 +172,18 @@ public interface PaymentClient {}
         expect(call?.symbol).toBe('payment-service');
         expect(call?.confidence).toBeCloseTo(0.9); // Phase 1: 0.7 → Phase 2: 0.9
         expect(call?.metadata).toMatchObject({ client: 'FeignClient' });
+    });
+
+    it('@FeignClient에 name이 없으면 call 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+@FeignClient(url = "http://payment:8080")
+public interface PaymentClient {}
+`;
+        const result = await scanJavaKotlinAst('/src/PaymentClient.java', content);
+        const feignCalls = result.signals.filter(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'FeignClient',
+        );
+        expect(feignCalls).toHaveLength(0);
     });
 
     it('@GetExchange에서 call 신호를 추출해야 한다 (HttpInterface, Phase 2: confidence 0.9)', async () => {
@@ -213,6 +263,16 @@ public void handlePayment(String message) {}
         expect(consume?.metadata).toMatchObject({ annotation: '@KafkaListener' });
     });
 
+    it('@KafkaListener에 topics가 없으면 consume 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+@KafkaListener(groupId = "order-group")
+public void handlePayment(String message) {}
+`;
+        const result = await scanJavaKotlinAst('/src/PaymentListener.java', content);
+        const consume = result.signals.filter((s) => s.kind === 'consume');
+        expect(consume).toHaveLength(0);
+    });
+
     it('@KafkaListener(topics = {"topic1", "topic2"}) 배열 형태를 처리해야 한다', async () => {
         const content = `
 @KafkaListener(topics = {"payment.completed", "order.created"})
@@ -263,6 +323,51 @@ public class OrderController {
         expect(kinds).toContain('db_mapping');
     });
 
+    it('문자열/식별자가 아닌 첫 번째 인수는 call 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+String response = restTemplate.getForObject(buildPaymentUrl(), String.class);
+`;
+        const result = await scanJavaKotlinAst('/src/OrderService.java', content);
+        const calls = result.signals.filter((s) => s.kind === 'call');
+        expect(calls).toHaveLength(0);
+    });
+
+    it('인수 없는 어노테이션(Feign/Kafka/Table)은 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+@FeignClient
+interface NoArgsFeign {}
+
+@KafkaListener
+void listen(String m) {}
+
+@Table
+class NoTableName {}
+`;
+        const result = await scanJavaKotlinAst('/src/NoArgsAnnotations.java', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('경로 인자가 없는 Mapping/Exchange 어노테이션은 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+@GetMapping
+class C1 {}
+
+@GetExchange
+interface C2 {}
+`;
+        const result = await scanJavaKotlinAst('/src/NoPathAnnotations.java', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('package_declaration이 없으면 packageName은 undefined여야 한다', async () => {
+        const content = `
+@GetMapping("/health")
+class HealthController {}
+`;
+        const result = await scanJavaKotlinAst('/src/HealthController.java', content);
+        expect(result.packageName).toBeUndefined();
+    });
+
     it('빈 파일은 빈 signals 배열을 반환해야 한다', async () => {
         const result = await scanJavaKotlinAst('/src/Empty.java', '');
         expect(result.signals).toHaveLength(0);
@@ -272,6 +377,12 @@ public class OrderController {
     it('Kotlin 파일은 language가 kotlin이어야 한다', async () => {
         const content = `package com.example\n@GetMapping("/api")\nfun handle() {}`;
         const result = await scanJavaKotlinAst('/src/Controller.kt', content);
+        expect(result.language).toBe('kotlin');
+    });
+
+    it('.kts 파일도 language가 kotlin이어야 한다', async () => {
+        const content = `println("hello")`;
+        const result = await scanJavaKotlinAst('/src/build.kts', content);
         expect(result.language).toBe('kotlin');
     });
 

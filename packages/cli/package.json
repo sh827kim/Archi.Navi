@@ -21,6 +21,8 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsx watch src/index.ts",
+    "test:unit": "vitest run src/__tests__",
+    "test:unit:coverage": "vitest run src/__tests__ --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --coverage.thresholds.lines=80 --coverage.thresholds.functions=80 --coverage.thresholds.branches=80 --coverage.thresholds.statements=80 --coverage.thresholds.perFile=true",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist",
     "prepack": "pnpm --filter @archi-navi/shared build && pnpm --filter @archi-navi/db build && pnpm --filter @archi-navi/core build && pnpm --filter @archi-navi/inference build && pnpm run clean && pnpm run build"
@@ -37,8 +39,10 @@
   },
   "devDependencies": {
     "@types/node": "^25.3.0",
+    "@vitest/coverage-v8": "^4.0.18",
     "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   },
   "publishConfig": {
     "access": "public"

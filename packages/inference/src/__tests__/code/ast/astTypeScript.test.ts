@@ -119,6 +119,14 @@ await axios.delete('http://payment/cancel');
         expect(calls.length).toBeGreaterThanOrEqual(3);
     });
 
+    it('axios.request도 call 신호를 추출해야 한다', async () => {
+        const content = `await axios.request('http://payment/request', { method: 'GET' });`;
+        const result = await scanTypeScriptAst('/src/client.ts', content);
+        const call = result.signals.find((s) => s.kind === 'call');
+        expect(call?.symbol).toBe('http://payment/request');
+        expect(call?.metadata).toMatchObject({ client: 'axios', method: 'REQUEST' });
+    });
+
     // ─── HTTP 체인 패턴 ───────────────────────────────────────────────────────
 
     it('.get/.post 체인 호출에서 URL 경로가 있는 경우 call 신호를 추출해야 한다', async () => {
@@ -131,6 +139,48 @@ await axios.delete('http://payment/cancel');
         expect(call?.metadata).toMatchObject({ client: 'http-chain' });
     });
 
+    it('http-chain에서 URL/경로가 아니면 call 신호를 생성하지 않아야 한다', async () => {
+        const content = `cache.get('cache-key');`;
+        const result = await scanTypeScriptAst('/src/client.ts', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('같은 라인에 route+client.get가 있을 때 expose 중복 기반 call은 건너뛰어야 한다', async () => {
+        const content = `app.get('/api/orders', handler); client.get('/api/orders');`;
+        const result = await scanTypeScriptAst('/src/routes.ts', content);
+        const expose = result.signals.filter((s) => s.kind === 'expose');
+        const calls = result.signals.filter((s) => s.kind === 'call');
+        expect(expose).toHaveLength(1);
+        expect(calls).toHaveLength(0);
+    });
+
+    it('템플릿 문자열 URL도 call 신호를 추출해야 한다', async () => {
+        const content = 'const res = await fetch(`http://inventory/health`);';
+        const result = await scanTypeScriptAst('/src/client.ts', content);
+        const call = result.signals.find((s) => s.kind === 'call');
+        expect(call?.symbol).toBe('http://inventory/health');
+    });
+
+    it('정의되지 않은 식별자 인수는 추적하지 않아야 한다', async () => {
+        const content = `await fetch(MISSING_URL);`;
+        const result = await scanTypeScriptAst('/src/client.ts', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('server.get도 Express expose로 인식해야 한다', async () => {
+        const content = `server.get('/api/server', handler);`;
+        const result = await scanTypeScriptAst('/src/server.ts', content);
+        const expose = result.signals.find((s) => s.kind === 'expose');
+        expect(expose?.symbol).toBe('/api/server');
+        expect(expose?.metadata).toMatchObject({ via: 'server' });
+    });
+
+    it('인수가 없는 fetch 호출은 신호를 생성하지 않아야 한다', async () => {
+        const content = `fetch();`;
+        const result = await scanTypeScriptAst('/src/client.ts', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
     // ─── language 감지 ────────────────────────────────────────────────────────
 
     it('.ts 파일은 language가 typescript여야 한다', async () => {
@@ -141,6 +191,11 @@ await axios.delete('http://payment/cancel');
     it('.js 파일은 language가 javascript여야 한다', async () => {
         const result = await scanTypeScriptAst('/src/app.js', `app.get('/api', handler);`);
         expect(result.language).toBe('javascript');
+    });
+
+    it('.tsx 파일은 language가 typescript여야 한다', async () => {
+        const result = await scanTypeScriptAst('/src/app.tsx', `app.get('/api', handler);`);
+        expect(result.language).toBe('typescript');
     });
 
     // ─── 엣지 케이스 ─────────────────────────────────────────────────────────
@@ -167,5 +222,11 @@ app.get('/api/orders', handler);`;
 
         const expose = result.signals.find((s) => s.kind === 'expose');
         expect(expose?.lineStart).toBe(3);
+    });
+
+    it('파싱 실패 시 빈 결과를 반환해야 한다', async () => {
+        const content = `const broken = ;`;
+        const result = await scanTypeScriptAst('/src/broken.ts', content);
+        expect(result.signals).toEqual([]);
     });
 });

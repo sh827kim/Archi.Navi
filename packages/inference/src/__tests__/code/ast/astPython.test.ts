@@ -63,6 +63,26 @@ def get_items(): pass
         expect(expose?.metadata['via']).toBe('router');
     });
 
+    it('@app.route에 methods 키워드가 있으면 method=MULTI여야 한다', async () => {
+        const content = `
+@app.route('/api/orders', methods=['GET', 'POST'])
+def orders(): pass
+`;
+        const result = await scanPythonAst('/src/app.py', content);
+        const expose = result.signals.find((s) => s.kind === 'expose');
+        expect(expose?.metadata).toMatchObject({ method: 'MULTI' });
+    });
+
+    it('@app.options도 expose 신호를 추출해야 한다', async () => {
+        const content = `
+@app.options('/api/cors')
+def cors_options(): pass
+`;
+        const result = await scanPythonAst('/src/app.py', content);
+        const expose = result.signals.find((s) => s.kind === 'expose');
+        expect(expose?.metadata).toMatchObject({ method: 'OPTIONS' });
+    });
+
     // ─── 변수 추적 (Phase 2 핵심 개선) ───────────────────────────────────────
 
     it('상수로 선언된 URL을 추적하여 call 신호를 추출해야 한다', async () => {
@@ -112,6 +132,35 @@ requests.delete('http://payment/cancel')
         expect(calls.length).toBeGreaterThanOrEqual(3);
     });
 
+    it('requests.request도 call 신호를 추출해야 한다', async () => {
+        const content = `requests.request('http://inventory-service/health')`;
+        const result = await scanPythonAst('/src/client.py', content);
+        const call = result.signals.find((s) => s.kind === 'call');
+        expect(call?.symbol).toBe('http://inventory-service/health');
+        expect(call?.metadata).toMatchObject({ method: 'REQUEST' });
+    });
+
+    it('positional 인수 없이 keyword 인수(url=...)만 있으면 call 신호를 생성하지 않아야 한다', async () => {
+        const content = `requests.get(url='http://inventory-service/health')`;
+        const result = await scanPythonAst('/src/client.py', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('f-string URL은 동적으로 간주하여 call 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+base = 'inventory-service'
+requests.get(f'http://{base}/health')
+`;
+        const result = await scanPythonAst('/src/client.py', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('concatenated string URL은 동적으로 간주하여 call 신호를 생성하지 않아야 한다', async () => {
+        const content = `requests.get('http://inventory-' 'service/health')`;
+        const result = await scanPythonAst('/src/client.py', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
     // ─── Kafka 패턴 ───────────────────────────────────────────────────────────
 
     it('@kafka_consumer(topic="topic")에서 consume 신호를 추출해야 한다 (Phase 2: confidence 0.9)', async () => {
@@ -128,6 +177,71 @@ def handle_payment(msg):
         expect(consume?.metadata).toMatchObject({ annotation: '@kafka_consumer' });
     });
 
+    it('@kafka_consumer(topic=TOPIC)에서 상수 토픽 식별자를 추적해야 한다', async () => {
+        const content = `
+TOPIC = 'payment.completed'
+@kafka_consumer(topic=TOPIC)
+def handle_payment(msg):
+    pass
+`;
+        const result = await scanPythonAst('/src/consumer.py', content);
+        const consume = result.signals.find((s) => s.kind === 'consume');
+        expect(consume?.symbol).toBe('payment.completed');
+    });
+
+    it('@kafka_consumer에서 topic 키워드가 없으면 consume 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+@kafka_consumer(group='order-group')
+def handle_payment(msg):
+    pass
+`;
+        const result = await scanPythonAst('/src/consumer.py', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('@kafka_consumer(**kwargs) 형태는 consume 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+kwargs = {"topic": "payment.completed"}
+@kafka_consumer(**kwargs)
+def handle_payment(msg):
+    pass
+`;
+        const result = await scanPythonAst('/src/consumer.py', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('call 형태가 아닌 decorator는 무시되어야 한다', async () => {
+        const content = `
+@simple_decorator
+def f():
+    pass
+`;
+        const result = await scanPythonAst('/src/decorators.py', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
+    it('지원하지 않는 flask/fastapi 메서드명은 expose 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+@app.custom('/api/orders')
+def custom_route():
+    pass
+`;
+        const result = await scanPythonAst('/src/app.py', content);
+        const exposes = result.signals.filter((s) => s.kind === 'expose');
+        expect(exposes).toHaveLength(0);
+    });
+
+    it('kafka_consumer(topic=build_topic()) 형태는 consume 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+@kafka_consumer(topic=build_topic())
+def handle(msg):
+    pass
+`;
+        const result = await scanPythonAst('/src/consumer.py', content);
+        const consumes = result.signals.filter((s) => s.kind === 'consume');
+        expect(consumes).toHaveLength(0);
+    });
+
     it('producer.send("topic", ...)에서 produce 신호를 추출해야 한다 (Phase 2: confidence 0.85)', async () => {
         const content = `producer.send('order.created', value=event)`;
         const result = await scanPythonAst('/src/publisher.py', content);
@@ -136,6 +250,13 @@ def handle_payment(msg):
         expect(produce?.symbol).toBe('order.created');
         expect(produce?.confidence).toBeCloseTo(0.85); // Phase 1: 0.7 → Phase 2: 0.85
         expect(produce?.metadata).toMatchObject({ client: 'KafkaProducer' });
+    });
+
+    it('대소문자 혼합 producer 객체명도 produce 신호를 추출해야 한다', async () => {
+        const content = `myProducer.send('order.created', value=event)`;
+        const result = await scanPythonAst('/src/publisher.py', content);
+        const produce = result.signals.find((s) => s.kind === 'produce');
+        expect(produce?.symbol).toBe('order.created');
     });
 
     // ─── 엣지 케이스 ─────────────────────────────────────────────────────────
@@ -169,5 +290,11 @@ def get_orders(): pass`;
 
         const expose = result.signals.find((s) => s.kind === 'expose');
         expect(expose?.lineStart).toBe(3);
+    });
+
+    it('파싱 실패 시 빈 결과를 반환해야 한다', async () => {
+        const content = `def broken(:`;
+        const result = await scanPythonAst('/src/broken.py', content);
+        expect(result.signals).toEqual([]);
     });
 });

@@ -419,6 +419,111 @@ describe('rebuildRollups (전체 리빌드)', () => {
         // activateGeneration은 호출되지 않아야 함 (BUILDING 상태 유지)
         expect(activateGeneration).not.toHaveBeenCalled();
     });
+
+    it('T12: full rebuild에서 방어 분기(미노출 endpoint/null confidence/null parent)를 처리해야 한다', async () => {
+        const { svcA, svcB, epB1, epB2, tableX, topicP, dbX, brokerM } = scenario;
+
+        const callRels = [
+            makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB2.id, confidence: 0.7 }), // self-expose -> skip
+            makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: null }), // confidence null
+        ];
+        const exposeRels = [
+            makeRelation({ relationType: 'expose', subjectObjectId: svcA.id, objectId: epB2.id }),
+            makeRelation({ relationType: 'expose', subjectObjectId: svcB.id, objectId: epB1.id }),
+        ];
+        const dependOnRels = [
+            makeRelation({ relationType: 'depend_on', subjectObjectId: svcA.id, objectId: svcA.id, confidence: 0.5 }), // self-loop -> skip
+        ];
+
+        const readJoined = [
+            { relation: makeRelation({ relationType: 'read', subjectObjectId: svcA.id, objectId: tableX.id, confidence: 0.8 }), tableParentId: null },
+            { relation: makeRelation({ relationType: 'read', subjectObjectId: svcA.id, objectId: tableX.id, confidence: null }), tableParentId: dbX.id },
+        ];
+        const produceJoined = [
+            { relation: makeRelation({ relationType: 'produce', subjectObjectId: svcA.id, objectId: topicP.id, confidence: 0.8 }), topicParentId: null },
+            { relation: makeRelation({ relationType: 'produce', subjectObjectId: svcA.id, objectId: topicP.id, confidence: null }), topicParentId: brokerM.id },
+        ];
+
+        const s2sRollup = [{
+            id: id('s2s-rollup'),
+            workspaceId: WORKSPACE_ID,
+            rollupLevel: 'SERVICE_TO_SERVICE',
+            relationType: 'call',
+            subjectObjectId: svcA.id,
+            objectId: svcB.id,
+            edgeWeight: 1,
+            confidence: 0.9,
+            generationVersion: 1,
+        }];
+
+        const selectResponses: Array<unknown[]> = [
+            callRels,      // call
+            exposeRels,    // expose
+            dependOnRels,  // depend_on
+            readJoined,    // read+join
+            [],            // write+join
+            produceJoined, // produce+join
+            [],            // consume+join
+            s2sRollup,     // D2D: S2S rollups
+            [],            // D2D: provenance
+            [              // D2D: affinities (low affinity 포함)
+                makeAffinity({ objectId: svcA.id, domainId: id('dom-order'), affinity: 0.9 }),
+                makeAffinity({ objectId: svcB.id, domainId: id('dom-payment'), affinity: 0.1 }),
+            ],
+            // graphStats 4 levels
+            [{ subjectObjectId: svcA.id, objectId: svcB.id }],
+            [],
+            [],
+            [],
+        ];
+
+        const { db, getInserted } = createTestDb(selectResponses);
+        await rebuildRollups(db, WORKSPACE_ID);
+
+        const allRows = getInserted().flatMap((i) => i.rows);
+        const s2s = allRows.filter((r) => r['rollupLevel'] === 'SERVICE_TO_SERVICE');
+        expect(s2s.length).toBeGreaterThan(0);
+    });
+
+    it('T13: D2D 계산 시 provenance의 baseRelationIds를 전달해야 한다', async () => {
+        const { svcA, svcB } = scenario;
+        const domA = id('dom-a');
+        const domB = id('dom-b');
+
+        const s2sRollup = [{
+            id: id('s2s-rollup-provenance'),
+            workspaceId: WORKSPACE_ID,
+            rollupLevel: 'SERVICE_TO_SERVICE',
+            relationType: 'call',
+            subjectObjectId: svcA.id,
+            objectId: svcB.id,
+            edgeWeight: 2,
+            confidence: 0.85,
+            generationVersion: 1,
+        }];
+        const s2sProv = [{ rollupId: id('s2s-rollup-provenance'), baseRelationId: id('rel-base-1') }];
+        const affs = [
+            makeAffinity({ objectId: svcA.id, domainId: domA, affinity: 0.9 }),
+            makeAffinity({ objectId: svcB.id, domainId: domB, affinity: 0.9 }),
+        ];
+
+        const selectResponses: Array<unknown[]> = [
+            [], [], [], // call, expose, depend_on
+            [], [],     // read, write
+            [], [],     // produce, consume
+            s2sRollup,  // D2D s2s
+            s2sProv,    // D2D provenance
+            affs,       // D2D affinities
+            [], [], [], [], // graphStats
+        ];
+
+        const { db, getInserted } = createTestDb(selectResponses);
+        await rebuildRollups(db, WORKSPACE_ID);
+
+        const insertedRows = getInserted().flatMap((i) => i.rows);
+        const d2d = insertedRows.find((r) => r['rollupLevel'] === 'DOMAIN_TO_DOMAIN');
+        expect(d2d).toBeDefined();
+    });
 });
 
 // ─── 증분 리빌드 테스트 ──────────────────────────────────────────────────────────
@@ -820,5 +925,116 @@ describe('incrementalRebuild (증분 리빌드)', () => {
 
         const s2dbRows = getInserted().flatMap((i) => i.rows).filter((r) => r['rollupLevel'] === 'SERVICE_TO_DATABASE');
         expect(s2dbRows.length).toBe(1);
+    });
+
+    it('T14: depend_on relation 승인도 S2S(+D2D 연쇄) 재계산 트리거여야 한다', async () => {
+        const { svcA, svcB } = scenario;
+        const dependOnRels = [
+            makeRelation({
+                relationType: 'depend_on',
+                subjectObjectId: svcA.id,
+                objectId: svcB.id,
+                confidence: 0.66,
+            }),
+        ];
+
+        const selectResponses: Array<unknown[]> = [
+            // S2S rebuild: call, depend_on, expose
+            [],
+            dependOnRels,
+            [],
+            // D2D rebuild
+            [],
+            // graphStats: S2S, D2D
+            [],
+            [],
+        ];
+
+        const { db, getInserted } = createTestDb(selectResponses);
+        const events: ChangeEvent[] = [
+            { type: 'RELATION_APPROVED', payload: { relationType: 'depend_on', subjectObjectId: svcA.id, objectId: svcB.id } },
+        ];
+
+        await incrementalRebuild(db, WORKSPACE_ID, events);
+
+        const s2sRows = getInserted().flatMap((i) => i.rows).filter((r) => r['rollupLevel'] === 'SERVICE_TO_SERVICE');
+        expect(s2sRows.length).toBeGreaterThan(0);
+        expect(s2sRows[0]!['relationType']).toBe('depend_on');
+    });
+
+    it('T15: 증분 graph stats에서 level rollup이 있으면 in/outDegree를 저장해야 한다', async () => {
+        const { svcA, svcB, epB1 } = scenario;
+        const callRels = [makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: 0.9 })];
+        const exposeRels = [makeRelation({ relationType: 'expose', subjectObjectId: svcB.id, objectId: epB1.id, confidence: 1 })];
+        const s2sRollupsForStats = [{ subjectObjectId: svcA.id, objectId: svcB.id }];
+
+        const selectResponses: Array<unknown[]> = [
+            // S2S rebuild: call, depend_on, expose
+            callRels,
+            [],
+            exposeRels,
+            // D2D rebuild (S2S rollup 조회)
+            [],
+            // graphStats: S2S, D2D
+            s2sRollupsForStats,
+            [],
+        ];
+
+        const { db, getInserted } = createTestDb(selectResponses);
+        const events: ChangeEvent[] = [
+            { type: 'RELATION_APPROVED', payload: { relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id } },
+        ];
+
+        await incrementalRebuild(db, WORKSPACE_ID, events);
+
+        const statsRows = getInserted()
+            .filter((i) => i.table === objectGraphStats)
+            .flatMap((i) => i.rows)
+            .filter((r) => r['rollupLevel'] === 'SERVICE_TO_SERVICE');
+        const a = statsRows.find((r) => r['objectId'] === svcA.id);
+        const b = statsRows.find((r) => r['objectId'] === svcB.id);
+        expect(a).toMatchObject({ outDegree: 1, inDegree: 0 });
+        expect(b).toMatchObject({ outDegree: 0, inDegree: 1 });
+    });
+
+    it('T16: RELATION_APPROVED(expose) 이벤트도 S2S/D2D 재계산을 유발해야 한다', async () => {
+        const { svcB, epB1, relations } = scenario;
+        const callRels = relations.filter((r) => r.relationType === 'call');
+        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+
+        const selectResponses: Array<unknown[]> = [
+            // S2S rebuild: call, depend_on, expose
+            callRels,
+            [],
+            exposeRels,
+            // D2D rebuild
+            [],
+            // graphStats: S2S, D2D
+            [],
+            [],
+        ];
+
+        const { db, getInserted } = createTestDb(selectResponses);
+        const events: ChangeEvent[] = [
+            { type: 'RELATION_APPROVED', payload: { relationType: 'expose', subjectObjectId: svcB.id, objectId: epB1.id } },
+        ];
+
+        await incrementalRebuild(db, WORKSPACE_ID, events);
+
+        const s2sRows = getInserted().flatMap((i) => i.rows).filter((r) => r['rollupLevel'] === 'SERVICE_TO_SERVICE');
+        expect(s2sRows.length).toBeGreaterThan(0);
+    });
+
+    it('T17: 영향 레벨이 없는 이벤트는 현재 generation을 그대로 반환해야 한다', async () => {
+        const { db } = createTestDb([]);
+        const version = await incrementalRebuild(
+            db,
+            WORKSPACE_ID,
+            [{ type: 'UNKNOWN_EVENT', payload: {} } as unknown as ChangeEvent],
+        );
+
+        expect(version).toBe(1);
+        expect(updateGenerationMeta).not.toHaveBeenCalled();
+        expect(invalidateCache).not.toHaveBeenCalled();
     });
 });

@@ -22,11 +22,11 @@ const PYTHON_PATTERNS: Pattern[] = [
         regex: /@(app|router)\.(route|get|post|put|delete|patch)\(\s*["']([^"']+)["']/,
         confidence: 0.8,
         extract: (m) => ({
-            symbol: m[3] ?? '',
+            symbol: m[3]!,
             metadata: {
-                method: m[2] === 'route' ? 'ANY' : (m[2] ?? '').toUpperCase(),
+                method: m[2] === 'route' ? 'ANY' : m[2]!.toUpperCase(),
                 framework: 'flask/fastapi',
-                via: m[1] ?? '',
+                via: m[1]!,
             },
         }),
     },
@@ -35,21 +35,21 @@ const PYTHON_PATTERNS: Pattern[] = [
         kind: 'call',
         regex: /\brequests\.(get|post|put|delete|patch|head)\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[2] ?? '', metadata: { client: 'requests', method: (m[1] ?? '').toUpperCase() } }),
+        extract: (m) => ({ symbol: m[2]!, metadata: { client: 'requests', method: m[1]!.toUpperCase() } }),
     },
     // Kafka 발행 — producer.send("topic", ...) / KafkaProducer
     {
         kind: 'produce',
         regex: /\b(?:producer|KafkaProducer\(\))\s*\.send\(\s*["']([^"']+)["']/,
         confidence: 0.7,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { client: 'KafkaProducer' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { client: 'KafkaProducer' } }),
     },
     // Kafka 수신 — @kafka_consumer(topic="topic")
     {
         kind: 'consume',
         regex: /@kafka_consumer\([^)]*topic\s*=\s*["']([^"']+)["']/,
         confidence: 0.8,
-        extract: (m) => ({ symbol: m[1] ?? '', metadata: { annotation: '@kafka_consumer' } }),
+        extract: (m) => ({ symbol: m[1]!, metadata: { annotation: '@kafka_consumer' } }),
     },
 ];
 
@@ -66,7 +66,7 @@ export function scanPython(filePath: string, content: string): FileScanResult {
     const signals: ExtractedSignal[] = [];
 
     for (let i = 0; i < lines.length; i++) {
-        const line = lines[i] ?? '';
+        const line = lines[i]!;
 
         for (const pattern of PYTHON_PATTERNS) {
             const match = line.match(pattern.regex);
