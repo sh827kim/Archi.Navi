@@ -86,6 +86,26 @@ await axios.post('http://notification-service/send', payload);
         expect(call?.symbol).toBe('http://notification-service/send');
     });
 
+    it('http-chain(.get/.post 등) 패턴에서 call 신호를 추출해야 한다', () => {
+        const content = `
+const res = httpClient.get('/internal/health');
+`;
+        const result = scanTypeScript('/src/httpChainClient.ts', content);
+
+        const call = result.signals.find((s) => s.kind === 'call');
+        expect(call?.symbol).toBe('/internal/health');
+        expect(call?.confidence).toBeCloseTo(0.6);
+        expect(call?.metadata).toMatchObject({ method: 'GET', client: 'http-chain' });
+    });
+
+    it('http-chain 패턴은 URL/경로가 아니면 매칭하지 않아야 한다', () => {
+        const content = `
+const value = myMap.get('cache-key');
+`;
+        const result = scanTypeScript('/src/cache.ts', content);
+        expect(result.signals).toHaveLength(0);
+    });
+
     // ─── 복합 / 엣지 케이스 ──────────────────────────────────────────────────
 
     it('여러 신호가 있는 파일에서 모두 추출해야 한다', () => {
@@ -118,6 +138,12 @@ app.get('/api/orders', async (req, res) => {
     it('.ts 파일은 language가 typescript여야 한다', () => {
         const content = `app.get('/api', (req, res) => {});`;
         const result = scanTypeScript('/src/index.ts', content);
+        expect(result.language).toBe('typescript');
+    });
+
+    it('.tsx 파일은 language가 typescript여야 한다', () => {
+        const content = `router.get('/api', () => <div />);`;
+        const result = scanTypeScript('/src/page.tsx', content);
         expect(result.language).toBe('typescript');
     });
 });

@@ -73,14 +73,6 @@ export function scanTypeScript(filePath: string, content: string): FileScanResul
             if (match) {
                 const extracted = pattern.extract(match);
 
-                // http-chain 패턴은 Express route와 중복될 수 있으므로 상위 패턴 우선
-                if (pattern.confidence === 0.6) {
-                    const alreadyMatched = signals.some(
-                        (s) => s.lineStart === i + 1 && s.kind === 'expose',
-                    );
-                    if (alreadyMatched) continue;
-                }
-
                 signals.push({
                     kind: pattern.kind,
                     symbol: extracted.symbol,

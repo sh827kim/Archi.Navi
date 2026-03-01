@@ -71,4 +71,43 @@ describe('buildRelationAssessmentPrompt', () => {
     // truncate 표시가 있어야 함
     expect(prompt).toContain('...');
   });
+
+  it('T4: evidence의 filePath/line/excerpt가 null이면 기본 표시를 사용해야 한다', () => {
+    const ctx = makeContext({
+      evidences: [
+        {
+          filePath: null,
+          lineStart: null,
+          lineEnd: null,
+          excerpt: null,
+          evidenceType: 'CONFIG',
+        },
+      ],
+    });
+    const prompt = buildRelationAssessmentPrompt(ctx);
+
+    expect(prompt).toContain('(경로 없음)');
+    expect(prompt).toContain('(내용 없음)');
+    expect(prompt).toContain('[CONFIG]');
+  });
+
+  it('T5: evidence excerpt 500자 이하는 원문이 유지되어야 한다', () => {
+    const excerpt = 'A'.repeat(500);
+    const ctx = makeContext({
+      evidences: [
+        {
+          filePath: 'src/test.ts',
+          lineStart: 1,
+          lineEnd: 2,
+          excerpt,
+          evidenceType: 'FILE',
+        },
+      ],
+    });
+    const prompt = buildRelationAssessmentPrompt(ctx);
+
+    expect(prompt).toContain(excerpt);
+    // 정확히 500자이면 truncate(...) 없어야 함
+    expect(prompt).not.toContain(`${excerpt}...`);
+  });
 });

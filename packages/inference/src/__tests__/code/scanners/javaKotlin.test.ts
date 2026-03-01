@@ -185,6 +185,18 @@ public void handlePayment(String message) {}
         expect(consume?.metadata).toMatchObject({ annotation: '@KafkaListener' });
     });
 
+    it('@KafkaListener 다중 토픽 배열에서 consume 신호를 모두 추출해야 한다', () => {
+        const content = `
+@KafkaListener(topics = {"order.created", "payment.completed"})
+public void handle(String message) {}
+`;
+        const result = scanJavaKotlin('/src/PaymentListener.java', content);
+        const consume = result.signals.filter((s) => s.kind === 'consume');
+        expect(consume).toHaveLength(2);
+        expect(consume.map((s) => s.symbol)).toContain('order.created');
+        expect(consume.map((s) => s.symbol)).toContain('payment.completed');
+    });
+
     // ─── JPA 패턴 ─────────────────────────────────────────────────────────────
 
     it('@Table(name = "table_name")에서 db_mapping 신호를 추출해야 한다', () => {
@@ -294,5 +306,30 @@ describe('scanMyBatisXml', () => {
         const symbols = dbReadSignals.map((s) => s.symbol);
         expect(symbols).toContain('orders');
         expect(symbols).toContain('order_items');
+    });
+
+    it('한 줄 태그(select/insert)가 닫히는 경우도 신호를 추출해야 한다', () => {
+        const content = `
+<mapper namespace="com.example.mapper.InlineMapper">
+  <select id="find">SELECT * FROM users</select>
+  <insert id="insert">INSERT INTO users (id, name) VALUES (#{id}, #{name})</insert>
+</mapper>
+`;
+        const result = scanMyBatisXml('/mapper/InlineMapper.xml', content);
+        const read = result.signals.filter((s) => s.kind === 'db_read');
+        const write = result.signals.filter((s) => s.kind === 'db_write');
+        expect(read.map((s) => s.symbol)).toContain('users');
+        expect(write.map((s) => s.symbol)).toContain('users');
+    });
+
+    it('namespace가 없으면 packageName 없이 결과를 반환해야 한다', () => {
+        const content = `
+<mapper>
+  <select id="find">SELECT * FROM users</select>
+</mapper>
+`;
+        const result = scanMyBatisXml('/mapper/NoNamespace.xml', content);
+        expect(result.packageName).toBeUndefined();
+        expect(result.signals.length).toBeGreaterThan(0);
     });
 });

@@ -61,6 +61,19 @@ function createMockDb(evidenceRows: Array<{
     return db as unknown as Parameters<typeof assembleEvidenceChain>[0];
 }
 
+function createFailingMockDb() {
+    const selectMock = vi.fn().mockImplementation(() => {
+        const chain = {
+            from: vi.fn().mockReturnThis(),
+            innerJoin: vi.fn().mockReturnThis(),
+            where: vi.fn().mockRejectedValue(new Error('db failure')),
+        };
+        return chain;
+    });
+
+    return { select: selectMock } as unknown as Parameters<typeof assembleEvidenceChain>[0];
+}
+
 // ─── 테스트용 QueryResponse 팩토리 ───────────────────────────────────────────
 
 function makeQueryResponse(overrides: Partial<QueryResponse['result']> = {}): QueryResponse {
@@ -277,6 +290,99 @@ describe('assembleEvidenceChain', () => {
         expect(chain.totalCount).toBeGreaterThanOrEqual(chain.items.length);
         expect(chain.truncated).toBe(chain.totalCount > chain.items.length);
     });
+
+    it('PATH_DISCOVERY의 paths 정보를 사용해 hop을 계산해야 한다', async () => {
+        const db = createMockDb();
+        const response = makeQueryResponse({
+            nodes: [
+                { id: 'order-service', type: 'service', name: 'order-service' },
+                { id: 'payment-service', type: 'service', name: 'payment-service' },
+                { id: 'inventory-service', type: 'service', name: 'inventory-service' },
+            ],
+            edges: [
+                {
+                    subjectId: 'order-service',
+                    objectId: 'payment-service',
+                    relationType: 'call',
+                    level: 'SERVICE_TO_SERVICE',
+                    edgeWeight: 1,
+                    confidence: 0.9,
+                    provenance: { rollupId: 'r1', baseRelationIds: [] },
+                },
+                {
+                    subjectId: 'payment-service',
+                    objectId: 'inventory-service',
+                    relationType: 'call',
+                    level: 'SERVICE_TO_SERVICE',
+                    edgeWeight: 1,
+                    confidence: 0.8,
+                    provenance: { rollupId: 'r2', baseRelationIds: [] },
+                },
+            ],
+            paths: [
+                { pathId: 'p1', nodeIds: ['order-service', 'payment-service', 'inventory-service'], score: 0.99 },
+            ],
+        });
+        response.queryType = 'PATH_DISCOVERY';
+
+        const chain = await assembleEvidenceChain(db, response);
+        const hop0 = chain.items.find((i) => i.targetId === 'payment-service');
+        const hop1 = chain.items.find((i) => i.targetId === 'inventory-service');
+        expect(hop0?.hop).toBe(0);
+        expect(hop1?.hop).toBe(1);
+    });
+
+    it('DB 조회 실패 시에도 롤업 evidence만으로 결과를 반환해야 한다', async () => {
+        const db = createFailingMockDb();
+        const response = makeQueryResponse();
+        const chain = await assembleEvidenceChain(db, response);
+
+        expect(chain.items.length).toBeGreaterThan(0);
+        expect(chain.items.every((item) => item.type === 'rollup')).toBe(true);
+    });
+
+    it('CONFIG/DB_SCHEMA evidenceType이 각각 config/db 타입으로 매핑되어야 한다', async () => {
+        const evidenceRow = {
+            id: 'ev-1',
+            workspaceId: 'ws-1',
+            evidenceType: 'CONFIG',
+            filePath: null,
+            lineStart: null,
+            lineEnd: null,
+            excerpt: 'spring.datasource.url=jdbc:mysql://db-host:3306/order_db',
+            uri: 'jdbc:mysql://db-host:3306/order_db',
+            metadata: {},
+            createdAt: new Date(),
+        };
+        const db = createMockDb([evidenceRow]);
+        const response = makeQueryResponse();
+        const chain = await assembleEvidenceChain(db, response);
+
+        const configItem = chain.items.find((i) => i.type === 'config');
+        expect(configItem).toBeDefined();
+        expect(configItem?.uri).toContain('jdbc:mysql://');
+    });
+
+    it('DB_SCHEMA evidenceType은 db 타입으로 매핑되어야 한다', async () => {
+        const evidenceRow = {
+            id: 'ev-1',
+            workspaceId: 'ws-1',
+            evidenceType: 'DB_SCHEMA',
+            filePath: null,
+            lineStart: null,
+            lineEnd: null,
+            excerpt: 'FK: orders.customer_id -> customers.id',
+            uri: null,
+            metadata: {},
+            createdAt: new Date(),
+        };
+        const db = createMockDb([evidenceRow]);
+        const response = makeQueryResponse();
+        const chain = await assembleEvidenceChain(db, response);
+
+        const dbItem = chain.items.find((i) => i.type === 'db');
+        expect(dbItem).toBeDefined();
+    });
 });
 
 // ─── formatEvidenceChain 테스트 ───────────────────────────────────────────────
@@ -474,5 +580,25 @@ describe('formatEvidenceChain', () => {
         const result = formatEvidenceChain(chain);
         expect(result).toContain('1. ');
         expect(result).toContain('2. ');
+    });
+
+    it('URI가 있는 항목은 URI 라인을 출력해야 한다', () => {
+        const chain = makeChain([
+            {
+                type: 'config',
+                sourceId: 'a',
+                sourceName: 'order-service',
+                targetId: 'b',
+                targetName: 'mysql-db',
+                relationType: 'read',
+                confidence: 0.8,
+                edgeWeight: 2,
+                hop: 0,
+                uri: 'jdbc:mysql://db-host:3306/order_db',
+                score: 1.6,
+            },
+        ]);
+        const result = formatEvidenceChain(chain);
+        expect(result).toContain('URI: jdbc:mysql://db-host:3306/order_db');
     });
 });

@@ -85,5 +85,37 @@ describe('findPaths', () => {
     expect(result.edges.map((e) => e.subjectId)).toContain('svc-a');
     expect(result.edges.map((e) => e.objectId)).toContain('svc-d');
   });
-});
 
+  it('maxHops를 초과하는 경로는 제외해야 한다', async () => {
+    const graph = new Graph({ multi: false, type: 'directed' });
+    ['svc-a', 'svc-b', 'svc-c', 'svc-d'].forEach((id) => graph.addNode(id));
+    graph.addDirectedEdgeWithKey('e-ab', 'svc-a', 'svc-b', { confidence: 0.8, edgeWeight: 1 });
+    graph.addDirectedEdgeWithKey('e-bc', 'svc-b', 'svc-c', { confidence: 0.8, edgeWeight: 1 });
+    graph.addDirectedEdgeWithKey('e-cd', 'svc-c', 'svc-d', { confidence: 0.8, edgeWeight: 1 });
+
+    const result = await findPaths(
+      graph,
+      { fromObjectId: 'svc-a', toObjectId: 'svc-d', maxHops: 2, topK: 3 },
+      scope,
+    );
+
+    expect(result.paths).toEqual([]);
+  });
+
+  it('사이클이 있어도 visited 기반으로 무한루프 없이 경로를 찾아야 한다', async () => {
+    const graph = new Graph({ multi: false, type: 'directed' });
+    ['svc-a', 'svc-b', 'svc-c'].forEach((id) => graph.addNode(id));
+    graph.addDirectedEdgeWithKey('e-ab', 'svc-a', 'svc-b', { confidence: 0.8, edgeWeight: 1 });
+    graph.addDirectedEdgeWithKey('e-ba', 'svc-b', 'svc-a', { confidence: 0.8, edgeWeight: 1 });
+    graph.addDirectedEdgeWithKey('e-bc', 'svc-b', 'svc-c', { confidence: 0.9, edgeWeight: 2 });
+
+    const result = await findPaths(
+      graph,
+      { fromObjectId: 'svc-a', toObjectId: 'svc-c', maxHops: 5, topK: 3 },
+      scope,
+    );
+
+    expect(result.paths?.length ?? 0).toBeGreaterThan(0);
+    expect(result.paths?.[0]?.nodeIds).toEqual(['svc-a', 'svc-b', 'svc-c']);
+  });
+});

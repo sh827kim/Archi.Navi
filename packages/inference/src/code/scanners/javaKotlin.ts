@@ -109,18 +109,14 @@ function extractPackageName(content: string): string | undefined {
 
 // ─── 다중 토픽 추출 ──────────────────────────────────────────────────────────
 
-/** @KafkaListener의 topics = {"t1", "t2", "t3"} 에서 모든 토픽을 추출 */
+/** @KafkaListener의 topics = {"t1", "t2", "t3"} (배열형)에서 모든 토픽을 추출 */
 function extractAllKafkaTopics(line: string): string[] {
     const topicsMatch = line.match(/@KafkaListener\([^)]*topics\s*=\s*(\{[^}]+\}|["'][^"']+["'])/);
     if (!topicsMatch) return [];
     const raw = topicsMatch[1] ?? '';
-    // {..} 배열인 경우 내부의 모든 문자열 추출
-    if (raw.startsWith('{')) {
-        return [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1] ?? '');
-    }
-    // 단일 문자열인 경우
-    const single = raw.match(/["']([^"']+)["']/);
-    return single?.[1] ? [single[1]] : [];
+    // 다중 토픽 배열만 여기서 처리, 단일 문자열은 일반 패턴 매칭으로 처리
+    if (!raw.startsWith('{')) return [];
+    return [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1] ?? '');
 }
 
 // ─── 라인별 스캔 ─────────────────────────────────────────────────────────────

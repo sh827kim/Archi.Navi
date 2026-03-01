@@ -114,6 +114,27 @@ spring:
     expect(result.datasource?.dbName).toBe('inventory_db');
   });
 
+  it('mssql JDBC URL은 sqlserver로 정규화해야 한다', () => {
+    const yaml = `
+spring:
+  datasource:
+    url: jdbc:mssql://mssql-host:1433/order_db
+`;
+    const result = parseApplicationYml('', yaml);
+    expect(result.datasource?.dbType).toBe('sqlserver');
+    expect(result.datasource?.port).toBe(1433);
+  });
+
+  it('알 수 없는 JDBC 타입은 unknown으로 파싱해야 한다', () => {
+    const yaml = `
+spring:
+  datasource:
+    url: jdbc:sqlite://localhost/test_db
+`;
+    const result = parseApplicationYml('', yaml);
+    expect(result.datasource?.dbType).toBe('unknown');
+  });
+
   // ─── Kafka topics 파싱 ───────────────────────────────────────────────────────
 
   it('topics가 배열 형식인 경우를 올바르게 파싱해야 한다', () => {
@@ -129,6 +150,18 @@ spring:
 `;
     const result = parseApplicationYml('', yaml);
     expect(result.kafka?.consumerTopics).toEqual(['payment.created', 'payment.completed']);
+  });
+
+  it('topics가 지원하지 않는 타입이면 빈 배열이어야 한다', () => {
+    const yaml = `
+spring:
+  kafka:
+    bootstrap-servers: kafka:9092
+    consumer:
+      topics: 12345
+`;
+    const result = parseApplicationYml('', yaml);
+    expect(result.kafka?.consumerTopics).toEqual([]);
   });
 
   it('listener.topics 경로도 지원해야 한다', () => {
@@ -212,6 +245,17 @@ spring:
     const result = parseApplicationYml('', yaml);
     // bootstrap-servers가 없으면 kafka 추론 불가
     expect(result.kafka).toBeNull();
+  });
+
+  it('datasource.url이 문자열이 아니면 datasource는 null이어야 한다', () => {
+    const yaml = `
+spring:
+  datasource:
+    url:
+      nested: true
+`;
+    const result = parseApplicationYml('/path', yaml);
+    expect(result.datasource).toBeNull();
   });
 
   it('filePath를 올바르게 보존해야 한다', () => {

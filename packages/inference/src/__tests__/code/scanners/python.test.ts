@@ -33,6 +33,16 @@ response = requests.post('http://notification-service/send', json=payload)
         expect(call?.metadata).toMatchObject({ method: 'POST' });
     });
 
+    it('requests.head에서 call 신호를 추출해야 한다', () => {
+        const content = `
+response = requests.head('http://inventory-service/health')
+`;
+        const result = scanPython('/src/health_client.py', content);
+        const call = result.signals.find((s) => s.kind === 'call');
+        expect(call?.symbol).toBe('http://inventory-service/health');
+        expect(call?.metadata).toMatchObject({ method: 'HEAD' });
+    });
+
     // ─── API 노출 패턴 ────────────────────────────────────────────────────────
 
     it('@app.route에서 expose 신호를 추출해야 한다', () => {
