@@ -20,6 +20,7 @@ import {
     domainCandidates,
     objectRelations,
     objectRollups,
+    objectRollupProvenances,
 } from '@archi-navi/db';
 import type { QueryParams, QueryResponse, ObjectType, RelationType } from '@archi-navi/shared';
 import { OBJECT_TYPES, RELATION_TYPES } from '@archi-navi/shared';
@@ -262,6 +263,29 @@ async function summarizeSingleDomain(
         confidence: r.confidence ?? 0,
     }));
 
+    const externalRollupIds = externalRollupRows.map((r) => r.id);
+    const externalProvenanceRows = externalRollupIds.length > 0
+        ? await db
+            .select({
+                rollupId: objectRollupProvenances.rollupId,
+                baseRelationId: objectRollupProvenances.baseRelationId,
+            })
+            .from(objectRollupProvenances)
+            .where(
+                and(
+                    eq(objectRollupProvenances.workspaceId, workspaceId),
+                    eq(objectRollupProvenances.generationVersion, generationVersion),
+                    inArray(objectRollupProvenances.rollupId, externalRollupIds),
+                ),
+            )
+        : [];
+    const baseRelationIdsByRollupId = new Map<string, string[]>();
+    for (const row of externalProvenanceRows) {
+        const existing = baseRelationIdsByRollupId.get(row.rollupId) ?? [];
+        existing.push(row.baseRelationId);
+        baseRelationIdsByRollupId.set(row.rollupId, existing);
+    }
+
     // ─── 결과 조립 ────────────────────────────────────────────────────────────
 
     const summaryData: DomainSummaryData = {
@@ -298,7 +322,7 @@ async function summarizeSingleDomain(
             level: 'DOMAIN_TO_DOMAIN' as const,
             edgeWeight: r.edgeWeight,
             confidence: r.confidence ?? 0,
-            provenance: { rollupId: r.id, baseRelationIds: [] },
+            provenance: { rollupId: r.id, baseRelationIds: baseRelationIdsByRollupId.get(r.id) ?? [] },
         }));
 
     return { nodes, edges, summary: { ...summaryData } };

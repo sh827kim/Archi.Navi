@@ -2,9 +2,9 @@
  * Rollup 그래프 데이터 조회
  * DB에서 object_rollups를 읽어 그래프 탐색에 필요한 데이터를 제공
  */
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
-import { objectRollups, objectRelations } from '@archi-navi/db';
+import { objectRollups, objectRollupProvenances, objectRelations } from '@archi-navi/db';
 import type { RollupLevel } from '@archi-navi/shared';
 
 /**
@@ -16,7 +16,7 @@ export async function getRollupEdges(
   generationVersion: number,
   rollupLevel: RollupLevel,
 ) {
-  return db
+  const edges = await db
     .select()
     .from(objectRollups)
     .where(
@@ -26,6 +26,37 @@ export async function getRollupEdges(
         eq(objectRollups.rollupLevel, rollupLevel),
       ),
     );
+
+  if (edges.length === 0) return [];
+
+  const provenanceRows = await db
+    .select({
+      rollupId: objectRollupProvenances.rollupId,
+      baseRelationId: objectRollupProvenances.baseRelationId,
+    })
+    .from(objectRollupProvenances)
+    .where(
+      and(
+        eq(objectRollupProvenances.workspaceId, workspaceId),
+        eq(objectRollupProvenances.generationVersion, generationVersion),
+        inArray(
+          objectRollupProvenances.rollupId,
+          edges.map((edge) => edge.id),
+        ),
+      ),
+    );
+
+  const baseRelationIdsByRollupId = new Map<string, string[]>();
+  for (const row of provenanceRows) {
+    const existing = baseRelationIdsByRollupId.get(row.rollupId) ?? [];
+    existing.push(row.baseRelationId);
+    baseRelationIdsByRollupId.set(row.rollupId, existing);
+  }
+
+  return edges.map((edge) => ({
+    ...edge,
+    baseRelationIds: baseRelationIdsByRollupId.get(edge.id) ?? [],
+  }));
 }
 
 /**

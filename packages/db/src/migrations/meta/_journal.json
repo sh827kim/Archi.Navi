@@ -15,6 +15,13 @@
       "when": 1771726927739,
       "tag": "0001_rare_mentor",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1772352000000,
+      "tag": "0002_broad_provenance",
+      "breakpoints": true
     }
   ]
 }

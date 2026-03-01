@@ -3,7 +3,7 @@
  * object_rollups, rollup_generations, object_graph_stats
  */
 import { bigint, index, integer, jsonb, pgTable, real, text, timestamp, uuid } from 'drizzle-orm/pg-core';
-import { workspaces, objects } from './core';
+import { workspaces, objects, objectRelations } from './core';
 
 // Materialized Roll-up 결과
 export const objectRollups = pgTable(
@@ -52,6 +52,29 @@ export const objectRollups = pgTable(
       table.rollupLevel,
       table.relationType,
     ),
+  ],
+);
+
+// Rollup provenance (rollup edge -> base object_relations)
+export const objectRollupProvenances = pgTable(
+  'object_rollup_provenances',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    generationVersion: bigint('generation_version', { mode: 'number' }).notNull(),
+    rollupId: uuid('rollup_id')
+      .notNull()
+      .references(() => objectRollups.id, { onDelete: 'cascade' }),
+    baseRelationId: uuid('base_relation_id')
+      .notNull()
+      .references(() => objectRelations.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    index('ix_rollup_prov_rollup').on(table.workspaceId, table.generationVersion, table.rollupId),
+    index('ix_rollup_prov_base').on(table.workspaceId, table.generationVersion, table.baseRelationId),
   ],
 );
 

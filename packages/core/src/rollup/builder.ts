@@ -7,12 +7,68 @@
  * 3. SERVICE_TO_BROKER (produce/consume + parent → service-to-broker)
  * 4. DOMAIN_TO_DOMAIN (SERVICE_TO_SERVICE + affinities → domain-to-domain)
  */
-import { eq, and, or, inArray, sql } from 'drizzle-orm';
+import { eq, and, or, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
-import { objectRelations, objects, objectRollups, objectDomainAffinities, objectGraphStats } from '@archi-navi/db';
+import {
+  objectRelations,
+  objects,
+  objectRollups,
+  objectRollupProvenances,
+  objectDomainAffinities,
+  objectGraphStats,
+} from '@archi-navi/db';
+import { generateId } from '@archi-navi/shared';
 import { createNewGeneration, activateGeneration, getActiveGeneration, updateGenerationMeta } from './generationManager';
 import { invalidateCache } from '../graph-index/index';
 import type { ChangeEvent, AffectedScope, AffectedRollupLevel } from './types';
+
+interface RollupInsertInput {
+  rollupLevel: string;
+  relationType: string;
+  subjectObjectId: string;
+  objectId: string;
+  edgeWeight: number;
+  confidence: number | null;
+  baseRelationIds: string[];
+}
+
+async function insertRollupsWithProvenance(
+  db: DbClient,
+  workspaceId: string,
+  generationVersion: number,
+  inputs: RollupInsertInput[],
+): Promise<void> {
+  if (inputs.length === 0) return;
+
+  const rollupRows = inputs.map((input) => ({
+    id: generateId(),
+    workspaceId,
+    rollupLevel: input.rollupLevel,
+    relationType: input.relationType,
+    subjectObjectId: input.subjectObjectId,
+    objectId: input.objectId,
+    edgeWeight: input.edgeWeight,
+    confidence: input.confidence,
+    generationVersion,
+  }));
+
+  await db.insert(objectRollups).values(rollupRows);
+
+  const provenanceRows = rollupRows.flatMap((rollupRow, idx) => {
+    const baseRelationIds = [...new Set(inputs[idx]?.baseRelationIds ?? [])];
+    return baseRelationIds.map((baseRelationId) => ({
+      id: generateId(),
+      workspaceId,
+      generationVersion,
+      rollupId: rollupRow.id,
+      baseRelationId,
+    }));
+  });
+
+  if (provenanceRows.length > 0) {
+    await db.insert(objectRollupProvenances).values(provenanceRows);
+  }
+}
 
 /**
  * 전체 Rollup 재빌드
@@ -97,7 +153,10 @@ async function buildServiceToService(
   }
 
   // A --call--> E, E --expose--> B → A --call--> B 집계
-  const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+  const rollupMap = new Map<
+    string,
+    { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+  >();
 
   for (const call of callRelations) {
     const callerServiceId = call.subjectObjectId;
@@ -107,33 +166,35 @@ async function buildServiceToService(
     if (!exposingServiceId || callerServiceId === exposingServiceId) continue;
 
     const key = `${callerServiceId}|${exposingServiceId}`;
-    const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+    const existing = rollupMap.get(key) ?? {
+      edgeWeight: 0,
+      confidences: [],
+      baseRelationIds: new Set<string>(),
+    };
     existing.edgeWeight += 1;
     if (call.confidence != null) existing.confidences.push(call.confidence);
+    existing.baseRelationIds.add(call.id);
     rollupMap.set(key, existing);
   }
 
-  // rollup 저장
-  const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+  const rollups = [...rollupMap.entries()].map(
+    ([key, { edgeWeight, confidences, baseRelationIds }]) => {
     const [subjectObjectId, objectId] = key.split('|') as [string, string];
     const confidence = confidences.length > 0
       ? confidences.reduce((a, b) => a + b, 0) / confidences.length
       : null;
     return {
-      workspaceId,
       rollupLevel: 'SERVICE_TO_SERVICE',
       relationType: 'call',
       subjectObjectId,
       objectId,
       edgeWeight,
       confidence,
-      generationVersion,
+      baseRelationIds: [...baseRelationIds],
     };
   });
 
-  if (rollups.length > 0) {
-    await db.insert(objectRollups).values(rollups);
-  }
+  await insertRollupsWithProvenance(db, workspaceId, generationVersion, rollups);
 }
 
 /**
@@ -162,37 +223,43 @@ async function buildServiceToDatabase(
         ),
       );
 
-    const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+    const rollupMap = new Map<
+      string,
+      { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+    >();
 
     for (const { relation, tableParentId } of relations) {
       if (!tableParentId) continue;
       const key = `${relation.subjectObjectId}|${tableParentId}`;
-      const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+      const existing = rollupMap.get(key) ?? {
+        edgeWeight: 0,
+        confidences: [],
+        baseRelationIds: new Set<string>(),
+      };
       existing.edgeWeight += 1;
       if (relation.confidence != null) existing.confidences.push(relation.confidence);
+      existing.baseRelationIds.add(relation.id);
       rollupMap.set(key, existing);
     }
 
-    const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+    const rollups = [...rollupMap.entries()].map(
+      ([key, { edgeWeight, confidences, baseRelationIds }]) => {
       const [subjectObjectId, objectId] = key.split('|') as [string, string];
       const confidence = confidences.length > 0
         ? confidences.reduce((a, b) => a + b, 0) / confidences.length
         : null;
       return {
-        workspaceId,
         rollupLevel: 'SERVICE_TO_DATABASE',
         relationType: relType,
         subjectObjectId,
         objectId,
         edgeWeight,
         confidence,
-        generationVersion,
+        baseRelationIds: [...baseRelationIds],
       };
     });
 
-    if (rollups.length > 0) {
-      await db.insert(objectRollups).values(rollups);
-    }
+    await insertRollupsWithProvenance(db, workspaceId, generationVersion, rollups);
   }
 }
 
@@ -222,37 +289,43 @@ async function buildServiceToBroker(
         ),
       );
 
-    const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+    const rollupMap = new Map<
+      string,
+      { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+    >();
 
     for (const { relation, topicParentId } of relations) {
       if (!topicParentId) continue;
       const key = `${relation.subjectObjectId}|${topicParentId}`;
-      const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+      const existing = rollupMap.get(key) ?? {
+        edgeWeight: 0,
+        confidences: [],
+        baseRelationIds: new Set<string>(),
+      };
       existing.edgeWeight += 1;
       if (relation.confidence != null) existing.confidences.push(relation.confidence);
+      existing.baseRelationIds.add(relation.id);
       rollupMap.set(key, existing);
     }
 
-    const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+    const rollups = [...rollupMap.entries()].map(
+      ([key, { edgeWeight, confidences, baseRelationIds }]) => {
       const [subjectObjectId, objectId] = key.split('|') as [string, string];
       const confidence = confidences.length > 0
         ? confidences.reduce((a, b) => a + b, 0) / confidences.length
         : null;
       return {
-        workspaceId,
         rollupLevel: 'SERVICE_TO_BROKER',
         relationType: relType,
         subjectObjectId,
         objectId,
         edgeWeight,
         confidence,
-        generationVersion,
+        baseRelationIds: [...baseRelationIds],
       };
     });
 
-    if (rollups.length > 0) {
-      await db.insert(objectRollups).values(rollups);
-    }
+    await insertRollupsWithProvenance(db, workspaceId, generationVersion, rollups);
   }
 }
 
@@ -280,6 +353,32 @@ async function buildDomainToDomain(
     );
 
   if (s2sRollups.length === 0) return;
+
+  const s2sRollupIds = s2sRollups
+    .map((r) => r.id)
+    .filter((id): id is string => typeof id === 'string' && id.length > 0);
+  const s2sProvenanceRows =
+    s2sRollupIds.length > 0
+      ? await db
+          .select({
+            rollupId: objectRollupProvenances.rollupId,
+            baseRelationId: objectRollupProvenances.baseRelationId,
+          })
+          .from(objectRollupProvenances)
+          .where(
+            and(
+              eq(objectRollupProvenances.workspaceId, workspaceId),
+              eq(objectRollupProvenances.generationVersion, generationVersion),
+              inArray(objectRollupProvenances.rollupId, s2sRollupIds),
+            ),
+          )
+      : [];
+  const baseRelationIdsByS2SRollup = new Map<string, string[]>();
+  for (const row of s2sProvenanceRows) {
+    const existing = baseRelationIdsByS2SRollup.get(row.rollupId) ?? [];
+    existing.push(row.baseRelationId);
+    baseRelationIdsByS2SRollup.set(row.rollupId, existing);
+  }
 
   // 모든 서비스의 도메인 affinity 조회
   const allServiceIds = [...new Set([
@@ -309,7 +408,12 @@ async function buildDomainToDomain(
   // DOMAIN_TO_DOMAIN 집계
   const d2dMap = new Map<
     string,
-    { weightedSum: number; weightedConfSum: number; denominator: number }
+    {
+      weightedSum: number;
+      weightedConfSum: number;
+      denominator: number;
+      baseRelationIds: Set<string>;
+    }
   >();
 
   for (const rollup of s2sRollups) {
@@ -325,33 +429,42 @@ async function buildDomainToDomain(
         if (ax < 0.2 || by < 0.2) continue; // min_membership_threshold
 
         const key = `${domainX}|${domainY}`;
-        const existing = d2dMap.get(key) ?? { weightedSum: 0, weightedConfSum: 0, denominator: 0 };
+        const existing =
+          d2dMap.get(key) ??
+          {
+            weightedSum: 0,
+            weightedConfSum: 0,
+            denominator: 0,
+            baseRelationIds: new Set<string>(),
+          };
         const contribution = wAb * ax * by;
         existing.weightedSum += contribution;
         existing.weightedConfSum += cAb * contribution;
         existing.denominator += contribution;
+        for (const baseRelationId of baseRelationIdsByS2SRollup.get(rollup.id) ?? []) {
+          existing.baseRelationIds.add(baseRelationId);
+        }
         d2dMap.set(key, existing);
       }
     }
   }
 
-  const rollups = [...d2dMap.entries()].map(([key, { weightedSum, weightedConfSum, denominator }]) => {
-    const [domainX, domainY] = key.split('|') as [string, string];
-    return {
-      workspaceId,
-      rollupLevel: 'DOMAIN_TO_DOMAIN',
-      relationType: 'call',
-      subjectObjectId: domainX,
-      objectId: domainY,
-      edgeWeight: Math.round(weightedSum),
-      confidence: denominator > 0 ? weightedConfSum / denominator : null,
-      generationVersion,
-    };
-  });
+  const rollups = [...d2dMap.entries()].map(
+    ([key, { weightedSum, weightedConfSum, denominator, baseRelationIds }]) => {
+      const [domainX, domainY] = key.split('|') as [string, string];
+      return {
+        rollupLevel: 'DOMAIN_TO_DOMAIN' as const,
+        relationType: 'call',
+        subjectObjectId: domainX,
+        objectId: domainY,
+        edgeWeight: Math.round(weightedSum),
+        confidence: denominator > 0 ? weightedConfSum / denominator : null,
+        baseRelationIds: [...baseRelationIds],
+      };
+    },
+  );
 
-  if (rollups.length > 0) {
-    await db.insert(objectRollups).values(rollups);
-  }
+  await insertRollupsWithProvenance(db, workspaceId, generationVersion, rollups);
 }
 
 /**
@@ -680,7 +793,10 @@ async function incrementalBuildS2S(
   }
 
   // S2S 집계 (affected 관련만 필터)
-  const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+  const rollupMap = new Map<
+    string,
+    { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+  >();
   for (const call of callRelations) {
     const callerServiceId = call.subjectObjectId;
     const exposingServiceId = endpointToService.get(call.objectId);
@@ -690,32 +806,35 @@ async function incrementalBuildS2S(
     if (!affectedServiceIds.has(callerServiceId) && !affectedServiceIds.has(exposingServiceId)) continue;
 
     const key = `${callerServiceId}|${exposingServiceId}`;
-    const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+    const existing = rollupMap.get(key) ?? {
+      edgeWeight: 0,
+      confidences: [],
+      baseRelationIds: new Set<string>(),
+    };
     existing.edgeWeight += 1;
     if (call.confidence != null) existing.confidences.push(call.confidence);
+    existing.baseRelationIds.add(call.id);
     rollupMap.set(key, existing);
   }
 
-  const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+  const rollups = [...rollupMap.entries()].map(
+    ([key, { edgeWeight, confidences, baseRelationIds }]) => {
     const [subjectObjectId, objectId] = key.split('|') as [string, string];
     const confidence = confidences.length > 0
       ? confidences.reduce((a, b) => a + b, 0) / confidences.length
       : null;
     return {
-      workspaceId,
       rollupLevel: 'SERVICE_TO_SERVICE',
       relationType: 'call',
       subjectObjectId,
       objectId,
       edgeWeight,
       confidence,
-      generationVersion,
+      baseRelationIds: [...baseRelationIds],
     };
   });
 
-  if (rollups.length > 0) {
-    await db.insert(objectRollups).values(rollups);
-  }
+  await insertRollupsWithProvenance(db, workspaceId, generationVersion, rollups);
 }
 
 /**
@@ -760,36 +879,42 @@ async function incrementalBuildS2DB(
         ),
       );
 
-    const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+    const rollupMap = new Map<
+      string,
+      { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+    >();
     for (const { relation, tableParentId } of relations) {
       if (!tableParentId) continue;
       const key = `${relation.subjectObjectId}|${tableParentId}`;
-      const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+      const existing = rollupMap.get(key) ?? {
+        edgeWeight: 0,
+        confidences: [],
+        baseRelationIds: new Set<string>(),
+      };
       existing.edgeWeight += 1;
       if (relation.confidence != null) existing.confidences.push(relation.confidence);
+      existing.baseRelationIds.add(relation.id);
       rollupMap.set(key, existing);
     }
 
-    const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+    const rollups = [...rollupMap.entries()].map(
+      ([key, { edgeWeight, confidences, baseRelationIds }]) => {
       const [subjectObjectId, objectId] = key.split('|') as [string, string];
       const confidence = confidences.length > 0
         ? confidences.reduce((a, b) => a + b, 0) / confidences.length
         : null;
       return {
-        workspaceId,
         rollupLevel: 'SERVICE_TO_DATABASE',
         relationType: relType,
         subjectObjectId,
         objectId,
         edgeWeight,
         confidence,
-        generationVersion,
+        baseRelationIds: [...baseRelationIds],
       };
     });
 
-    if (rollups.length > 0) {
-      await db.insert(objectRollups).values(rollups);
-    }
+    await insertRollupsWithProvenance(db, workspaceId, generationVersion, rollups);
   }
 }
 
@@ -833,36 +958,42 @@ async function incrementalBuildS2B(
         ),
       );
 
-    const rollupMap = new Map<string, { edgeWeight: number; confidences: number[] }>();
+    const rollupMap = new Map<
+      string,
+      { edgeWeight: number; confidences: number[]; baseRelationIds: Set<string> }
+    >();
     for (const { relation, topicParentId } of relations) {
       if (!topicParentId) continue;
       const key = `${relation.subjectObjectId}|${topicParentId}`;
-      const existing = rollupMap.get(key) ?? { edgeWeight: 0, confidences: [] };
+      const existing = rollupMap.get(key) ?? {
+        edgeWeight: 0,
+        confidences: [],
+        baseRelationIds: new Set<string>(),
+      };
       existing.edgeWeight += 1;
       if (relation.confidence != null) existing.confidences.push(relation.confidence);
+      existing.baseRelationIds.add(relation.id);
       rollupMap.set(key, existing);
     }
 
-    const rollups = [...rollupMap.entries()].map(([key, { edgeWeight, confidences }]) => {
+    const rollups = [...rollupMap.entries()].map(
+      ([key, { edgeWeight, confidences, baseRelationIds }]) => {
       const [subjectObjectId, objectId] = key.split('|') as [string, string];
       const confidence = confidences.length > 0
         ? confidences.reduce((a, b) => a + b, 0) / confidences.length
         : null;
       return {
-        workspaceId,
         rollupLevel: 'SERVICE_TO_BROKER',
         relationType: relType,
         subjectObjectId,
         objectId,
         edgeWeight,
         confidence,
-        generationVersion,
+        baseRelationIds: [...baseRelationIds],
       };
     });
 
-    if (rollups.length > 0) {
-      await db.insert(objectRollups).values(rollups);
-    }
+    await insertRollupsWithProvenance(db, workspaceId, generationVersion, rollups);
   }
 }
 

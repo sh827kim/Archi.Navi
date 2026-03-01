@@ -21,7 +21,7 @@ function createMockDbAllDomains(domainRows: unknown[]) {
     return { select: selectMock } as unknown as Parameters<typeof summarizeDomain>[0];
 }
 
-/** domainId + 멤버 있는 케이스 (6회 조회) */
+/** domainId + 멤버 있는 케이스 (최대 7회 조회, provenance 포함) */
 function createMockDbWithMembers({
     domainRow,
     affinityRows = [],
@@ -29,6 +29,7 @@ function createMockDbWithMembers({
     candidateRows = [],
     relationRows = [],
     rollupRows = [],
+    rollupProvenanceRows = [],
 }: {
     domainRow: unknown;
     affinityRows?: unknown[];
@@ -36,6 +37,7 @@ function createMockDbWithMembers({
     candidateRows?: unknown[];
     relationRows?: unknown[];
     rollupRows?: unknown[];
+    rollupProvenanceRows?: unknown[];
 }) {
     const selectMock = vi.fn()
         .mockReturnValueOnce(makeChain([domainRow]))    // 1. objects (domain)
@@ -43,7 +45,8 @@ function createMockDbWithMembers({
         .mockReturnValueOnce(makeChain(memberRows))     // 3. objects (members)
         .mockReturnValueOnce(makeChain(candidateRows))  // 4. domain_candidates
         .mockReturnValueOnce(makeChain(relationRows))   // 5. object_relations
-        .mockReturnValueOnce(makeChain(rollupRows));    // 6. object_rollups
+        .mockReturnValueOnce(makeChain(rollupRows))     // 6. object_rollups
+        .mockReturnValueOnce(makeChain(rollupProvenanceRows)); // 7. object_rollup_provenances
 
     return { select: selectMock } as unknown as Parameters<typeof summarizeDomain>[0];
 }

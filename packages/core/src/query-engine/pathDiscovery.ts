@@ -129,7 +129,9 @@ function buildEdgeFromKey(graph: Graph, edgeKey: string): QueryResponse['result'
     confidence: (attrs['confidence'] as number) ?? 0,
     provenance: {
       rollupId: (attrs['rollupId'] as string) ?? '',
-      baseRelationIds: [],
+      baseRelationIds: Array.isArray(attrs['baseRelationIds'])
+        ? (attrs['baseRelationIds'] as string[])
+        : [],
     },
   };
 }

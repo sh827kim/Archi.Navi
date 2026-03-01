@@ -67,7 +67,12 @@ export async function discoverUsage(
           level: 'SERVICE_TO_SERVICE' as const,
           edgeWeight: (attrs['edgeWeight'] as number) ?? 1,
           confidence: (attrs['confidence'] as number) ?? 0,
-          provenance: { rollupId: (attrs['rollupId'] as string) ?? '', baseRelationIds: [] },
+          provenance: {
+            rollupId: (attrs['rollupId'] as string) ?? '',
+            baseRelationIds: Array.isArray(attrs['baseRelationIds'])
+              ? (attrs['baseRelationIds'] as string[])
+              : [],
+          },
         };
       }),
       // Atomic relation edges

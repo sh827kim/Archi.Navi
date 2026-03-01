@@ -67,6 +67,7 @@ export async function getOrBuildGraph(
         relationType: edge.relationType,
         edgeWeight: edge.edgeWeight,
         confidence: edge.confidence ?? 0,
+        baseRelationIds: edge.baseRelationIds ?? [],
       });
     }
   }

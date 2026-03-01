@@ -14,7 +14,7 @@
 | Rollup Engine | ✅ | 4단계 rollup + generation 관리 + seed 후 재빌드 |
 | Relation 추론 파이프라인 | ⚠️ | `/api/inference/run`으로 config/code/db 실행 가능, 운영 오케스트레이션/증거 승격은 보강 필요 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
-| AI Reasoning | ⚠️ | Evidence Assembler/Answer Composer 연동 완료, baseRelation provenance 강화 필요 |
+| AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 문서-실행 예제 정합성 | ⚠️ | 2026-03-01 기준 주요 문서 정리 중, 일부 운영 가이드는 추가 동기화 필요 |
 
 ---
@@ -73,8 +73,8 @@
 
 ### 2.2 Evidence-first 체인 강화
 
-- ⚠️ 관계 후보 승인 시 evidence 승격(`relation_candidate_evidences -> relation_evidences`) 미구현
-- ⚠️ rollup/query 응답의 `baseRelationIds` provenance 강화 필요
+- ✅ 관계 후보 승인 시 evidence 승격(`relation_candidate_evidences -> relation_evidences`) 구현 완료
+- ✅ rollup/query 응답의 `baseRelationIds` provenance 저장/조회 구현 완료
 
 ### 2.3 설정 반영
 
@@ -107,4 +107,3 @@
 - `anavi rebuild-rollup --workspace <id> [--incremental]`
 - `anavi export --workspace <id> --format <json|dot> --output <path>`
 - `anavi snapshot <save|restore> ...`
-
