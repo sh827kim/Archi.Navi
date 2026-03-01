@@ -15,7 +15,6 @@ import {
   EyeOff,
   Check,
   Bot,
-  Wand2,
   FlaskConical,
   Database,
   RefreshCw,
@@ -66,7 +65,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@archi-navi/ui';
-import { SetupWizard } from '@/components/workspace/setup-wizard';
 import { useWorkspace } from '@/contexts/workspace-context';
 
 /* ─── 타입 ─── */
@@ -120,8 +118,8 @@ function readLocalStorageNumber(
    루트 컴포넌트
    ════════════════════════════════════════════════════════════════ */
 export function SettingsClient() {
-  const [wizardOpen, setWizardOpen] = useState(false);
   const { workspaceId } = useWorkspace();
+  if (!workspaceId) return null;
 
   return (
     <div className="p-6 max-w-3xl space-y-4">
@@ -163,25 +161,6 @@ export function SettingsClient() {
             </CardContent>
           </Card>
 
-          {/* 셋업 마법사 */}
-          <Card className="glass-card">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Wand2 className="h-4 w-4 text-primary" />
-                워크스페이스 셋업 마법사
-              </CardTitle>
-              <CardDescription>
-                레이어 프리셋 적용 및 초기 설정을 단계별로 진행합니다
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Button onClick={() => setWizardOpen(true)} className="w-full sm:w-auto">
-                <Wand2 className="h-4 w-4 mr-2" />
-                마법사 열기
-              </Button>
-            </CardContent>
-          </Card>
-
           {/* 개발자 도구 */}
           <DevTools workspaceId={workspaceId} />
         </TabsContent>
@@ -211,16 +190,6 @@ export function SettingsClient() {
           <ScanSettings workspaceId={workspaceId} />
         </TabsContent>
       </Tabs>
-
-      {/* 셋업 마법사 다이얼로그 */}
-      <SetupWizard
-        open={wizardOpen}
-        onOpenChange={setWizardOpen}
-        onComplete={() => {
-          setWizardOpen(false);
-          toast.success('워크스페이스 초기 설정 완료!');
-        }}
-      />
     </div>
   );
 }

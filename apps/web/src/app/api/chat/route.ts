@@ -12,6 +12,7 @@ import {
   createUIMessageStreamResponse,
 } from 'ai';
 import type { UIMessage } from 'ai';
+import { NextResponse } from 'next/server';
 import { openai, createOpenAI } from '@ai-sdk/openai';
 import { anthropic, createAnthropic } from '@ai-sdk/anthropic';
 import { google, createGoogleGenerativeAI } from '@ai-sdk/google';
@@ -28,7 +29,6 @@ import {
   buildDomainAnswerComposerPrompt,
 } from '@archi-navi/core';
 import type { QueryScope } from '@archi-navi/shared';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 /** AI 제공자 선택 (헤더 오버라이드 → 환경변수 fallback) */
 function getModel(req: Request): LanguageModel {
@@ -272,10 +272,13 @@ function createMockChatResponse(content: string): Response {
 export async function POST(req: Request) {
   try {
     // useChat hook은 UIMessage[] 형식으로 전송 — ModelMessage[]로 변환 필요
-    const { messages, workspaceId = DEFAULT_WORKSPACE_ID } = (await req.json()) as {
+    const { messages, workspaceId } = (await req.json()) as {
       messages: UIMessage[];
       workspaceId?: string;
     };
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
 
     // 마지막 사용자 메시지 텍스트 추출 (UIMessage의 parts 배열에서)
     const lastUserMessage = [...messages]

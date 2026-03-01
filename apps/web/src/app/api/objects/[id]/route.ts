@@ -6,7 +6,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, objects, objectRelations } from '@archi-navi/db';
 import { eq, and, or } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 /* ── GET: Object + 인바운드/아웃바운드 관계 + 자식 ── */
 export async function GET(
@@ -16,7 +15,10 @@ export async function GET(
     try {
         const { id } = await params;
         const { searchParams } = req.nextUrl;
-        const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+        const workspaceId = searchParams.get('workspaceId');
+        if (!workspaceId) {
+            return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+        }
 
         const db = await getDb();
 
@@ -121,7 +123,10 @@ export async function PATCH(
             description?: string | null;
         };
 
-        const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+        const workspaceId = body.workspaceId;
+        if (!workspaceId) {
+            return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+        }
         const db = await getDb();
 
         // 업데이트할 필드 동적 구성
@@ -154,7 +159,10 @@ export async function DELETE(
     try {
         const { id } = await params;
         const { searchParams } = req.nextUrl;
-        const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+        const workspaceId = searchParams.get('workspaceId');
+        if (!workspaceId) {
+            return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+        }
 
         const db = await getDb();
         await db

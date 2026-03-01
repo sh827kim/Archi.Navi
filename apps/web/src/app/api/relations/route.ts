@@ -6,12 +6,15 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@archi-navi/db';
 import { objectRelations } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
-import { generateId, DEFAULT_WORKSPACE_ID } from '@archi-navi/shared'; 
+import { generateId } from '@archi-navi/shared';
 
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
-    const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const status = searchParams.get('status') ?? 'APPROVED';
 
     const db = await getDb();
@@ -42,7 +45,10 @@ export async function POST(req: NextRequest) {
       confidence?: number;
     };
 
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const id = generateId();
     const db = await getDb();
 

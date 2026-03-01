@@ -1,10 +1,9 @@
 /**
  * Next.js Instrumentation Hook (Node.js runtime 전용)
- * 서버 시작 시 한 번 실행 — DB 마이그레이션 + 기본 워크스페이스 생성
+ * 서버 시작 시 한 번 실행 — DB 마이그레이션
  */
 import { resolve } from 'path';
 import { existsSync } from 'fs';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 function resolveMigrationsFolder(): string {
   if (process.env['MIGRATIONS_FOLDER']) {
@@ -23,7 +22,7 @@ function resolveMigrationsFolder(): string {
     }
   }
 
-  return candidates[0];
+  return candidates[0]!;
 }
 
 /** 마이그레이션 폴더 — env > monorepo 경로 > 설치된 @archi-navi/db 경로 */
@@ -41,26 +40,5 @@ export async function register() {
     console.log('[archi-navi] DB 마이그레이션 완료');
   } catch (e) {
     console.warn('[archi-navi] 마이그레이션 경고 (이미 적용됨):', (e as Error).message);
-  }
-
-  // 기본 워크스페이스 생성 (없으면)
-  try {
-    const { workspaces } = await import('@archi-navi/db');
-    const { eq } = await import('drizzle-orm');
-
-    const existing = await db
-      .select()
-      .from(workspaces)
-      .where(eq(workspaces.id, DEFAULT_WORKSPACE_ID));
-
-    if (existing.length === 0) {
-      await db.insert(workspaces).values({
-        id: DEFAULT_WORKSPACE_ID,
-        name: 'Default Workspace',
-      });
-      console.log('[archi-navi] 기본 워크스페이스 생성 완료');
-    }
-  } catch (e) {
-    console.warn('[archi-navi] 워크스페이스 초기화 경고:', (e as Error).message);
   }
 }

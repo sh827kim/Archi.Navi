@@ -14,6 +14,7 @@ import {
   GitBranch,
   CheckCircle,
   Settings,
+  FolderOpen,
   Search,
   MessageSquare,
   RefreshCw,
@@ -22,6 +23,7 @@ import { cn } from '@archi-navi/ui';
 
 /** 네비게이션 아이템 */
 const NAV_ITEMS = [
+  { label: '워크스페이스', href: '/workspaces', icon: FolderOpen, group: '페이지' },
   { label: '아키텍처 뷰', href: '/architecture', icon: Layers, group: '페이지' },
   { label: 'Object Mapping', href: '/mapping-graph', icon: GitGraph, group: '페이지' },
   { label: '서비스 목록', href: '/services', icon: Server, group: '페이지' },

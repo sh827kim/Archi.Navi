@@ -4,13 +4,15 @@
  */
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
 import { PGlite } from '@electric-sql/pglite';
-import { mkdirSync } from 'fs';
+import { existsSync, mkdirSync, rmSync } from 'fs';
 import * as schema from './schema/index';
 
 /** DB 클라이언트 타입 */
 export type DbClient = ReturnType<typeof createPgliteClient>;
 
 let _client: DbClient | null = null;
+let _pg: PGlite | null = null;
+let _shutdownHookInstalled = false;
 
 /**
  * PGlite 로컬 DB 클라이언트 생성
@@ -19,6 +21,64 @@ let _client: DbClient | null = null;
 export function createPgliteClient(dataDir?: string) {
   const pg = new PGlite(dataDir ?? 'memory://');
   return drizzlePglite(pg, { schema });
+}
+
+async function closePg(): Promise<void> {
+  if (!_pg) return;
+  try {
+    await _pg.close();
+  } finally {
+    _pg = null;
+    _client = null;
+  }
+}
+
+function installShutdownHook(): void {
+  if (_shutdownHookInstalled) return;
+  _shutdownHookInstalled = true;
+
+  process.once('SIGINT', () => {
+    void closePg();
+  });
+  process.once('SIGTERM', () => {
+    void closePg();
+  });
+  process.once('beforeExit', () => {
+    void closePg();
+  });
+}
+
+function isPgliteAbortedError(error: unknown): boolean {
+  const messages: string[] = [];
+  let current: unknown = error;
+  let depth = 0;
+
+  while (current && depth < 8) {
+    if (current instanceof Error) {
+      messages.push(current.message);
+      current = (current as { cause?: unknown }).cause;
+    } else {
+      messages.push(String(current));
+      break;
+    }
+    depth += 1;
+  }
+
+  const message = messages.join(' | ');
+  return message.includes('Aborted()') || message.includes('RuntimeError: Aborted');
+}
+
+function resetCorruptedDataDir(dataDir: string): boolean {
+  if (dataDir.startsWith('memory://')) return false;
+  if (!existsSync(dataDir)) return false;
+
+  try {
+    rmSync(dataDir, { recursive: true, force: true });
+    mkdirSync(dataDir, { recursive: true });
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -38,6 +98,23 @@ export async function getDb(): Promise<DbClient> {
     // 이미 존재하면 무시
   }
 
-  _client = createPgliteClient(pgliteDataDir);
-  return _client;
+  try {
+    _pg = new PGlite(pgliteDataDir);
+    _client = drizzlePglite(_pg, { schema });
+    await _client.execute('select 1');
+    installShutdownHook();
+    return _client;
+  } catch (error) {
+    await closePg();
+    if (!isPgliteAbortedError(error) || !resetCorruptedDataDir(pgliteDataDir)) {
+      throw error;
+    }
+
+    console.warn('[archi-navi/db] PGlite 데이터 손상 감지, 데이터 디렉터리 재생성');
+    _pg = new PGlite(pgliteDataDir);
+    _client = drizzlePglite(_pg, { schema });
+    await _client.execute('select 1');
+    installShutdownHook();
+    return _client;
+  }
 }

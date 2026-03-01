@@ -11,7 +11,6 @@ import { google, createGoogleGenerativeAI } from '@ai-sdk/google';
 import type { LanguageModel } from 'ai';
 import { z } from 'zod';
 import { getDb } from '@archi-navi/db';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 import {
   filterCandidates,
   buildRelationAssessmentPrompt,
@@ -112,9 +111,22 @@ export async function POST(req: Request) {
 
     const db = await getDb();
     const generateFn = createGenerateFn(modelInfo.model, modelInfo.modelName);
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'workspaceId is required',
+          },
+        },
+        { status: 400 },
+      );
+    }
 
     const result = await filterCandidates(db, generateFn, {
-      workspaceId: body.workspaceId ?? DEFAULT_WORKSPACE_ID,
+      workspaceId,
       ...(body.candidateIds ? { candidateIds: body.candidateIds } : {}),
       ...(body.batchSize ? { batchSize: body.batchSize } : {}),
     });

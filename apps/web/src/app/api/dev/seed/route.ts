@@ -23,7 +23,7 @@ import {
   objectTags,
 } from '@archi-navi/db';
 import { eq, and, inArray } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_ID, generateId } from '@archi-navi/shared';
+import { generateId } from '@archi-navi/shared';
 import { rebuildRollups } from '@archi-navi/core';
 
 /* ─── 레이어 정의 ─── */
@@ -177,7 +177,10 @@ const SAMPLE_ATOMIC_RELATIONS = [
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as { workspaceId?: string };
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const db = await getDb();
 
     let layersInserted = 0;

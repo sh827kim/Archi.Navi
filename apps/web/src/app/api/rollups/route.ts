@@ -1,4 +1,3 @@
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 /**
  * GET /api/rollups — Roll-up 그래프 데이터 조회 (React Flow용 변환)
  * POST /api/rollups — Roll-up 재빌드 실행
@@ -12,7 +11,10 @@ import { getActiveGeneration, rebuildRollups } from '@archi-navi/core';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
-    const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const level = searchParams.get('level') ?? 'SERVICE_TO_SERVICE';
 
     const db = await getDb();
@@ -96,7 +98,10 @@ export async function GET(req: NextRequest) {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as { workspaceId?: string };
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
 
     const db = await getDb();
     const generationVersion = await rebuildRollups(db, workspaceId);

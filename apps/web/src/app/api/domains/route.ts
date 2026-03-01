@@ -1,4 +1,3 @@
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 /**
  * GET /api/domains — 도메인 목록 조회
  */
@@ -10,7 +9,10 @@ import { eq, and } from 'drizzle-orm';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
-    const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
 
     const db = await getDb();
     const domains = await db

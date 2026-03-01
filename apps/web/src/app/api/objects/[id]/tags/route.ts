@@ -6,7 +6,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, tags, objectTags } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 /* ── GET: Object에 달린 태그 목록 ── */
 export async function GET(
@@ -16,7 +15,10 @@ export async function GET(
   try {
     const { id: objectId } = await params;
     const { searchParams } = req.nextUrl;
-    const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
 
     const db = await getDb();
 
@@ -55,7 +57,10 @@ export async function POST(
       tagId?: string;
     };
 
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     if (!body.tagId) {
       return NextResponse.json({ error: 'tagId는 필수입니다' }, { status: 400 });
     }
@@ -91,7 +96,10 @@ export async function DELETE(
       tagId?: string;
     };
 
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     if (!body.tagId) {
       return NextResponse.json({ error: 'tagId는 필수입니다' }, { status: 400 });
     }

@@ -5,7 +5,6 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
 
 const DEFAULT_PROFILE_NAME = 'default';
@@ -128,7 +127,10 @@ function clamp(value: number, min: number, max: number): number {
 
 export async function GET(req: NextRequest) {
   try {
-    const workspaceId = req.nextUrl.searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const profile = await ensureDefaultProfile(workspaceId);
     return NextResponse.json(toPublicProfile(profile));
   } catch (error) {
@@ -140,7 +142,10 @@ export async function GET(req: NextRequest) {
 export async function PUT(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as UpdateProfileBody;
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const db = await getDb();
 
     const current = await ensureDefaultProfile(workspaceId);

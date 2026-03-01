@@ -6,12 +6,14 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, objectLayerAssignments } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_ID, generateId } from '@archi-navi/shared';
+import { generateId } from '@archi-navi/shared';
 
 export async function GET(req: NextRequest) {
   try {
-    const workspaceId =
-      req.nextUrl.searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
 
     const db = await getDb();
     const rows = await db
@@ -34,7 +36,10 @@ export async function POST(req: NextRequest) {
       layerId: string;
     };
 
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const id = generateId();
     const db = await getDb();
 
@@ -66,11 +71,13 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const objectId = req.nextUrl.searchParams.get('objectId');
-    const workspaceId =
-      req.nextUrl.searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = req.nextUrl.searchParams.get('workspaceId');
 
     if (!objectId) {
       return NextResponse.json({ error: 'objectId is required' }, { status: 400 });
+    }
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
     }
 
     const db = await getDb();

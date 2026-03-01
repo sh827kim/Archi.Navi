@@ -911,6 +911,12 @@ export function RelationsClient() {
 
   /* ─── 데이터 로드 ─── */
   const loadData = useCallback(async () => {
+    if (!workspaceId) {
+      setRelations([]);
+      setAllObjects([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const [relRes, objRes] = await Promise.all([
@@ -995,6 +1001,10 @@ export function RelationsClient() {
       setDeleting(false);
     }
   };
+
+  if (!workspaceId) {
+    return null;
+  }
 
   return (
     <div className="flex h-full">

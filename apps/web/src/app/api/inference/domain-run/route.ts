@@ -5,7 +5,6 @@
  */
 import { and, eq } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
 import { runDiscovery, runSeedBasedInference } from '@archi-navi/inference';
 import { getActiveGeneration } from '@archi-navi/core';
@@ -59,7 +58,10 @@ async function resolveProfileId(
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as DomainRunBody;
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const track = normalizeTrack(body.track);
     const profileId = await resolveProfileId(workspaceId, body.profileId);
     const db = await getDb();

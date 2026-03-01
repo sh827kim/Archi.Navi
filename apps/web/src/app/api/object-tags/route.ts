@@ -7,12 +7,13 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, tags, objectTags } from '@archi-navi/db';
 import { asc, eq } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 export async function GET(req: NextRequest) {
   try {
-    const workspaceId =
-      req.nextUrl.searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = req.nextUrl.searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
 
     const db = await getDb();
 

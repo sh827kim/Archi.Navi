@@ -5,13 +5,15 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, tags, objectTags } from '@archi-navi/db';
 import { eq, sql } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 /* ── GET: 태그 목록 + 각 태그의 Object 수 ── */
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
-    const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const db = await getDb();
 
     // 태그 목록과 사용 개수를 LEFT JOIN으로 조회
@@ -48,7 +50,10 @@ export async function POST(req: NextRequest) {
       color?: string;
     };
 
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const name = body.name?.trim();
     if (!name) {
       return NextResponse.json({ error: '태그 이름은 필수입니다' }, { status: 400 });

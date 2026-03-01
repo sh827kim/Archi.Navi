@@ -1,4 +1,3 @@
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 /**
  * GET /api/inference/candidates — 관계 후보 목록 조회
  * POST /api/inference/run — 추론 실행
@@ -11,7 +10,10 @@ import { eq, and } from 'drizzle-orm';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
-    const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const status = searchParams.get('status') ?? 'PENDING';
 
     const db = await getDb();

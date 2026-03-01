@@ -16,7 +16,6 @@ import { eq, and } from 'drizzle-orm';
 import {
   generateId,
   buildPath,
-  DEFAULT_WORKSPACE_ID,
 } from '@archi-navi/shared';
 import type {
   ScanMode,
@@ -226,7 +225,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: '잘못된 요청 형식' }, { status: 400 });
   }
 
-  const workspaceId = body.workspaceId || DEFAULT_WORKSPACE_ID;
+  const workspaceId = body.workspaceId?.trim();
+  if (!workspaceId) {
+    return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+  }
   const mode: ScanMode = body.mode || 'local';
   const target = body.target;
   const dryRun = body.dryRun ?? false;

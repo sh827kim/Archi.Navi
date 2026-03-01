@@ -1,7 +1,6 @@
 /**
  * GET /api/inference/domain-candidates — 도메인 후보 목록 조회
  */
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@archi-navi/db';
 import { domainCandidates, objects } from '@archi-navi/db';
@@ -10,7 +9,10 @@ import { eq, and } from 'drizzle-orm';
 export async function GET(req: NextRequest) {
   try {
     const { searchParams } = req.nextUrl;
-    const workspaceId = searchParams.get('workspaceId') ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = searchParams.get('workspaceId');
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const status = searchParams.get('status') ?? 'PENDING';
 
     const db = await getDb();

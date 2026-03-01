@@ -617,6 +617,11 @@ export function ObjectListClient() {
 
   /* ─── 데이터 로드 ─── */
   const loadObjects = useCallback(async () => {
+    if (!workspaceId) {
+      setObjects([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const res = await fetch(`/api/objects?workspaceId=${workspaceId}`);
@@ -788,6 +793,10 @@ export function ObjectListClient() {
       </div>
     );
   };
+
+  if (!workspaceId) {
+    return null;
+  }
 
   return (
     <div className="p-6 space-y-4">

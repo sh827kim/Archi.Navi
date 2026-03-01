@@ -9,7 +9,6 @@ import { existsSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { and, eq } from 'drizzle-orm';
 import { getDb, objects } from '@archi-navi/db';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 import {
   inferRelationsFromConfig,
   extractCodeSignals,
@@ -55,7 +54,10 @@ function normalizeModes(input?: string[]): InferenceMode[] {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as RunInferenceRequest;
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
     const modes = normalizeModes(body.modes);
     const modeSet = new Set<InferenceMode>(modes);
 
@@ -252,4 +254,3 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
-

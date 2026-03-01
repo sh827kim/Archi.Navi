@@ -15,7 +15,6 @@
 
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 /* ─── 타입 ─── */
 export interface WorkspaceItem {
@@ -26,13 +25,13 @@ export interface WorkspaceItem {
 
 interface WorkspaceState {
   /* 상태 */
-  workspaceId: string;
-  workspaceName: string;
+  workspaceId: string | null;
+  workspaceName: string | null;
   workspaces: WorkspaceItem[];
 
   /* 액션 */
   /** 워크스페이스 전환 — workspaceName을 목록에서 자동 갱신 */
-  setWorkspace: (id: string) => void;
+  setWorkspace: (id: string | null) => void;
   /** API 결과로 목록 전체 교체 + 현재 workspaceName 갱신 */
   setWorkspaces: (workspaces: WorkspaceItem[]) => void;
   /** /api/workspaces 를 호출해 목록 새로고침 */
@@ -44,28 +43,38 @@ export const useWorkspaceStore = create<WorkspaceState>()(
   persist(
     (set, get) => ({
       /* ── 초기값 ── */
-      workspaceId: DEFAULT_WORKSPACE_ID,
-      workspaceName: 'Default Workspace',
+      workspaceId: null,
+      workspaceName: null,
       workspaces: [],
 
       /* ── 워크스페이스 전환 ── */
       setWorkspace: (id) => {
+        if (!id) {
+          set({
+            workspaceId: null,
+            workspaceName: null,
+          });
+          return;
+        }
+
         const found = get().workspaces.find((w) => w.id === id);
         set({
           workspaceId: id,
-          workspaceName: found?.name ?? 'Default Workspace',
+          workspaceName: found?.name ?? null,
         });
       },
 
       /* ── 목록 갱신 (API 결과 반영) ── */
       setWorkspaces: (workspaces) => {
         const currentId = get().workspaceId;
-        const found = workspaces.find((w) => w.id === currentId);
+        const found = currentId
+          ? workspaces.find((w) => w.id === currentId)
+          : null;
         set({
           workspaces,
-          // 현재 ID가 목록에 없으면 첫 번째 워크스페이스로 폴백
-          workspaceId: found ? currentId : (workspaces[0]?.id ?? DEFAULT_WORKSPACE_ID),
-          workspaceName: found?.name ?? workspaces[0]?.name ?? 'Default Workspace',
+          // 현재 ID가 목록에 없으면 미선택 상태로 전환 (implicit default 제거)
+          workspaceId: found ? currentId : null,
+          workspaceName: found?.name ?? null,
         });
       },
 
@@ -77,12 +86,14 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
           const data = (await res.json()) as WorkspaceItem[];
           const currentId = get().workspaceId;
-          const found = data.find((w) => w.id === currentId);
+          const found = currentId
+            ? data.find((w) => w.id === currentId)
+            : null;
 
           set({
             workspaces: data,
-            workspaceId: found ? currentId : (data[0]?.id ?? DEFAULT_WORKSPACE_ID),
-            workspaceName: found?.name ?? data[0]?.name ?? 'Default Workspace',
+            workspaceId: found ? currentId : null,
+            workspaceName: found?.name ?? null,
           });
         } catch {
           console.error('[WorkspaceStore] 워크스페이스 목록 로드 실패');

@@ -16,12 +16,14 @@ import {
   rollupGenerations,
 } from '@archi-navi/db';
 import { eq, sql } from 'drizzle-orm';
-import { DEFAULT_WORKSPACE_ID } from '@archi-navi/shared';
 
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json().catch(() => ({}))) as { workspaceId?: string };
-    const workspaceId = body.workspaceId ?? DEFAULT_WORKSPACE_ID;
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
+    }
 
     const db = await getDb();
 
