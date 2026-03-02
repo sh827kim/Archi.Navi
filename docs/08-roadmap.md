@@ -173,15 +173,13 @@
   - 기존 증분 처리 해시/중복 방지 로직과 통합
   - 단위 테스트 보강: unique/index/FK 중복 방지 케이스 추가
 
-### 3-7. Object Mapping 3D 렌더러 전환
-- **목표 라이브러리:** `3d-force-graph`
-- **목표:**
-  - 대규모 그래프 탐색성 개선(회전/줌/깊이 분리)
-  - 기존 핵심 기능(레벨 전환, Roll-down, 허브 토글) 동등성 유지
-- **전환 전략:**
-  - 데이터 어댑터 분리 후 2D(D3)/3D 병행 제공
-  - feature flag 또는 뷰 토글로 점진 전환
-- **참조:** `local-only-docs/plans/2026-03-01-object-mapping-3d-force-graph-plan.md`
+### ✅ 3-7. Object Mapping 3D 렌더러 전환 (완료)
+- **구현 완료:**
+  - `3d-force-graph` 기반 3D 렌더러(`rollup-graph-3d.tsx`) 추가
+  - Object Mapping 렌더러를 3D 단일 모드로 전환(2D 선택 UI 제거)
+  - 기존 핵심 동작(레벨 전환, Domain-first drill-down, Roll-down 패널, Hub 토글) 상태 흐름 유지
+  - WebGL 미지원 환경 fallback 메시지 제공
+  - e2e 보강: 3D 기본 렌더링 시나리오 추가
 
 ---
 
@@ -200,6 +198,7 @@
 | DOMAIN_SUMMARY | `docs/04-query-engine.md` §4 DOMAIN_SUMMARY |
 | 증분 리빌드 | `docs/05-rollup-and-graph.md` §4 Incremental Rebuild |
 | DB 추론 확장(3-6) | `docs/11-db-inference-index-unique-spec.md` |
+| 3D 렌더러 전환(3-7) | `docs/12-object-mapping-3d-renderer-spec.md` |
 | Hub 처리 | `docs/archive/ArchiNavi_대규모_그래프_성능_전략_v1.md` §2 |
 | 프로그레시브 렌더링 | `docs/archive/ArchiNavi_대규모_그래프_성능_전략_v1.md` §5 |
 | Domain-first | `docs/05-rollup-and-graph.md` §6 Navigation Strategy |

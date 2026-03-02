@@ -289,6 +289,16 @@ const defaultOptions = {
 };
 ```
 
+### 9.4 Object Mapping 3D 렌더러
+
+Object Mapping은 3D(`3d-force-graph`) 단일 렌더러를 사용한다.
+
+| 항목 | 정책 |
+|------|------|
+| 렌더러 | `3D(Force)` 단일 |
+| 2D 렌더러 | UI에서 제거 |
+| 호환성 | WebGL 미지원 환경은 3D fallback 메시지 표시 |
+
 ---
 
 ## 10. Navigation 전략
