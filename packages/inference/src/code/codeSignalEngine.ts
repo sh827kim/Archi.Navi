@@ -72,16 +72,15 @@ export async function extractCodeSignalsWithEngine(
     if (shouldProbeRegexFallback(result)) {
       try {
         const regexResult = await extractCodeSignals(db, baseOptions);
-        if (regexResult.signalCount > result.signalCount) {
-          return {
-            ...regexResult,
-            engineRequested,
-            engineUsed: 'regex',
-            fallbackUsed: true,
-            warning:
-              'AST 결과가 무신호(0 signal)로 감지되어 Regex fallback 결과를 사용했습니다.',
-          };
-        }
+        // extractCodeSignals는 저장을 수행하므로 probe 실행 시 결과 엔진을 regex로 일치시킨다.
+        return {
+          ...regexResult,
+          engineRequested,
+          engineUsed: 'regex',
+          fallbackUsed: true,
+          warning:
+            'AST 결과가 무신호(0 signal)로 감지되어 Regex fallback 결과를 사용했습니다.',
+        };
       } catch {
         // AST 무신호 상황의 보조 probe 실패는 치명 오류로 승격하지 않고 AST 결과를 유지한다.
       }
