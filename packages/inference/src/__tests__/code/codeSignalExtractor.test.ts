@@ -200,6 +200,36 @@ def orders():
         expect(edges).toHaveLength(2);
     });
 
+    it('forceRescan 재처리 시 기존 evidence를 정리하고 최신 증거만 유지해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        const filePath = join(srcDir, 'Controller.java');
+        writeFileSync(filePath, `@GetMapping("/api/orders")\npublic class C {}`);
+
+        await extractCodeSignals(db, { workspaceId, repoRoot: tempDir });
+        const firstEvidences = await db
+            .select()
+            .from(evidences)
+            .where(eq(evidences.workspaceId, workspaceId));
+        expect(firstEvidences).toHaveLength(1);
+
+        await extractCodeSignals(db, { workspaceId, repoRoot: tempDir, forceRescan: true });
+        const secondEvidences = await db
+            .select()
+            .from(evidences)
+            .where(eq(evidences.workspaceId, workspaceId));
+        const secondEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+
+        expect(secondEvidences).toHaveLength(1);
+        expect(secondEdges).toHaveLength(1);
+        expect(secondEdges[0]?.evidenceId).toBe(secondEvidences[0]?.id);
+    });
+
     // ─── evidence 타입 확인 ────────────────────────────────────────────────────
 
     it('evidence가 FILE 타입으로 저장되어야 한다', async () => {

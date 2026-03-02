@@ -392,6 +392,9 @@ function ObjectDetailSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="overflow-y-auto">
         <SheetHeader className="pr-8">
+          <SheetTitle className="sr-only">
+            {detail ? `${detail.displayName ?? detail.name} 상세 정보` : 'Object 상세 정보'}
+          </SheetTitle>
           {detail && config && (
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-lg shrink-0" style={{ backgroundColor: `${config.color}20` }}>

@@ -17,6 +17,7 @@ const STOP_WORDS = new Set([
     'controller', 'repository', 'repo', 'impl', 'base', 'utils', 'util',
     'helper', 'module', 'component', 'provider', 'factory', 'adapter',
     'gateway', 'proxy', 'hub', 'node', 'cluster', 'discovered',
+    'db', 'database', 'table', 'tables', 'topic', 'broker', 'kafka',
     'svc', 'ms', 'be', 'fe', 'web', 'core', 'common', 'shared',
     'main', 'default', 'new', 'old', 'v1', 'v2', 'v3',
 ]);
@@ -70,7 +71,10 @@ export function extractLabelCandidates(
     if (totalCount === 0) return [];
 
     return [...freq.entries()]
-        .sort(([, a], [, b]) => b - a)
+        .sort(([ta, a], [tb, b]) => {
+            if (b !== a) return b - a;
+            return ta.localeCompare(tb);
+        })
         .slice(0, topN)
         .map(([text, count]) => ({
             text,

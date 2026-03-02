@@ -18,3 +18,5 @@
 - [08-progressive-rendering-spec.md](./08-progressive-rendering-spec.md)
 - [09-domain-first-navigation-spec.md](./09-domain-first-navigation-spec.md)
 - [10-incremental-inference-spec.md](./10-incremental-inference-spec.md)
+- [11-ast-default-code-signal-spec.md](./11-ast-default-code-signal-spec.md)
+- [12-ast-regex-hybrid-code-signal-spec.md](./12-ast-regex-hybrid-code-signal-spec.md)

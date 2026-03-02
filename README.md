@@ -325,6 +325,8 @@ Relations are stored at the atomic level; Roll-up views are derived via material
 | [docs/spec/08-progressive-rendering-spec.md](./docs/spec/08-progressive-rendering-spec.md) | Progressive rendering spec |
 | [docs/spec/09-domain-first-navigation-spec.md](./docs/spec/09-domain-first-navigation-spec.md) | Domain-first navigation spec |
 | [docs/spec/10-incremental-inference-spec.md](./docs/spec/10-incremental-inference-spec.md) | Incremental inference spec |
+| [docs/spec/11-ast-default-code-signal-spec.md](./docs/spec/11-ast-default-code-signal-spec.md) | AST default code signal spec |
+| [docs/spec/12-ast-regex-hybrid-code-signal-spec.md](./docs/spec/12-ast-regex-hybrid-code-signal-spec.md) | AST + Regex hybrid code signal spec |
 
 ---
 

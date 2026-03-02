@@ -7,7 +7,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname } from 'path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -55,6 +55,10 @@ export interface CodeSignalOptions {
     workspaceId: string;
     /** 탐색 대상 리포 루트 경로 */
     repoRoot: string;
+    /** true면 SHA256 동일 파일도 강제로 재처리 */
+    forceRescan?: boolean;
+    /** 지정 시 해당 파일 경로들만 추출 대상으로 제한 */
+    targetFilePaths?: string[];
 }
 
 /** extractCodeSignals 반환 결과 */
@@ -67,6 +71,10 @@ export interface CodeSignalResult {
     signalCount: number;
     /** SHA256 미변경으로 스킵된 파일 수 */
     skippedCount: number;
+    /** 스캐너/파서 오류로 파일 단위 스킵된 수 (주로 AST 모드에서 사용) */
+    scanErrorCount?: number;
+    /** 스캐너/파서 오류가 발생한 파일 경로 목록 (주로 AST 모드에서 사용) */
+    scanErrorFilePaths?: string[];
 }
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
@@ -185,12 +193,57 @@ interface ProcessFileContext {
     workspaceId: string;
     repoRoot: string;
     allServices: { id: string; name: string }[];
+    forceRescan: boolean;
 }
 
 interface ProcessFileResult {
     skipped: boolean;
     isNew: boolean;
     signalCount: number;
+}
+
+async function deleteArtifactEdgesAndEvidences(
+    db: DbClient,
+    workspaceId: string,
+    artifactId: string,
+) {
+    const existingEdgeRows = await db
+        .select({ evidenceId: codeCallEdges.evidenceId })
+        .from(codeCallEdges)
+        .where(
+            and(
+                eq(codeCallEdges.workspaceId, workspaceId),
+                eq(codeCallEdges.callerArtifactId, artifactId),
+            ),
+        );
+
+    await db
+        .delete(codeCallEdges)
+        .where(
+            and(
+                eq(codeCallEdges.workspaceId, workspaceId),
+                eq(codeCallEdges.callerArtifactId, artifactId),
+            ),
+        );
+
+    const evidenceIds = Array.from(
+        new Set(
+            existingEdgeRows
+                .map((row) => row.evidenceId)
+                .filter((id): id is string => typeof id === 'string' && id.length > 0),
+        ),
+    );
+
+    if (evidenceIds.length === 0) return;
+
+    await db
+        .delete(evidences)
+        .where(
+            and(
+                eq(evidences.workspaceId, workspaceId),
+                inArray(evidences.id, evidenceIds),
+            ),
+        );
 }
 
 /**
@@ -204,7 +257,7 @@ async function processFile(
     scanResult: FileScanResult,
     ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
-    const { db, workspaceId, repoRoot, allServices } = ctx;
+    const { db, workspaceId, repoRoot, allServices, forceRescan } = ctx;
 
     // 기존 code_artifact 조회
     const existing = await db
@@ -221,7 +274,7 @@ async function processFile(
     const existingArtifact = existing[0];
 
     // SHA256 동일 → 스킵
-    if (existingArtifact?.sha256 === scanResult.sha256) {
+    if (!forceRescan && existingArtifact?.sha256 === scanResult.sha256) {
         return { skipped: true, isNew: false, signalCount: 0 };
     }
 
@@ -230,9 +283,7 @@ async function processFile(
 
     if (existingArtifact) {
         // SHA256 변경 → 기존 edges 삭제 후 sha256 업데이트
-        await db
-            .delete(codeCallEdges)
-            .where(eq(codeCallEdges.callerArtifactId, existingArtifact.id));
+        await deleteArtifactEdgesAndEvidences(db, workspaceId, existingArtifact.id);
         await db
             .update(codeArtifacts)
             .set({ sha256: scanResult.sha256, updatedAt: new Date() })
@@ -304,6 +355,10 @@ export async function extractCodeSignals(
     options: CodeSignalOptions,
 ): Promise<CodeSignalResult> {
     const { workspaceId, repoRoot } = options;
+    const forceRescan = options.forceRescan === true;
+    const targetFileSet = options.targetFilePaths
+        ? new Set(options.targetFilePaths.map((path) => path.replace(/\\/g, '/')))
+        : null;
 
     // 워크스페이스 서비스 목록 미리 조회 (ownerObjectId 매칭용)
     const allServices = await db
@@ -316,13 +371,18 @@ export async function extractCodeSignals(
             ),
         );
 
-    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices };
+    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
     const result: CodeSignalResult = {
         fileCount: 0,
         artifactCount: 0,
         signalCount: 0,
         skippedCount: 0,
     };
+
+    function filterTargetFiles(files: string[]): string[] {
+        if (!targetFileSet) return files;
+        return files.filter((filePath) => targetFileSet.has(filePath.replace(/\\/g, '/')));
+    }
 
     /**
      * 파일 목록을 순회하며 스캔 결과를 처리하는 헬퍼
@@ -356,16 +416,16 @@ export async function extractCodeSignals(
     }
 
     // 1. Java/Kotlin 파일 처리
-    await processAll(findJavaKotlinFiles(repoRoot), scanJavaKotlin);
+    await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), scanJavaKotlin);
 
     // 2. MyBatis XML 파일 처리
-    await processAll(findMyBatisXmlFiles(repoRoot), scanMyBatisXml);
+    await processAll(filterTargetFiles(findMyBatisXmlFiles(repoRoot)), scanMyBatisXml);
 
     // 3. TypeScript/JavaScript 파일 처리
-    await processAll(findTypeScriptFiles(repoRoot), scanTypeScript);
+    await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), scanTypeScript);
 
     // 4. Python 파일 처리
-    await processAll(findPythonFiles(repoRoot), scanPython);
+    await processAll(filterTargetFiles(findPythonFiles(repoRoot)), scanPython);
 
     return result;
 }

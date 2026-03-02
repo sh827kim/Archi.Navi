@@ -47,7 +47,7 @@ describe('db/client', () => {
     mockPGliteCtor.mockImplementation(() => ({ close: vi.fn().mockResolvedValue(undefined) }));
     mockDrizzle.mockImplementation(() => makeDbClient());
 
-    const { createPgliteClient } = await import('../client');
+    const { createPgliteClient } = await import('../client.js');
     const client = createPgliteClient();
 
     expect(client).toBeDefined();
@@ -63,7 +63,7 @@ describe('db/client', () => {
     const dbClient = makeDbClient();
     mockDrizzle.mockImplementation(() => dbClient);
 
-    const { getDb } = await import('../client');
+    const { getDb } = await import('../client.js');
     const first = await getDb();
     const second = await getDb();
 
@@ -94,7 +94,7 @@ describe('db/client', () => {
 
     const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const { getDb } = await import('../client');
+    const { getDb } = await import('../client.js');
     const recovered = await getDb();
 
     expect(recovered).toBe(secondClient);
@@ -114,7 +114,7 @@ describe('db/client', () => {
       makeDbClient(() => Promise.reject(new Error('permission denied'))),
     );
 
-    const { getDb } = await import('../client');
+    const { getDb } = await import('../client.js');
     await expect(getDb()).rejects.toThrow('permission denied');
   });
 
@@ -126,7 +126,7 @@ describe('db/client', () => {
       makeDbClient(() => Promise.reject(new Error('RuntimeError: Aborted()'))),
     );
 
-    const { getDb } = await import('../client');
+    const { getDb } = await import('../client.js');
     await expect(getDb()).rejects.toThrow('Aborted');
   });
 
@@ -139,12 +139,15 @@ describe('db/client', () => {
     mockDrizzle.mockImplementation(() => makeDbClient());
 
     const handlers = new Map<string, () => void>();
-    const onceSpy = vi.spyOn(process, 'once').mockImplementation(((event, callback) => {
+    const onceSpy = vi.spyOn(process, 'once').mockImplementation(((
+      event: Parameters<typeof process.once>[0],
+      callback: Parameters<typeof process.once>[1],
+    ) => {
       handlers.set(String(event), callback as () => void);
       return process;
     }) as typeof process.once);
 
-    const { getDb } = await import('../client');
+    const { getDb } = await import('../client.js');
     await getDb();
 
     const sigintHandler = handlers.get('SIGINT');
@@ -179,7 +182,7 @@ describe('db/client', () => {
       .mockImplementationOnce(() => makeDbClient(() => Promise.reject('RuntimeError: Aborted()')))
       .mockImplementationOnce(() => makeDbClient());
 
-    const { getDb } = await import('../client');
+    const { getDb } = await import('../client.js');
     const client = await getDb();
     expect(client).toBeDefined();
   });
@@ -193,7 +196,7 @@ describe('db/client', () => {
       makeDbClient(() => Promise.reject(new Error('RuntimeError: Aborted()'))),
     );
 
-    const { getDb } = await import('../client');
+    const { getDb } = await import('../client.js');
     await expect(getDb()).rejects.toThrow('Aborted');
   });
 
