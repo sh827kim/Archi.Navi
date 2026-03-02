@@ -436,6 +436,8 @@ domain_discovery_memberships (클러스터별 멤버십 저장)
 | 소스 | 추론 방식 | 추론 결과 | Confidence |
 |------|----------|----------|------------|
 | **FK 제약조건** | 직접 추출 | `db_table` → `db_table` 참조 Evidence | 0.95 |
+| **Unique 제약 / Unique 인덱스** | `*_id`, `*_no` 컬럼 + unique 패턴 | 식별 관계 힌트 Evidence | 0.85 |
+| **복합 인덱스** | 인덱스 구성 컬럼(`columns >= 2`)의 FK 유사 컬럼 추론 | 조인 관계 힌트 Evidence | 0.7 |
 | **컬럼명 패턴** | `*_id`, `*_no` 접미사 → 대상 테이블 추정 | implicit FK Evidence | 0.5 |
 
 **제외 패턴** (false positive 방지):

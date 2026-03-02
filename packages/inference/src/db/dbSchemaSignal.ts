@@ -33,10 +33,25 @@ interface ColumnInfo {
     type?: string;
 }
 
+/** 인덱스 메타데이터 구조 */
+interface IndexInfo {
+    name?: string;
+    columns: string[];
+    unique?: boolean;
+}
+
+/** Unique 제약조건 메타데이터 구조 */
+interface UniqueConstraintInfo {
+    name?: string;
+    columns: string[];
+}
+
 /** db_table object의 metadata 구조 */
 interface DbTableMetadata {
     columns?: ColumnInfo[];
     fk_constraints?: FkConstraint[];
+    indexes?: unknown[];
+    unique_constraints?: unknown[];
     [key: string]: unknown;
 }
 
@@ -103,13 +118,80 @@ export function matchDomainByPrefix(
  * `item_no`  → ['items', 'item']
  */
 function inferReferencedTables(columnName: string): string[] {
+    const normalized = columnName.trim().toLowerCase();
     // *_id 또는 *_no 패턴 추출
-    const idMatch = columnName.match(/^(.+)_(?:id|no)$/);
+    const idMatch = normalized.match(/^(.+)_(?:id|no)$/);
     if (!idMatch) return [];
     const base = idMatch[1] ?? '';
     if (!base) return [];
     // 복수형 우선 시도
     return [`${base}s`, base];
+}
+
+/** FK 추론 대상 컬럼명인지 검사 */
+function isFkLikeColumn(columnName: string): boolean {
+    const lower = columnName.toLowerCase();
+    if (EXCLUDE_COLUMNS.has(lower)) return false;
+    return /_(?:id|no)$/.test(lower);
+}
+
+function normalizeColumnList(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value
+        .filter((v): v is string => typeof v === 'string')
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
+}
+
+function parseIndexes(meta: DbTableMetadata): IndexInfo[] {
+    const rawIndexes = meta.indexes;
+    if (!Array.isArray(rawIndexes)) return [];
+    return rawIndexes
+        .map((entry): IndexInfo | null => {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return null;
+            const row = entry as Record<string, unknown>;
+            const columns = normalizeColumnList(row.columns);
+            if (columns.length === 0) return null;
+            const name = typeof row.name === 'string' ? row.name : null;
+            return {
+                ...(name ? { name } : {}),
+                columns,
+                unique: row.unique === true,
+            };
+        })
+        .filter((v): v is IndexInfo => v !== null);
+}
+
+function parseUniqueConstraints(
+    meta: DbTableMetadata,
+    indexes: IndexInfo[],
+): UniqueConstraintInfo[] {
+    const constraints: UniqueConstraintInfo[] = [];
+    const rawUnique = meta.unique_constraints;
+    if (Array.isArray(rawUnique)) {
+        for (const entry of rawUnique) {
+            if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
+            const row = entry as Record<string, unknown>;
+            const columns = normalizeColumnList(row.columns);
+            if (columns.length === 0) continue;
+            const name = typeof row.name === 'string' ? row.name : null;
+            constraints.push({
+                ...(name ? { name } : {}),
+                columns,
+            });
+        }
+    }
+
+    // unique index도 unique 제약과 동일하게 취급한다.
+    for (const idx of indexes) {
+        if (!idx.unique) continue;
+        const name = typeof idx.name === 'string' ? idx.name : null;
+        constraints.push({
+            ...(name ? { name } : {}),
+            columns: idx.columns,
+        });
+    }
+    return constraints;
 }
 
 interface DbSchemaArtifactEntry {
@@ -157,6 +239,8 @@ function dbSchemaArtifactPath(tableId: string): string {
 /**
  * DB 스키마 신호 추출
  * - FK 제약조건 → relation_candidates (confidence 0.95)
+ * - Unique 패턴 → relation_candidates (confidence 0.85)
+ * - 복합 인덱스 패턴 → relation_candidates (confidence 0.7)
  * - 컬럼명 패턴 (implicit FK) → relation_candidates (confidence 0.5)
  *
  * @param db - DB 클라이언트
@@ -273,7 +357,7 @@ export async function extractDbSchemaSignals(
         confidence: number,
         meta: Record<string, unknown>,
         evidenceMeta: {
-            kind: 'db_schema_fk' | 'db_schema_implicit_fk';
+            kind: 'db_schema_fk' | 'db_schema_implicit_fk' | 'db_schema_unique_hint' | 'db_schema_index_hint';
             excerpt: string;
             uri: string;
             metadata: Record<string, unknown>;
@@ -351,25 +435,101 @@ export async function extractDbSchemaSignals(
             fkCandidateCount += Number(inserted);
         }
 
-        // FK로 이미 처리한 관계 (컬럼패턴 중복 방지)
-        const fkProcessedTargets = new Set(
+        // 우선순위가 높은 신호로 이미 처리한 관계
+        const highPriorityProcessedTargets = new Set(
             fkConstraints
                 .map((fk) => tableNameIndex.get(fk.references_table.toLowerCase()))
                 .filter((id): id is string => id !== undefined),
         );
 
+        const indexes = parseIndexes(meta);
+        const uniqueConstraints = parseUniqueConstraints(meta, indexes);
+
+        // ── unique 패턴 처리 ──────────────────────────────────────────
+        for (const unique of uniqueConstraints) {
+            for (const colName of unique.columns) {
+                if (!isFkLikeColumn(colName)) continue;
+                const inferredTables = inferReferencedTables(colName);
+                for (const candidateTable of inferredTables) {
+                    const refTableId = tableNameIndex.get(candidateTable.toLowerCase());
+                    if (!refTableId) continue;
+                    if (highPriorityProcessedTargets.has(refTableId)) break;
+
+                    const inserted = await insertCandidate(table.id, refTableId, 0.85, {
+                        column: colName,
+                        unique_name: unique.name ?? null,
+                        unique_columns: unique.columns,
+                        source: 'unique_pattern',
+                        cardinality_hint: 'one_to_one_or_identifying',
+                    }, {
+                        kind: 'db_schema_unique_hint',
+                        excerpt: `${table.name}.${colName} unique -> ${candidateTable}`,
+                        uri: `db-table://${table.name}`,
+                        metadata: {
+                            source: 'unique_pattern',
+                            subject_table: table.name,
+                            object_table: tableIdToName.get(refTableId) ?? candidateTable,
+                            column: colName,
+                            unique_name: unique.name ?? null,
+                            unique_columns: unique.columns,
+                            cardinality_hint: 'one_to_one_or_identifying',
+                        },
+                    });
+                    implicitFkCandidateCount += Number(inserted);
+                    if (inserted) highPriorityProcessedTargets.add(refTableId);
+                    break;
+                }
+            }
+        }
+
+        // ── 복합 인덱스 패턴 처리 ──────────────────────────────────────
+        for (const index of indexes) {
+            if (index.unique) continue;
+            if (index.columns.length < 2) continue;
+
+            for (const colName of index.columns) {
+                if (!isFkLikeColumn(colName)) continue;
+                const inferredTables = inferReferencedTables(colName);
+                for (const candidateTable of inferredTables) {
+                    const refTableId = tableNameIndex.get(candidateTable.toLowerCase());
+                    if (!refTableId) continue;
+                    if (highPriorityProcessedTargets.has(refTableId)) break;
+
+                    const inserted = await insertCandidate(table.id, refTableId, 0.7, {
+                        column: colName,
+                        index_name: index.name ?? null,
+                        index_columns: index.columns,
+                        source: 'index_pattern',
+                    }, {
+                        kind: 'db_schema_index_hint',
+                        excerpt: `${table.name}.${colName} indexed -> ${candidateTable}`,
+                        uri: `db-table://${table.name}`,
+                        metadata: {
+                            source: 'index_pattern',
+                            subject_table: table.name,
+                            object_table: tableIdToName.get(refTableId) ?? candidateTable,
+                            column: colName,
+                            index_name: index.name ?? null,
+                            index_columns: index.columns,
+                        },
+                    });
+                    implicitFkCandidateCount += Number(inserted);
+                    if (inserted) highPriorityProcessedTargets.add(refTableId);
+                    break;
+                }
+            }
+        }
+
         // ── 컬럼명 패턴 처리 (implicit FK) ─────────────────────────────
         const columns = meta.columns ?? [];
         for (const col of columns) {
-            if (EXCLUDE_COLUMNS.has(col.name.toLowerCase())) continue;
-            // *_id, *_no 패턴만 처리
-            if (!/_(?:id|no)$/.test(col.name)) continue;
+            if (!isFkLikeColumn(col.name)) continue;
 
             const candidates = inferReferencedTables(col.name);
             for (const candidateTable of candidates) {
                 const refTableId = tableNameIndex.get(candidateTable.toLowerCase());
                 if (!refTableId) continue;
-                if (fkProcessedTargets.has(refTableId)) break; // FK 처리된 관계 스킵
+                if (highPriorityProcessedTargets.has(refTableId)) break;
 
                 const inserted = await insertCandidate(table.id, refTableId, 0.5, {
                     column: col.name,
@@ -388,6 +548,7 @@ export async function extractDbSchemaSignals(
                     },
                 });
                 implicitFkCandidateCount += Number(inserted);
+                if (inserted) highPriorityProcessedTargets.add(refTableId);
                 break; // 첫 번째 매칭 테이블에서 중단
             }
         }

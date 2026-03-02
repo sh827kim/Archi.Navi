@@ -371,6 +371,273 @@ describe('extractDbSchemaSignals', () => {
         expect(result.implicitFkCandidateCount).toBe(0);
     });
 
+    it('unique 제약조건 패턴에서 fk_reference 후보를 생성해야 한다 (confidence 0.85)', async () => {
+        const usersId = await createDbTable(db, 'users', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'user_profiles', {
+            columns: [{ name: 'user_id', type: 'bigint' }],
+            fk_constraints: [],
+            unique_constraints: [
+                { name: 'uq_user_profiles_user', columns: ['user_id'] },
+            ],
+        });
+
+        const result = await extractDbSchemaSignals(db, { workspaceId });
+        expect(result.fkCandidateCount).toBe(0);
+        expect(result.implicitFkCandidateCount).toBe(1);
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(usersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.85);
+
+        const evidenceRows = await db.select().from(evidences);
+        expect(evidenceRows).toHaveLength(1);
+        expect((evidenceRows[0]!.metadata as Record<string, unknown>)['kind']).toBe('db_schema_unique_hint');
+    });
+
+    it('unique index 패턴(indexes[].unique=true)도 fk_reference 후보를 생성해야 한다', async () => {
+        const usersId = await createDbTable(db, 'users', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'user_sessions', {
+            columns: [{ name: 'user_id', type: 'bigint' }],
+            fk_constraints: [],
+            indexes: [
+                { name: 'uq_user_sessions_user', columns: ['user_id'], unique: true },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(usersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.85);
+    });
+
+    it('대문자 FK-like 컬럼(USER_ID)도 unique 제약 패턴으로 추론되어야 한다', async () => {
+        const usersId = await createDbTable(db, 'users', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'user_profiles', {
+            columns: [{ name: 'USER_ID', type: 'bigint' }],
+            fk_constraints: [],
+            unique_constraints: [
+                { name: 'UQ_USER_PROFILES_USER', columns: ['USER_ID'] },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(usersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.85);
+    });
+
+    it('복합 인덱스 패턴에서 fk_reference 후보를 생성해야 한다 (confidence 0.7)', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        const productsId = await createDbTable(db, 'products', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'order_items', {
+            columns: [
+                { name: 'order_id', type: 'bigint' },
+                { name: 'product_id', type: 'bigint' },
+            ],
+            fk_constraints: [],
+            indexes: [
+                {
+                    name: 'idx_order_items_order_product',
+                    columns: ['order_id', 'product_id'],
+                    unique: false,
+                },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(2);
+        const objectIds = new Set(candidates.map((c) => c.objectId));
+        expect(objectIds.has(ordersId)).toBe(true);
+        expect(objectIds.has(productsId)).toBe(true);
+        expect(candidates.every((c) => Math.abs(c.confidence - 0.7) < 0.0001)).toBe(true);
+
+        const evidenceRows = await db.select().from(evidences);
+        expect(evidenceRows).toHaveLength(2);
+        expect(
+            evidenceRows.every(
+                (e) => (e.metadata as Record<string, unknown>)['kind'] === 'db_schema_index_hint',
+            ),
+        ).toBe(true);
+    });
+
+    it('대문자 FK-like 컬럼(ORDER_NO)도 복합 인덱스 패턴으로 추론되어야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'shipment_items', {
+            columns: [
+                { name: 'ORDER_NO', type: 'bigint' },
+                { name: 'LINE_NO', type: 'bigint' },
+            ],
+            fk_constraints: [],
+            indexes: [
+                { name: 'IDX_SHIPMENT_ITEMS_ORDER_LINE', columns: ['ORDER_NO', 'LINE_NO'], unique: false },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.7);
+    });
+
+    it('FK가 있으면 동일 대상 unique/index 패턴은 중복 생성되지 않아야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'order_items', {
+            columns: [{ name: 'order_id', type: 'bigint' }],
+            fk_constraints: [
+                { column: 'order_id', references_table: 'orders', references_column: 'id' },
+            ],
+            unique_constraints: [
+                { name: 'uq_order_items_order', columns: ['order_id'] },
+            ],
+            indexes: [
+                { name: 'idx_order_items_order', columns: ['order_id', 'id'], unique: false },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.95);
+
+        const evidenceRows = await db.select().from(evidences);
+        expect(evidenceRows).toHaveLength(1);
+        expect((evidenceRows[0]!.metadata as Record<string, unknown>)['kind']).toBe('db_schema_fk');
+    });
+
+    it('비정상 indexes/unique_constraints 메타는 무시하고 컬럼 패턴으로 fallback 해야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'order_items', {
+            columns: [{ name: 'order_id', type: 'bigint' }],
+            fk_constraints: [],
+            indexes: [
+                null,
+                [] as unknown as Record<string, unknown>,
+                { name: 123, columns: ['   ', 1] },
+                { name: 'idx_invalid_columns', columns: [] },
+            ],
+            unique_constraints: 'invalid-shape' as unknown as Record<string, unknown>,
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.5);
+    });
+
+    it('단일(non-unique) 인덱스는 index 패턴으로 처리하지 않고 implicit 컬럼 패턴을 사용해야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'order_items', {
+            columns: [{ name: 'order_id', type: 'bigint' }],
+            fk_constraints: [],
+            indexes: [
+                { name: 'ix_order_items_order_id', columns: ['order_id'], unique: false },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.5);
+    });
+
+    it('복합 인덱스 내 일부 컬럼이 비FK/미매칭이어도 매칭 가능한 컬럼으로 후보를 생성해야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'order_items', {
+            columns: [
+                { name: 'order_id', type: 'bigint' },
+                { name: 'created_at', type: 'timestamp' },
+                { name: 'ghost_id', type: 'bigint' },
+            ],
+            fk_constraints: [],
+            indexes: [
+                { name: 'idx_order_items_mixed', columns: ['created_at', 'ghost_id', 'order_id'], unique: false },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.7);
+    });
+
+    it('기존 PENDING 후보가 있으면 index 패턴 insert는 건너뛰어야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        const orderItemsId = await createDbTable(db, 'order_items', {
+            columns: [{ name: 'order_id', type: 'bigint' }],
+            fk_constraints: [],
+            indexes: [
+                { name: 'idx_order_items_order', columns: ['order_id', 'id'], unique: false },
+            ],
+        });
+
+        await db.insert(relationCandidates).values({
+            id: generateId(),
+            workspaceId,
+            relationType: 'fk_reference',
+            subjectObjectId: orderItemsId,
+            objectId: ordersId,
+            confidence: 0.4,
+            metadata: { source: 'preexisting' },
+            status: 'PENDING',
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.subjectObjectId).toBe(orderItemsId);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+
+        const evidenceRows = await db.select().from(evidences);
+        expect(evidenceRows).toHaveLength(0);
+    });
+
+    it('기존 PENDING 후보가 있으면 implicit 컬럼 패턴 insert는 건너뛰어야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        const orderItemsId = await createDbTable(db, 'order_items', {
+            columns: [{ name: 'order_id', type: 'bigint' }],
+            fk_constraints: [],
+        });
+
+        await db.insert(relationCandidates).values({
+            id: generateId(),
+            workspaceId,
+            relationType: 'fk_reference',
+            subjectObjectId: orderItemsId,
+            objectId: ordersId,
+            confidence: 0.4,
+            metadata: { source: 'preexisting' },
+            status: 'PENDING',
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.subjectObjectId).toBe(orderItemsId);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+
+        const evidenceRows = await db.select().from(evidences);
+        expect(evidenceRows).toHaveLength(0);
+    });
+
     it('FK + 컬럼패턴 혼합 시 FK 처리된 관계는 컬럼패턴에서 중복 생성하지 않아야 한다', async () => {
         await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
         await createDbTable(db, 'order_items', {
