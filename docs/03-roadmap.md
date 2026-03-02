@@ -16,6 +16,18 @@
 
 ---
 
+## 현재 상태 요약 (2026-03-02)
+
+| 구간 | 상태 | 비고 |
+|------|------|------|
+| P1 (1-1 ~ 1-6) | ✅ 완료 | 추론 MVP 기능/승인 플로우 구현 완료 |
+| P2 (2-1) | ⚠️ 부분 구현 | AST 모듈은 존재하나 기본 추출 파이프라인은 Regex 중심 |
+| P2 (2-2 ~ 2-5) | ✅ 완료 | Evidence Assembler/Answer Composer/DOMAIN_SUMMARY/Message 시그널 반영 완료 |
+| P2 (운영 고도화) | ❌ 미구현 | `/api/inference/run`이 로컬 경로 의존, 조직/원격 오케스트레이션 미구현 |
+| P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
+
+---
+
 ## P1: 추론 파이프라인 MVP (v2.0)
 
 > **목표**: Regex + Config 파싱으로 전체 Relation의 60~80% 자동 추론
@@ -85,9 +97,15 @@
 
 > **목표**: AST로 추론 정밀도 85~95% 달성, Evidence 기반 AI Chat 고도화
 
-### 2-1. AST Plugin (Tree-sitter) — Phase 2
+### ⚠️ 2-1. AST Plugin (Tree-sitter) — Phase 2 (부분 구현)
 - **파일:** `packages/inference/src/code/ast/` (신규)
 - **언어:** Java/Kotlin, TypeScript/JavaScript, Python
+- **현재 상태:**
+  - AST 분석 모듈/파서는 존재
+  - 기본 추출 파이프라인(`extractCodeSignals`)은 Regex 경로가 기본
+- **남은 작업:**
+  - AST 결과를 기본 추출 경로로 승격
+  - 언어별 data-flow 정확도 회귀 테스트 보강
 - **Phase 1 대비 개선:**
   - 변수/상수로 지정된 URL 추적 (data-flow analysis)
   - 간접 호출 감지 (인터페이스 구현체 매핑)
@@ -97,7 +115,7 @@
 - **의존:** tree-sitter 바인딩 + 언어별 grammar
 - **참조:** 03-inference-engine.md §6.2
 
-### 2-2. Evidence Assembler
+### ✅ 2-2. Evidence Assembler (완료)
 - **파일:** `packages/core/src/ai/evidence-assembler.ts` (신규)
 - **기능:**
   - 쿼리 결과 → 증거 체인 구조화 (max 10개)
@@ -105,7 +123,7 @@
   - 파일 경로 + 라인 + excerpt 포함
 - **연동:** Chat API에서 queryContext 대신 evidence chain 주입
 
-### 2-3. Answer Composer 템플릿
+### ✅ 2-3. Answer Composer 템플릿 (완료)
 - **파일:** `apps/web/src/app/api/chat/route.ts` 확장
 - **구조:** 결론 → 신뢰도 → 증거 목록 → 요약 → deep-link
 - **UI:** `floating-chat.tsx`에 evidence 카드 렌더링
@@ -121,6 +139,13 @@
 - **구현 완료:**
   - 토픽 네이밍 패턴 분석 → producer/consumer 결합도 → 도메인 affinity
   - `msgScore` 계산값을 Seed-based 도메인 추론에 실제 반영
+
+### ❌ 2-6. Inference 운영 오케스트레이션 고도화 (미구현)
+- **현재 상태:** `/api/inference/run`은 로컬 repo 경로(`repoRoots`, `service.metadata.scanPath`) 중심 실행
+- **남은 작업:**
+  - 조직 단위/원격 소스 포함 실행 오케스트레이션
+  - 실행 큐/재시도/실패 복구 정책
+  - 운영 상태 모니터링(실행 이력/지표) 노출
 
 ---
 
