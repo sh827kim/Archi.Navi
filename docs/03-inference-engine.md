@@ -725,7 +725,7 @@ domain_candidates (PENDING)
 
 ## 9. 구현 로드맵
 
-### Phase 1 — 추론 파이프라인 MVP (2026-03-01 기준)
+### Phase 1 — 추론 파이프라인 MVP (2026-03-02 기준)
 
 | 순서 | 작업 | 상태 |
 |------|------|------|
@@ -733,8 +733,8 @@ domain_candidates (PENDING)
 | 2 | Regex 기반 Code Signal 추출 | ✅ 구현 |
 | 3 | DB Signal 구현 (`dbScore`, FK 후보) | ✅ 구현 |
 | 4 | Domain Candidates 승인 API + UI | ✅ 구현 |
-| 5 | Discovery 다중 레이어 통합 | ⚠️ 부분 구현 |
-| 6 | 클러스터 Label 자동 추출 | ⚠️ 부분 구현 |
+| 5 | Discovery 다중 레이어 통합 | ✅ 구현 |
+| 6 | 클러스터 Label 자동 추출 | ✅ 구현 |
 
 **Phase 1 완료 시 목표: 전체 Relation의 60~80% 자동 추론**
 
@@ -751,12 +751,12 @@ domain_candidates (PENDING)
 
 ### Phase 3 — 고도화 (v2.2+)
 
-| 작업 | 설명 |
-|------|------|
-| Message Signal 구현 (`seedBased.ts`의 `msgScore`) | 토픽 네이밍 패턴 기반 도메인 추론 |
-| 증분 추론 | 변경된 파일/설정만 재분석, 기존 결과 유지 |
-| Evidence Assembler 고도화 | AI Chat에서 추론 근거 체인 표시 |
-| 인덱스/Unique 제약조건 분석 | DB 추론 확장 (세밀한 테이블 관계) |
+| 작업 | 설명 | 상태 |
+|------|------|------|
+| Message Signal 구현 (`seedBased.ts`의 `msgScore`) | 토픽 네이밍 패턴 기반 도메인 추론 | ✅ 완료 |
+| 증분 추론 | 변경된 파일/설정만 재분석, 기존 결과 유지 | ✅ 완료 |
+| Evidence Assembler 고도화 | AI Chat에서 추론 근거 체인 표시 | ✅ 완료 |
+| 인덱스/Unique 제약조건 분석 | DB 추론 확장 (세밀한 테이블 관계) | ✅ 완료 |
 
 ---
 

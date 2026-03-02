@@ -3,8 +3,10 @@
  * 승인 시 → object_relations에 APPROVED 상태로 이동
  */
 import { type NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@archi-navi/db';
+import { getDb, relationCandidates } from '@archi-navi/db';
+import { eq } from 'drizzle-orm';
 import { approveRelationCandidate } from '@archi-navi/inference';
+import { applyRollupChanges, createRelationChangeEvent } from '@/lib/rollup-change-events';
 
 export async function PATCH(
   req: NextRequest,
@@ -22,8 +24,33 @@ export async function PATCH(
     }
 
     const db = await getDb();
+    const [candidate] = await db
+      .select({
+        workspaceId: relationCandidates.workspaceId,
+        relationType: relationCandidates.relationType,
+        subjectObjectId: relationCandidates.subjectObjectId,
+        objectId: relationCandidates.objectId,
+      })
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, id))
+      .limit(1);
+
+    if (!candidate) {
+      return NextResponse.json({ error: '후보를 찾을 수 없습니다' }, { status: 404 });
+    }
 
     const result = await approveRelationCandidate(db, id, body.status);
+
+    if (body.status === 'APPROVED') {
+      await applyRollupChanges(db, candidate.workspaceId, [
+        createRelationChangeEvent('APPROVED', {
+          relationType: candidate.relationType,
+          subjectObjectId: candidate.subjectObjectId,
+          objectId: candidate.objectId,
+        }),
+      ]);
+    }
+
     return NextResponse.json(result);
   } catch (error) {
     if (error instanceof Error && error.message === 'candidate not found') {

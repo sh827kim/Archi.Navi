@@ -30,7 +30,8 @@ export interface RollupGraph3DLink {
 interface RollupGraph3DProps {
   nodes: RollupGraph3DNode[];
   links: RollupGraph3DLink[];
-  onNodeClick?: (node: RollupGraph3DNode, event: MouseEvent) => void;
+  onNodeClick?: (node: RollupGraph3DNode, event?: MouseEvent) => void;
+  onLinkClick?: (link: RollupGraph3DLink, event?: MouseEvent) => void;
   onBackgroundClick?: () => void;
 }
 
@@ -61,10 +62,12 @@ type ForceGraphInstance = {
   nodeVal: (fn: (node: GraphNodeWithPos) => number) => ForceGraphInstance;
   nodeColor: (fn: (node: GraphNodeWithPos) => string) => ForceGraphInstance;
   nodeLabel: (fn: (node: GraphNodeWithPos) => string) => ForceGraphInstance;
+  enableNodeDrag: (enable: boolean) => ForceGraphInstance;
   nodeThreeObjectExtend: (extend: boolean) => ForceGraphInstance;
   nodeThreeObject: (fn: (node: GraphNodeWithPos) => Object3D) => ForceGraphInstance;
   linkColor: (fn: (link: GraphLinkWithRefs) => string) => ForceGraphInstance;
   linkWidth: (fn: (link: GraphLinkWithRefs) => number) => ForceGraphInstance;
+  linkHoverPrecision: (value: number) => ForceGraphInstance;
   linkOpacity: (value: number) => ForceGraphInstance;
   linkDirectionalArrowLength: (fn: (link: GraphLinkWithRefs) => number) => ForceGraphInstance;
   linkDirectionalArrowRelPos: (value: number) => ForceGraphInstance;
@@ -77,6 +80,7 @@ type ForceGraphInstance = {
   onBackgroundClick: (fn: () => void) => ForceGraphInstance;
   onNodeHover: (fn: (node: GraphNodeWithPos | null) => void) => ForceGraphInstance;
   onLinkHover: (fn: (link: GraphLinkWithRefs | null) => void) => ForceGraphInstance;
+  onLinkClick: (fn: (link: GraphLinkWithRefs, event: MouseEvent) => void) => ForceGraphInstance;
   zoomToFit: (ms: number, px: number) => ForceGraphInstance;
   cameraPosition: (
     position: { x: number; y: number; z: number },
@@ -180,12 +184,16 @@ export function RollupGraph3D({
   nodes,
   links,
   onNodeClick,
+  onLinkClick,
   onBackgroundClick,
 }: RollupGraph3DProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const instanceRef = useRef<ForceGraphInstance | null>(null);
   const onNodeClickRef = useRef<typeof onNodeClick>(onNodeClick);
+  const onLinkClickRef = useRef<typeof onLinkClick>(onLinkClick);
   const onBackgroundClickRef = useRef<typeof onBackgroundClick>(onBackgroundClick);
+  const hoveredLinkRef = useRef<GraphLinkWithRefs | null>(null);
+  const hoveredNodeRef = useRef<GraphNodeWithPos | null>(null);
   const nodesRef = useRef(nodes);
   const linksRef = useRef(links);
   const [ready, setReady] = useState(false);
@@ -208,6 +216,10 @@ export function RollupGraph3D({
   useEffect(() => {
     onNodeClickRef.current = onNodeClick;
   }, [onNodeClick]);
+
+  useEffect(() => {
+    onLinkClickRef.current = onLinkClick;
+  }, [onLinkClick]);
 
   useEffect(() => {
     onBackgroundClickRef.current = onBackgroundClick;
@@ -292,7 +304,7 @@ export function RollupGraph3D({
 
         const linkWidthAccessor = (link: GraphLinkWithRefs) => {
           if (isLinkHighlighted(link.id)) return 3.4;
-          return link.isContains ? 0.5 : 1.2;
+          return link.isContains ? 1.0 : 2.2;
         };
 
         const linkParticlesAccessor = (link: GraphLinkWithRefs) => {
@@ -324,10 +336,13 @@ export function RollupGraph3D({
             const hubSuffix = node.isHub ? ` [HUB in:${node.inDegree} out:${node.outDegree}]` : '';
             return `${node.label} (${node.objectType})${hubSuffix}`;
           })
+          // 클릭 안정성을 위해 노드 드래그를 비활성화한다.
+          .enableNodeDrag(false)
           .nodeThreeObjectExtend(true)
           .nodeThreeObject(nodeLabelAccessor)
           .linkColor(linkColorAccessor)
           .linkWidth(linkWidthAccessor)
+          .linkHoverPrecision(18)
           .linkOpacity(0.55)
           // contains도 방향이 보이도록 화살표를 렌더링한다.
           .linkDirectionalArrowLength((link) => (link.isContains ? 3 : 3.5))
@@ -460,6 +475,35 @@ export function RollupGraph3D({
             onNodeClickRef.current?.(node, event);
           })
           .onBackgroundClick(() => {
+            // 일부 환경에서 노드 클릭이 background click으로 판정되는 경우를 보정한다.
+            if (hoveredNodeRef.current) {
+              const hovered = hoveredNodeRef.current;
+              focusNode(instance, hovered);
+              pinnedRootNodeIdRef.current = hovered.id;
+              applyPinnedHighlightByRootId(pinnedRootNodeIdRef.current);
+              updateHighlight();
+              onNodeClickRef.current?.(hovered);
+              return;
+            }
+
+            // 일부 환경에서 링크 클릭이 background click으로 판정되는 경우가 있어
+            // 현재 hover 중인 링크가 있으면 링크 클릭으로 승격한다.
+            if (!hoveredNodeRef.current && hoveredLinkRef.current) {
+              const hovered = hoveredLinkRef.current;
+              const clicked: RollupGraph3DLink = {
+                id: hovered.id,
+                source: getLinkNodeId(hovered.source),
+                target: getLinkNodeId(hovered.target),
+                semanticSource: hovered.semanticSource,
+                semanticTarget: hovered.semanticTarget,
+                relationType: hovered.relationType,
+                color: hovered.color,
+                isContains: hovered.isContains,
+              };
+              onLinkClickRef.current?.(clicked);
+              return;
+            }
+
             highlightNodeIdsRef.current.clear();
             highlightLinkIdsRef.current.clear();
             pinnedNodeIdsRef.current.clear();
@@ -470,6 +514,7 @@ export function RollupGraph3D({
             onBackgroundClickRef.current?.();
           })
           .onNodeHover((node) => {
+            hoveredNodeRef.current = node;
             const prevHoverNodeId = hoverNodeIdRef.current;
             if ((!node && highlightNodeIdsRef.current.size === 0) || (node && prevHoverNodeId === node.id)) {
               return;
@@ -487,6 +532,7 @@ export function RollupGraph3D({
             updateHighlight();
           })
           .onLinkHover((link) => {
+            hoveredLinkRef.current = link;
             highlightNodeIdsRef.current.clear();
             highlightLinkIdsRef.current.clear();
             hoverNodeIdRef.current = null;
@@ -497,6 +543,35 @@ export function RollupGraph3D({
               highlightNodeIdsRef.current.add(getLinkNodeId(link.target));
             }
             updateHighlight();
+          })
+          .onLinkClick((link, event) => {
+            // 링크 endpoint 위 클릭은 노드 클릭 의도로 보고 노드 이벤트를 우선한다.
+            const hoveredNode = hoveredNodeRef.current;
+            const sourceId = getLinkNodeId(link.source);
+            const targetId = getLinkNodeId(link.target);
+            if (
+              hoveredNode &&
+              (hoveredNode.id === sourceId || hoveredNode.id === targetId)
+            ) {
+              focusNode(instance, hoveredNode);
+              pinnedRootNodeIdRef.current = hoveredNode.id;
+              applyPinnedHighlightByRootId(pinnedRootNodeIdRef.current);
+              updateHighlight();
+              onNodeClickRef.current?.(hoveredNode, event);
+              return;
+            }
+
+            const clicked: RollupGraph3DLink = {
+              id: link.id,
+              source: getLinkNodeId(link.source),
+              target: getLinkNodeId(link.target),
+              semanticSource: link.semanticSource,
+              semanticTarget: link.semanticTarget,
+              relationType: link.relationType,
+              color: link.color,
+              isContains: link.isContains,
+            };
+            onLinkClickRef.current?.(clicked, event);
           });
 
         const resize = () => {

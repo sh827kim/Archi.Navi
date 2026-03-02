@@ -7,6 +7,7 @@ import { getDb } from '@archi-navi/db';
 import { objectRelations } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
+import { applyRollupChanges, createRelationChangeEvent } from '@/lib/rollup-change-events';
 
 export async function GET(req: NextRequest) {
   try {
@@ -51,17 +52,33 @@ export async function POST(req: NextRequest) {
     }
     const id = generateId();
     const db = await getDb();
+    const relationType = body.relationType as
+      | 'call'
+      | 'expose'
+      | 'read'
+      | 'write'
+      | 'produce'
+      | 'consume'
+      | 'depend_on';
 
     await db.insert(objectRelations).values({
       id,
       workspaceId,
       subjectObjectId: body.subjectObjectId,
-      relationType: body.relationType as 'call' | 'expose' | 'read' | 'write' | 'produce' | 'consume' | 'depend_on',
+      relationType,
       objectId: body.objectId,
       confidence: body.confidence ?? 1.0,
       status: 'APPROVED',
       metadata: {},
     });
+
+    await applyRollupChanges(db, workspaceId, [
+      createRelationChangeEvent('APPROVED', {
+        relationType,
+        subjectObjectId: body.subjectObjectId,
+        objectId: body.objectId,
+      }),
+    ]);
 
     return NextResponse.json({ id }, { status: 201 });
   } catch (error) {

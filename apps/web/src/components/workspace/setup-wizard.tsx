@@ -6,7 +6,7 @@
 'use client';
 
 import { useState, useCallback } from 'react';
-import { Layers, Terminal, CheckCircle2, Sparkles, ArrowRight, ArrowLeft } from 'lucide-react';
+import { LayoutGrid, Terminal, CheckCircle2, Sparkles, ArrowRight, ArrowLeft } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   cn,
@@ -121,7 +121,7 @@ export function SetupWizard({ open, onOpenChange, onComplete }: SetupWizardProps
       content: (
         <div className="space-y-3">
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Layers className="h-4 w-4" />
+            <LayoutGrid className="h-4 w-4" />
             아키텍처 레이어 프리셋을 선택하세요
           </div>
           <div className="space-y-2">

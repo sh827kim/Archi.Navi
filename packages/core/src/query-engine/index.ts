@@ -8,3 +8,10 @@ export { analyzeImpact } from './impactAnalysis';
 export { discoverUsage } from './usageDiscovery';
 export { summarizeDomain } from './domainSummary';
 export type { DomainSummaryData } from './domainSummary';
+export { queryContributors } from './contributors';
+export type {
+  ContributorQueryInput,
+  ContributorQueryResult,
+  ContributorGroupBy,
+  ContributorScopeMode,
+} from './contributors';
