@@ -807,6 +807,53 @@ spring:
     expect(secondArtifact[0]?.sha256).not.toBe(firstArtifact[0]?.sha256);
   });
 
+  it('서비스 목록이 변경되면 파일 SHA가 동일해도 재처리해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'test-workspace' });
+    const paymentServiceId = generateId();
+    const appPath = join(tempDir, 'application.yml');
+
+    writeFileSync(
+      appPath,
+      `
+spring:
+  application:
+    name: payment-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/payment_db
+`,
+    );
+
+    const first = await inferRelationsFromConfig(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      incremental: true,
+    });
+    expect(first.processedFileCount).toBe(1);
+    expect(first.candidateCount).toBe(0);
+
+    await db.insert(objects).values({
+      id: paymentServiceId,
+      workspaceId,
+      objectType: 'service',
+      category: 'COMPUTE',
+      granularity: 'COMPOUND',
+      name: 'payment-service',
+      path: `/${paymentServiceId}`,
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    });
+
+    const second = await inferRelationsFromConfig(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      incremental: true,
+    });
+    expect(second.processedFileCount).toBe(1);
+    expect(second.skippedFileCount).toBe(0);
+    expect(second.candidateCount).toBe(2);
+  });
+
   it('REJECTED 상태 후보만 존재할 때 신규 후보를 생성해야 한다 (설계 §2.5)', async () => {
     // REJECTED 후보는 조회에서 제외되므로 자동으로 신규 생성됨
     const { orderServiceId } = await createTestFixtures(db, workspaceId);

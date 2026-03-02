@@ -131,9 +131,20 @@ function stableStringify(value: unknown): string {
     return JSON.stringify(value);
 }
 
-function hashDbTableSchema(tableName: string, metadata: DbTableMetadata): string {
-    // 테이블명 변경도 영향이 있으므로 해시에 포함한다.
-    const payload = { tableName, metadata };
+function hashTableNameSet(tableNames: string[]): string {
+    const normalized = tableNames
+        .map((name) => name.toLowerCase())
+        .sort();
+    return createHash('sha256').update(stableStringify(normalized)).digest('hex');
+}
+
+function hashDbTableSchema(
+    tableName: string,
+    metadata: DbTableMetadata,
+    tableNameSetHash: string,
+): string {
+    // 테이블명 변경/metadata 변경 + 글로벌 테이블 집합 변경 모두 반영한다.
+    const payload = { tableName, metadata, tableNameSetHash };
     return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
@@ -175,6 +186,7 @@ export async function extractDbSchemaSignals(
     // 테이블명 → objectId 인덱스 (빠른 조회)
     const tableNameIndex = new Map<string, string>();
     const tableIdToName = new Map<string, string>();
+    const tableNameSetHash = hashTableNameSet(dbTables.map((table) => table.name));
     for (const t of dbTables) {
         tableNameIndex.set(t.name.toLowerCase(), t.id);
         tableIdToName.set(t.id, t.name);
@@ -205,7 +217,7 @@ export async function extractDbSchemaSignals(
     const tablesToProcess = dbTables.filter((table) => {
         if (!incremental) return true;
         const meta = (table.metadata ?? {}) as DbTableMetadata;
-        const hash = hashDbTableSchema(table.name, meta);
+        const hash = hashDbTableSchema(table.name, meta, tableNameSetHash);
         const existing = artifactMap.get(dbSchemaArtifactPath(table.id));
         return existing?.sha256 !== hash;
     });
@@ -382,7 +394,7 @@ export async function extractDbSchemaSignals(
 
         // 처리 완료된 테이블의 해시를 artifact에 반영
         const artifactPath = dbSchemaArtifactPath(table.id);
-        const schemaHash = hashDbTableSchema(table.name, meta);
+        const schemaHash = hashDbTableSchema(table.name, meta, tableNameSetHash);
         const existingArtifact = artifactMap.get(artifactPath);
         if (existingArtifact) {
             await db

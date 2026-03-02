@@ -143,6 +143,18 @@ function hashContentSha256(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
+function hashServiceInventory(services: { id: string; name: string }[]): string {
+  const normalized = services
+    .map((service) => `${service.id}:${service.name.toLowerCase()}`)
+    .sort()
+    .join('\n');
+  return hashContentSha256(normalized);
+}
+
+function hashConfigArtifact(contentSha256: string, serviceInventoryHash: string): string {
+  return hashContentSha256(`${contentSha256}::services:${serviceInventoryHash}`);
+}
+
 async function loadConfigArtifactMap(
   db: DbClient,
   workspaceId: string,
@@ -852,6 +864,7 @@ export async function inferRelationsFromConfig(
 
   const ctx: ProcessContext = { db, workspaceId, allServices };
   const stats: ProcessStats = { candidateCount: 0, objectCount: 0 };
+  const serviceInventoryHash = hashServiceInventory(allServices);
 
   const appYmlFiles = findApplicationYmls(repoRoot);
   const dockerComposeFiles = findDockerComposeFiles(repoRoot);
@@ -872,7 +885,8 @@ export async function inferRelationsFromConfig(
       continue;
     }
 
-    const sha256 = hashContentSha256(content);
+    const contentSha256 = hashContentSha256(content);
+    const sha256 = hashConfigArtifact(contentSha256, serviceInventoryHash);
     const existingArtifact = artifactMap.get(filePath);
     if (incremental && existingArtifact?.sha256 === sha256) {
       skippedFileCount += 1;
@@ -901,7 +915,8 @@ export async function inferRelationsFromConfig(
       continue;
     }
 
-    const sha256 = hashContentSha256(content);
+    const contentSha256 = hashContentSha256(content);
+    const sha256 = hashConfigArtifact(contentSha256, serviceInventoryHash);
     const existingArtifact = artifactMap.get(filePath);
     if (incremental && existingArtifact?.sha256 === sha256) {
       skippedFileCount += 1;
@@ -930,7 +945,8 @@ export async function inferRelationsFromConfig(
       continue;
     }
 
-    const sha256 = hashContentSha256(content);
+    const contentSha256 = hashContentSha256(content);
+    const sha256 = hashConfigArtifact(contentSha256, serviceInventoryHash);
     const existingArtifact = artifactMap.get(filePath);
     if (incremental && existingArtifact?.sha256 === sha256) {
       skippedFileCount += 1;
