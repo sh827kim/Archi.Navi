@@ -413,6 +413,24 @@ describe('extractDbSchemaSignals', () => {
         expect(candidates[0]!.confidence).toBeCloseTo(0.85);
     });
 
+    it('대문자 FK-like 컬럼(USER_ID)도 unique 제약 패턴으로 추론되어야 한다', async () => {
+        const usersId = await createDbTable(db, 'users', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'user_profiles', {
+            columns: [{ name: 'USER_ID', type: 'bigint' }],
+            fk_constraints: [],
+            unique_constraints: [
+                { name: 'UQ_USER_PROFILES_USER', columns: ['USER_ID'] },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(usersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.85);
+    });
+
     it('복합 인덱스 패턴에서 fk_reference 후보를 생성해야 한다 (confidence 0.7)', async () => {
         const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
         const productsId = await createDbTable(db, 'products', { columns: [], fk_constraints: [] });
@@ -447,6 +465,27 @@ describe('extractDbSchemaSignals', () => {
                 (e) => (e.metadata as Record<string, unknown>)['kind'] === 'db_schema_index_hint',
             ),
         ).toBe(true);
+    });
+
+    it('대문자 FK-like 컬럼(ORDER_NO)도 복합 인덱스 패턴으로 추론되어야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        await createDbTable(db, 'shipment_items', {
+            columns: [
+                { name: 'ORDER_NO', type: 'bigint' },
+                { name: 'LINE_NO', type: 'bigint' },
+            ],
+            fk_constraints: [],
+            indexes: [
+                { name: 'IDX_SHIPMENT_ITEMS_ORDER_LINE', columns: ['ORDER_NO', 'LINE_NO'], unique: false },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId });
+
+        const candidates = await db.select().from(relationCandidates);
+        expect(candidates).toHaveLength(1);
+        expect(candidates[0]!.objectId).toBe(ordersId);
+        expect(candidates[0]!.confidence).toBeCloseTo(0.7);
     });
 
     it('FK가 있으면 동일 대상 unique/index 패턴은 중복 생성되지 않아야 한다', async () => {

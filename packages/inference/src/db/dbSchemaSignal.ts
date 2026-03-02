@@ -118,8 +118,9 @@ export function matchDomainByPrefix(
  * `item_no`  → ['items', 'item']
  */
 function inferReferencedTables(columnName: string): string[] {
+    const normalized = columnName.trim().toLowerCase();
     // *_id 또는 *_no 패턴 추출
-    const idMatch = columnName.match(/^(.+)_(?:id|no)$/);
+    const idMatch = normalized.match(/^(.+)_(?:id|no)$/);
     if (!idMatch) return [];
     const base = idMatch[1] ?? '';
     if (!base) return [];
