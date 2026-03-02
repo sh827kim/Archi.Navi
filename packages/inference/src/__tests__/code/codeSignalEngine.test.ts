@@ -165,7 +165,7 @@ describe('codeSignalEngine', () => {
     expect(result.engineRequested).toBe('ast');
     expect(result.engineUsed).toBe('regex');
     expect(result.fallbackUsed).toBe(true);
-    expect(result.warning).toContain('무신호');
+    expect(result.warning).toContain('파싱 오류');
   });
 
   it('AST 무신호 probe에서 Regex 신호가 동일/낮아도 regex 결과를 활성 엔진으로 반환해야 한다', async () => {
@@ -189,6 +189,25 @@ describe('codeSignalEngine', () => {
     expect(extractCodeSignals).toHaveBeenCalledTimes(1);
     expect(result.engineUsed).toBe('regex');
     expect(result.fallbackUsed).toBe(true);
+  });
+
+  it('ast 모드에서 일부 파일만 파싱 실패한 경우(signal>0 + scanError>0)에도 Regex probe를 수행해야 한다', async () => {
+    vi.mocked(extractAstCodeSignals).mockResolvedValue({
+      fileCount: 5,
+      artifactCount: 2,
+      signalCount: 3,
+      skippedCount: 0,
+      scanErrorCount: 1,
+    });
+    vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+
+    const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+    expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
+    expect(extractCodeSignals).toHaveBeenCalledTimes(1);
+    expect(result.engineUsed).toBe('regex');
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.warning).toContain('파싱 오류');
   });
 
   it('ast 모드에서 모두 skipped인 0 signal 결과는 Regex probe를 수행하지 않아야 한다', async () => {

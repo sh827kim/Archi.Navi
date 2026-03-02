@@ -24,8 +24,7 @@ export interface CodeSignalEngineResult extends CodeSignalResult {
 function shouldProbeRegexFallback(astResult: CodeSignalResult): boolean {
   const processedFileCount = astResult.fileCount - astResult.skippedCount;
   if (processedFileCount <= 0) return false;
-  if (astResult.signalCount > 0) return false;
-  // 실제 AST 스캐너/파서 오류가 관측된 경우에만 fallback probe를 수행한다.
+  // 일부 파일만 파싱 실패해도(부분 실패) 누락 파일 복구를 위해 fallback probe를 수행한다.
   return (astResult.scanErrorCount ?? 0) > 0;
 }
 
@@ -82,8 +81,7 @@ export async function extractCodeSignalsWithEngine(
           engineRequested,
           engineUsed: 'regex',
           fallbackUsed: true,
-          warning:
-            'AST 결과가 무신호(0 signal)로 감지되어 Regex fallback 결과를 사용했습니다.',
+          warning: `AST 파싱 오류(${result.scanErrorCount ?? 0}건) 감지로 Regex fallback 결과를 사용했습니다.`,
         };
       } catch {
         // AST 무신호 상황의 보조 probe 실패는 치명 오류로 승격하지 않고 AST 결과를 유지한다.
