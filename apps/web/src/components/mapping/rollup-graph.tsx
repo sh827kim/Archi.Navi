@@ -846,22 +846,18 @@ export function RollupGraph() {
       return;
     }
 
-    if (hasDomainObjects) {
-      if (!selectedDomain) {
-        if (level !== 'DOMAIN_TO_DOMAIN') return;
-      } else {
-        if (level === 'DOMAIN_TO_DOMAIN') {
-          setSelectedDomain(null);
-          setSelectedService(null);
-          setExpandedSet(new Set());
-          setViewLevel('DOMAIN_TO_DOMAIN');
-          return;
-        }
-        if (level !== 'SERVICE_TO_SERVICE') return;
-      }
+    if (level === 'DOMAIN_TO_DOMAIN') {
+      setSelectedDomain(null);
+      setSelectedService(null);
+      setExpandedSet(new Set());
+      setViewLevel('DOMAIN_TO_DOMAIN');
+      return;
     }
 
-    if (level !== 'SERVICE_TO_SERVICE') setSelectedService(null);
+    if (level !== 'SERVICE_TO_SERVICE') {
+      setSelectedDomain(null);
+      setSelectedService(null);
+    }
     setExpandedSet(new Set());
     setViewLevel(level);
   };
@@ -928,26 +924,21 @@ export function RollupGraph() {
         <div className="flex flex-wrap gap-2">
           {VIEW_LEVELS.map((level) => {
             const isAlwaysAllowed = level.value === 'UNUSED_ATOMIC';
-            const disabledByDomainFlow =
-              hasDomainObjects &&
-              !isAlwaysAllowed &&
-              (
-                (!selectedDomain && level.value !== 'DOMAIN_TO_DOMAIN') ||
-                (selectedDomain !== null && !['DOMAIN_TO_DOMAIN', 'SERVICE_TO_SERVICE'].includes(level.value))
-              );
             return (
               <button
                 key={level.value}
                 onClick={() => handleLevelChange(level.value)}
-                disabled={disabledByDomainFlow}
-                title={disabledByDomainFlow ? 'Domain-first 단계에서 자동 전환됩니다.' : undefined}
+                title={
+                  hasDomainObjects && !isAlwaysAllowed
+                    ? '도메인 드릴다운과 별개로 언제든 레벨 전환할 수 있습니다.'
+                    : undefined
+                }
                 className={cn(
                   'flex items-center gap-1.5 rounded-full px-3 py-1.5 text-xs font-medium',
                   'border backdrop-blur-sm whitespace-nowrap transition-opacity',
                   viewLevel === level.value
                     ? 'border-primary bg-primary/20 text-primary'
                     : 'border-white/10 bg-black/40 text-zinc-400 hover:text-white hover:border-white/20',
-                  disabledByDomainFlow && 'cursor-not-allowed opacity-45 hover:text-zinc-400 hover:border-white/10',
                 )}
               >
                 <span

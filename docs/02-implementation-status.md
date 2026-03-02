@@ -54,7 +54,7 @@
 
 - ✅ Relation 추론(구현 존재)
   - Config 기반: `inferRelationsFromConfig`
-  - Code Signal(Regex): `extractCodeSignals`
+  - Code Signal(AST/Regex): `extractCodeSignalsWithEngine` (`hybrid` 기본, `ast`는 AST 실패 시 Regex fallback)
   - DB Signal: `extractDbSchemaSignals` (FK/implicit 후보 + schema evidence 연결)
 - ✅ Domain 추론
   - Track A(Seed-based): `runSeedBasedInference`
@@ -94,7 +94,7 @@
 
 ### 2.4 AST 고도화
 
-- ⚠️ AST 분석 모듈은 존재하나 기본 파이프라인(`extractCodeSignals`)은 현재 Regex 중심
+- ⚠️ `/api/inference/run` 기본 경로는 `hybrid(AST+Regex 병합)`로 전환되었으나, fallback 모니터링/운영 정책(UI/CLI)은 추가 보강 필요
 
 ---
 

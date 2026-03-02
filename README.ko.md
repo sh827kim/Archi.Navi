@@ -333,6 +333,8 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 | [docs/spec/08-progressive-rendering-spec.md](./docs/spec/08-progressive-rendering-spec.md) | 프로그레시브 렌더링 스펙 |
 | [docs/spec/09-domain-first-navigation-spec.md](./docs/spec/09-domain-first-navigation-spec.md) | Domain-first 내비게이션 스펙 |
 | [docs/spec/10-incremental-inference-spec.md](./docs/spec/10-incremental-inference-spec.md) | 증분 추론 스펙 |
+| [docs/spec/11-ast-default-code-signal-spec.md](./docs/spec/11-ast-default-code-signal-spec.md) | AST 기본 코드 시그널 스펙 |
+| [docs/spec/12-ast-regex-hybrid-code-signal-spec.md](./docs/spec/12-ast-regex-hybrid-code-signal-spec.md) | AST + Regex 하이브리드 코드 시그널 스펙 |
 
 ---
 

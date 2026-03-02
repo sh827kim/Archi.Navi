@@ -86,9 +86,18 @@ const LS = {
   INF_W_CODE: 'archi-navi:inference:w-code',
   INF_W_DB: 'archi-navi:inference:w-db',
   INF_W_MSG: 'archi-navi:inference:w-msg',
+  INF_CODE_ENGINE: 'archi-navi:inference:code-engine',
   ROLLUP_HUB: 'archi-navi:rollup:hub-threshold',
   ROLLUP_CLUSTER: 'archi-navi:rollup:min-cluster',
 } as const;
+
+type CodeEngineMode = 'hybrid' | 'ast' | 'regex';
+
+function normalizeCodeEngineMode(value: string): CodeEngineMode {
+  if (value === 'ast' || value === 'regex' || value === 'hybrid') return value;
+  if (value === 'auto') return 'ast';
+  return 'hybrid';
+}
 
 /* ─── AI 제공자 기본 모델 ─── */
 const DEFAULT_MODELS: Record<string, string> = {
@@ -944,6 +953,9 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
   const [minCluster, setMinCluster] = useState(() =>
     readLocalStorageNumber(LS.ROLLUP_CLUSTER, 3, (value) => parseInt(value, 10)),
   );
+  const [codeEngine, setCodeEngine] = useState<CodeEngineMode>(() =>
+    normalizeCodeEngineMode(readLocalStorage(LS.INF_CODE_ENGINE, 'hybrid')),
+  );
   const [profileId, setProfileId] = useState<string | null>(null);
   const [syncingProfile, setSyncingProfile] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -1020,6 +1032,7 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
       localStorage.setItem(LS.INF_W_CODE, wCode.toString());
       localStorage.setItem(LS.INF_W_DB, wDb.toString());
       localStorage.setItem(LS.INF_W_MSG, wMsg.toString());
+      localStorage.setItem(LS.INF_CODE_ENGINE, codeEngine);
       localStorage.setItem(LS.ROLLUP_HUB, hubThreshold.toString());
       localStorage.setItem(LS.ROLLUP_CLUSTER, minCluster.toString());
 
@@ -1086,6 +1099,37 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
               <span className="ml-auto text-xs">합이 1.00이어야 합니다</span>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* 코드 추출 엔진 */}
+      <Card className="glass-card">
+        <CardHeader>
+          <CardTitle>코드 시그널 엔진</CardTitle>
+          <CardDescription>
+            `modes: [code]` 실행 시 사용할 기본 코드 추출 엔진
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-2">
+          <Select
+            value={codeEngine}
+            onValueChange={(value) => {
+              setCodeEngine(normalizeCodeEngineMode(value));
+              setSaved(false);
+            }}
+          >
+            <SelectTrigger className="w-full">
+              <SelectValue placeholder="엔진 선택" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="hybrid">Hybrid (AST + Regex 병합, 기본)</SelectItem>
+              <SelectItem value="ast">AST 우선 + Regex fallback</SelectItem>
+              <SelectItem value="regex">Regex only</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            저장 후 관계 추론 실행 시 요청 본문 `codeEngine`에 적용됩니다.
+          </p>
         </CardContent>
       </Card>
 

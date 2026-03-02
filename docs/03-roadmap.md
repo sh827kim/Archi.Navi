@@ -21,7 +21,7 @@
 | 구간 | 상태 | 비고 |
 |------|------|------|
 | P1 (1-1 ~ 1-6) | ✅ 완료 | 추론 MVP 기능/승인 플로우 구현 완료 |
-| P2 (2-1) | ⚠️ 부분 구현 | AST 모듈은 존재하나 기본 추출 파이프라인은 Regex 중심 |
+| P2 (2-1) | ⚠️ 부분 구현 | 기본 경로는 `hybrid(AST+Regex 병합)`로 전환됐으나 운영 정책/모니터링 보강 필요 |
 | P2 (2-2 ~ 2-5) | ✅ 완료 | Evidence Assembler/Answer Composer/DOMAIN_SUMMARY/Message 시그널 반영 완료 |
 | P2 (운영 고도화) | ❌ 미구현 | `/api/inference/run`이 로컬 경로 의존, 조직/원격 오케스트레이션 미구현 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
@@ -99,12 +99,14 @@
 
 ### ⚠️ 2-1. AST Plugin (Tree-sitter) — Phase 2 (부분 구현)
 - **파일:** `packages/inference/src/code/ast/` (신규)
+- **SPEC:** `docs/spec/11-ast-default-code-signal-spec.md`
 - **언어:** Java/Kotlin, TypeScript/JavaScript, Python
 - **현재 상태:**
   - AST 분석 모듈/파서는 존재
-  - 기본 추출 파이프라인(`extractCodeSignals`)은 Regex 경로가 기본
+  - `/api/inference/run`의 기본 코드 추출 경로는 `hybrid(AST+Regex 병합)`
 - **남은 작업:**
-  - AST 결과를 기본 추출 경로로 승격
+  - `hybrid/ast/regex` 모드 운영 정책(UI/CLI 노출 여부) 정리
+  - fallback 발생률/실패 원인 관측 지표 노출
   - 언어별 data-flow 정확도 회귀 테스트 보강
 - **Phase 1 대비 개선:**
   - 변수/상수로 지정된 URL 추적 (data-flow analysis)
@@ -234,6 +236,8 @@
 | 프로그레시브 렌더링(3-3) | `docs/spec/08-progressive-rendering-spec.md` |
 | Domain-first(3-4) | `docs/spec/09-domain-first-navigation-spec.md` |
 | 증분 추론(3-5) | `docs/spec/10-incremental-inference-spec.md` |
+| AST 기본 경로 전환(2-1 Phase 1) | `docs/spec/11-ast-default-code-signal-spec.md` |
+| AST+Regex 하이브리드 모드(2-1 확장) | `docs/spec/12-ast-regex-hybrid-code-signal-spec.md` |
 | DOMAIN_SUMMARY | `docs/design/04-query-engine.md` §4 DOMAIN_SUMMARY |
 | DB 추론 확장(3-6) | `docs/spec/01-db-inference-index-unique-spec.md` |
 | 3D 렌더러 전환(3-7) | `docs/spec/02-object-mapping-3d-renderer-spec.md` |

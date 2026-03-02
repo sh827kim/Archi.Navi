@@ -11,8 +11,11 @@ import { and, eq } from 'drizzle-orm';
 import { getDb, objects } from '@archi-navi/db';
 import {
   inferRelationsFromConfig,
-  extractCodeSignals,
+  extractCodeSignalsWithEngine,
   extractDbSchemaSignals,
+  normalizeCodeSignalEngine,
+  type CodeSignalEngine,
+  type CodeSignalEngineUsed,
 } from '@archi-navi/inference';
 
 type InferenceMode = 'config' | 'code' | 'db';
@@ -23,6 +26,7 @@ interface RunInferenceRequest {
   repoRoots?: string[];
   useServiceMetadataPaths?: boolean;
   incremental?: boolean;
+  codeEngine?: string;
 }
 
 const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
@@ -61,6 +65,7 @@ export async function POST(req: NextRequest) {
     }
     const modes = normalizeModes(body.modes);
     const modeSet = new Set<InferenceMode>(modes);
+    const codeEngine: CodeSignalEngine = normalizeCodeSignalEngine(body.codeEngine);
 
     const db = await getDb();
 
@@ -144,6 +149,10 @@ export async function POST(req: NextRequest) {
       artifactCount: 0,
       signalCount: 0,
       skippedCount: 0,
+      engineRequested: codeEngine,
+      enginesUsed: [] as CodeSignalEngineUsed[],
+      fallbackCount: 0,
+      fallbackRepoRoots: [] as string[],
     };
     let dbResult:
       | null
@@ -176,12 +185,24 @@ export async function POST(req: NextRequest) {
     if (modeSet.has('code')) {
       for (const repoRoot of usedRepoRoots) {
         try {
-          const result = await extractCodeSignals(db, { workspaceId, repoRoot });
+          const result = await extractCodeSignalsWithEngine(db, {
+            workspaceId,
+            repoRoot,
+            codeEngine,
+          });
           codeResult.repoCount += 1;
           codeResult.fileCount += result.fileCount;
           codeResult.artifactCount += result.artifactCount;
           codeResult.signalCount += result.signalCount;
           codeResult.skippedCount += result.skippedCount;
+          if (!codeResult.enginesUsed.includes(result.engineUsed)) {
+            codeResult.enginesUsed.push(result.engineUsed);
+          }
+          if (result.fallbackUsed) {
+            codeResult.fallbackCount += 1;
+            codeResult.fallbackRepoRoots.push(repoRoot);
+            if (result.warning) warnings.push(`[code:${repoRoot}] ${result.warning}`);
+          }
         } catch (error) {
           errors.push({
             mode: 'code',

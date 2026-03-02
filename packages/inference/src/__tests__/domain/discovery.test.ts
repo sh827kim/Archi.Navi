@@ -349,5 +349,12 @@ describe('runDiscovery — 다중 레이어 통합', () => {
             return Array.isArray(candidates) && candidates.some((c) => c.text === 'order');
         });
         expect(hasOrderLabel).toBe(true);
+
+        // 자동 라벨이 있으면 displayName이 "Cluster n" 대신 의미 있는 이름이어야 한다.
+        const hasFriendlyDisplayName = discoveredDomains.some((d) => {
+            if (!d.displayName) return false;
+            return /order domain/i.test(d.displayName);
+        });
+        expect(hasFriendlyDisplayName).toBe(true);
     });
 });

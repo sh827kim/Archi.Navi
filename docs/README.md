@@ -40,6 +40,8 @@
 - [08-progressive-rendering-spec.md](./spec/08-progressive-rendering-spec.md)
 - [09-domain-first-navigation-spec.md](./spec/09-domain-first-navigation-spec.md)
 - [10-incremental-inference-spec.md](./spec/10-incremental-inference-spec.md)
+- [11-ast-default-code-signal-spec.md](./spec/11-ast-default-code-signal-spec.md)
+- [12-ast-regex-hybrid-code-signal-spec.md](./spec/12-ast-regex-hybrid-code-signal-spec.md)
 
 ### Guide/Ops (`docs` 루트)
 - [00-overview.md](./00-overview.md)

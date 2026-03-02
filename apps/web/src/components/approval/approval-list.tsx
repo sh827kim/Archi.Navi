@@ -22,6 +22,16 @@ interface RelationCandidate {
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
 }
 
+const CODE_ENGINE_LS_KEY = 'archi-navi:inference:code-engine';
+
+function resolveCodeEngine(): 'hybrid' | 'ast' | 'regex' {
+  if (typeof window === 'undefined') return 'hybrid';
+  const saved = localStorage.getItem(CODE_ENGINE_LS_KEY);
+  if (saved === 'regex') return 'regex';
+  if (saved === 'ast' || saved === 'auto') return 'ast';
+  return 'hybrid';
+}
+
 export function ApprovalList() {
   const { workspaceId } = useWorkspace();
   const [candidates, setCandidates] = useState<RelationCandidate[]>([]);
@@ -58,6 +68,7 @@ export function ApprovalList() {
           workspaceId,
           modes: ['config', 'db'],
           useServiceMetadataPaths: true,
+          codeEngine: resolveCodeEngine(),
         }),
       });
       const payload = (await res.json()) as {

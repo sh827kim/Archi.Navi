@@ -21,7 +21,7 @@ import {
     objects,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { extractLabelCandidates } from './labelExtractor';
+import { extractLabelCandidates, type LabelCandidate } from './labelExtractor';
 
 interface DiscoveryOptions {
     workspaceId: string;
@@ -38,6 +38,48 @@ interface EdgeWeights {
     call: number; // SERVICE_TO_SERVICE
     rw: number;   // SERVICE_TO_DATABASE
     msg: number;  // SERVICE_TO_BROKER
+}
+
+function toTitleWord(value: string): string {
+    if (value.length === 0) return value;
+    return value[0]!.toUpperCase() + value.slice(1);
+}
+
+function toSlug(value: string): string {
+    return value
+        .toLowerCase()
+        .replace(/[^a-z0-9\u3131-\uD79D]+/g, '-')
+        .replace(/^-+|-+$/g, '');
+}
+
+function buildDiscoveryDomainNaming(
+    clusterId: number,
+    labelCandidates: LabelCandidate[],
+    usedDisplayNames: Map<string, number>,
+): { name: string; displayName: string; autoLabel: string | null } {
+    const topLabel = labelCandidates[0]?.text?.trim() ?? '';
+    if (topLabel.length === 0) {
+        return {
+            name: `discovered:cluster-${clusterId}`,
+            displayName: `Cluster ${clusterId}`,
+            autoLabel: null,
+        };
+    }
+
+    const prettyLabel = toTitleWord(topLabel);
+    const baseDisplayName = `${prettyLabel} Domain`;
+    const duplicateCount = (usedDisplayNames.get(baseDisplayName) ?? 0) + 1;
+    usedDisplayNames.set(baseDisplayName, duplicateCount);
+    const displayName = duplicateCount === 1
+        ? baseDisplayName
+        : `${baseDisplayName} ${duplicateCount}`;
+
+    const slug = toSlug(topLabel) || `cluster-${clusterId}`;
+    return {
+        name: `discovered:${slug}-${clusterId}`,
+        displayName,
+        autoLabel: topLabel,
+    };
 }
 
 /**
@@ -261,11 +303,9 @@ export async function runDiscovery(
 
     // 도메인 생성 + 멤버십 저장 + run 완료를 트랜잭션으로 원자적 처리
     await db.transaction(async (tx) => {
-        for (const [clusterId, members] of validClusters) {
-            // Domain object 생성 (kind=DISCOVERED)
-            const domainId = generateId();
-            const clusterName = `cluster-${clusterId}`;
+        const usedDisplayNames = new Map<string, number>();
 
+        for (const [clusterId, members] of validClusters) {
             // 클러스터 멤버 이름 조회 → 라벨 후보 추출
             const memberRows = await tx
                 .select({ name: objects.name })
@@ -273,6 +313,10 @@ export async function runDiscovery(
                 .where(inArray(objects.id, members));
             const memberNames = memberRows.map((r) => r.name);
             const labelCandidates = extractLabelCandidates(memberNames);
+            const naming = buildDiscoveryDomainNaming(clusterId, labelCandidates, usedDisplayNames);
+
+            // Domain object 생성 (kind=DISCOVERED)
+            const domainId = generateId();
 
             await tx.insert(objects).values({
                 id: domainId,
@@ -280,8 +324,8 @@ export async function runDiscovery(
                 objectType: 'domain',
                 category: null,
                 granularity: 'COMPOUND',
-                name: `discovered:${clusterName}`,
-                displayName: `Cluster ${clusterId}`,
+                name: naming.name,
+                displayName: naming.displayName,
                 path: `/${domainId}`,
                 depth: 0,
                 visibility: 'VISIBLE',
@@ -292,6 +336,7 @@ export async function runDiscovery(
                     algoVersion: '1.0',
                     inputLayers: actualInputLayers,
                     labelCandidates,
+                    autoLabel: naming.autoLabel,
                 },
             });
 

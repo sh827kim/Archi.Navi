@@ -14,6 +14,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "dev": "tsc -w --preserveWatchOutput",
     "test:unit": "vitest run src/__tests__",
     "test:unit:coverage": "vitest run src/__tests__ --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --coverage.thresholds.lines=80 --coverage.thresholds.functions=80 --coverage.thresholds.branches=80 --coverage.thresholds.statements=80 --coverage.thresholds.perFile=true",
     "test:unit:watch": "vitest src/__tests__",

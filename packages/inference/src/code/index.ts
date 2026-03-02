@@ -7,6 +7,12 @@
  * → WASM 전환 완료 후 다시 통합 예정 (docs/10-verification-report.md §5)
  */
 export { extractCodeSignals } from './codeSignalExtractor';
+export { extractHybridCodeSignals } from './hybridCodeSignalExtractor';
+export {
+    extractCodeSignalsWithEngine,
+    normalizeCodeSignalEngine,
+} from './codeSignalEngine';
+export { mergeHybridSignals } from './hybridSignalMerge';
 export type {
     CodeSignalOptions,
     CodeSignalResult,
@@ -14,3 +20,9 @@ export type {
     FileScanResult,
     SignalKind,
 } from './codeSignalExtractor';
+export type {
+    CodeSignalEngine,
+    CodeSignalEngineResult,
+    CodeSignalEngineUsed,
+    CodeSignalEngineOptions,
+} from './codeSignalEngine';
