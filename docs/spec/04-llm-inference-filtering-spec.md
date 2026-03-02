@@ -362,6 +362,6 @@ batchSize(기본 10)개씩 LLM 호출
 
 | 문서 | 관계 |
 |------|------|
-| [03-inference-engine.md](./03-inference-engine.md) | 추론 엔진 전체 설계 (§2.5 중복 후보 처리) |
-| [08-roadmap.md](./08-roadmap.md) | P2 AST + AI 고도화 로드맵 |
-| [02-data-model.md](./02-data-model.md) | relation_candidates, evidences 스키마 |
+| [03-inference-engine.md](../design/03-inference-engine.md) | 추론 엔진 전체 설계 (§2.5 중복 후보 처리) |
+| [03-roadmap.md](../03-roadmap.md) | P2 AST + AI 고도화 로드맵 |
+| [02-data-model.md](../design/02-data-model.md) | relation_candidates, evidences 스키마 |

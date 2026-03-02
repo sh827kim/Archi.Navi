@@ -1,6 +1,6 @@
 # LLM 추론 후보 필터링 — 구현 체크리스트
 
-> 설계안: `docs/09-llm-inference-filtering.md` v1.0
+> 설계안: `docs/spec/04-llm-inference-filtering-spec.md` v1.0
 > AST Phase 2 충돌 검증 포함
 
 ---

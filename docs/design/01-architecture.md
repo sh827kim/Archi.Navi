@@ -354,6 +354,6 @@ PORT=3000
 
 | 문서 | 설명 |
 |------|------|
-| [00-overview.md](./00-overview.md) | 프로젝트 개요, 범위, 원칙 |
+| [00-overview.md](../00-overview.md) | 프로젝트 개요, 범위, 원칙 |
 | [02-data-model.md](./02-data-model.md) | Object/Relation 모델, DB 스키마 |
-| [06-development-guide.md](./06-development-guide.md) | 개발 환경 설정, 컨벤션 |
+| [01-development-guide.md](../01-development-guide.md) | 개발 환경 설정, 컨벤션 |

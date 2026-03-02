@@ -302,17 +302,29 @@ Relations are stored at the atomic level; Roll-up views are derived via material
 
 | Document | Description |
 |----------|-------------|
+| [docs/README.md](./docs/README.md) | Documentation taxonomy (Design / SPEC / Guide) |
+| [docs/design/README.md](./docs/design/README.md) | Design document index |
+| [docs/spec/README.md](./docs/spec/README.md) | SPEC document index |
 | [docs/00-overview.md](./docs/00-overview.md) | Product overview, principles, scope |
-| [docs/01-architecture.md](./docs/01-architecture.md) | System architecture, tech stack |
-| [docs/02-data-model.md](./docs/02-data-model.md) | Object/Relation model, DB schema |
-| [docs/03-inference-engine.md](./docs/03-inference-engine.md) | Inference engine design |
-| [docs/04-query-engine.md](./docs/04-query-engine.md) | Query engine (BFS/DFS, impact analysis) |
-| [docs/05-rollup-and-graph.md](./docs/05-rollup-and-graph.md) | Rollup strategy and graph performance |
-| [docs/06-development-guide.md](./docs/06-development-guide.md) | Development guide and conventions |
-| [docs/07-implementation-status.md](./docs/07-implementation-status.md) | v1 implementation status |
-| [docs/08-roadmap.md](./docs/08-roadmap.md) | v2+ roadmap |
-| [docs/11-db-inference-index-unique-spec.md](./docs/11-db-inference-index-unique-spec.md) | DB inference expansion spec (index/unique patterns) |
-| [docs/12-object-mapping-3d-renderer-spec.md](./docs/12-object-mapping-3d-renderer-spec.md) | Object Mapping 3D renderer transition spec |
+| [docs/design/01-architecture.md](./docs/design/01-architecture.md) | System architecture, tech stack |
+| [docs/design/02-data-model.md](./docs/design/02-data-model.md) | Object/Relation model, DB schema |
+| [docs/design/03-inference-engine.md](./docs/design/03-inference-engine.md) | Inference engine design |
+| [docs/design/04-query-engine.md](./docs/design/04-query-engine.md) | Query engine (BFS/DFS, impact analysis) |
+| [docs/design/05-rollup-and-graph.md](./docs/design/05-rollup-and-graph.md) | Rollup strategy and graph performance |
+| [docs/design/06-compound-view.md](./docs/design/06-compound-view.md) | Compound dependency view design |
+| [docs/01-development-guide.md](./docs/01-development-guide.md) | Development guide and conventions |
+| [docs/02-implementation-status.md](./docs/02-implementation-status.md) | v1 implementation status |
+| [docs/03-roadmap.md](./docs/03-roadmap.md) | v2+ roadmap |
+| [docs/spec/01-db-inference-index-unique-spec.md](./docs/spec/01-db-inference-index-unique-spec.md) | DB inference expansion spec (index/unique patterns) |
+| [docs/spec/02-object-mapping-3d-renderer-spec.md](./docs/spec/02-object-mapping-3d-renderer-spec.md) | Object Mapping 3D renderer transition spec |
+| [docs/spec/03-compound-view-implementation-spec.md](./docs/spec/03-compound-view-implementation-spec.md) | Compound View implementation spec |
+| [docs/spec/04-llm-inference-filtering-spec.md](./docs/spec/04-llm-inference-filtering-spec.md) | LLM inference filtering spec |
+| [docs/spec/05-llm-inference-filtering-spec-checklist.md](./docs/spec/05-llm-inference-filtering-spec-checklist.md) | LLM inference filtering implementation checklist |
+| [docs/spec/06-incremental-rollup-rebuild-spec.md](./docs/spec/06-incremental-rollup-rebuild-spec.md) | Incremental rollup rebuild spec |
+| [docs/spec/07-hub-node-management-spec.md](./docs/spec/07-hub-node-management-spec.md) | Hub node management spec |
+| [docs/spec/08-progressive-rendering-spec.md](./docs/spec/08-progressive-rendering-spec.md) | Progressive rendering spec |
+| [docs/spec/09-domain-first-navigation-spec.md](./docs/spec/09-domain-first-navigation-spec.md) | Domain-first navigation spec |
+| [docs/spec/10-incremental-inference-spec.md](./docs/spec/10-incremental-inference-spec.md) | Incremental inference spec |
 
 ---
 

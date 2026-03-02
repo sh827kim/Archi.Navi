@@ -3,7 +3,7 @@
 작성일: 2026-02-23
 문서 버전: v1.0
 상태: Draft
-구현 SPEC: [13-compound-view-implementation-spec.md](./13-compound-view-implementation-spec.md)
+구현 SPEC: [compound-view-implementation-spec.md](../spec/03-compound-view-implementation-spec.md)
 
 ---
 

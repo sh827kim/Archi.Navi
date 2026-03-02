@@ -406,5 +406,5 @@ packages/cli
 
 | 문서 | 설명 |
 |------|------|
-| [01-architecture.md](./01-architecture.md) | 기술스택 및 모노레포 구조 상세 |
-| [02-data-model.md](./02-data-model.md) | DB 스키마 (Drizzle 개발 시 참조) |
+| [01-architecture.md](./design/01-architecture.md) | 기술스택 및 모노레포 구조 상세 |
+| [02-data-model.md](./design/02-data-model.md) | DB 스키마 (Drizzle 개발 시 참조) |

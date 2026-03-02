@@ -1,11 +1,11 @@
-# 13. Compound View Implementation SPEC
+# Compound View Implementation SPEC
 
 - 작성일: 2026-03-02
 - 상태: Draft (Phase A/B + 잔여 항목 대부분 구현 완료)
-- 연계 문서: `docs/07-compound-view.md`, `docs/05-rollup-and-graph.md`
+- 연계 문서: `../design/06-compound-view.md`, `../design/05-rollup-and-graph.md`
 
 ## 1. 목적
-`docs/07-compound-view.md`의 개념 설계를 실제 구현 단위로 분해해, Compound View를 단계적으로 릴리스 가능한 형태로 정의한다.
+`../design/06-compound-view.md`의 개념 설계를 실제 구현 단위로 분해해, Compound View를 단계적으로 릴리스 가능한 형태로 정의한다.
 
 ## 2. 범위
 ### 2.1 MVP (Phase A)
