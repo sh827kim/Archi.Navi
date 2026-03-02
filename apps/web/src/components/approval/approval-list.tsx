@@ -66,7 +66,7 @@ export function ApprovalList() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           workspaceId,
-          modes: ['config', 'db'],
+          modes: ['config', 'code', 'db'],
           useServiceMetadataPaths: true,
           codeEngine: resolveCodeEngine(),
         }),
@@ -74,11 +74,34 @@ export function ApprovalList() {
       const payload = (await res.json()) as {
         error?: string;
         summary?: { relationCandidatesCreated?: number };
+        results?: {
+          config?: { processedFileCount?: number };
+          code?: { signalCount?: number };
+        };
+        warnings?: string[];
       };
       if (!res.ok) throw new Error(payload.error ?? '추론 실행 실패');
 
       const created = payload.summary?.relationCandidatesCreated ?? 0;
-      toast.success(`추론 실행 완료 — 관계 후보 ${created}개 생성`);
+      if (created > 0) {
+        toast.success(`추론 실행 완료 — 관계 후보 ${created}개 생성`);
+      } else {
+        const codeSignals = payload.results?.code?.signalCount ?? 0;
+        const processedConfigFiles = payload.results?.config?.processedFileCount ?? 0;
+        const primaryWarning = payload.warnings?.[0];
+
+        if (primaryWarning) {
+          toast.warning(`후보 0개 — ${primaryWarning}`);
+        } else if (codeSignals > 0) {
+          toast.warning(
+            `후보 0개 — 코드 시그널 ${codeSignals}개 추출됨 (관계 후보 생성은 config/db 결과 기준)`,
+          );
+        } else if (processedConfigFiles === 0) {
+          toast.warning('후보 0개 — 처리된 설정 파일이 없습니다. repoRoot/scanPath를 확인하세요.');
+        } else {
+          toast.warning('추론 실행 완료 — 신규 관계 후보가 생성되지 않았습니다.');
+        }
+      }
       await loadCandidates();
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '추론 실행 실패');
