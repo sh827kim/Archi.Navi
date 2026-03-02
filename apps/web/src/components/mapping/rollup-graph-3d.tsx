@@ -357,10 +357,11 @@ export function RollupGraph3D({
 
         const collectReferenceContext = (rootId: string): { nodes: Set<string>; links: Set<string> } => {
           const { nodesById, links: snapshotLinks } = graphSnapshotRef.current;
-          const resultNodes = new Set<string>([rootId]);
+          const resultNodes = new Set<string>();
           const resultLinks = new Set<string>();
           const rootNode = nodesById.get(rootId);
           if (!rootNode) return { nodes: resultNodes, links: resultLinks };
+          resultNodes.add(rootId);
 
           const parentCompoundByAtomic = new Map<string, string>();
           const containsLinkByAtomic = new Map<string, string>();
@@ -435,7 +436,15 @@ export function RollupGraph3D({
           pinnedNodeIdsRef.current.clear();
           pinnedLinkIdsRef.current.clear();
           if (!rootId) return;
+          if (!graphSnapshotRef.current.nodesById.has(rootId)) {
+            pinnedRootNodeIdRef.current = null;
+            return;
+          }
           const context = collectReferenceContext(rootId);
+          if (context.nodes.size === 0) {
+            pinnedRootNodeIdRef.current = null;
+            return;
+          }
           context.nodes.forEach((id) => pinnedNodeIdsRef.current.add(id));
           context.links.forEach((id) => pinnedLinkIdsRef.current.add(id));
         };
