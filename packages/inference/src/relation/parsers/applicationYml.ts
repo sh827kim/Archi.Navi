@@ -208,7 +208,7 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
     for (const routeValue of Object.values(routes)) {
       if (!routeValue || typeof routeValue !== 'object') continue;
       const routeObj = routeValue as Record<string, unknown>;
-      const serviceId = routeObj['serviceId'];
+      const serviceId = routeObj['serviceId'] ?? routeObj['service-id'];
       if (typeof serviceId !== 'string') continue;
       const normalized = serviceId.trim();
       if (normalized.length === 0) continue;

@@ -239,6 +239,55 @@ zuul:
       expect(callCandidates[0]?.confidence).toBeCloseTo(0.7);
     });
 
+    it('zuul.routes.service-id(kebab-case)에서도 service 간 call relation_candidate를 생성해야 한다', async () => {
+      const { orderServiceId } = await createTestFixtures(db, workspaceId);
+
+      const articleServiceId = generateId();
+      await db.insert(objects).values({
+        id: articleServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'article-service',
+        path: `/${articleServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      });
+
+      writeFileSync(
+        join(tempDir, 'application.yml'),
+        `
+spring:
+  application:
+    name: order-service
+zuul:
+  routes:
+    article:
+      service-id: article-service
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      expect(result.candidateCount).toBe(1);
+
+      const callCandidates = await db
+        .select()
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, workspaceId),
+            eq(relationCandidates.relationType, 'call'),
+            eq(relationCandidates.subjectObjectId, orderServiceId),
+            eq(relationCandidates.objectId, articleServiceId),
+          ),
+        );
+      expect(callCandidates).toHaveLength(1);
+      expect(callCandidates[0]?.confidence).toBeCloseTo(0.7);
+    });
+
     it('서비스 이름이 매칭되지 않으면 relation_candidate를 생성하지 않아야 한다', async () => {
       await createTestFixtures(db, workspaceId);
 

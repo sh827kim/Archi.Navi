@@ -207,6 +207,24 @@ zuul:
     expect(result.routeServiceIds).toEqual(['article-service', 'author-service']);
   });
 
+  it('zuul.routes.*.service-id(kebab-case)도 서비스 의존 후보로 파싱해야 한다', () => {
+    const yaml = `
+spring:
+  application:
+    name: api-gateway
+zuul:
+  routes:
+    article:
+      path: /articles/**
+      service-id: article-service
+    author:
+      path: /authors/**
+      service-id: author-service
+`;
+    const result = parseApplicationYml('/app/application.yml', yaml);
+    expect(result.routeServiceIds).toEqual(['article-service', 'author-service']);
+  });
+
   // ─── 엣지 케이스 ─────────────────────────────────────────────────────────────
 
   it('spring.profiles.active가 있어도 동일 파일의 설정은 정상 파싱해야 한다', () => {
