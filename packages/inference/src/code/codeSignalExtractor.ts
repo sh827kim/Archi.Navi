@@ -57,6 +57,8 @@ export interface CodeSignalOptions {
     repoRoot: string;
     /** true면 SHA256 동일 파일도 강제로 재처리 */
     forceRescan?: boolean;
+    /** 지정 시 해당 파일 경로들만 추출 대상으로 제한 */
+    targetFilePaths?: string[];
 }
 
 /** extractCodeSignals 반환 결과 */
@@ -71,6 +73,8 @@ export interface CodeSignalResult {
     skippedCount: number;
     /** 스캐너/파서 오류로 파일 단위 스킵된 수 (주로 AST 모드에서 사용) */
     scanErrorCount?: number;
+    /** 스캐너/파서 오류가 발생한 파일 경로 목록 (주로 AST 모드에서 사용) */
+    scanErrorFilePaths?: string[];
 }
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
@@ -352,6 +356,9 @@ export async function extractCodeSignals(
 ): Promise<CodeSignalResult> {
     const { workspaceId, repoRoot } = options;
     const forceRescan = options.forceRescan === true;
+    const targetFileSet = options.targetFilePaths
+        ? new Set(options.targetFilePaths.map((path) => path.replace(/\\/g, '/')))
+        : null;
 
     // 워크스페이스 서비스 목록 미리 조회 (ownerObjectId 매칭용)
     const allServices = await db
@@ -371,6 +378,11 @@ export async function extractCodeSignals(
         signalCount: 0,
         skippedCount: 0,
     };
+
+    function filterTargetFiles(files: string[]): string[] {
+        if (!targetFileSet) return files;
+        return files.filter((filePath) => targetFileSet.has(filePath.replace(/\\/g, '/')));
+    }
 
     /**
      * 파일 목록을 순회하며 스캔 결과를 처리하는 헬퍼
@@ -404,16 +416,16 @@ export async function extractCodeSignals(
     }
 
     // 1. Java/Kotlin 파일 처리
-    await processAll(findJavaKotlinFiles(repoRoot), scanJavaKotlin);
+    await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), scanJavaKotlin);
 
     // 2. MyBatis XML 파일 처리
-    await processAll(findMyBatisXmlFiles(repoRoot), scanMyBatisXml);
+    await processAll(filterTargetFiles(findMyBatisXmlFiles(repoRoot)), scanMyBatisXml);
 
     // 3. TypeScript/JavaScript 파일 처리
-    await processAll(findTypeScriptFiles(repoRoot), scanTypeScript);
+    await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), scanTypeScript);
 
     // 4. Python 파일 처리
-    await processAll(findPythonFiles(repoRoot), scanPython);
+    await processAll(filterTargetFiles(findPythonFiles(repoRoot)), scanPython);
 
     return result;
 }

@@ -112,6 +112,7 @@ interface ProcessFileContext {
     workspaceId: string;
     repoRoot: string;
     allServices: { id: string; name: string }[];
+    forceRescan: boolean;
 }
 
 interface ProcessFileResult {
@@ -125,7 +126,7 @@ async function processFile(
     scanResult: FileScanResult,
     ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
-    const { db, workspaceId, repoRoot, allServices } = ctx;
+    const { db, workspaceId, repoRoot, allServices, forceRescan } = ctx;
 
     const existing = await db
         .select({ id: codeArtifacts.id, sha256: codeArtifacts.sha256 })
@@ -141,7 +142,7 @@ async function processFile(
     const existingArtifact = existing[0];
 
     // SHA256 동일 → 스킵
-    if (existingArtifact?.sha256 === scanResult.sha256) {
+    if (!forceRescan && existingArtifact?.sha256 === scanResult.sha256) {
         return { skipped: true, isNew: false, signalCount: 0 };
     }
 
@@ -219,6 +220,10 @@ export async function extractAstCodeSignals(
     options: CodeSignalOptions,
 ): Promise<CodeSignalResult> {
     const { workspaceId, repoRoot } = options;
+    const forceRescan = options.forceRescan === true;
+    const targetFileSet = options.targetFilePaths
+        ? new Set(options.targetFilePaths.map((path) => path.replace(/\\/g, '/')))
+        : null;
 
     const allServices = await db
         .select({ id: objects.id, name: objects.name })
@@ -230,14 +235,20 @@ export async function extractAstCodeSignals(
             ),
         );
 
-    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices };
+    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
     const result: CodeSignalResult = {
         fileCount: 0,
         artifactCount: 0,
         signalCount: 0,
         skippedCount: 0,
         scanErrorCount: 0,
+        scanErrorFilePaths: [],
     };
+
+    function filterTargetFiles(files: string[]): string[] {
+        if (!targetFileSet) return files;
+        return files.filter((filePath) => targetFileSet.has(filePath.replace(/\\/g, '/')));
+    }
 
     async function processAll(
         files: string[],
@@ -259,6 +270,7 @@ export async function extractAstCodeSignals(
             } catch {
                 // AST 파싱 실패 시 스킵
                 result.scanErrorCount = (result.scanErrorCount ?? 0) + 1;
+                result.scanErrorFilePaths?.push(filePath);
                 continue;
             }
 
@@ -273,13 +285,13 @@ export async function extractAstCodeSignals(
     }
 
     // 1. Java/Kotlin 파일 처리 (AST)
-    await processAll(findJavaKotlinFiles(repoRoot), scanJavaKotlinAst);
+    await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), scanJavaKotlinAst);
 
     // 2. TypeScript/JavaScript 파일 처리 (AST)
-    await processAll(findTypeScriptFiles(repoRoot), scanTypeScriptAst);
+    await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), scanTypeScriptAst);
 
     // 3. Python 파일 처리 (AST)
-    await processAll(findPythonFiles(repoRoot), scanPythonAst);
+    await processAll(filterTargetFiles(findPythonFiles(repoRoot)), scanPythonAst);
 
     return result;
 }

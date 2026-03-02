@@ -151,6 +151,7 @@ describe('codeSignalEngine', () => {
       signalCount: 0,
       skippedCount: 0,
       scanErrorCount: 2,
+      scanErrorFilePaths: ['/tmp/repo/src/A.java', '/tmp/repo/src/B.java'],
     });
     vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
 
@@ -160,7 +161,11 @@ describe('codeSignalEngine', () => {
     expect(extractCodeSignals).toHaveBeenCalledTimes(1);
     expect(extractCodeSignals).toHaveBeenCalledWith(
       db,
-      expect.objectContaining({ ...options, forceRescan: true }),
+      expect.objectContaining({
+        ...options,
+        forceRescan: true,
+        targetFilePaths: ['/tmp/repo/src/A.java', '/tmp/repo/src/B.java'],
+      }),
     );
     expect(result.engineRequested).toBe('ast');
     expect(result.engineUsed).toBe('regex');
@@ -175,6 +180,7 @@ describe('codeSignalEngine', () => {
       signalCount: 0,
       skippedCount: 0,
       scanErrorCount: 1,
+      scanErrorFilePaths: ['/tmp/repo/src/A.java'],
     });
     vi.mocked(extractCodeSignals).mockResolvedValue({
       fileCount: 5,
@@ -198,16 +204,49 @@ describe('codeSignalEngine', () => {
       signalCount: 3,
       skippedCount: 0,
       scanErrorCount: 1,
+      scanErrorFilePaths: ['/tmp/repo/src/Failed.ts'],
     });
-    vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+    vi.mocked(extractCodeSignals).mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 2,
+      skippedCount: 0,
+    });
 
     const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
 
     expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
     expect(extractCodeSignals).toHaveBeenCalledTimes(1);
-    expect(result.engineUsed).toBe('regex');
+    expect(extractCodeSignals).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        ...options,
+        forceRescan: true,
+        targetFilePaths: ['/tmp/repo/src/Failed.ts'],
+      }),
+    );
+    expect(result.engineUsed).toBe('ast');
     expect(result.fallbackUsed).toBe(true);
+    expect(result.signalCount).toBe(5);
     expect(result.warning).toContain('파싱 오류');
+  });
+
+  it('ast 모드에서 scanErrorCount>0 이지만 실패 파일 목록이 없고 AST 신호가 있으면 fallback을 건너뛰어야 한다', async () => {
+    vi.mocked(extractAstCodeSignals).mockResolvedValue({
+      fileCount: 4,
+      artifactCount: 1,
+      signalCount: 2,
+      skippedCount: 0,
+      scanErrorCount: 1,
+    });
+
+    const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+    expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
+    expect(extractCodeSignals).not.toHaveBeenCalled();
+    expect(result.engineUsed).toBe('ast');
+    expect(result.fallbackUsed).toBe(false);
+    expect(result.warning).toContain('건너뛰었습니다');
   });
 
   it('ast 모드에서 모두 skipped인 0 signal 결과는 Regex probe를 수행하지 않아야 한다', async () => {

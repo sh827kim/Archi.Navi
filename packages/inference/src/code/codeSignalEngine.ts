@@ -28,6 +28,30 @@ function shouldProbeRegexFallback(astResult: CodeSignalResult): boolean {
   return (astResult.scanErrorCount ?? 0) > 0;
 }
 
+function getFailedFilePaths(astResult: CodeSignalResult): string[] {
+  const source = astResult.scanErrorFilePaths ?? [];
+  return Array.from(new Set(source.filter((path) => typeof path === 'string' && path.length > 0)));
+}
+
+function mergeAstAndRegexRecovery(
+  astResult: CodeSignalResult,
+  regexResult: CodeSignalResult,
+): CodeSignalResult {
+  const merged: CodeSignalResult = {
+    fileCount: astResult.fileCount,
+    artifactCount: astResult.artifactCount + regexResult.artifactCount,
+    signalCount: astResult.signalCount + regexResult.signalCount,
+    skippedCount: astResult.skippedCount + regexResult.skippedCount,
+  };
+  if (typeof astResult.scanErrorCount === 'number') {
+    merged.scanErrorCount = astResult.scanErrorCount;
+  }
+  if (astResult.scanErrorFilePaths) {
+    merged.scanErrorFilePaths = astResult.scanErrorFilePaths;
+  }
+  return merged;
+}
+
 export function normalizeCodeSignalEngine(value: string | null | undefined): CodeSignalEngine {
   if (value === 'ast' || value === 'auto') return 'ast';
   if (value === 'regex') return 'regex';
@@ -44,6 +68,7 @@ export async function extractCodeSignalsWithEngine(
     workspaceId: options.workspaceId,
     repoRoot: options.repoRoot,
     ...(options.forceRescan === true ? { forceRescan: true } : {}),
+    ...(options.targetFilePaths ? { targetFilePaths: options.targetFilePaths } : {}),
   };
 
   if (engineRequested === 'regex') {
@@ -67,32 +92,59 @@ export async function extractCodeSignalsWithEngine(
   }
 
   try {
-    const result = await extractAstCodeSignals(db, baseOptions);
+    const astResult = await extractAstCodeSignals(db, baseOptions);
+    let fallbackWarning: string | undefined;
 
-    if (shouldProbeRegexFallback(result)) {
+    if (shouldProbeRegexFallback(astResult)) {
+      const failedFilePaths = getFailedFilePaths(astResult);
+      if (failedFilePaths.length === 0 && astResult.signalCount > 0) {
+        // 실패 파일 식별 정보가 없을 때 전체 regex fallback은 AST 성공 신호를 덮어쓸 수 있어 차단한다.
+        return {
+          ...astResult,
+          engineRequested,
+          engineUsed: 'ast',
+          fallbackUsed: false,
+          warning: `AST 파싱 오류(${astResult.scanErrorCount ?? 0}건)를 감지했지만 실패 파일 식별이 불가하여 Regex fallback을 건너뛰었습니다.`,
+        };
+      }
+
       try {
         const regexResult = await extractCodeSignals(db, {
           ...baseOptions,
           forceRescan: true,
+          ...(failedFilePaths.length > 0 ? { targetFilePaths: failedFilePaths } : {}),
         });
-        // extractCodeSignals는 저장을 수행하므로 probe 실행 시 결과 엔진을 regex로 일치시킨다.
+
+        if (astResult.signalCount > 0) {
+          return {
+            ...mergeAstAndRegexRecovery(astResult, regexResult),
+            engineRequested,
+            engineUsed: 'ast',
+            fallbackUsed: true,
+            warning: `AST 파싱 오류(${astResult.scanErrorCount ?? 0}건) 파일에 한해 Regex fallback을 병행 적용했습니다.`,
+          };
+        }
+
         return {
           ...regexResult,
           engineRequested,
           engineUsed: 'regex',
           fallbackUsed: true,
-          warning: `AST 파싱 오류(${result.scanErrorCount ?? 0}건) 감지로 Regex fallback 결과를 사용했습니다.`,
+          warning: `AST 파싱 오류(${astResult.scanErrorCount ?? 0}건) 감지로 Regex fallback 결과를 사용했습니다.`,
         };
-      } catch {
-        // AST 무신호 상황의 보조 probe 실패는 치명 오류로 승격하지 않고 AST 결과를 유지한다.
+      } catch (fallbackError) {
+        const fallbackErrorMessage =
+          fallbackError instanceof Error ? fallbackError.message : 'unknown regex fallback error';
+        fallbackWarning = `AST 파싱 오류(${astResult.scanErrorCount ?? 0}건)를 감지했으나 Regex fallback에 실패했습니다: ${fallbackErrorMessage}`;
       }
     }
 
     return {
-      ...result,
+      ...astResult,
       engineRequested,
       engineUsed: 'ast',
       fallbackUsed: false,
+      ...(fallbackWarning ? { warning: fallbackWarning } : {}),
     };
   } catch (astError) {
     const astErrorMessage = astError instanceof Error ? astError.message : 'unknown AST error';
