@@ -95,6 +95,41 @@ describe('codeSignalEngine', () => {
     expect(result.warning).toContain('AST 추출 실패');
   });
 
+  it('ast 모드에서 AST 무신호(침묵 실패) 시 Regex probe가 개선 결과를 fallback으로 채택해야 한다', async () => {
+    vi.mocked(extractAstCodeSignals).mockResolvedValue({
+      fileCount: 5,
+      artifactCount: 0,
+      signalCount: 0,
+      skippedCount: 0,
+    });
+    vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+
+    const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+    expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
+    expect(extractCodeSignals).toHaveBeenCalledTimes(1);
+    expect(result.engineRequested).toBe('ast');
+    expect(result.engineUsed).toBe('regex');
+    expect(result.fallbackUsed).toBe(true);
+    expect(result.warning).toContain('무신호');
+  });
+
+  it('ast 모드에서 모두 skipped인 0 signal 결과는 Regex probe를 수행하지 않아야 한다', async () => {
+    vi.mocked(extractAstCodeSignals).mockResolvedValue({
+      fileCount: 4,
+      artifactCount: 0,
+      signalCount: 0,
+      skippedCount: 4,
+    });
+
+    const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+    expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
+    expect(extractCodeSignals).not.toHaveBeenCalled();
+    expect(result.engineUsed).toBe('ast');
+    expect(result.fallbackUsed).toBe(false);
+  });
+
   it('ast 모드에서 AST/Regex 모두 실패하면 에러를 던져야 한다', async () => {
     vi.mocked(extractAstCodeSignals).mockRejectedValue(new Error('ast failed'));
     vi.mocked(extractCodeSignals).mockRejectedValue(new Error('regex failed'));

@@ -21,6 +21,14 @@ export interface CodeSignalEngineResult extends CodeSignalResult {
   warning?: string;
 }
 
+function shouldProbeRegexFallback(astResult: CodeSignalResult): boolean {
+  const processedFileCount = astResult.fileCount - astResult.skippedCount;
+  if (processedFileCount <= 0) return false;
+  if (astResult.signalCount > 0) return false;
+  // AST 파서/스캐너가 파일 단위로 예외를 삼키며 통과한 경우를 포착하기 위한 휴리스틱.
+  return astResult.artifactCount === 0;
+}
+
 export function normalizeCodeSignalEngine(value: string | null | undefined): CodeSignalEngine {
   if (value === 'ast' || value === 'auto') return 'ast';
   if (value === 'regex') return 'regex';
@@ -60,6 +68,25 @@ export async function extractCodeSignalsWithEngine(
 
   try {
     const result = await extractAstCodeSignals(db, baseOptions);
+
+    if (shouldProbeRegexFallback(result)) {
+      try {
+        const regexResult = await extractCodeSignals(db, baseOptions);
+        if (regexResult.signalCount > result.signalCount) {
+          return {
+            ...regexResult,
+            engineRequested,
+            engineUsed: 'regex',
+            fallbackUsed: true,
+            warning:
+              'AST 결과가 무신호(0 signal)로 감지되어 Regex fallback 결과를 사용했습니다.',
+          };
+        }
+      } catch {
+        // AST 무신호 상황의 보조 probe 실패는 치명 오류로 승격하지 않고 AST 결과를 유지한다.
+      }
+    }
+
     return {
       ...result,
       engineRequested,
