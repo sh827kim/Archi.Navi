@@ -105,6 +105,7 @@ describe('codeSignalEngine', () => {
       artifactCount: 0,
       signalCount: 0,
       skippedCount: 0,
+      scanErrorCount: 2,
     });
     vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
 
@@ -128,6 +129,7 @@ describe('codeSignalEngine', () => {
       artifactCount: 0,
       signalCount: 0,
       skippedCount: 0,
+      scanErrorCount: 1,
     });
     vi.mocked(extractCodeSignals).mockResolvedValue({
       fileCount: 5,
@@ -150,6 +152,24 @@ describe('codeSignalEngine', () => {
       artifactCount: 0,
       signalCount: 0,
       skippedCount: 4,
+      scanErrorCount: 1,
+    });
+
+    const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+    expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
+    expect(extractCodeSignals).not.toHaveBeenCalled();
+    expect(result.engineUsed).toBe('ast');
+    expect(result.fallbackUsed).toBe(false);
+  });
+
+  it('ast 모드에서 0 signal이어도 AST 오류 신호가 없으면 Regex probe를 수행하지 않아야 한다', async () => {
+    vi.mocked(extractAstCodeSignals).mockResolvedValue({
+      fileCount: 3,
+      artifactCount: 0,
+      signalCount: 0,
+      skippedCount: 0,
+      scanErrorCount: 0,
     });
 
     const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });

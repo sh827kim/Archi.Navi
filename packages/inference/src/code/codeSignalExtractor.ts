@@ -7,7 +7,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname } from 'path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -69,6 +69,8 @@ export interface CodeSignalResult {
     signalCount: number;
     /** SHA256 미변경으로 스킵된 파일 수 */
     skippedCount: number;
+    /** 스캐너/파서 오류로 파일 단위 스킵된 수 (주로 AST 모드에서 사용) */
+    scanErrorCount?: number;
 }
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
@@ -196,6 +198,50 @@ interface ProcessFileResult {
     signalCount: number;
 }
 
+async function deleteArtifactEdgesAndEvidences(
+    db: DbClient,
+    workspaceId: string,
+    artifactId: string,
+) {
+    const existingEdgeRows = await db
+        .select({ evidenceId: codeCallEdges.evidenceId })
+        .from(codeCallEdges)
+        .where(
+            and(
+                eq(codeCallEdges.workspaceId, workspaceId),
+                eq(codeCallEdges.callerArtifactId, artifactId),
+            ),
+        );
+
+    await db
+        .delete(codeCallEdges)
+        .where(
+            and(
+                eq(codeCallEdges.workspaceId, workspaceId),
+                eq(codeCallEdges.callerArtifactId, artifactId),
+            ),
+        );
+
+    const evidenceIds = Array.from(
+        new Set(
+            existingEdgeRows
+                .map((row) => row.evidenceId)
+                .filter((id): id is string => typeof id === 'string' && id.length > 0),
+        ),
+    );
+
+    if (evidenceIds.length === 0) return;
+
+    await db
+        .delete(evidences)
+        .where(
+            and(
+                eq(evidences.workspaceId, workspaceId),
+                inArray(evidences.id, evidenceIds),
+            ),
+        );
+}
+
 /**
  * 파일 스캔 결과를 DB에 저장
  * - SHA256 동일 → 스킵
@@ -233,9 +279,7 @@ async function processFile(
 
     if (existingArtifact) {
         // SHA256 변경 → 기존 edges 삭제 후 sha256 업데이트
-        await db
-            .delete(codeCallEdges)
-            .where(eq(codeCallEdges.callerArtifactId, existingArtifact.id));
+        await deleteArtifactEdgesAndEvidences(db, workspaceId, existingArtifact.id);
         await db
             .update(codeArtifacts)
             .set({ sha256: scanResult.sha256, updatedAt: new Date() })

@@ -25,8 +25,8 @@ function shouldProbeRegexFallback(astResult: CodeSignalResult): boolean {
   const processedFileCount = astResult.fileCount - astResult.skippedCount;
   if (processedFileCount <= 0) return false;
   if (astResult.signalCount > 0) return false;
-  // AST 파서/스캐너가 파일 단위로 예외를 삼키며 통과한 경우를 포착하기 위한 휴리스틱.
-  return astResult.artifactCount === 0;
+  // 실제 AST 스캐너/파서 오류가 관측된 경우에만 fallback probe를 수행한다.
+  return (astResult.scanErrorCount ?? 0) > 0;
 }
 
 export function normalizeCodeSignalEngine(value: string | null | undefined): CodeSignalEngine {

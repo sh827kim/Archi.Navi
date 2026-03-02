@@ -236,6 +236,7 @@ export async function extractAstCodeSignals(
         artifactCount: 0,
         signalCount: 0,
         skippedCount: 0,
+        scanErrorCount: 0,
     };
 
     async function processAll(
@@ -257,6 +258,7 @@ export async function extractAstCodeSignals(
                 scanResult = await scanner(filePath, content);
             } catch {
                 // AST 파싱 실패 시 스킵
+                result.scanErrorCount = (result.scanErrorCount ?? 0) + 1;
                 continue;
             }
 
