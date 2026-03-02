@@ -29,6 +29,7 @@ const CONFIDENCE = {
   DOCKER_DB_OBJECT: 0.8,      // docker-compose DB 이미지 → database Object
   K8S_DB_RELATION: 0.7,       // K8s env DB_URL → read/write
   K8S_KAFKA_RELATION: 0.7,    // K8s env KAFKA_BROKERS → relation
+  ZUUL_ROUTE_CALL: 0.7,       // zuul.routes.*.serviceId → call
 } as const;
 
 /** 추론 옵션 */
@@ -634,6 +635,40 @@ async function processAppYmlSignal(
         );
         stats.candidateCount += Number(produceResult.created);
       }
+    }
+  }
+
+  // zuul.routes.*.serviceId → service call relation
+  if (serviceId && signal.routeServiceIds.length > 0) {
+    for (const targetServiceName of signal.routeServiceIds) {
+      const targetServiceId = await findServiceByName(
+        db,
+        workspaceId,
+        targetServiceName,
+        allServices,
+      );
+      if (!targetServiceId || targetServiceId === serviceId) continue;
+
+      const evidenceId = await saveEvidence(
+        db,
+        workspaceId,
+        signal.filePath,
+        `zuul.routes.*.serviceId=${targetServiceName}`,
+      );
+
+      const callResult = await saveRelationCandidate(
+        db,
+        {
+          workspaceId,
+          relationType: 'call',
+          subjectObjectId: serviceId,
+          objectId: targetServiceId,
+          confidence: CONFIDENCE.ZUUL_ROUTE_CALL,
+          metadata: { source: 'application_yml', configKey: 'zuul.routes.serviceId' },
+        },
+        evidenceId,
+      );
+      stats.candidateCount += Number(callResult.created);
     }
   }
 }

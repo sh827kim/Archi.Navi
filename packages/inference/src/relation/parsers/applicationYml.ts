@@ -38,6 +38,8 @@ export interface AppYmlSignal {
   datasource: DatasourceInfo | null;
   /** spring.kafka 설정 */
   kafka: KafkaInfo | null;
+  /** zuul.routes.*.serviceId 목록 */
+  routeServiceIds: string[];
   /** server.port */
   serverPort: number | null;
   /** server.servlet.context-path */
@@ -119,6 +121,7 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
     serviceName: null,
     datasource: null,
     kafka: null,
+    routeServiceIds: [],
     serverPort: null,
     contextPath: null,
     filePath,
@@ -197,6 +200,22 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
     }
   }
 
+  // zuul.routes.*.serviceId
+  const routeServiceIds: string[] = [];
+  const zuul = root['zuul'] as Record<string, unknown> | null | undefined;
+  const routes = zuul?.['routes'] as Record<string, unknown> | null | undefined;
+  if (routes && typeof routes === 'object') {
+    for (const routeValue of Object.values(routes)) {
+      if (!routeValue || typeof routeValue !== 'object') continue;
+      const routeObj = routeValue as Record<string, unknown>;
+      const serviceId = routeObj['serviceId'];
+      if (typeof serviceId !== 'string') continue;
+      const normalized = serviceId.trim();
+      if (normalized.length === 0) continue;
+      if (!routeServiceIds.includes(normalized)) routeServiceIds.push(normalized);
+    }
+  }
+
   // server.port
   const serverPort =
     typeof server?.['port'] === 'number' ? server['port'] : null;
@@ -211,5 +230,5 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
       ? servletSection['context-path']
       : null;
 
-  return { serviceName, datasource, kafka, serverPort, contextPath, filePath };
+  return { serviceName, datasource, kafka, routeServiceIds, serverPort, contextPath, filePath };
 }
