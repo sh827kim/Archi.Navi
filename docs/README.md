@@ -42,6 +42,11 @@
 - [10-incremental-inference-spec.md](./spec/10-incremental-inference-spec.md)
 - [11-ast-default-code-signal-spec.md](./spec/11-ast-default-code-signal-spec.md)
 - [12-ast-regex-hybrid-code-signal-spec.md](./spec/12-ast-regex-hybrid-code-signal-spec.md)
+- [13-inference-run-orchestration-spec.md](./spec/13-inference-run-orchestration-spec.md)
+- [14-code-based-relation-candidate-spec.md](./spec/14-code-based-relation-candidate-spec.md)
+- [15-compound-to-atomic-inference-spec.md](./spec/15-compound-to-atomic-inference-spec.md)
+- [16-rabbitmq-queue-code-signal-spec.md](./spec/16-rabbitmq-queue-code-signal-spec.md)
+- [17-db-table-code-signal-spec.md](./spec/17-db-table-code-signal-spec.md)
 
 ### Guide/Ops (`docs` 루트)
 - [00-overview.md](./00-overview.md)

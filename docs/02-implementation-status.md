@@ -12,7 +12,7 @@
 | Architecture / Mapping UI | ✅ | 레이어드 아키텍처(Cytoscape), 매핑 뷰(3D Force 단일 렌더러), rollup 기반 상위 엣지 반영 |
 | Query Engine | ✅ | PATH/IMPACT/USAGE/DOMAIN_SUMMARY 구현, `generationVersion` 미지정 시 ACTIVE 자동 적용 |
 | Rollup Engine | ✅ | 4단계 rollup + generation 관리 + seed 후 재빌드 |
-| Relation 추론 파이프라인 | ⚠️ | `/api/inference/run`으로 config/code/db 실행 가능, 운영 오케스트레이션/증거 승격은 보강 필요 |
+| Relation 추론 파이프라인 | ⚠️ | `/api/inference/run`으로 config/code/db 실행 가능, code 기반 후보 생성(Phase 1: endpoint/topic)은 진행, 운영 오케스트레이션/모니터링은 보강 필요 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 문서-실행 예제 정합성 | ⚠️ | 2026-03-01 기준 주요 문서 정리 중, 일부 운영 가이드는 추가 동기화 필요 |
@@ -55,6 +55,7 @@
 - ✅ Relation 추론(구현 존재)
   - Config 기반: `inferRelationsFromConfig`
   - Code Signal(AST/Regex): `extractCodeSignalsWithEngine` (`hybrid` 기본, `ast`는 AST 실패 시 Regex fallback)
+  - Code Signal 기반 후보 생성(부분 구현): `mode=code`로 `relation_candidates` 생성 (SPEC: `docs/spec/14-*`, `docs/spec/15-*`)
   - DB Signal: `extractDbSchemaSignals` (FK/implicit 후보 + schema evidence 연결)
 - ✅ Domain 추론
   - Track A(Seed-based): `runSeedBasedInference`
