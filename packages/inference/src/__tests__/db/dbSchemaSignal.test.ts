@@ -207,6 +207,108 @@ describe('extractDbSchemaSignals', () => {
         expect(evidenceRows).toHaveLength(1); // 중복 생성되지 않음
     });
 
+    it('증분 모드에서 변경 없는 db_table은 두 번째 실행에서 스킵되어야 한다', async () => {
+        await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        const orderItemsId = await createDbTable(db, 'order_items', {
+            columns: [],
+            fk_constraints: [
+                { column: 'order_id', references_table: 'orders', references_column: 'id' },
+            ],
+        });
+
+        const first = await extractDbSchemaSignals(db, { workspaceId, incremental: true });
+        expect(first.fkCandidateCount).toBe(1);
+
+        const second = await extractDbSchemaSignals(db, { workspaceId, incremental: true });
+        expect(second.fkCandidateCount).toBe(0);
+        expect(second.implicitFkCandidateCount).toBe(0);
+
+        const pending = await db
+            .select()
+            .from(relationCandidates)
+            .where(
+                and(
+                    eq(relationCandidates.workspaceId, workspaceId),
+                    eq(relationCandidates.status, 'PENDING'),
+                    eq(relationCandidates.relationType, 'fk_reference'),
+                    eq(relationCandidates.subjectObjectId, orderItemsId),
+                ),
+            );
+        expect(pending).toHaveLength(1);
+    });
+
+    it('증분 모드에서 변경된 db_table만 재처리되어 기존 후보가 갱신되어야 한다', async () => {
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+        const paymentsId = await createDbTable(db, 'payments', { columns: [], fk_constraints: [] });
+        const orderItemsId = await createDbTable(db, 'order_items', {
+            columns: [],
+            fk_constraints: [
+                { column: 'order_id', references_table: 'orders', references_column: 'id' },
+            ],
+        });
+
+        await extractDbSchemaSignals(db, { workspaceId, incremental: true });
+
+        await db
+            .update(objects)
+            .set({
+                metadata: {
+                    columns: [],
+                    fk_constraints: [
+                        { column: 'payment_id', references_table: 'payments', references_column: 'id' },
+                    ],
+                },
+            })
+            .where(eq(objects.id, orderItemsId));
+
+        const rerun = await extractDbSchemaSignals(db, { workspaceId, incremental: true });
+        expect(rerun.fkCandidateCount).toBe(1);
+
+        const pending = await db
+            .select()
+            .from(relationCandidates)
+            .where(
+                and(
+                    eq(relationCandidates.workspaceId, workspaceId),
+                    eq(relationCandidates.status, 'PENDING'),
+                    eq(relationCandidates.relationType, 'fk_reference'),
+                    eq(relationCandidates.subjectObjectId, orderItemsId),
+                ),
+            );
+        expect(pending).toHaveLength(1);
+        expect(pending[0]!.objectId).toBe(paymentsId);
+        expect(pending[0]!.objectId).not.toBe(ordersId);
+    });
+
+    it('테이블 집합이 변경되면 기존 테이블도 재처리되어 implicit FK를 생성해야 한다', async () => {
+        const orderItemsId = await createDbTable(db, 'order_items', {
+            columns: [{ name: 'order_id', type: 'bigint' }],
+            fk_constraints: [],
+        });
+
+        const first = await extractDbSchemaSignals(db, { workspaceId, incremental: true });
+        expect(first.implicitFkCandidateCount).toBe(0);
+
+        const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
+
+        const second = await extractDbSchemaSignals(db, { workspaceId, incremental: true });
+        expect(second.implicitFkCandidateCount).toBe(1);
+
+        const pending = await db
+            .select()
+            .from(relationCandidates)
+            .where(
+                and(
+                    eq(relationCandidates.workspaceId, workspaceId),
+                    eq(relationCandidates.status, 'PENDING'),
+                    eq(relationCandidates.relationType, 'fk_reference'),
+                    eq(relationCandidates.subjectObjectId, orderItemsId),
+                    eq(relationCandidates.objectId, ordersId),
+                ),
+            );
+        expect(pending).toHaveLength(1);
+    });
+
     it('컬럼명 *_id 패턴에서 implicit FK를 생성해야 한다 (confidence 0.5)', async () => {
         const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
         await createDbTable(db, 'order_items', {
