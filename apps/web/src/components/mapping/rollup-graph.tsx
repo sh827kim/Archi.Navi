@@ -176,6 +176,7 @@ interface ContributorRelationItem {
 
 interface ContributorGroupItem {
   groupKey: string;
+  groupLabel?: string;
   weight: number;
   relations: ContributorRelationItem[];
 }
@@ -1209,7 +1210,9 @@ export function RollupGraph() {
                   {contributorData.groups.map((group) => (
                     <div key={group.groupKey} className="rounded border border-zinc-800 bg-zinc-900/50 p-2">
                       <div className="mb-1 flex items-center justify-between">
-                        <span className="font-semibold text-zinc-200">{group.groupKey}</span>
+                        <span className="font-semibold text-zinc-200">
+                          {group.groupLabel ?? group.groupKey}
+                        </span>
                         <span className="text-[10px] text-zinc-500">{group.weight}</span>
                       </div>
                       <div className="space-y-1.5">

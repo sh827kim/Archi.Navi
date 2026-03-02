@@ -109,12 +109,14 @@ test('mapping contributors API supports scopeMode and additional groupBy options
   expect(subtreeRes.ok()).toBeTruthy();
   const subtreeJson = (await subtreeRes.json()) as {
     summary: { totalCount: number };
-    groups: Array<{ groupKey: string }>;
+    groups: Array<{ groupKey: string; groupLabel?: string }>;
     scopeMode: string;
   };
   expect(subtreeJson.scopeMode).toBe('SUBTREE');
   expect(subtreeJson.summary.totalCount).toBeGreaterThan(0);
-  expect(subtreeJson.groups.some((group) => group.groupKey.includes('order-service'))).toBe(true);
+  expect(
+    subtreeJson.groups.some((group) => (group.groupLabel ?? group.groupKey).includes('order-service')),
+  ).toBe(true);
 
   const globalRes = await request.get(
     `/api/mapping/contributors?workspaceId=${workspaceId}&sourceCompoundId=${orderServiceId}&targetCompoundId=${userServiceId}&groupBy=targetAtomic&scopeMode=GLOBAL`,
@@ -122,12 +124,14 @@ test('mapping contributors API supports scopeMode and additional groupBy options
   expect(globalRes.ok()).toBeTruthy();
   const globalJson = (await globalRes.json()) as {
     summary: { totalCount: number };
-    groups: Array<{ groupKey: string }>;
+    groups: Array<{ groupKey: string; groupLabel?: string }>;
     scopeMode: string;
   };
   expect(globalJson.scopeMode).toBe('GLOBAL');
   expect(globalJson.summary.totalCount).toBeGreaterThan(subtreeJson.summary.totalCount);
-  expect(globalJson.groups.some((group) => group.groupKey.includes('user-service'))).toBe(true);
+  expect(
+    globalJson.groups.some((group) => (group.groupLabel ?? group.groupKey).includes('user-service')),
+  ).toBe(true);
 
   const pagedRes = await request.get(
     `/api/mapping/contributors?workspaceId=${workspaceId}&sourceCompoundId=${orderServiceId}&targetCompoundId=${userServiceId}&groupBy=targetAtomic&scopeMode=GLOBAL&limit=1`,

@@ -62,6 +62,7 @@ export interface ContributorQueryResult {
   };
   groups: Array<{
     groupKey: string;
+    groupLabel: string;
     weight: number;
     relations: ContributorRelation[];
   }>;
@@ -415,28 +416,46 @@ export async function queryContributors(
   });
 
   const byRelationType: Record<string, number> = {};
-  const groups = new Map<string, { groupKey: string; weight: number; relations: ContributorRelation[] }>();
+  const groups = new Map<
+    string,
+    { groupKey: string; groupLabel: string; weight: number; relations: ContributorRelation[] }
+  >();
 
   for (const relation of relations) {
     byRelationType[relation.relationType] = (byRelationType[relation.relationType] ?? 0) + 1;
     let key: string;
-    if (groupBy === 'relationType') key = relation.relationType;
-    else if (groupBy === 'sourceAtomic') key = relation.sourceAtomicLabel;
-    else if (groupBy === 'targetAtomic') key = relation.targetAtomicLabel;
-    else key = relation.targetCompoundLabel;
+    let label: string;
+    if (groupBy === 'relationType') {
+      key = relation.relationType;
+      label = relation.relationType;
+    } else if (groupBy === 'sourceAtomic') {
+      key = relation.sourceAtomicId;
+      label = relation.sourceAtomicLabel;
+    } else if (groupBy === 'targetAtomic') {
+      key = relation.targetAtomicId;
+      label = relation.targetAtomicLabel;
+    } else {
+      key = relation.targetCompoundId;
+      label = relation.targetCompoundLabel;
+    }
 
-    const existing = groups.get(key) ?? { groupKey: key, weight: 0, relations: [] };
+    const existing = groups.get(key) ?? { groupKey: key, groupLabel: label, weight: 0, relations: [] };
     existing.weight += 1;
     existing.relations.push(relation);
     groups.set(key, existing);
   }
 
   const grouped = [...groups.values()]
-    .sort((a, b) => b.weight - a.weight)
+    .sort((a, b) => {
+      const byWeight = b.weight - a.weight;
+      if (byWeight !== 0) return byWeight;
+      return a.groupKey.localeCompare(b.groupKey);
+    })
     .map((group) => ({
       groupKey: group.groupKey,
+      groupLabel: group.groupLabel,
       weight: group.weight,
-      relations: group.relations,
+      relations: [...group.relations].sort((a, b) => a.relationId.localeCompare(b.relationId)),
     }));
 
   const pagedGroups = grouped.slice(startOffset, startOffset + limit);
