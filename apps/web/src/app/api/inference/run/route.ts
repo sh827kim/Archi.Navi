@@ -201,8 +201,8 @@ export async function POST(req: NextRequest) {
           if (result.fallbackUsed) {
             codeResult.fallbackCount += 1;
             codeResult.fallbackRepoRoots.push(repoRoot);
-            if (result.warning) warnings.push(`[code:${repoRoot}] ${result.warning}`);
           }
+          if (result.warning) warnings.push(`[code:${repoRoot}] ${result.warning}`);
         } catch (error) {
           errors.push({
             mode: 'code',

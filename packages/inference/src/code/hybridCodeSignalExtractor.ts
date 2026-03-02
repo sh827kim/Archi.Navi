@@ -334,6 +334,9 @@ export async function extractHybridCodeSignals(
 ): Promise<CodeSignalResult> {
   const { workspaceId, repoRoot } = options;
   const forceRescan = options.forceRescan === true;
+  const targetFileSet = options.targetFilePaths
+    ? new Set(options.targetFilePaths.map((path) => path.replace(/\\/g, '/')))
+    : null;
 
   const allServices = await db
     .select({ id: objects.id, name: objects.name })
@@ -347,6 +350,11 @@ export async function extractHybridCodeSignals(
     signalCount: 0,
     skippedCount: 0,
   };
+
+  function filterTargetFiles(files: string[]): string[] {
+    if (!targetFileSet) return files;
+    return files.filter((filePath) => targetFileSet.has(filePath.replace(/\\/g, '/')));
+  }
 
   async function processAll(
     files: string[],
@@ -379,10 +387,10 @@ export async function extractHybridCodeSignals(
     }
   }
 
-  await processAll(findJavaKotlinFiles(repoRoot), mergeJavaOrKotlinSignals);
-  await processAll(findTypeScriptFiles(repoRoot), mergeTypeScriptSignals);
-  await processAll(findPythonFiles(repoRoot), mergePythonSignals);
-  await processAll(findMyBatisXmlFiles(repoRoot), mergeMyBatisSignals);
+  await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), mergeJavaOrKotlinSignals);
+  await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), mergeTypeScriptSignals);
+  await processAll(filterTargetFiles(findPythonFiles(repoRoot)), mergePythonSignals);
+  await processAll(filterTargetFiles(findMyBatisXmlFiles(repoRoot)), mergeMyBatisSignals);
 
   return result;
 }

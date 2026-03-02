@@ -127,4 +127,32 @@ describe('extractHybridCodeSignals', () => {
     expect(evidencesAfter).toHaveLength(edgesAfter.length);
     expect(evidencesAfter.length).toBeGreaterThan(0);
   });
+
+  it('targetFilePaths가 지정되면 hybrid 추출은 대상 파일만 처리해야 한다', async () => {
+    await createFixtures(db);
+
+    const srcDir = join(tempDir, 'order-service', 'src');
+    mkdirSync(srcDir, { recursive: true });
+    const targetFilePath = join(srcDir, 'TargetController.java');
+    const otherFilePath = join(srcDir, 'OtherController.java');
+
+    writeFileSync(targetFilePath, `@GetMapping("/api/target")\npublic class TargetC {}`);
+    writeFileSync(otherFilePath, `@GetMapping("/api/other")\npublic class OtherC {}`);
+
+    const result = await extractHybridCodeSignals(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      targetFilePaths: [targetFilePath],
+    });
+
+    const artifacts = await db
+      .select({ filePath: codeArtifacts.filePath })
+      .from(codeArtifacts)
+      .where(eq(codeArtifacts.workspaceId, workspaceId));
+
+    expect(result.fileCount).toBe(1);
+    expect(result.signalCount).toBeGreaterThan(0);
+    expect(artifacts).toEqual([{ filePath: targetFilePath }]);
+    expect(artifacts.some((row) => row.filePath === otherFilePath)).toBe(false);
+  });
 });
