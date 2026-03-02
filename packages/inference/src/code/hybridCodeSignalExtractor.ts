@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { extname, join } from 'path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -130,6 +130,45 @@ interface ProcessFileResult {
   signalCount: number;
 }
 
+async function deleteArtifactEdgesAndEvidences(
+  db: DbClient,
+  workspaceId: string,
+  artifactId: string,
+) {
+  const existingEdgeRows = await db
+    .select({ evidenceId: codeCallEdges.evidenceId })
+    .from(codeCallEdges)
+    .where(
+      and(
+        eq(codeCallEdges.workspaceId, workspaceId),
+        eq(codeCallEdges.callerArtifactId, artifactId),
+      ),
+    );
+
+  await db
+    .delete(codeCallEdges)
+    .where(
+      and(
+        eq(codeCallEdges.workspaceId, workspaceId),
+        eq(codeCallEdges.callerArtifactId, artifactId),
+      ),
+    );
+
+  const evidenceIds = Array.from(
+    new Set(
+      existingEdgeRows
+        .map((row) => row.evidenceId)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    ),
+  );
+
+  if (evidenceIds.length === 0) return;
+
+  await db
+    .delete(evidences)
+    .where(and(eq(evidences.workspaceId, workspaceId), inArray(evidences.id, evidenceIds)));
+}
+
 async function processFile(
   filePath: string,
   scanResult: FileScanResult,
@@ -155,7 +194,7 @@ async function processFile(
   let isNew = false;
 
   if (existingArtifact) {
-    await db.delete(codeCallEdges).where(eq(codeCallEdges.callerArtifactId, existingArtifact.id));
+    await deleteArtifactEdgesAndEvidences(db, workspaceId, existingArtifact.id);
     await db
       .update(codeArtifacts)
       .set({ sha256: scanResult.sha256, updatedAt: new Date() })
