@@ -164,9 +164,14 @@
   - `/api/inference/run`에서 `incremental` 옵션으로 config/db 증분 추론 동시 제어
   - `/api/inference/run` 응답에 config 스캔 통계(`fileCount`, `processedFileCount`, `skippedFileCount`) 노출
 
-### 3-6. DB 추론 확장
-- **인덱스 패턴:** 복합 인덱스에 포함된 컬럼 → 조인 관계 힌트
-- **Unique 제약조건:** 유니크 키 패턴 → 엔티티 식별 관계
+### ✅ 3-6. DB 추론 확장 (완료)
+- **구현 완료:**
+  - `db_table.metadata.unique_constraints`와 `indexes(unique=true)`에서 FK 유사 컬럼(`*_id`, `*_no`)을 식별하여 `fk_reference` 후보 생성
+  - 복합 인덱스(`columns.length >= 2`) 기반으로 조인 관계 힌트 후보 생성
+  - 신호 우선순위 적용: `FK(0.95) > Unique(0.85) > Index(0.7) > Column Pattern(0.5)`
+  - Evidence kind 확장: `db_schema_unique_hint`, `db_schema_index_hint`
+  - 기존 증분 처리 해시/중복 방지 로직과 통합
+  - 단위 테스트 보강: unique/index/FK 중복 방지 케이스 추가
 
 ### 3-7. Object Mapping 3D 렌더러 전환
 - **목표 라이브러리:** `3d-force-graph`
@@ -194,6 +199,7 @@
 | Answer Composer | `docs/archive/ArchiNavi_AI_Reasoning_레이어_설계안_v1.md` §4 |
 | DOMAIN_SUMMARY | `docs/04-query-engine.md` §4 DOMAIN_SUMMARY |
 | 증분 리빌드 | `docs/05-rollup-and-graph.md` §4 Incremental Rebuild |
+| DB 추론 확장(3-6) | `docs/11-db-inference-index-unique-spec.md` |
 | Hub 처리 | `docs/archive/ArchiNavi_대규모_그래프_성능_전략_v1.md` §2 |
 | 프로그레시브 렌더링 | `docs/archive/ArchiNavi_대규모_그래프_성능_전략_v1.md` §5 |
 | Domain-first | `docs/05-rollup-and-graph.md` §6 Navigation Strategy |
