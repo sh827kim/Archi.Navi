@@ -13,14 +13,14 @@
     }
   },
   "scripts": {
-    "build": "tsc",
+    "build": "pnpm run download:wasm && tsc",
     "dev": "tsc -w --preserveWatchOutput",
     "test:unit": "vitest run src/__tests__",
     "test:unit:coverage": "vitest run src/__tests__ --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --coverage.thresholds.lines=80 --coverage.thresholds.functions=80 --coverage.thresholds.branches=80 --coverage.thresholds.statements=80 --coverage.thresholds.perFile=true",
     "test:unit:watch": "vitest src/__tests__",
     "lint": "tsc --noEmit",
     "clean": "rm -rf dist",
-    "prepack": "pnpm run clean && pnpm run build",
+    "prepack": "pnpm run download:wasm && pnpm run clean && pnpm run build",
     "download:wasm": "node scripts/download-wasm-grammars.mjs",
     "postinstall": "node scripts/download-wasm-grammars.mjs"
   },

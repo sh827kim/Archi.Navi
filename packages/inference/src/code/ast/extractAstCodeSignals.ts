@@ -19,6 +19,7 @@ import type { CodeSignalOptions, CodeSignalResult, FileScanResult } from '../cod
 import { scanJavaKotlinAst } from './astJavaKotlin';
 import { scanTypeScriptAst } from './astTypeScript';
 import { scanPythonAst } from './astPython';
+import { AstRuntimeError } from './wasmParser';
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
 
@@ -267,7 +268,11 @@ export async function extractAstCodeSignals(
             let scanResult: FileScanResult;
             try {
                 scanResult = await scanner(filePath, content);
-            } catch {
+            } catch (error) {
+                if (error instanceof AstRuntimeError) {
+                    // 런타임/grammar 초기화 실패는 파일 단위 파싱 에러가 아니라 AST 엔진 전체 실패로 간주한다.
+                    throw error;
+                }
                 // AST 파싱 실패 시 스킵
                 result.scanErrorCount = (result.scanErrorCount ?? 0) + 1;
                 result.scanErrorFilePaths?.push(filePath);

@@ -9,12 +9,14 @@
  *   node scripts/download-wasm-grammars.mjs
  *   pnpm download:wasm
  */
-import { writeFileSync, existsSync, mkdirSync } from 'fs';
+import { copyFileSync, writeFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const WASM_DIR = join(__dirname, '..', 'wasm');
+const require = createRequire(import.meta.url);
 
 /** tree-sitter 공식 playground 레포에서 WASM grammar 다운로드 */
 const BASE_URL = 'https://raw.githubusercontent.com/tree-sitter/tree-sitter.github.io/master';
@@ -36,11 +38,42 @@ async function download(url, dest) {
     console.log(`  ✓ Saved to ${dest} (${(buffer.length / 1024).toFixed(1)} KB)`);
 }
 
+function ensureRuntimeWasm() {
+    const dest = join(WASM_DIR, 'tree-sitter.wasm');
+    if (existsSync(dest)) {
+        console.log('  ⊘ tree-sitter.wasm already exists, skipping.');
+        return true;
+    }
+
+    try {
+        const src = require.resolve('web-tree-sitter/tree-sitter.wasm');
+        copyFileSync(src, dest);
+        console.log(`  ✓ Copied runtime wasm from ${src}`);
+        return true;
+    } catch (err) {
+        console.error(`  ✗ Failed to copy runtime wasm: ${err.message}`);
+        return false;
+    }
+}
+
+function assertRequiredWasmFiles() {
+    const required = ['tree-sitter.wasm', ...Object.keys(GRAMMAR_URLS)];
+    const missing = required.filter((filename) => !existsSync(join(WASM_DIR, filename)));
+    if (missing.length > 0) {
+        throw new Error(`Required WASM assets are missing: ${missing.join(', ')}`);
+    }
+}
+
 async function main() {
     console.log('Downloading tree-sitter WASM grammars...\n');
 
     if (!existsSync(WASM_DIR)) {
         mkdirSync(WASM_DIR, { recursive: true });
+    }
+
+    const runtimeReady = ensureRuntimeWasm();
+    if (!runtimeReady) {
+        console.warn('  ! runtime wasm copy failed; will continue and validate required assets.');
     }
 
     for (const [filename, url] of Object.entries(GRAMMAR_URLS)) {
@@ -56,6 +89,7 @@ async function main() {
         }
     }
 
+    assertRequiredWasmFiles();
     console.log('\nDone.');
 }
 
