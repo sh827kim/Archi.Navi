@@ -69,7 +69,7 @@ function buildGraphStats(edges: RollupEdge[]) {
   });
 }
 
-test('P3-3: 2000+ 엣지에서 점진 렌더링 배지가 표시되고 완료 후 사라진다', async ({ page }) => {
+test('P3-3: 2000+ 엣지에서도 3D 렌더러가 노드 액션을 안정적으로 구성한다', async ({ page }) => {
   const objects = buildMockObjects();
   const s2sEdges = buildMockEdges();
   const s2sStats = buildGraphStats(s2sEdges);
@@ -77,6 +77,7 @@ test('P3-3: 2000+ 엣지에서 점진 렌더링 배지가 표시되고 완료 �
   await page.addInitScript((workspaceId) => {
     const persisted = { state: { workspaceId }, version: 0 };
     window.localStorage.setItem('archi-navi:workspace', JSON.stringify(persisted));
+    window.localStorage.setItem('archi-navi:e2e-node-actions', '1');
   }, WORKSPACE_ID);
 
   await page.route('**/api/workspaces', async (route) => {
@@ -127,13 +128,13 @@ test('P3-3: 2000+ 엣지에서 점진 렌더링 배지가 표시되고 완료 �
 
   await page.goto('/mapping-graph');
   await expect(page.getByRole('button', { name: '서비스 ↔ 서비스' })).toBeVisible();
-
-  const progressBadge = page.locator('text=/^edge\\s+\\d+\\/5000$/');
-  await expect(progressBadge).toBeVisible({ timeout: 15000 });
+  await expect(page.getByTestId('mapping-graph-e2e-node-actions')).toBeVisible();
 
   await expect
-    .poll(async () => page.locator('path.link-path').count(), { timeout: 20000 })
-    .toBe(EDGE_COUNT);
+    .poll(async () => page.getByTestId('mapping-graph-e2e-node-action').count(), { timeout: 20000 })
+    .toBe(NODE_COUNT);
 
-  await expect(progressBadge).toHaveCount(0, { timeout: 15000 });
+  // 3D 단일 모드 전환 후에는 2D 전용 점진 렌더링 배지가 노출되지 않는다.
+  await expect(page.locator('text=/^edge\\s+\\d+\\/5000$/')).toHaveCount(0);
+  await expect(page.locator('path.link-path')).toHaveCount(0);
 });

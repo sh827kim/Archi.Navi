@@ -320,6 +320,7 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 | [docs/07-implementation-status.md](./docs/07-implementation-status.md) | v1 구현 현황 |
 | [docs/08-roadmap.md](./docs/08-roadmap.md) | v2+ 로드맵 |
 | [docs/11-db-inference-index-unique-spec.md](./docs/11-db-inference-index-unique-spec.md) | DB 추론 확장 스펙 (인덱스/유니크 패턴) |
+| [docs/12-object-mapping-3d-renderer-spec.md](./docs/12-object-mapping-3d-renderer-spec.md) | Object Mapping 3D 렌더러 전환 스펙 |
 
 ---
 

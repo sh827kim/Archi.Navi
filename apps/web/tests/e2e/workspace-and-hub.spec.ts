@@ -65,6 +65,7 @@ test('P3-2: Hub 접기/펼치기 토글이 노드 표시 수를 변경한다', a
     const persisted = { state: { workspaceId }, version: 0 };
     window.localStorage.setItem('archi-navi:workspace', JSON.stringify(persisted));
     window.localStorage.setItem('archi-navi:rollup:hub-threshold', '5');
+    window.localStorage.setItem('archi-navi:e2e-node-actions', '1');
   }, MOCK_WORKSPACE_ID);
 
   await page.route('**/api/workspaces', async (route) => {
@@ -120,13 +121,14 @@ test('P3-2: Hub 접기/펼치기 토글이 노드 표시 수를 변경한다', a
 
   await page.goto('/mapping-graph');
   await expect(page.getByRole('button', { name: /Hub 접기/ })).toBeVisible();
+  await expect(page.getByTestId('mapping-graph-e2e-node-actions')).toBeVisible();
   await expect
-    .poll(async () => page.locator('g.node').count(), { timeout: 15000 })
+    .poll(async () => page.getByTestId('mapping-graph-e2e-node-action').count(), { timeout: 15000 })
     .toBe(5);
 
   await page.getByRole('button', { name: /Hub 접기/ }).click();
   await expect(page.getByRole('button', { name: /Hub 펼치기/ })).toBeVisible();
   await expect
-    .poll(async () => page.locator('g.node').count(), { timeout: 15000 })
+    .poll(async () => page.getByTestId('mapping-graph-e2e-node-action').count(), { timeout: 15000 })
     .toBe(4);
 });

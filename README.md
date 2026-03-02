@@ -312,6 +312,7 @@ Relations are stored at the atomic level; Roll-up views are derived via material
 | [docs/07-implementation-status.md](./docs/07-implementation-status.md) | v1 implementation status |
 | [docs/08-roadmap.md](./docs/08-roadmap.md) | v2+ roadmap |
 | [docs/11-db-inference-index-unique-spec.md](./docs/11-db-inference-index-unique-spec.md) | DB inference expansion spec (index/unique patterns) |
+| [docs/12-object-mapping-3d-renderer-spec.md](./docs/12-object-mapping-3d-renderer-spec.md) | Object Mapping 3D renderer transition spec |
 
 ---
 

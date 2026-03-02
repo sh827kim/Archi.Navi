@@ -6,6 +6,7 @@ test('P3-4: Domain-first 내비게이션(도메인→서비스→아토믹) + �
   await page.addInitScript((workspaceId) => {
     const persisted = { state: { workspaceId }, version: 0 };
     window.localStorage.setItem('archi-navi:workspace', JSON.stringify(persisted));
+    window.localStorage.setItem('archi-navi:e2e-node-actions', '1');
   }, WORKSPACE_ID);
 
   await page.route('**/api/workspaces', async (route) => {
@@ -106,22 +107,23 @@ test('P3-4: Domain-first 내비게이션(도메인→서비스→아토믹) + �
 
   await expect(page.getByRole('button', { name: '도메인 ↔ 도메인' })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Domain', exact: true })).toBeVisible();
+  await expect(page.getByTestId('mapping-graph-e2e-node-actions')).toBeVisible();
 
   await expect
-    .poll(async () => page.locator('g.node').count(), { timeout: 15000 })
+    .poll(async () => page.getByTestId('mapping-graph-e2e-node-action').count(), { timeout: 15000 })
     .toBe(2);
 
-  await page.locator('g.node').filter({ hasText: 'Order Domain' }).first().click();
+  await page.locator('[data-testid="mapping-graph-e2e-node-action"][data-node-id="dom-order"]').click();
 
   await expect(page.getByRole('button', { name: 'Order Domain' })).toBeVisible();
   await expect(page.getByRole('button', { name: '서비스 ↔ 서비스' })).toBeVisible();
   await expect
-    .poll(async () => page.locator('g.node').count(), { timeout: 15000 })
+    .poll(async () => page.getByTestId('mapping-graph-e2e-node-action').count(), { timeout: 15000 })
     .toBe(1);
 
-  await page.locator('g.node').filter({ hasText: 'Order Service' }).first().click();
+  await page.locator('[data-testid="mapping-graph-e2e-node-action"][data-node-id="svc-order"]').click();
   await expect(page.getByText('← Inbound')).toBeVisible();
-  await expect(page.getByTitle('Order Service')).toBeVisible();
+  await expect(page.locator('span[title="Order Service"]')).toBeVisible();
 
   await page.getByRole('button', { name: /상위로/ }).click();
   await expect(page.getByText('← Inbound')).toHaveCount(0);

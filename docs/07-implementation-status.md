@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-01  
+> 최종 점검일: 2026-03-02  
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -9,7 +9,7 @@
 
 | 영역 | 상태 | 비고 |
 |------|------|------|
-| Architecture / Mapping UI | ✅ | 레이어드 아키텍처(Cytoscape), 매핑 뷰(D3 Force), rollup 기반 상위 엣지 반영 |
+| Architecture / Mapping UI | ✅ | 레이어드 아키텍처(Cytoscape), 매핑 뷰(3D Force 단일 렌더러), rollup 기반 상위 엣지 반영 |
 | Query Engine | ✅ | PATH/IMPACT/USAGE/DOMAIN_SUMMARY 구현, `generationVersion` 미지정 시 ACTIVE 자동 적용 |
 | Rollup Engine | ✅ | 4단계 rollup + generation 관리 + seed 후 재빌드 |
 | Relation 추론 파이프라인 | ⚠️ | `/api/inference/run`으로 config/code/db 실행 가능, 운영 오케스트레이션/증거 승격은 보강 필요 |
@@ -33,6 +33,9 @@
   - 실행 후 PENDING 후보 즉시 재조회
 - ✅ `Approval > 도메인 후보`
   - `GET/PATCH /api/inference/domain-candidates*`로 승인/거부 처리
+- ✅ `Object Mapping` 3D 렌더러 전환
+  - `3D(Force)` 단일 렌더러 제공(2D 선택 UI 제거)
+  - WebGL 미지원 환경 fallback 메시지 제공
 
 ### 1.2 Query / Rollup
 
