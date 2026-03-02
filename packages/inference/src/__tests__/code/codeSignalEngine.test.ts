@@ -89,6 +89,10 @@ describe('codeSignalEngine', () => {
 
     expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
     expect(extractCodeSignals).toHaveBeenCalledTimes(1);
+    expect(extractCodeSignals).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ ...options, forceRescan: true }),
+    );
     expect(result.engineRequested).toBe('ast');
     expect(result.engineUsed).toBe('regex');
     expect(result.fallbackUsed).toBe(true);
@@ -108,6 +112,10 @@ describe('codeSignalEngine', () => {
 
     expect(extractAstCodeSignals).toHaveBeenCalledTimes(1);
     expect(extractCodeSignals).toHaveBeenCalledTimes(1);
+    expect(extractCodeSignals).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ ...options, forceRescan: true }),
+    );
     expect(result.engineRequested).toBe('ast');
     expect(result.engineUsed).toBe('regex');
     expect(result.fallbackUsed).toBe(true);

@@ -55,6 +55,8 @@ export interface CodeSignalOptions {
     workspaceId: string;
     /** 탐색 대상 리포 루트 경로 */
     repoRoot: string;
+    /** true면 SHA256 동일 파일도 강제로 재처리 */
+    forceRescan?: boolean;
 }
 
 /** extractCodeSignals 반환 결과 */
@@ -185,6 +187,7 @@ interface ProcessFileContext {
     workspaceId: string;
     repoRoot: string;
     allServices: { id: string; name: string }[];
+    forceRescan: boolean;
 }
 
 interface ProcessFileResult {
@@ -204,7 +207,7 @@ async function processFile(
     scanResult: FileScanResult,
     ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
-    const { db, workspaceId, repoRoot, allServices } = ctx;
+    const { db, workspaceId, repoRoot, allServices, forceRescan } = ctx;
 
     // 기존 code_artifact 조회
     const existing = await db
@@ -221,7 +224,7 @@ async function processFile(
     const existingArtifact = existing[0];
 
     // SHA256 동일 → 스킵
-    if (existingArtifact?.sha256 === scanResult.sha256) {
+    if (!forceRescan && existingArtifact?.sha256 === scanResult.sha256) {
         return { skipped: true, isNew: false, signalCount: 0 };
     }
 
@@ -304,6 +307,7 @@ export async function extractCodeSignals(
     options: CodeSignalOptions,
 ): Promise<CodeSignalResult> {
     const { workspaceId, repoRoot } = options;
+    const forceRescan = options.forceRescan === true;
 
     // 워크스페이스 서비스 목록 미리 조회 (ownerObjectId 매칭용)
     const allServices = await db
@@ -316,7 +320,7 @@ export async function extractCodeSignals(
             ),
         );
 
-    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices };
+    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
     const result: CodeSignalResult = {
         fileCount: 0,
         artifactCount: 0,

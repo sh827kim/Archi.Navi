@@ -71,7 +71,10 @@ export async function extractCodeSignalsWithEngine(
 
     if (shouldProbeRegexFallback(result)) {
       try {
-        const regexResult = await extractCodeSignals(db, baseOptions);
+        const regexResult = await extractCodeSignals(db, {
+          ...baseOptions,
+          forceRescan: true,
+        });
         // extractCodeSignals는 저장을 수행하므로 probe 실행 시 결과 엔진을 regex로 일치시킨다.
         return {
           ...regexResult,
@@ -95,7 +98,10 @@ export async function extractCodeSignalsWithEngine(
   } catch (astError) {
     const astErrorMessage = astError instanceof Error ? astError.message : 'unknown AST error';
     try {
-      const result = await extractCodeSignals(db, baseOptions);
+      const result = await extractCodeSignals(db, {
+        ...baseOptions,
+        forceRescan: true,
+      });
       return {
         ...result,
         engineRequested,
