@@ -44,6 +44,7 @@ export async function extractCodeSignalsWithEngine(
   const baseOptions: CodeSignalOptions = {
     workspaceId: options.workspaceId,
     repoRoot: options.repoRoot,
+    ...(options.forceRescan === true ? { forceRescan: true } : {}),
   };
 
   if (engineRequested === 'regex') {

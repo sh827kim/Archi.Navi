@@ -122,6 +122,7 @@ interface ProcessFileContext {
   workspaceId: string;
   repoRoot: string;
   allServices: { id: string; name: string }[];
+  forceRescan: boolean;
 }
 
 interface ProcessFileResult {
@@ -174,7 +175,7 @@ async function processFile(
   scanResult: FileScanResult,
   ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
-  const { db, workspaceId, repoRoot, allServices } = ctx;
+  const { db, workspaceId, repoRoot, allServices, forceRescan } = ctx;
 
   const existing = await db
     .select({ id: codeArtifacts.id, sha256: codeArtifacts.sha256 })
@@ -186,7 +187,7 @@ async function processFile(
 
   const existingArtifact = existing[0];
 
-  if (existingArtifact?.sha256 === scanResult.sha256) {
+  if (!forceRescan && existingArtifact?.sha256 === scanResult.sha256) {
     return { skipped: true, isNew: false, signalCount: 0 };
   }
 
@@ -332,13 +333,14 @@ export async function extractHybridCodeSignals(
   options: CodeSignalOptions,
 ): Promise<CodeSignalResult> {
   const { workspaceId, repoRoot } = options;
+  const forceRescan = options.forceRescan === true;
 
   const allServices = await db
     .select({ id: objects.id, name: objects.name })
     .from(objects)
     .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service')));
 
-  const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices };
+  const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
   const result: CodeSignalResult = {
     fileCount: 0,
     artifactCount: 0,

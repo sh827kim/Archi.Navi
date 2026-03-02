@@ -97,4 +97,34 @@ describe('extractHybridCodeSignals', () => {
     expect(refreshedEvidences.every((row) => firstEvidenceIds.has(row.id))).toBe(false);
     expect(refreshedEdges.every((row) => row.evidenceId !== null)).toBe(true);
   });
+
+  it('forceRescan=true이면 SHA256 동일 파일도 재처리해야 한다', async () => {
+    await createFixtures(db);
+
+    const srcDir = join(tempDir, 'order-service', 'src');
+    mkdirSync(srcDir, { recursive: true });
+    const filePath = join(srcDir, 'OrderController.java');
+    writeFileSync(filePath, `@GetMapping("/api/orders")\npublic class C {}`);
+
+    await extractHybridCodeSignals(db, { workspaceId, repoRoot: tempDir });
+    const second = await extractHybridCodeSignals(db, {
+      workspaceId,
+      repoRoot: tempDir,
+      forceRescan: true,
+    });
+
+    const evidencesAfter = await db
+      .select()
+      .from(evidences)
+      .where(eq(evidences.workspaceId, workspaceId));
+    const edgesAfter = await db
+      .select()
+      .from(codeCallEdges)
+      .where(eq(codeCallEdges.workspaceId, workspaceId));
+
+    expect(second.skippedCount).toBe(0);
+    expect(second.signalCount).toBeGreaterThan(0);
+    expect(evidencesAfter).toHaveLength(edgesAfter.length);
+    expect(evidencesAfter.length).toBeGreaterThan(0);
+  });
 });

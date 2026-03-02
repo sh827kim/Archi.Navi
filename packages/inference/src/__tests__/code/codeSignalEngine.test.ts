@@ -56,6 +56,21 @@ describe('codeSignalEngine', () => {
     expect(result.fallbackUsed).toBe(false);
   });
 
+  it('forceRescan=true이면 regex 모드에서 extractCodeSignals로 전달해야 한다', async () => {
+    vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+
+    await extractCodeSignalsWithEngine(db, {
+      ...options,
+      codeEngine: 'regex',
+      forceRescan: true,
+    });
+
+    expect(extractCodeSignals).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ ...options, forceRescan: true }),
+    );
+  });
+
   it('ast 모드에서 AST가 성공하면 fallback 없이 AST를 사용해야 한다', async () => {
     vi.mocked(extractAstCodeSignals).mockResolvedValue(BASE_RESULT);
 
@@ -66,6 +81,21 @@ describe('codeSignalEngine', () => {
     expect(result.engineRequested).toBe('ast');
     expect(result.engineUsed).toBe('ast');
     expect(result.fallbackUsed).toBe(false);
+  });
+
+  it('forceRescan=true이면 ast 모드에서 extractAstCodeSignals로 전달해야 한다', async () => {
+    vi.mocked(extractAstCodeSignals).mockResolvedValue(BASE_RESULT);
+
+    await extractCodeSignalsWithEngine(db, {
+      ...options,
+      codeEngine: 'ast',
+      forceRescan: true,
+    });
+
+    expect(extractAstCodeSignals).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ ...options, forceRescan: true }),
+    );
   });
 
   it('hybrid 모드면 AST+Regex 병합 추출기만 사용해야 한다', async () => {
@@ -79,6 +109,21 @@ describe('codeSignalEngine', () => {
     expect(result.engineRequested).toBe('hybrid');
     expect(result.engineUsed).toBe('hybrid');
     expect(result.fallbackUsed).toBe(false);
+  });
+
+  it('forceRescan=true이면 hybrid 모드에서 extractHybridCodeSignals로 전달해야 한다', async () => {
+    vi.mocked(extractHybridCodeSignals).mockResolvedValue(BASE_RESULT);
+
+    await extractCodeSignalsWithEngine(db, {
+      ...options,
+      codeEngine: 'hybrid',
+      forceRescan: true,
+    });
+
+    expect(extractHybridCodeSignals).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ ...options, forceRescan: true }),
+    );
   });
 
   it('ast 모드에서 AST 실패 시 Regex fallback을 사용해야 한다', async () => {
