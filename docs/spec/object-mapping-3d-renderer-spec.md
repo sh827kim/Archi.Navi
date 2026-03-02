@@ -12,6 +12,8 @@ Object Mapping 화면의 렌더러를 3D(`3d-force-graph`)로 단일화해 대�
 2. 기존 핵심 기능(레벨 전환/Domain-first/Roll-down/Hub 토글)은 유지한다.
 3. 3D 모드는 `3d-force-graph` 기반으로 구현한다.
 4. WebGL 미지원 환경에서는 안내 메시지를 노출한다.
+5. 기본 Object Mapping 뷰에서는 `expose`만 존재하고 실사용(`call/read/write/produce/consume`)이 없는 atomic을 숨긴다.
+6. 실사용이 없는 atomic만 모아보는 전용 뷰(`UNUSED_ATOMIC`)를 제공한다.
 
 ## 3. 핵심 기능 동등성 범위
 - 뷰 레벨 전환
@@ -42,3 +44,5 @@ Object Mapping 화면의 렌더러를 3D(`3d-force-graph`)로 단일화해 대�
 3. 노드 클릭 기반 drill-down/roll-down이 3D에서도 동작한다.
 4. WebGL 미지원 환경에서 fallback 메시지가 노출된다.
 5. 기존 e2e(허브/프로그레시브/domain-first)가 회귀 없이 통과한다.
+6. 기본 레벨에서 미사용 atomic은 그래프/roll-down에 표시되지 않는다.
+7. `미사용 Atomic` 레벨에서 미사용 atomic 목록과 소속 compound를 확인할 수 있다.

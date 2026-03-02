@@ -339,6 +339,7 @@ function ObjectDetailSheet({
 
   const config = detail ? getConfig(detail.objectType) : null;
   const Icon = config?.icon ?? Box;
+  const outboundVisible = detail?.outbound.filter((r) => r.relationType !== 'expose') ?? [];
 
   /* 인라인 필드 저장 핸들러 */
   const saveField = async (field: string, value: string) => {
@@ -511,13 +512,13 @@ function ObjectDetailSheet({
             <section className="space-y-2">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                 <ArrowRight className="h-3.5 w-3.5" />
-                Outbound ({detail.outbound.length})
+                Outbound ({outboundVisible.length})
               </h3>
-              {detail.outbound.length === 0 ? (
+              {outboundVisible.length === 0 ? (
                 <p className="text-xs text-muted-foreground">없음</p>
               ) : (
                 <div className="space-y-1.5">
-                  {detail.outbound.map((r) => {
+                  {outboundVisible.map((r) => {
                     const tc = getConfig(r.targetType ?? '');
                     const TIcon = tc.icon;
                     return (

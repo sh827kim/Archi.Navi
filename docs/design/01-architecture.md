@@ -58,7 +58,7 @@ Local-first를 기본 전제로, 개발자 로컬 환경에서 단일 프로세�
 | **DB** | PostgreSQL + PGlite | 17.x + latest | Local-first 핵심. PGlite는 Node.js/WASM 네이티브 |
 | **ORM** | Drizzle ORM | latest | TypeScript 네이티브, 경량, PGlite 호환, 타입 안전 |
 | **그래프 알고리즘** | graphology | latest | BFS/DFS, 커뮤니티 탐지(Louvain/Leiden), 경로 탐색 |
-| **그래프 시각화** | Cytoscape.js + D3 Force | latest | 레이어드 뷰(Cytoscape) + 매핑 그래프(D3) |
+| **그래프 시각화** | Cytoscape.js + 3d-force-graph | latest | 레이어드 뷰(Cytoscape) + 매핑 그래프(3D Force) |
 | **AI/LLM** | Vercel AI SDK (`ai`) | latest | OpenAI, Claude, Gemini 멀티 프로바이더 지원, 스트리밍 |
 | **상태관리** | Zustand | latest | 경량, TypeScript 친화, 보일러플레이트 최소 |
 | **CLI** | Commander.js + tsx | latest | npm 배포 가능, TypeScript 직접 실행 |

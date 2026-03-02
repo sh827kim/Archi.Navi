@@ -5,6 +5,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
   Plus,
@@ -198,6 +199,7 @@ export function SettingsClient() {
    개발자 도구 (샘플 데이터 / 초기화)
    ════════════════════════════════════════════════════════════════ */
 function DevTools({ workspaceId }: { workspaceId: string }) {
+  const router = useRouter();
   const [seeding, setSeeding] = useState(false);
   const [resetOpen, setResetOpen] = useState(false);
   const [resetting, setResetting] = useState(false);
@@ -258,8 +260,9 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
       } else {
         toast.success('워크스페이스 데이터 초기화 완료');
       }
-      // 이미 로드된 클라이언트 상태(목록/그래프)를 모두 갱신하기 위해 새로고침
-      window.location.reload();
+      // 강제 reload 대신 라우트 데이터만 새로고침해 HMR 충돌 가능성을 낮춘다.
+      window.dispatchEvent(new CustomEvent('archi-navi:workspace-reset', { detail: { workspaceId } }));
+      router.refresh();
     } catch {
       toast.error('초기화 실패');
     } finally {

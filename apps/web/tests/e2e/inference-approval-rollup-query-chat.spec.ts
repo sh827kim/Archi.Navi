@@ -107,18 +107,7 @@ test('추론→승인→롤업→쿼리→채팅 카드 렌더링 시나리오',
     expect(approveJson.success).toBe(true);
   });
 
-  await test.step('롤업 재빌드 + Query 검증(경로/근거)', async () => {
-    const rebuild = await request.post('/api/rollups', {
-      data: { workspaceId },
-    });
-    expect(rebuild.ok()).toBeTruthy();
-    const rebuildJson = (await rebuild.json()) as {
-      ok: boolean;
-      generationVersion: number;
-    };
-    expect(rebuildJson.ok).toBe(true);
-    expect(rebuildJson.generationVersion).toBeGreaterThan(0);
-
+  await test.step('자동 롤업 갱신 + Query 검증(경로/근거)', async () => {
     const query = await request.post('/api/query', {
       data: {
         workspaceId,

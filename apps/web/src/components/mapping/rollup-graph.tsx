@@ -31,9 +31,14 @@ type ViewLevel =
   | 'SERVICE_TO_DATABASE'
   | 'SERVICE_TO_BROKER'
   | 'DOMAIN_TO_DOMAIN'
-  | 'COMPOUND_VIEW';
+  | 'COMPOUND_VIEW'
+  | 'UNUSED_ATOMIC';
 
-type RollupLevelKey = Exclude<ViewLevel, 'COMPOUND_VIEW'>;
+type RollupLevelKey =
+  | 'SERVICE_TO_SERVICE'
+  | 'SERVICE_TO_DATABASE'
+  | 'SERVICE_TO_BROKER'
+  | 'DOMAIN_TO_DOMAIN';
 
 interface RollupEdgeApiItem {
   id: string;
@@ -68,7 +73,7 @@ const LEVEL_TYPES: Partial<Record<ViewLevel, string[]>> = {
 };
 
 const PANEL_RELATION_TYPES: Partial<Record<ViewLevel, string[]>> = {
-  SERVICE_TO_SERVICE: ['call', 'expose', 'depend_on'],
+  SERVICE_TO_SERVICE: ['call', 'depend_on'],
   SERVICE_TO_DATABASE: ['read', 'write'],
   SERVICE_TO_BROKER: ['produce', 'consume'],
 };
@@ -79,6 +84,7 @@ const VIEW_LEVELS: { value: ViewLevel; label: string; color: string }[] = [
   { value: 'SERVICE_TO_BROKER', label: '서비스 ↔ 브로커', color: '#f59e0b' },
   { value: 'DOMAIN_TO_DOMAIN', label: '도메인 ↔ 도메인', color: '#8b5cf6' },
   { value: 'COMPOUND_VIEW', label: '전체 통합 뷰', color: '#f43f5e' },
+  { value: 'UNUSED_ATOMIC', label: '미사용 Atomic', color: '#f97316' },
 ];
 
 const NODE_COLORS: Record<string, string> = {
@@ -132,6 +138,75 @@ interface RollDownPanelItem {
   referencedAtomics: ReferencedAtomicInfo[];
 }
 
+interface UnusedAtomicItem {
+  atomicId: string;
+  atomicLabel: string;
+  atomicObjectType: string;
+  parentCompoundId: string;
+  parentCompoundLabel: string;
+}
+
+type ContributorGroupBy = 'targetCompound' | 'relationType' | 'sourceAtomic' | 'targetAtomic';
+type ContributorScopeMode = 'SUBTREE' | 'GLOBAL';
+
+interface ContributorEvidenceItem {
+  id: string;
+  evidenceType: string;
+  filePath: string | null;
+  lineStart: number | null;
+  lineEnd: number | null;
+  excerpt: string | null;
+}
+
+interface ContributorRelationItem {
+  relationId: string;
+  relationType: string;
+  confidence: number | null;
+  sourceAtomicId: string;
+  sourceAtomicLabel: string;
+  sourceCompoundId: string;
+  sourceCompoundLabel: string;
+  targetAtomicId: string;
+  targetAtomicLabel: string;
+  targetCompoundId: string;
+  targetCompoundLabel: string;
+  evidenceCount: number;
+  evidences: ContributorEvidenceItem[];
+}
+
+interface ContributorGroupItem {
+  groupKey: string;
+  groupLabel?: string;
+  weight: number;
+  relations: ContributorRelationItem[];
+}
+
+interface ContributorResponse {
+  summary: {
+    totalCount: number;
+    byRelationType: Record<string, number>;
+  };
+  groups: ContributorGroupItem[];
+  scopeMode: ContributorScopeMode;
+  pageInfo?: {
+    limit: number;
+    hasNext: boolean;
+    nextCursor: string | null;
+  };
+}
+
+const USAGE_RELATION_TYPES = new Set(['call', 'consume', 'produce', 'read', 'write']);
+
+function buildUsedAtomicIdSet(relations: RelationItem[]): Set<string> {
+  const usedIds = new Set<string>();
+  for (const relation of relations) {
+    if (!USAGE_RELATION_TYPES.has(relation.relationType)) continue;
+    usedIds.add(relation.subjectObjectId);
+    usedIds.add(relation.objectId);
+  }
+  return usedIds;
+}
+
 function parseHubThreshold(value: string | null): number {
   const parsed = Number.parseInt(value ?? '', 10);
   if (!Number.isFinite(parsed)) return DEFAULT_HUB_THRESHOLD;
@@ -156,24 +231,48 @@ export function RollupGraph() {
   const [selectedService, setSelectedService] = useState<{ id: string; label: string } | null>(null);
   const [hasDomainObjects, setHasDomainObjects] = useState(false);
   const [showE2ENodeActions, setShowE2ENodeActions] = useState(false);
+  const [showE2ELinkActions, setShowE2ELinkActions] = useState(false);
   const [rollDownInfo, setRollDownInfo] = useState<RollDownPanelItem[]>([]);
+  const [selectedContributorLink, setSelectedContributorLink] = useState<RollupGraph3DLink | null>(null);
+  const [contributorGroupBy, setContributorGroupBy] = useState<ContributorGroupBy>('targetCompound');
+  const [contributorScopeMode, setContributorScopeMode] = useState<ContributorScopeMode>('SUBTREE');
+  const [contributorLoading, setContributorLoading] = useState(false);
+  const [contributorError, setContributorError] = useState<string | null>(null);
+  const [contributorData, setContributorData] = useState<ContributorResponse | null>(null);
+  const [contributorNextCursor, setContributorNextCursor] = useState<string | null>(null);
+  const [contributorLoadingMore, setContributorLoadingMore] = useState(false);
+  const [unusedAtomicItems, setUnusedAtomicItems] = useState<UnusedAtomicItem[]>([]);
 
   useEffect(() => {
     setSelectedDomain(null);
     setSelectedService(null);
     setExpandedSet(new Set());
+    setSelectedContributorLink(null);
+    setContributorScopeMode('SUBTREE');
+    setContributorGroupBy('targetCompound');
+    setContributorData(null);
+    setContributorError(null);
+    setContributorNextCursor(null);
+    setContributorLoadingMore(false);
+    setUnusedAtomicItems([]);
   }, [workspaceId]);
 
   useEffect(() => {
     try {
       setShowE2ENodeActions(window.localStorage.getItem('archi-navi:e2e-node-actions') === '1');
+      setShowE2ELinkActions(window.localStorage.getItem('archi-navi:e2e-link-actions') === '1');
     } catch {
       setShowE2ENodeActions(false);
+      setShowE2ELinkActions(false);
     }
   }, []);
 
   const handleNodePrimaryAction = useCallback(
     (node: { id: string; objectType: string; isCompound: boolean; label: string }) => {
+      if (viewLevel === 'UNUSED_ATOMIC') {
+        return;
+      }
+
       if (viewLevel === 'DOMAIN_TO_DOMAIN' && node.objectType === 'domain') {
         setSelectedDomain({ id: node.id, label: node.label });
         setSelectedService(null);
@@ -290,6 +389,88 @@ export function RollupGraph() {
     };
   }, [workspaceId]);
 
+  const fetchContributors = useCallback(
+    async (
+      link: RollupGraph3DLink,
+      groupBy: ContributorGroupBy,
+      scopeMode: ContributorScopeMode,
+      options?: { cursor?: string | null; append?: boolean },
+    ) => {
+      if (!workspaceId) {
+        setContributorError('workspaceId가 필요합니다.');
+        setContributorData(null);
+        setContributorNextCursor(null);
+        return;
+      }
+      const cursor = options?.cursor ?? null;
+      const append = options?.append ?? false;
+      const params = new URLSearchParams({
+        workspaceId,
+        sourceCompoundId: link.semanticSource,
+        targetCompoundId: link.semanticTarget,
+        groupBy,
+        scopeMode,
+        limit: '20',
+      });
+      if (scopeMode === 'SUBTREE' && link.id.startsWith('rollup-')) {
+        params.set('rollupId', link.id);
+      }
+      if (cursor) params.set('cursor', cursor);
+
+      if (append) setContributorLoadingMore(true);
+      else setContributorLoading(true);
+      if (!append) setContributorError(null);
+      try {
+        const res = await fetch(`/api/mapping/contributors?${params.toString()}`);
+        if (!res.ok) {
+          throw new Error('Contributor 데이터를 불러오지 못했습니다.');
+        }
+        const payload = (await res.json()) as ContributorResponse;
+        setContributorNextCursor(payload.pageInfo?.nextCursor ?? null);
+        setContributorData((prev) => {
+          if (!append || !prev) return payload;
+          return {
+            ...payload,
+            groups: [...prev.groups, ...payload.groups],
+          };
+        });
+      } catch (error) {
+        console.error('[RollupGraph] contributors 로드 실패:', error);
+        if (!append) setContributorData(null);
+        setContributorNextCursor(null);
+        setContributorError(error instanceof Error ? error.message : '알 수 없는 오류');
+      } finally {
+        if (append) setContributorLoadingMore(false);
+        else setContributorLoading(false);
+      }
+    },
+    [workspaceId],
+  );
+
+  const handleLinkClick = useCallback(
+    (link: RollupGraph3DLink) => {
+      if (link.isContains) return;
+      setSelectedContributorLink(link);
+      setContributorNextCursor(null);
+      setContributorLoadingMore(false);
+      void fetchContributors(link, contributorGroupBy, contributorScopeMode, {
+        cursor: null,
+        append: false,
+      });
+    },
+    [contributorGroupBy, contributorScopeMode, fetchContributors],
+  );
+
+  useEffect(() => {
+    if (!selectedContributorLink) return;
+    setContributorNextCursor(null);
+    setContributorLoadingMore(false);
+    void fetchContributors(selectedContributorLink, contributorGroupBy, contributorScopeMode, {
+      cursor: null,
+      append: false,
+    });
+  }, [selectedContributorLink, contributorGroupBy, contributorScopeMode, fetchContributors]);
+
   const buildGraph = useCallback(
     async (level: ViewLevel, expanded: Set<string>) => {
       setLoading(true);
@@ -302,7 +483,7 @@ export function RollupGraph() {
           allRollups,
           allGraphStats,
           allDomainAffinities,
-        } = await fetchData(expanded.size > 0);
+        } = await fetchData(expanded.size > 0 || level === 'UNUSED_ATOMIC');
 
         const domainObjects = allObjects.filter((o) => o.objectType === 'domain' && o.depth === 0);
         const domainIdSet = new Set(domainObjects.map((domain) => domain.id));
@@ -324,6 +505,8 @@ export function RollupGraph() {
           return;
         }
 
+        const usedAtomicIds = buildUsedAtomicIdSet(allRelations);
+
         if (expanded.size > 0) {
           const objMap = new Map(allObjects.map((o) => [o.id, o]));
           const allowedRelTypes: Set<string> | null = PANEL_RELATION_TYPES[level]
@@ -336,7 +519,9 @@ export function RollupGraph() {
             const compound = objMap.get(compoundId);
             if (!compound) return;
 
-            const atomicChildren = allObjects.filter((o) => o.parentId === compoundId);
+            const atomicChildren = allObjects
+              .filter((o) => o.parentId === compoundId)
+              .filter((o) => o.granularity === 'COMPOUND' || usedAtomicIds.has(o.id));
             const atomicChildIds = new Set(atomicChildren.map((a) => a.id));
 
             const exposedAtomics: ExposedAtomicInfo[] = atomicChildren.map((atomic) => {
@@ -414,7 +599,51 @@ export function RollupGraph() {
           relationType: 'contains';
         }[] = [];
 
-        if (level === 'COMPOUND_VIEW') {
+        if (level === 'UNUSED_ATOMIC') {
+          const objMap = new Map(allObjects.map((o) => [o.id, o]));
+          const unusedAtomics = allObjects.filter(
+            (o) => o.granularity === 'ATOMIC' && !usedAtomicIds.has(o.id),
+          );
+          const parentIds = new Set(
+            unusedAtomics
+              .map((o) => o.parentId)
+              .filter((id): id is string => typeof id === 'string' && id.length > 0),
+          );
+          const parentCompounds = allObjects.filter((o) => parentIds.has(o.id));
+          const parentIdSet = new Set(parentCompounds.map((o) => o.id));
+
+          filteredObjects = [...parentCompounds, ...unusedAtomics];
+          filteredRelations = [];
+          containsLinks = unusedAtomics
+            .filter((atomic) => atomic.parentId && parentIdSet.has(atomic.parentId))
+            .map((atomic) => ({
+              id: `contains-${atomic.parentId}-${atomic.id}`,
+              subjectObjectId: atomic.parentId!,
+              objectId: atomic.id,
+              relationType: 'contains' as const,
+            }));
+
+          const nextUnusedItems = unusedAtomics
+            .map((atomic) => {
+              const parent = atomic.parentId ? objMap.get(atomic.parentId) : null;
+              if (!parent) return null;
+              return {
+                atomicId: atomic.id,
+                atomicLabel: atomic.displayName ?? atomic.name,
+                atomicObjectType: atomic.objectType,
+                parentCompoundId: parent.id,
+                parentCompoundLabel: parent.displayName ?? parent.name,
+              } satisfies UnusedAtomicItem;
+            })
+            .filter((item): item is UnusedAtomicItem => item !== null)
+            .sort((a, b) => {
+              const parentSort = a.parentCompoundLabel.localeCompare(b.parentCompoundLabel, 'ko');
+              if (parentSort !== 0) return parentSort;
+              return a.atomicLabel.localeCompare(b.atomicLabel, 'ko');
+            });
+          setUnusedAtomicItems(nextUnusedItems);
+        } else if (level === 'COMPOUND_VIEW') {
+          setUnusedAtomicItems([]);
           filteredObjects = allObjects.filter((o) => o.depth === 0);
           const idSet = new Set(filteredObjects.map((o) => o.id));
           const rollupCompoundRelations = [
@@ -428,6 +657,7 @@ export function RollupGraph() {
             .forEach((r) => relationMap.set(r.id, r));
           filteredRelations = [...relationMap.values()];
         } else {
+          setUnusedAtomicItems([]);
           const allowedTypes = LEVEL_TYPES[level] ?? [];
           let baseObjects = allObjects.filter(
             (o) => allowedTypes.includes(o.objectType) && o.depth === 0,
@@ -453,6 +683,7 @@ export function RollupGraph() {
           expanded.forEach((parentId) => {
             allObjects
               .filter((o) => o.parentId === parentId)
+              .filter((o) => o.granularity === 'COMPOUND' || usedAtomicIds.has(o.id))
               .forEach((o) => expandedChildren.push(o));
           });
 
@@ -481,7 +712,7 @@ export function RollupGraph() {
         }
 
         const graphStatsForLevel: GraphStatApiItem[] =
-          level === 'COMPOUND_VIEW' ? [] : allGraphStats[level];
+          level === 'COMPOUND_VIEW' || level === 'UNUSED_ATOMIC' ? [] : allGraphStats[level];
         const graphStatMap = new Map(graphStatsForLevel.map((row) => [row.objectId, row]));
         const visibleBeforeHubFilter = new Set(filteredObjects.map((o) => o.id));
         const hubNodeIds = new Set(
@@ -585,6 +816,7 @@ export function RollupGraph() {
         console.error('[RollupGraph] 로드 실패:', err);
         setIsEmpty(true);
         setGraph3DData({ nodes: [], links: [] });
+        setUnusedAtomicItems([]);
       } finally {
         setLoading(false);
       }
@@ -597,6 +829,23 @@ export function RollupGraph() {
   }, [viewLevel, expandedSet, buildGraph]);
 
   const handleLevelChange = (level: ViewLevel) => {
+    setSelectedContributorLink(null);
+    setContributorScopeMode('SUBTREE');
+    setContributorGroupBy('targetCompound');
+    setContributorData(null);
+    setContributorError(null);
+    setContributorNextCursor(null);
+    setContributorLoadingMore(false);
+    setUnusedAtomicItems([]);
+
+    if (level === 'UNUSED_ATOMIC') {
+      setSelectedDomain(null);
+      setSelectedService(null);
+      setExpandedSet(new Set());
+      setViewLevel('UNUSED_ATOMIC');
+      return;
+    }
+
     if (hasDomainObjects) {
       if (!selectedDomain) {
         if (level !== 'DOMAIN_TO_DOMAIN') return;
@@ -616,6 +865,13 @@ export function RollupGraph() {
     setExpandedSet(new Set());
     setViewLevel(level);
   };
+
+  const nodeLabelById = new Map(graph3DData.nodes.map((node) => [node.id, node.label]));
+  const selectedContributorSourceLabel =
+    selectedContributorLink && nodeLabelById.get(selectedContributorLink.semanticSource);
+  const selectedContributorTargetLabel =
+    selectedContributorLink && nodeLabelById.get(selectedContributorLink.semanticTarget);
+  const hasContributorNextPage = contributorNextCursor !== null;
 
   return (
     <div className="relative h-full w-full bg-[#0f0f11]">
@@ -671,8 +927,10 @@ export function RollupGraph() {
 
         <div className="flex flex-wrap gap-2">
           {VIEW_LEVELS.map((level) => {
+            const isAlwaysAllowed = level.value === 'UNUSED_ATOMIC';
             const disabledByDomainFlow =
               hasDomainObjects &&
+              !isAlwaysAllowed &&
               (
                 (!selectedDomain && level.value !== 'DOMAIN_TO_DOMAIN') ||
                 (selectedDomain !== null && !['DOMAIN_TO_DOMAIN', 'SERVICE_TO_SERVICE'].includes(level.value))
@@ -723,7 +981,7 @@ export function RollupGraph() {
           </button>
         )}
 
-        {viewLevel !== 'COMPOUND_VIEW' && hubNodeCount > 0 && (
+        {!['COMPOUND_VIEW', 'UNUSED_ATOMIC'].includes(viewLevel) && hubNodeCount > 0 && (
           <button
             onClick={() => setIsHubCollapsed((prev) => !prev)}
             className={cn(
@@ -817,6 +1075,223 @@ export function RollupGraph() {
         </div>
       )}
 
+      {viewLevel === 'UNUSED_ATOMIC' && !loading && (
+        <div className="absolute left-4 bottom-20 z-20 w-[min(520px,calc(100vw-3rem))] max-h-[55vh] rounded-xl border border-zinc-700/80 bg-zinc-950/95 p-3 text-xs shadow-xl backdrop-blur-md">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+              Unused Atomic
+            </p>
+            <span className="rounded border border-zinc-700 bg-zinc-900 px-2 py-0.5 text-[10px] text-zinc-300">
+              total: {unusedAtomicItems.length}
+            </span>
+          </div>
+          {unusedAtomicItems.length === 0 ? (
+            <p className="text-zinc-500">미사용 atomic이 없습니다.</p>
+          ) : (
+            <div className="max-h-[44vh] space-y-1.5 overflow-y-auto pr-1">
+              {unusedAtomicItems.map((item) => (
+                <div
+                  key={item.atomicId}
+                  className="rounded border border-zinc-800 bg-zinc-900/60 px-2 py-1.5"
+                >
+                  <div className="text-[10px] text-indigo-300">{item.parentCompoundLabel}</div>
+                  <div className="break-all text-zinc-200">{item.atomicLabel}</div>
+                  <div className="text-[10px] font-mono text-zinc-500">{item.atomicObjectType}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {selectedContributorLink && (
+        <div className="absolute right-4 bottom-20 z-20 w-[min(560px,calc(100vw-2rem))] max-h-[55vh] rounded-xl border border-zinc-700/80 bg-zinc-950/95 text-xs shadow-xl backdrop-blur-md">
+          <div className="flex items-start justify-between gap-2 border-b border-zinc-800 px-3 py-2">
+            <div className="min-w-0">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-zinc-400">
+                Contributor
+              </p>
+              <p className="truncate font-semibold text-zinc-100">
+                {selectedContributorSourceLabel ?? selectedContributorLink.semanticSource} →{' '}
+                {selectedContributorTargetLabel ?? selectedContributorLink.semanticTarget}
+              </p>
+              <p className="mt-0.5 text-[10px] text-zinc-500">
+                relation: {selectedContributorLink.relationType}
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setSelectedContributorLink(null);
+                setContributorData(null);
+                setContributorError(null);
+                setContributorNextCursor(null);
+                setContributorLoadingMore(false);
+              }}
+              className="rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-[10px] text-zinc-300 hover:border-zinc-500 hover:text-white"
+            >
+              닫기
+            </button>
+          </div>
+
+          <div className="flex items-center gap-1.5 border-b border-zinc-800 px-3 py-2">
+            <span className="text-[10px] text-zinc-500">groupBy</span>
+            {(
+              [
+                ['targetCompound', 'targetCompound'],
+                ['relationType', 'relationType'],
+                ['sourceAtomic', 'sourceAtomic'],
+                ['targetAtomic', 'targetAtomic'],
+              ] as const
+            ).map(([option, label]) => (
+              <button
+                key={option}
+                onClick={() => setContributorGroupBy(option)}
+                className={cn(
+                  'rounded-full px-2 py-0.5 text-[10px] font-medium border',
+                  contributorGroupBy === option
+                    ? 'border-primary bg-primary/20 text-primary'
+                    : 'border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500 hover:text-white',
+                )}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          <div className="flex items-center gap-1.5 border-b border-zinc-800 px-3 py-2">
+            <span className="text-[10px] text-zinc-500">scope</span>
+            {(['SUBTREE', 'GLOBAL'] as ContributorScopeMode[]).map((mode) => (
+              <button
+                key={mode}
+                onClick={() => setContributorScopeMode(mode)}
+                className={cn(
+                  'rounded-full px-2 py-0.5 text-[10px] font-medium border',
+                  contributorScopeMode === mode
+                    ? 'border-primary bg-primary/20 text-primary'
+                    : 'border-zinc-700 bg-zinc-900 text-zinc-300 hover:border-zinc-500 hover:text-white',
+                )}
+              >
+                {mode}
+              </button>
+            ))}
+          </div>
+
+          <div className="max-h-[42vh] overflow-y-auto px-3 py-2">
+            {contributorLoading && (
+              <div className="flex items-center justify-center py-6 text-zinc-400">
+                <Spinner size="sm" />
+              </div>
+            )}
+
+            {!contributorLoading && contributorError && (
+              <p className="py-4 text-rose-300">{contributorError}</p>
+            )}
+
+            {!contributorLoading &&
+              !contributorError &&
+              contributorData &&
+              contributorData.summary.totalCount === 0 && (
+                <p className="py-4 text-zinc-500">기여 관계가 없습니다.</p>
+              )}
+
+            {!contributorLoading &&
+              !contributorError &&
+              contributorData &&
+              contributorData.summary.totalCount > 0 && (
+                <div className="space-y-2">
+                  <div className="rounded border border-zinc-800 bg-zinc-900/60 px-2 py-1 text-[10px] text-zinc-400">
+                    total: {contributorData.summary.totalCount}
+                    {' · '}
+                    {Object.entries(contributorData.summary.byRelationType)
+                      .map(([type, count]) => `${type}:${count}`)
+                      .join(', ')}
+                  </div>
+
+                  {contributorData.groups.map((group) => (
+                    <div key={group.groupKey} className="rounded border border-zinc-800 bg-zinc-900/50 p-2">
+                      <div className="mb-1 flex items-center justify-between">
+                        <span className="font-semibold text-zinc-200">
+                          {group.groupLabel ?? group.groupKey}
+                        </span>
+                        <span className="text-[10px] text-zinc-500">{group.weight}</span>
+                      </div>
+                      <div className="space-y-1.5">
+                        {group.relations.map((relation) => (
+                          <div key={relation.relationId} className="rounded border border-zinc-800/80 bg-zinc-950/60 p-2">
+                            <div className="flex items-start gap-1 text-[11px]">
+                              <span className="font-mono text-violet-300">{relation.relationType}</span>
+                              <span className="text-zinc-300 break-all">
+                                {relation.sourceAtomicLabel} → {relation.targetAtomicLabel}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-[10px] text-zinc-500">
+                              confidence:{' '}
+                              {typeof relation.confidence === 'number'
+                                ? relation.confidence.toFixed(2)
+                                : 'n/a'}
+                              {' · '}evidence:{relation.evidenceCount}
+                            </div>
+                            {relation.evidences.length > 0 && (
+                              <div className="mt-1 space-y-1">
+                                {relation.evidences.slice(0, 3).map((evidence) => (
+                                  <div key={evidence.id} className="rounded bg-zinc-900/70 px-1.5 py-1 text-[10px] text-zinc-400">
+                                    <span className="font-mono text-zinc-300">{evidence.evidenceType}</span>
+                                    {evidence.filePath && (
+                                      <span className="ml-1 break-all">{evidence.filePath}</span>
+                                    )}
+                                    {(evidence.lineStart || evidence.lineEnd) && (
+                                      <span className="ml-1 text-zinc-500">
+                                        [{evidence.lineStart ?? '-'}-{evidence.lineEnd ?? '-'}]
+                                      </span>
+                                    )}
+                                    {evidence.excerpt && (
+                                      <div className="mt-1 line-clamp-2 break-all text-zinc-500">
+                                        {evidence.excerpt}
+                                      </div>
+                                    )}
+                                  </div>
+                                ))}
+                              </div>
+                            )}
+                            {relation.evidences.length === 0 && (
+                              <div className="mt-1 text-[10px] text-zinc-500">근거 없음</div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+
+                  {hasContributorNextPage && selectedContributorLink && (
+                    <div className="flex justify-center pt-1">
+                      <button
+                        onClick={() => {
+                          if (!contributorNextCursor || contributorLoadingMore) return;
+                          void fetchContributors(
+                            selectedContributorLink,
+                            contributorGroupBy,
+                            contributorScopeMode,
+                            { cursor: contributorNextCursor, append: true },
+                          );
+                        }}
+                        disabled={contributorLoadingMore}
+                        className={cn(
+                          'rounded border px-2 py-1 text-[10px]',
+                          contributorLoadingMore
+                            ? 'border-zinc-700 bg-zinc-900 text-zinc-500'
+                            : 'border-zinc-600 bg-zinc-900 text-zinc-300 hover:border-zinc-400 hover:text-white',
+                        )}
+                      >
+                        {contributorLoadingMore ? '불러오는 중...' : '더 보기'}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+          </div>
+        </div>
+      )}
+
       {loading && (
         <div className="absolute inset-0 flex items-center justify-center">
           <Spinner size="lg" />
@@ -842,7 +1317,9 @@ export function RollupGraph() {
             <span>드래그: 회전</span>
             <span>휠: 줌</span>
             <span>클릭: 포커스</span>
-            {viewLevel !== 'COMPOUND_VIEW' && <span>클릭(COMPOUND): Roll-down</span>}
+            {!['COMPOUND_VIEW', 'UNUSED_ATOMIC'].includes(viewLevel) && (
+              <span>클릭(COMPOUND): Roll-down</span>
+            )}
           </div>
         </div>
       )}
@@ -857,6 +1334,16 @@ export function RollupGraph() {
             isCompound: node.isCompound,
             label: node.label,
           });
+        }}
+        onLinkClick={(link) => {
+          handleLinkClick(link);
+        }}
+        onBackgroundClick={() => {
+          setSelectedContributorLink(null);
+          setContributorData(null);
+          setContributorError(null);
+          setContributorNextCursor(null);
+          setContributorLoadingMore(false);
         }}
       />
 
@@ -887,6 +1374,39 @@ export function RollupGraph() {
                 {node.label}
               </button>
             ))}
+          </div>
+        </div>
+      )}
+
+      {showE2ELinkActions && (
+        <div
+          data-testid="mapping-graph-e2e-link-actions"
+          className="absolute bottom-4 right-64 z-30 max-h-40 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-950/90 p-2 text-[10px] backdrop-blur-sm"
+        >
+          <p className="mb-1 text-zinc-400">E2E Link Actions</p>
+          <div className="flex flex-col gap-1">
+            {graph3DData.links
+              .filter((link) => !link.isContains)
+              .map((link) => (
+                <button
+                  key={link.id}
+                  data-testid="mapping-graph-e2e-link-action"
+                  data-link-id={link.id}
+                  aria-hidden="true"
+                  onClick={() => handleLinkClick(link)}
+                  className="truncate rounded border border-zinc-700 bg-zinc-900 px-2 py-1 text-left text-zinc-200 hover:border-zinc-500 hover:text-white"
+                  title={`${nodeLabelById.get(link.semanticSource) ?? link.semanticSource} -> ${
+                    nodeLabelById.get(link.semanticTarget) ?? link.semanticTarget
+                  }`}
+                >
+                  {(nodeLabelById.get(link.semanticSource) ?? link.semanticSource)}
+                  {' -> '}
+                  {(nodeLabelById.get(link.semanticTarget) ?? link.semanticTarget)}
+                  {' ('}
+                  {link.relationType}
+                  {')'}
+                </button>
+              ))}
           </div>
         </div>
       )}

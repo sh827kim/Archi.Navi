@@ -149,9 +149,12 @@ const SAMPLE_ATOMIC_RELATIONS = [
   { subject: 'api-gateway',    relation: 'call', object: 'product-get-by-id' },
 
   { subject: 'order-service',  relation: 'call', object: 'user-get-by-id' },
+  { subject: 'order-service',  relation: 'call', object: 'user-get-users' },
+  { subject: 'order-service',  relation: 'call', object: 'user-post-user' },
   { subject: 'order-service',  relation: 'call', object: 'payment-charge' },
   { subject: 'order-service',  relation: 'call', object: 'payment-refund' },
   { subject: 'review-service', relation: 'call', object: 'user-get-by-id' },
+  { subject: 'payment-service', relation: 'call', object: 'user-get-by-id' },
   { subject: 'review-service', relation: 'call', object: 'product-get-by-id' },
 
   // ── DB 읽기/쓰기 (service → table) ─────────────────────────────────────────────

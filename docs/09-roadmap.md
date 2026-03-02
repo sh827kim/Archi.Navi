@@ -126,11 +126,17 @@
 
 ## P3: 대규모 그래프 성능 + 추론 고도화 (v2.2+)
 
-### 3-1. 증분 리빌드
-- **파일:** `packages/core/src/rollup/builder.ts`
-- **현재:** 전체 rebuild (모든 level 재계산)
-- **목표:** 변경 영향 범위만 부분 재계산
-- **트리거:** 관계 승인/삭제, 부모 변경, expose 변경
+### ✅ 3-1. 증분 리빌드 (완료)
+- **파일:** `packages/core/src/rollup/builder.ts`, `apps/web/src/lib/rollup-change-events.ts`
+- **구현 완료:**
+  - `incrementalRebuild` 기반 영향 범위(level/affected service) 계산 + in-place 갱신
+  - API 변경 이벤트 연동:
+    - `PATCH /api/inference/candidates/:id` (승인)
+    - `PATCH /api/inference/domain-candidates/:id` (승인)
+    - `POST /api/relations` (직접 승인 등록)
+    - `DELETE /api/relations/:id` (관계 삭제)
+  - `expose` 관계는 `EXPOSE_CHANGED` 이벤트로 처리해 caller 역추적 반영
+  - 증분 대상이 없거나 ACTIVE generation이 없으면 안전 fallback 처리
 
 ### ✅ 3-2. Hub 처리 UI (완료)
 - **기준:** `object_graph_stats.inDegree >= threshold` (기본 50, 설정에서 조정 가능)

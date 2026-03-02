@@ -10,7 +10,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useTheme } from 'next-themes';
 import {
-  Layers,         // Architecture (레이어드 뷰)
+  LayoutGrid,     // Architecture (레이어드 뷰)
   GitGraph,       // Object Mapping (롤업 그래프)
   Server,         // Services
   GitBranch,      // Relations
@@ -28,7 +28,7 @@ const navItems = [
   {
     href: '/architecture',
     label: '아키텍처 뷰',
-    icon: Layers,
+    icon: LayoutGrid,
     description: '레이어드 아키텍처 시각화',
   },
   {

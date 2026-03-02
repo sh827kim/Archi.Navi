@@ -3,6 +3,7 @@
 작성일: 2026-02-23
 문서 버전: v1.0
 상태: Draft
+구현 SPEC: [13-compound-view-implementation-spec.md](./13-compound-view-implementation-spec.md)
 
 ---
 
@@ -384,15 +385,20 @@ Containment 변경(`parent_id` 수정)은 현재 수동 편집으로 처리되�
 
 ---
 
-## 12. 구현 체크리스트
+## 12. 구현 체크리스트 (2026-03-02 기준)
 
-- [ ] Compound Graph View (Rollup 기반 1-level graph 렌더링)
-- [ ] Contributor Drill-down Panel (edge 클릭 → Atomic 근거 목록)
-- [ ] Contributor Grouping 옵션 (targetCompound, sourceAtomic, targetAtomic, relationType)
-- [ ] Affinity Compound subtree 해소 (domain의 가상 subtree 조회)
-- [ ] Evidence Chain 연결 (Contributor → relation_evidences → evidences)
-- [ ] Scope Mode 전환 (SUBTREE / GLOBAL)
+- [x] Compound Graph View (Rollup 기반 1-level graph 렌더링)
+- [x] Contributor Drill-down Panel (edge 클릭 → Atomic 근거 목록)
+- [x] Contributor Grouping 옵션 (targetCompound, sourceAtomic, targetAtomic, relationType)
+- [x] Affinity Compound subtree 해소 (domain의 가상 subtree 조회)
+- [x] Evidence Chain 연결 (Contributor → relation_evidences → evidences)
+- [x] Scope Mode 전환 (SUBTREE / GLOBAL)
 - [ ] 기존 Navigation Flow 통합 (Architecture View → Contributor → Evidence)
+
+현재 구현 범위:
+- grouping `targetCompound`, `relationType`, `sourceAtomic`, `targetAtomic` 제공
+- Scope Mode `SUBTREE`, `GLOBAL` 토글 제공
+- Domain edge의 contributor 조회 시 `object_domain_affinities` 기반 subtree 해소 적용
 
 ---
 

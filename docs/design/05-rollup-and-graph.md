@@ -276,16 +276,15 @@ function renderIncrementally(edges: Edge[]) {
 | **규칙 기반** (기본) | 계층별 고정 배치 | 빠른 초기 렌더링 |
 | **Force Layout** (선택) | 물리 시뮬레이션 기반 | 구조 탐색용, 옵션 버튼 |
 
-### 9.3 React Flow 구성
+### 9.3 Architecture View 구성
 
 ```typescript
-// Architecture View의 React Flow 설정
-const defaultOptions = {
-  fitView: true,
+// Architecture View (Cytoscape) 기본 상호작용 정책
+const defaultViewOptions = {
+  wheelSensitivity: 0.2,
   minZoom: 0.1,
-  maxZoom: 2,
-  nodesDraggable: true,
-  elementsSelectable: true,
+  maxZoom: 2.0,
+  fitOnInit: true,
 };
 ```
 
@@ -361,19 +360,19 @@ listGenerations(workspaceId: string): Promise<Generation[]>
 
 ---
 
-## 13. 구현 체크리스트
+## 13. 구현 체크리스트 (2026-03-02 기준)
 
-- [ ] rollup_generation 관리 구현
-- [ ] SERVICE_TO_SERVICE rollup 계산
-- [ ] SERVICE_TO_DATABASE rollup 계산
-- [ ] SERVICE_TO_BROKER rollup 계산
-- [ ] DOMAIN_TO_DOMAIN rollup 계산
-- [ ] object_graph_stats 계산
+- [x] rollup_generation 관리 구현
+- [x] SERVICE_TO_SERVICE rollup 계산
+- [x] SERVICE_TO_DATABASE rollup 계산
+- [x] SERVICE_TO_BROKER rollup 계산
+- [x] DOMAIN_TO_DOMAIN rollup 계산
+- [x] object_graph_stats 계산
 - [ ] direction 기반 Graph API
-- [ ] 허브 collapse/expand UI
-- [ ] 점진적 렌더링 (requestAnimationFrame)
-- [ ] React Flow 기반 Architecture View
-- [ ] Domain-first navigation
+- [x] 허브 collapse/expand UI
+- [x] 점진적 렌더링 (requestAnimationFrame)
+- [ ] React Flow 기반 Architecture View (현재 Cytoscape 사용)
+- [x] Domain-first navigation
 - [ ] Fast Mode / Exact Mode 전환
 
 ---
