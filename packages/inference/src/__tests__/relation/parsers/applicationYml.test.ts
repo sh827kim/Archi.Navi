@@ -189,6 +189,42 @@ spring:
     expect(result.kafka?.consumerTopics).toEqual([]);
   });
 
+  it('zuul.routes.*.serviceId를 서비스 의존 후보로 파싱해야 한다', () => {
+    const yaml = `
+spring:
+  application:
+    name: api-gateway
+zuul:
+  routes:
+    article:
+      path: /articles/**
+      serviceId: article-service
+    author:
+      path: /authors/**
+      serviceId: author-service
+`;
+    const result = parseApplicationYml('/app/application.yml', yaml);
+    expect(result.routeServiceIds).toEqual(['article-service', 'author-service']);
+  });
+
+  it('zuul.routes.*.service-id(kebab-case)도 서비스 의존 후보로 파싱해야 한다', () => {
+    const yaml = `
+spring:
+  application:
+    name: api-gateway
+zuul:
+  routes:
+    article:
+      path: /articles/**
+      service-id: article-service
+    author:
+      path: /authors/**
+      service-id: author-service
+`;
+    const result = parseApplicationYml('/app/application.yml', yaml);
+    expect(result.routeServiceIds).toEqual(['article-service', 'author-service']);
+  });
+
   // ─── 엣지 케이스 ─────────────────────────────────────────────────────────────
 
   it('spring.profiles.active가 있어도 동일 파일의 설정은 정상 파싱해야 한다', () => {
@@ -214,6 +250,7 @@ spring:
     expect(result.serviceName).toBeNull();
     expect(result.datasource).toBeNull();
     expect(result.kafka).toBeNull();
+    expect(result.routeServiceIds).toEqual([]);
   });
 
   it('잘못된 YAML 형식은 빈 결과를 반환해야 한다', () => {
@@ -221,6 +258,7 @@ spring:
     expect(result.serviceName).toBeNull();
     expect(result.datasource).toBeNull();
     expect(result.kafka).toBeNull();
+    expect(result.routeServiceIds).toEqual([]);
   });
 
   it('spring 섹션 없이 다른 설정만 있는 경우 빈 결과를 반환해야 한다', () => {
@@ -233,6 +271,7 @@ logging:
     expect(result.serviceName).toBeNull();
     expect(result.datasource).toBeNull();
     expect(result.kafka).toBeNull();
+    expect(result.routeServiceIds).toEqual([]);
   });
 
   it('spring.kafka.bootstrap-servers 없이 consumer 설정만 있으면 kafka가 null이어야 한다', () => {

@@ -7,7 +7,7 @@ import { and, eq } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
 import { runDiscovery, runSeedBasedInference } from '@archi-navi/inference';
-import { getActiveGeneration } from '@archi-navi/core';
+import { getActiveGeneration, rebuildRollups } from '@archi-navi/core';
 
 type DomainTrack = 'a' | 'b' | 'all';
 
@@ -87,15 +87,9 @@ export async function POST(req: NextRequest) {
 
     if (track === 'b' || track === 'all') {
       const activeGeneration = await getActiveGeneration(db, workspaceId);
-      const generationVersion = body.generationVersion ?? activeGeneration ?? null;
+      let generationVersion = body.generationVersion ?? activeGeneration ?? null;
       if (generationVersion === null) {
-        return NextResponse.json(
-          {
-            error:
-              'Track B 실행에 사용할 ACTIVE rollup generation이 없습니다. 먼저 seed/rebuild를 실행하세요.',
-          },
-          { status: 400 },
-        );
+        generationVersion = await rebuildRollups(db, workspaceId);
       }
 
       const discoveryResult = await runDiscovery(db, {

@@ -250,21 +250,43 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ workspaceId }),
       });
-      if (!res.ok) throw new Error('reset failed');
       const data = (await res.json()) as {
+        error?: string;
         deleted?: {
           objects?: number;
           layers?: number;
           tags?: number;
           relations?: number;
           relationCandidates?: number;
+          domainCandidates?: number;
+          codeArtifacts?: number;
+          evidences?: number;
+        };
+        remaining?: {
+          objects?: number;
+          layers?: number;
+          tags?: number;
+          relations?: number;
+          relationCandidates?: number;
+          domainCandidates?: number;
+          codeArtifacts?: number;
+          evidences?: number;
         };
       };
+      if (!res.ok) {
+        const remaining = data.remaining;
+        if (remaining) {
+          throw new Error(
+            `초기화 실패 — 남은 데이터: Object ${remaining.objects ?? 0}, 관계 ${remaining.relations ?? 0}, 후보 ${remaining.relationCandidates ?? 0}, 도메인후보 ${remaining.domainCandidates ?? 0}`,
+          );
+        }
+        throw new Error(data.error ?? 'reset failed');
+      }
       setResetOpen(false);
       const deleted = data.deleted;
       if (deleted) {
         toast.success(
-          `워크스페이스 초기화 완료 — Object ${deleted.objects ?? 0}, 레이어 ${deleted.layers ?? 0}, 태그 ${deleted.tags ?? 0}, 관계 ${deleted.relations ?? 0}, 후보 ${deleted.relationCandidates ?? 0} 삭제`,
+          `워크스페이스 초기화 완료 — Object ${deleted.objects ?? 0}, 레이어 ${deleted.layers ?? 0}, 태그 ${deleted.tags ?? 0}, 관계 ${deleted.relations ?? 0}, 후보 ${deleted.relationCandidates ?? 0}, 도메인후보 ${deleted.domainCandidates ?? 0}, 코드아티팩트 ${deleted.codeArtifacts ?? 0} 삭제`,
         );
       } else {
         toast.success('워크스페이스 데이터 초기화 완료');
@@ -272,8 +294,8 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
       // 강제 reload 대신 라우트 데이터만 새로고침해 HMR 충돌 가능성을 낮춘다.
       window.dispatchEvent(new CustomEvent('archi-navi:workspace-reset', { detail: { workspaceId } }));
       router.refresh();
-    } catch {
-      toast.error('초기화 실패');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '초기화 실패');
     } finally {
       setResetting(false);
     }
