@@ -767,4 +767,4 @@ domain_candidates (PENDING)
 | [02-data-model.md](./02-data-model.md) | 추론 관련 테이블 스키마 (21개 테이블) |
 | [05-rollup-and-graph.md](./05-rollup-and-graph.md) | 승인 후 Roll-up 재빌드 |
 | [04-query-engine.md](./04-query-engine.md) | 추론 결과 활용 (Query Engine) |
-| [08-roadmap.md](./08-roadmap.md) | 전체 로드맵 |
+| [03-roadmap.md](../03-roadmap.md) | 전체 로드맵 |

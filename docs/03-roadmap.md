@@ -1,8 +1,8 @@
 # Archi.Navi — v2+ 로드맵
 
 > 작성일: 2026-02-22
-> v1 구현 현황: `docs/07-implementation-status.md` 참고
-> 추론 엔진 설계: `docs/03-inference-engine.md` v3.0 참고
+> v1 구현 현황: `docs/02-implementation-status.md` 참고
+> 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0 참고
 
 ---
 
@@ -127,6 +127,7 @@
 ## P3: 대규모 그래프 성능 + 추론 고도화 (v2.2+)
 
 ### ✅ 3-1. 증분 리빌드 (완료)
+- **SPEC:** `docs/spec/06-incremental-rollup-rebuild-spec.md`
 - **파일:** `packages/core/src/rollup/builder.ts`, `apps/web/src/lib/rollup-change-events.ts`
 - **구현 완료:**
   - `incrementalRebuild` 기반 영향 범위(level/affected service) 계산 + in-place 갱신
@@ -139,6 +140,7 @@
   - 증분 대상이 없거나 ACTIVE generation이 없으면 안전 fallback 처리
 
 ### ✅ 3-2. Hub 처리 UI (완료)
+- **SPEC:** `docs/spec/07-hub-node-management-spec.md`
 - **기준:** `object_graph_stats.inDegree >= threshold` (기본 50, 설정에서 조정 가능)
 - **구현 완료:**
   - Mapping 그래프 우상단 `Hub 접기/펼치기` 토글
@@ -146,6 +148,7 @@
   - `/api/rollups` 응답에 `graphStats` 포함하여 UI 판정에 활용
 
 ### ✅ 3-3. 프로그레시브 렌더링 (완료)
+- **SPEC:** `docs/spec/08-progressive-rendering-spec.md`
 - **파일:** `apps/web/src/components/mapping/rollup-graph.tsx`
 - **구현 완료:**
   - 2000+ 엣지에서 `requestAnimationFrame` 기반 점진 렌더링 자동 활성화
@@ -153,6 +156,7 @@
   - 소규모 그래프는 기존 즉시 렌더링 경로 유지
 
 ### ✅ 3-4. Domain-first 내비게이션 (완료)
+- **SPEC:** `docs/spec/09-domain-first-navigation-spec.md`
 - **구현 완료:**
   - 기본 진입 레벨을 `DOMAIN_TO_DOMAIN`으로 전환 (도메인 데이터 없으면 `SERVICE_TO_SERVICE` fallback)
   - `DOMAIN_TO_DOMAIN`에서 도메인 클릭 시 `SERVICE_TO_SERVICE` 자동 전환
@@ -161,6 +165,7 @@
   - `object_domain_affinities` 기반 도메인별 서비스 필터링 적용
 
 ### ✅ 3-5. 증분 추론 (완료)
+- **SPEC:** `docs/spec/10-incremental-inference-spec.md`
 - **구현 완료:**
   - Config 추론 경로(`inferRelationsFromConfig`)에 SHA256 기반 파일 변경 감지 적용
   - 변경 없는 설정 파일은 파싱/추론을 건너뛰고 기존 결과를 유지
@@ -193,18 +198,18 @@
 
 | 로드맵 항목 | 참조 문서 |
 |------------|----------|
-| Config 기반 추론 | `docs/03-inference-engine.md` §7 Config 파싱 전략 |
-| Regex Code Signal | `docs/03-inference-engine.md` §6.1 Phase 1 |
-| AST Plugin | `docs/03-inference-engine.md` §6.2 Phase 2 |
-| DB 시그널 | `docs/03-inference-engine.md` §5 DB 스키마 신호 추출 |
-| Domain 승인 API | `docs/03-inference-engine.md` §8.2 Domain 승인 |
-| Discovery 멀티 레이어 | `docs/03-inference-engine.md` §4.2 |
-| Evidence Assembler | `docs/archive/ArchiNavi_AI_Reasoning_레이어_설계안_v1.md` §3 |
-| Answer Composer | `docs/archive/ArchiNavi_AI_Reasoning_레이어_설계안_v1.md` §4 |
-| DOMAIN_SUMMARY | `docs/04-query-engine.md` §4 DOMAIN_SUMMARY |
-| 증분 리빌드 | `docs/05-rollup-and-graph.md` §4 Incremental Rebuild |
-| DB 추론 확장(3-6) | `docs/11-db-inference-index-unique-spec.md` |
-| 3D 렌더러 전환(3-7) | `docs/12-object-mapping-3d-renderer-spec.md` |
-| Hub 처리 | `docs/archive/ArchiNavi_대규모_그래프_성능_전략_v1.md` §2 |
-| 프로그레시브 렌더링 | `docs/archive/ArchiNavi_대규모_그래프_성능_전략_v1.md` §5 |
-| Domain-first | `docs/05-rollup-and-graph.md` §6 Navigation Strategy |
+| Config 기반 추론 | `docs/design/03-inference-engine.md` §7 Config 파싱 전략 |
+| Regex Code Signal | `docs/design/03-inference-engine.md` §6.1 Phase 1 |
+| AST Plugin | `docs/design/03-inference-engine.md` §6.2 Phase 2 |
+| DB 시그널 | `docs/design/03-inference-engine.md` §5 DB 스키마 신호 추출 |
+| Domain 승인 API | `docs/design/03-inference-engine.md` §8.2 Domain 승인 |
+| Discovery 멀티 레이어 | `docs/design/03-inference-engine.md` §4.2 |
+| 증분 리빌드(3-1) | `docs/spec/06-incremental-rollup-rebuild-spec.md` |
+| Hub 처리(3-2) | `docs/spec/07-hub-node-management-spec.md` |
+| 프로그레시브 렌더링(3-3) | `docs/spec/08-progressive-rendering-spec.md` |
+| Domain-first(3-4) | `docs/spec/09-domain-first-navigation-spec.md` |
+| 증분 추론(3-5) | `docs/spec/10-incremental-inference-spec.md` |
+| DOMAIN_SUMMARY | `docs/design/04-query-engine.md` §4 DOMAIN_SUMMARY |
+| DB 추론 확장(3-6) | `docs/spec/01-db-inference-index-unique-spec.md` |
+| 3D 렌더러 전환(3-7) | `docs/spec/02-object-mapping-3d-renderer-spec.md` |
+| Domain-first | `docs/design/05-rollup-and-graph.md` §6 Navigation Strategy |

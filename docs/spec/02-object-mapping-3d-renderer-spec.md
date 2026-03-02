@@ -1,4 +1,4 @@
-# 12. Object Mapping 3D Renderer SPEC (Roadmap 3-7)
+# Object Mapping 3D Renderer SPEC (Roadmap 3-7)
 
 - 작성일: 2026-03-02
 - 상태: Draft (구현 기준)

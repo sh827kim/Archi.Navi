@@ -384,4 +384,4 @@ listGenerations(workspaceId: string): Promise<Generation[]>
 | [02-data-model.md](./02-data-model.md) | Rollup 관련 테이블 스키마 |
 | [04-query-engine.md](./04-query-engine.md) | Rollup 데이터를 활용하는 Query Engine |
 | [03-inference-engine.md](./03-inference-engine.md) | 승인 후 Rollup 재빌드 트리거 |
-| [07-compound-view.md](./07-compound-view.md) | Compound Dependency View 및 Contributor Drill-down 정의 |
+| [06-compound-view.md](./06-compound-view.md) | Compound Dependency View 및 Contributor Drill-down 정의 |

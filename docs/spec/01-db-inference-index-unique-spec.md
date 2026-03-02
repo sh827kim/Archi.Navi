@@ -1,4 +1,4 @@
-# 11. DB Inference Expansion SPEC (Roadmap 3-6)
+# DB Inference Expansion SPEC (Roadmap 3-6)
 
 - 작성일: 2026-03-02
 - 상태: Draft (구현 기준)

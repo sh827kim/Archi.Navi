@@ -310,17 +310,29 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 
 | 문서 | 설명 |
 |------|------|
+| [docs/README.md](./docs/README.md) | 문서 체계 가이드 (Design / SPEC / Guide) |
+| [docs/design/README.md](./docs/design/README.md) | 설계 문서 인덱스 |
+| [docs/spec/README.md](./docs/spec/README.md) | SPEC 문서 인덱스 |
 | [docs/00-overview.md](./docs/00-overview.md) | 제품 개요, 원칙, 범위 |
-| [docs/01-architecture.md](./docs/01-architecture.md) | 시스템 아키텍처, 기술 스택 |
-| [docs/02-data-model.md](./docs/02-data-model.md) | Object/Relation 모델, DB 스키마 |
-| [docs/03-inference-engine.md](./docs/03-inference-engine.md) | 추론 엔진 설계 |
-| [docs/04-query-engine.md](./docs/04-query-engine.md) | 쿼리 엔진 (BFS/DFS, 영향도 분석) |
-| [docs/05-rollup-and-graph.md](./docs/05-rollup-and-graph.md) | Rollup 전략 및 그래프 성능 |
-| [docs/06-development-guide.md](./docs/06-development-guide.md) | 개발 가이드 및 컨벤션 |
-| [docs/07-implementation-status.md](./docs/07-implementation-status.md) | v1 구현 현황 |
-| [docs/08-roadmap.md](./docs/08-roadmap.md) | v2+ 로드맵 |
-| [docs/11-db-inference-index-unique-spec.md](./docs/11-db-inference-index-unique-spec.md) | DB 추론 확장 스펙 (인덱스/유니크 패턴) |
-| [docs/12-object-mapping-3d-renderer-spec.md](./docs/12-object-mapping-3d-renderer-spec.md) | Object Mapping 3D 렌더러 전환 스펙 |
+| [docs/design/01-architecture.md](./docs/design/01-architecture.md) | 시스템 아키텍처, 기술 스택 |
+| [docs/design/02-data-model.md](./docs/design/02-data-model.md) | Object/Relation 모델, DB 스키마 |
+| [docs/design/03-inference-engine.md](./docs/design/03-inference-engine.md) | 추론 엔진 설계 |
+| [docs/design/04-query-engine.md](./docs/design/04-query-engine.md) | 쿼리 엔진 (BFS/DFS, 영향도 분석) |
+| [docs/design/05-rollup-and-graph.md](./docs/design/05-rollup-and-graph.md) | Rollup 전략 및 그래프 성능 |
+| [docs/design/06-compound-view.md](./docs/design/06-compound-view.md) | Compound Dependency View 설계 |
+| [docs/01-development-guide.md](./docs/01-development-guide.md) | 개발 가이드 및 컨벤션 |
+| [docs/02-implementation-status.md](./docs/02-implementation-status.md) | v1 구현 현황 |
+| [docs/03-roadmap.md](./docs/03-roadmap.md) | v2+ 로드맵 |
+| [docs/spec/01-db-inference-index-unique-spec.md](./docs/spec/01-db-inference-index-unique-spec.md) | DB 추론 확장 스펙 (인덱스/유니크 패턴) |
+| [docs/spec/02-object-mapping-3d-renderer-spec.md](./docs/spec/02-object-mapping-3d-renderer-spec.md) | Object Mapping 3D 렌더러 전환 스펙 |
+| [docs/spec/03-compound-view-implementation-spec.md](./docs/spec/03-compound-view-implementation-spec.md) | Compound View 구현 스펙 |
+| [docs/spec/04-llm-inference-filtering-spec.md](./docs/spec/04-llm-inference-filtering-spec.md) | LLM 추론 후보 필터링 스펙 |
+| [docs/spec/05-llm-inference-filtering-spec-checklist.md](./docs/spec/05-llm-inference-filtering-spec-checklist.md) | LLM 추론 후보 필터링 구현 체크리스트 |
+| [docs/spec/06-incremental-rollup-rebuild-spec.md](./docs/spec/06-incremental-rollup-rebuild-spec.md) | 증분 Rollup 리빌드 스펙 |
+| [docs/spec/07-hub-node-management-spec.md](./docs/spec/07-hub-node-management-spec.md) | Hub 노드 관리 스펙 |
+| [docs/spec/08-progressive-rendering-spec.md](./docs/spec/08-progressive-rendering-spec.md) | 프로그레시브 렌더링 스펙 |
+| [docs/spec/09-domain-first-navigation-spec.md](./docs/spec/09-domain-first-navigation-spec.md) | Domain-first 내비게이션 스펙 |
+| [docs/spec/10-incremental-inference-spec.md](./docs/spec/10-incremental-inference-spec.md) | 증분 추론 스펙 |
 
 ---
 

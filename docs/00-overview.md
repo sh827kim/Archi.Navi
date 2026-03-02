@@ -170,10 +170,12 @@ MSA/멀티 레포 환경에서는 아래 문제가 반복된다.
 
 | 문서 | 설명 |
 |------|------|
-| [01-architecture.md](./01-architecture.md) | 시스템 아키텍처, 기술스택, 배포 전략 |
-| [02-data-model.md](./02-data-model.md) | Object/Relation 모델, DB 스키마 |
-| [03-inference-engine.md](./03-inference-engine.md) | Relation/Domain 추론 엔진 |
-| [04-query-engine.md](./04-query-engine.md) | Deterministic Query Engine + AI 레이어 |
-| [05-rollup-and-graph.md](./05-rollup-and-graph.md) | Roll-up 전략, 그래프 성능 |
-| [06-development-guide.md](./06-development-guide.md) | 개발 가이드, CLI, 컨벤션 |
-| [10-npm-distribution.md](./10-npm-distribution.md) | npm 배포/설치 절차, `anavi up` 실행 가이드 |
+| [01-architecture.md](./design/01-architecture.md) | 시스템 아키텍처, 기술스택, 배포 전략 |
+| [02-data-model.md](./design/02-data-model.md) | Object/Relation 모델, DB 스키마 |
+| [03-inference-engine.md](./design/03-inference-engine.md) | Relation/Domain 추론 엔진 |
+| [04-query-engine.md](./design/04-query-engine.md) | Deterministic Query Engine + AI 레이어 |
+| [05-rollup-and-graph.md](./design/05-rollup-and-graph.md) | Roll-up 전략, 그래프 성능 |
+| [docs/README.md](./README.md) | 문서 분류 기준(Design / SPEC / Guide) |
+| [docs/spec/README.md](./spec/README.md) | 기능별 SPEC 인덱스 |
+| [01-development-guide.md](./01-development-guide.md) | 개발 가이드, CLI, 컨벤션 |
+| [05-npm-distribution.md](./05-npm-distribution.md) | npm 배포/설치 절차, `anavi up` 실행 가이드 |
