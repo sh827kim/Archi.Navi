@@ -567,7 +567,7 @@ export async function executeInferenceRun(
     });
   }
 
-  await db
+  const claimedRows = await db
     .update(inferenceRuns)
     .set({
       status: 'RUNNING',
@@ -576,7 +576,21 @@ export async function executeInferenceRun(
       updatedAt: new Date(),
       errorMessage: null,
     })
-    .where(eq(inferenceRuns.id, run.id));
+    .where(
+      and(
+        eq(inferenceRuns.id, run.id),
+        eq(inferenceRuns.workspaceId, input.workspaceId),
+        eq(inferenceRuns.status, 'QUEUED'),
+      ),
+    )
+    .returning({ id: inferenceRuns.id });
+
+  if (claimedRows.length === 0) {
+    return await getInferenceRunDetail(db, {
+      workspaceId: input.workspaceId,
+      runId: input.runId,
+    });
+  }
 
   await appendRunEvent(db, {
     workspaceId: input.workspaceId,
