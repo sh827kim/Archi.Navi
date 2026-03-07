@@ -383,9 +383,10 @@ async function resolveRunnableSources(
         continue;
       }
 
+      let tempDir: string | null = null;
       try {
         checkGhAuth();
-        const tempDir = mkdtempSync(join(tmpdir(), 'archi-navi-infrun-repo-'));
+        tempDir = mkdtempSync(join(tmpdir(), 'archi-navi-infrun-repo-'));
         const repoName = basename(nwo.split('/')[1] ?? 'repo');
         const repoDir = join(tempDir, repoName);
         cloneGithubRepo(nwo, repoDir);
@@ -409,6 +410,9 @@ async function resolveRunnableSources(
           payload: { sourceId: source.id, sourceRef: source.sourceRef, repoRoot: repoDir },
         });
       } catch (error) {
+        if (tempDir) {
+          rmSync(tempDir, { recursive: true, force: true });
+        }
         const errorMessage = error instanceof Error ? error.message : 'unknown github repo error';
         const message = `githubRepo source 준비 실패(${nwo}): ${errorMessage}`;
         await updateRunSource(db, {
