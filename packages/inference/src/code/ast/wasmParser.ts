@@ -9,6 +9,8 @@
  * 설계 참조: docs/10-verification-report.md §5
  */
 import Parser from 'web-tree-sitter';
+import { existsSync } from 'fs';
+import { createRequire } from 'node:module';
 import { join } from 'path';
 
 // ─── 타입 정의 ────────────────────────────────────────────────────────────────
@@ -17,6 +19,25 @@ export type SupportedLanguage = 'java' | 'kotlin' | 'typescript' | 'python';
 
 /** web-tree-sitter의 SyntaxNode를 re-export */
 export type { SyntaxNode } from 'web-tree-sitter';
+
+export class AstRuntimeError extends Error {
+    readonly language: SupportedLanguage | undefined;
+    readonly wasmPath: string | undefined;
+
+    constructor(message: string, options?: { language?: SupportedLanguage; wasmPath?: string; cause?: unknown }) {
+        super(message);
+        this.name = 'AstRuntimeError';
+        this.language = options?.language;
+        this.wasmPath = options?.wasmPath;
+        if (options?.cause !== undefined) {
+            (this as Error & { cause?: unknown }).cause = options.cause;
+        }
+    }
+}
+
+function getWasmSetupHint(): string {
+    return 'pnpm --filter @archi-navi/inference download:wasm 실행 후 재시도하세요.';
+}
 
 // ─── WASM 파일 경로 해석 ───────────────────────────────────────────────────────
 
@@ -42,6 +63,71 @@ const WASM_FILE_MAP: Record<SupportedLanguage, string> = {
     python: 'tree-sitter-python.wasm',
 };
 
+const nodeRequire = createRequire(__filename);
+const BUNDLED_RUNTIME_WASM_RELATIVE_PATH = '../../../wasm/tree-sitter.wasm';
+const BUNDLED_GRAMMAR_WASM_RELATIVE_PATH_MAP: Record<SupportedLanguage, string> = {
+    java: '../../../wasm/tree-sitter-java.wasm',
+    kotlin: '../../../wasm/tree-sitter-kotlin.wasm',
+    typescript: '../../../wasm/tree-sitter-typescript.wasm',
+    python: '../../../wasm/tree-sitter-python.wasm',
+};
+
+function resolveBundledWasmPath(relativePath: string): string | null {
+    try {
+        const resolved = nodeRequire.resolve(relativePath);
+        if (existsSync(resolved)) return resolved;
+    } catch {
+        // no-op
+    }
+    return null;
+}
+
+function resolveWasmPathFromCwd(fileName: string): string | null {
+    const roots = [process.cwd(), process.env['INIT_CWD']?.trim()].filter(
+        (value): value is string => typeof value === 'string' && value.length > 0,
+    );
+    const candidates = roots.flatMap((root) => [
+        join(root, 'packages', 'inference', 'wasm', fileName),
+        join(root, 'node_modules', '@archi-navi', 'inference', 'wasm', fileName),
+    ]);
+    for (const candidate of candidates) {
+        if (existsSync(candidate)) return candidate;
+    }
+    return null;
+}
+
+function getRuntimeWasmPath(): string {
+    const envPath = process.env['TREE_SITTER_RUNTIME_WASM_PATH']?.trim();
+    if (envPath) return envPath;
+
+    const configuredWasmDir = process.env['TREE_SITTER_WASM_DIR']?.trim();
+    if (configuredWasmDir) {
+        const configuredRuntimePath = join(configuredWasmDir, 'tree-sitter.wasm');
+        if (existsSync(configuredRuntimePath)) return configuredRuntimePath;
+    }
+
+    const resolvedFromCwd = resolveWasmPathFromCwd('tree-sitter.wasm');
+    if (resolvedFromCwd) return resolvedFromCwd;
+
+    const resolvedBundledRuntimePath = resolveBundledWasmPath(BUNDLED_RUNTIME_WASM_RELATIVE_PATH);
+    if (resolvedBundledRuntimePath) return resolvedBundledRuntimePath;
+
+    const bundledRuntimePath = join(getWasmDir(), 'tree-sitter.wasm');
+    if (existsSync(bundledRuntimePath)) {
+        return bundledRuntimePath;
+    }
+
+    try {
+        const resolved = nodeRequire.resolve('web-tree-sitter/tree-sitter.wasm');
+        if (existsSync(resolved)) return resolved;
+    } catch {
+        // no-op
+    }
+
+    // fallback: 런타임 상대 경로 해석 시도
+    return 'tree-sitter.wasm';
+}
+
 // ─── 초기화 상태 관리 ──────────────────────────────────────────────────────────
 
 let _initPromise: Promise<void> | null = null;
@@ -53,9 +139,25 @@ const _parsers = new Map<SupportedLanguage, Parser>();
  */
 async function ensureInit(): Promise<void> {
     if (!_initPromise) {
-        _initPromise = Parser.init();
+        const runtimeWasmPath = getRuntimeWasmPath();
+        _initPromise = Parser.init({
+            locateFile(path: string) {
+                if (path === 'tree-sitter.wasm') return runtimeWasmPath;
+                return path;
+            },
+        });
     }
-    await _initPromise;
+    try {
+        await _initPromise;
+    } catch (error) {
+        // 실패 Promise를 유지하면 이후 모든 호출이 영구 실패하므로 초기화 상태를 리셋한다.
+        _initPromise = null;
+        const runtimeWasmPath = getRuntimeWasmPath();
+        throw new AstRuntimeError(
+            `tree-sitter runtime 초기화 실패(runtimeWasm=${runtimeWasmPath}). ${getWasmSetupHint()}`,
+            { wasmPath: runtimeWasmPath, cause: error },
+        );
+    }
 }
 
 // ─── 공개 API ──────────────────────────────────────────────────────────────────
@@ -76,11 +178,24 @@ export async function getWasmParser(language: SupportedLanguage): Promise<Parser
 
     await ensureInit();
 
-    const wasmDir = getWasmDir();
     const wasmFile = WASM_FILE_MAP[language];
-    const wasmPath = join(wasmDir, wasmFile);
+    const configuredWasmDir = process.env['TREE_SITTER_WASM_DIR']?.trim();
+    const wasmPath =
+        (configuredWasmDir ? join(configuredWasmDir, wasmFile) : null) ??
+        resolveWasmPathFromCwd(wasmFile) ??
+        resolveBundledWasmPath(BUNDLED_GRAMMAR_WASM_RELATIVE_PATH_MAP[language]) ??
+        join(getWasmDir(), wasmFile);
 
-    const lang = await Parser.Language.load(wasmPath);
+    let lang: Awaited<ReturnType<typeof Parser.Language.load>>;
+    try {
+        lang = await Parser.Language.load(wasmPath);
+    } catch (error) {
+        const missingHint = !existsSync(wasmPath) ? ` ${getWasmSetupHint()}` : '';
+        throw new AstRuntimeError(
+            `tree-sitter grammar 로드 실패(language=${language}, wasmPath=${wasmPath}).${missingHint}`,
+            { language, wasmPath, cause: error },
+        );
+    }
     const parser = new Parser();
     parser.setLanguage(lang);
 

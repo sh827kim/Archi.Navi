@@ -90,6 +90,27 @@ const JAVA_PATTERNS: Pattern[] = [
         confidence: 0.8,
         extract: (m) => ({ symbol: m[1]!, metadata: { annotation: '@KafkaListener' } }),
     },
+    // RabbitMQ 수신 — @RabbitListener(queues = "queue") 또는 queues = {"q1","q2"} (다중 큐)
+    // 첫 번째 큐는 regex로 캡처하고, 다중 큐는 scanLines에서 extractAllRabbitQueues로 처리
+    {
+        kind: 'consume',
+        regex: /@RabbitListener\([^)]*queues\s*=\s*\{?\s*["']([^"']+)["']/,
+        confidence: 0.8,
+        extract: (m) => ({
+            symbol: m[1]!,
+            metadata: { annotation: '@RabbitListener', broker: 'rabbitmq', channelType: 'queue' },
+        }),
+    },
+    // RabbitMQ 발행 — rabbitTemplate.convertAndSend("queue", ...) / rabbitTemplate.send("queue", ...)
+    {
+        kind: 'produce',
+        regex: /\b(?:rabbitTemplate|amqpTemplate)\.(?:convertAndSend|send)\(\s*["']([^"']+)["']/,
+        confidence: 0.7,
+        extract: (m) => ({
+            symbol: m[1]!,
+            metadata: { client: 'RabbitTemplate', broker: 'rabbitmq', channelType: 'queue' },
+        }),
+    },
     // JPA 테이블 매핑 — @Table(name = "table_name")
     {
         kind: 'db_mapping',
@@ -115,6 +136,16 @@ function extractAllKafkaTopics(line: string): string[] {
     if (!topicsMatch) return [];
     const raw = topicsMatch[1]!;
     // 다중 토픽 배열만 여기서 처리, 단일 문자열은 일반 패턴 매칭으로 처리
+    if (!raw.startsWith('{')) return [];
+    return [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]!);
+}
+
+/** @RabbitListener의 queues = {"q1", "q2"} (배열형)에서 모든 큐 이름을 추출 */
+function extractAllRabbitQueues(line: string): string[] {
+    const queuesMatch = line.match(/@RabbitListener\([^)]*queues\s*=\s*(\{[^}]+\}|["'][^"']+["'])/);
+    if (!queuesMatch) return [];
+    const raw = queuesMatch[1]!;
+    // 다중 큐 배열만 여기서 처리, 단일 문자열은 일반 패턴 매칭으로 처리
     if (!raw.startsWith('{')) return [];
     return [...raw.matchAll(/["']([^"']+)["']/g)].map((m) => m[1]!);
 }
@@ -147,6 +178,23 @@ function scanLines(lines: string[], patterns: Pattern[]): ExtractedSignal[] {
                 });
             }
             if (topics.length > 0) continue;
+        }
+
+        // RabbitListener 다중 큐 처리: 모든 큐를 개별 신호로 추출
+        if (/@RabbitListener/.test(line)) {
+            const queues = extractAllRabbitQueues(line);
+            for (const queue of queues) {
+                signals.push({
+                    kind: 'consume',
+                    symbol: queue,
+                    lineStart: i + 1,
+                    lineEnd: i + 1,
+                    excerpt: line.trim(),
+                    confidence: 0.8,
+                    metadata: { annotation: '@RabbitListener', broker: 'rabbitmq', channelType: 'queue' },
+                });
+            }
+            if (queues.length > 0) continue;
         }
 
         for (const pattern of patterns) {

@@ -23,7 +23,8 @@
 | P1 (1-1 ~ 1-6) | ✅ 완료 | 추론 MVP 기능/승인 플로우 구현 완료 |
 | P2 (2-1) | ⚠️ 부분 구현 | 기본 경로는 `hybrid(AST+Regex 병합)`로 전환됐으나 운영 정책/모니터링 보강 필요 |
 | P2 (2-2 ~ 2-5) | ✅ 완료 | Evidence Assembler/Answer Composer/DOMAIN_SUMMARY/Message 시그널 반영 완료 |
-| P2 (운영 고도화) | ❌ 미구현 | `/api/inference/run`이 로컬 경로 의존, 조직/원격 오케스트레이션 미구현 |
+| P2 (운영 고도화) | ⚠️ 부분 구현 | 비동기 run 이력/API 골격(`inference_runs*`, `/api/inference/runs`) 추가, 원격 커넥터/재시도 정책은 후속 |
+| P2 (2-7) | ⚠️ 부분 구현 | Code Signal 기반 후보 생성(Compound->Atomic): endpoint/topic은 진행, RabbitMQ queue/DB table은 후속 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
 
 ---
@@ -142,12 +143,32 @@
   - 토픽 네이밍 패턴 분석 → producer/consumer 결합도 → 도메인 affinity
   - `msgScore` 계산값을 Seed-based 도메인 추론에 실제 반영
 
-### ❌ 2-6. Inference 운영 오케스트레이션 고도화 (미구현)
-- **현재 상태:** `/api/inference/run`은 로컬 repo 경로(`repoRoots`, `service.metadata.scanPath`) 중심 실행
+### ⚠️ 2-6. Inference 운영 오케스트레이션 고도화 (부분 구현)
+- **SPEC:** `docs/spec/13-inference-run-orchestration-spec.md`
+- **1차 구현 완료:**
+  - 비동기 실행 API 골격: `POST/GET /api/inference/runs`, `GET /api/inference/runs/:id`
+  - 실행 상태 저장 테이블: `inference_runs`, `inference_run_sources`, `inference_run_events`
+  - local source 기준 background 실행 + 상태 전이/경고/오류 이력 저장
+  - `githubRepo`/`githubOrg` source를 `gh` 기반 clone으로 실행 경로에 연결
+  - 기존 `/api/inference/run` quick run 경로는 유지
 - **남은 작업:**
-  - 조직 단위/원격 소스 포함 실행 오케스트레이션
-  - 실행 큐/재시도/실패 복구 정책
-  - 운영 상태 모니터링(실행 이력/지표) 노출
+  - 재시도(backoff), 취소, 실행 큐/워커 분리
+  - 운영 UI 상태 카드/지표 대시보드
+
+### ⚠️ 2-7. Compound → Atomic 후보 추론 고도화 (부분 구현)
+- **SPEC:**
+  - `docs/spec/14-code-based-relation-candidate-spec.md`
+  - `docs/spec/15-compound-to-atomic-inference-spec.md`
+  - `docs/spec/16-rabbitmq-queue-code-signal-spec.md` (RabbitMQ 우선)
+  - `docs/spec/17-db-table-code-signal-spec.md` (db_table은 database 소속 필수)
+- **목표:** 설정 파일이 없더라도 `mode=code`만으로 Atomic 생성 및 `relation_candidates` 생성이 가능해야 한다.
+- **1차 구현/진행 범위:**
+  - `expose` 기반 `api_endpoint` Atomic upsert (후보 생성은 아님)
+  - URL(host+path) 기반 `call`의 endpoint 매핑 시도(유일 매칭이면 `service -> api_endpoint`, 실패 시 `service -> service` fallback)
+  - `produce/consume` 기반 `service -> topic` 후보 생성
+- **남은 작업(우선순위):**
+  - RabbitMQ queue 추출/후보 생성(`queue`, produce/consume)
+  - `db_table` read/write 후보 생성 및 database parent 연결(항상 parent 보장)
 
 ---
 

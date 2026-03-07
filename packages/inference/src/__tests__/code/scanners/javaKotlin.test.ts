@@ -197,6 +197,43 @@ public void handle(String message) {}
         expect(consume.map((s) => s.symbol)).toContain('payment.completed');
     });
 
+    // ─── RabbitMQ 패턴 ───────────────────────────────────────────────────────
+
+    it('@RabbitListener(queues = \"queue\")에서 consume 신호를 추출해야 한다', () => {
+        const content = `
+@RabbitListener(queues = "email.queue")
+public void handle(String message) {}
+`;
+        const result = scanJavaKotlin('/src/EmailListener.java', content);
+        const consume = result.signals.find((s) => s.kind === 'consume');
+        expect(consume?.symbol).toBe('email.queue');
+        expect(consume?.confidence).toBeCloseTo(0.8);
+        expect(consume?.metadata).toMatchObject({ annotation: '@RabbitListener', broker: 'rabbitmq', channelType: 'queue' });
+    });
+
+    it('@RabbitListener 다중 큐 배열에서 consume 신호를 모두 추출해야 한다', () => {
+        const content = `
+@RabbitListener(queues = {"q1", "q2"})
+public void handle(String message) {}
+`;
+        const result = scanJavaKotlin('/src/EmailListener.java', content);
+        const consume = result.signals.filter((s) => s.kind === 'consume');
+        expect(consume).toHaveLength(2);
+        expect(consume.map((s) => s.symbol)).toContain('q1');
+        expect(consume.map((s) => s.symbol)).toContain('q2');
+    });
+
+    it('rabbitTemplate.convertAndSend에서 produce 신호를 추출해야 한다', () => {
+        const content = `
+rabbitTemplate.convertAndSend("email.queue", payload);
+`;
+        const result = scanJavaKotlin('/src/EmailPublisher.java', content);
+        const produce = result.signals.find((s) => s.kind === 'produce');
+        expect(produce?.symbol).toBe('email.queue');
+        expect(produce?.confidence).toBeCloseTo(0.7);
+        expect(produce?.metadata).toMatchObject({ client: 'RabbitTemplate', broker: 'rabbitmq', channelType: 'queue' });
+    });
+
     // ─── JPA 패턴 ─────────────────────────────────────────────────────────────
 
     it('@Table(name = "table_name")에서 db_mapping 신호를 추출해야 한다', () => {

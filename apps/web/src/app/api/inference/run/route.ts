@@ -11,6 +11,7 @@ import { and, eq } from 'drizzle-orm';
 import { getDb, objects } from '@archi-navi/db';
 import {
   inferRelationsFromConfig,
+  inferRelationsFromCodeSignals,
   extractCodeSignalsWithEngine,
   extractDbSchemaSignals,
   normalizeCodeSignalEngine,
@@ -149,6 +150,7 @@ export async function POST(req: NextRequest) {
       artifactCount: 0,
       signalCount: 0,
       skippedCount: 0,
+      candidateCount: 0,
       engineRequested: codeEngine,
       enginesUsed: [] as CodeSignalEngineUsed[],
       fallbackCount: 0,
@@ -203,6 +205,9 @@ export async function POST(req: NextRequest) {
             codeResult.fallbackRepoRoots.push(repoRoot);
           }
           if (result.warning) warnings.push(`[code:${repoRoot}] ${result.warning}`);
+
+          const codeCand = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+          codeResult.candidateCount += codeCand.candidateCount;
         } catch (error) {
           errors.push({
             mode: 'code',
@@ -239,7 +244,8 @@ export async function POST(req: NextRequest) {
     const dbCandidateCount =
       (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
 
-    const relationCandidatesCreated = configResult.candidateCount + dbCandidateCount;
+    const relationCandidatesCreated =
+      configResult.candidateCount + dbCandidateCount + codeResult.candidateCount;
     const hasAnySuccess =
       configResult.repoCount > 0 ||
       codeResult.repoCount > 0 ||
