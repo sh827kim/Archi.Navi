@@ -25,4 +25,7 @@ export type {
     CodeSignalEngineResult,
     CodeSignalEngineUsed,
     CodeSignalEngineOptions,
+    CodeSignalMetrics,
+    LanguageMetrics,
 } from './codeSignalEngine';
+export { ENGINE_POLICY } from './codeSignalEngine';
