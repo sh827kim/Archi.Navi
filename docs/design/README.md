@@ -13,3 +13,5 @@
 - [04-query-engine.md](./04-query-engine.md)
 - [05-rollup-and-graph.md](./05-rollup-and-graph.md)
 - [06-compound-view.md](./06-compound-view.md)
+- [07-inference-engine-advanced.md](./07-inference-engine-advanced.md)
+- [08-developer-productivity.md](./08-developer-productivity.md)
