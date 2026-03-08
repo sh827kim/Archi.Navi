@@ -4,5 +4,7 @@
  */
 export { inferRelationsFromConfig } from './configBased';
 export { inferRelationsFromCodeSignals } from './codeBased';
+export { bindConfigToCodeEndpoints } from './configCodeBinding';
+export type { ConfigCodeBindingResult } from './configCodeBinding';
 export { approveRelationCandidate } from './approveRelationCandidate';
 export type { ApproveRelationCandidateResult } from './approveRelationCandidate';

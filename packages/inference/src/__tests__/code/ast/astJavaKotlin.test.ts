@@ -161,7 +161,49 @@ restClient.get().uri("http://payment-service/pay").retrieve();
         expect(call?.symbol).toBe('http://payment-service/pay');
     });
 
-    it('@FeignClient(name = "service")에서 call 신호를 추출해야 한다', async () => {
+    it('@FeignClient 인터페이스에서 메서드별 call 신호를 추출해야 한다', async () => {
+        const content = `
+@FeignClient(name = "payment-service")
+public interface PaymentClient {
+    @GetMapping("/api/payments/{id}")
+    Payment getPayment(String id);
+
+    @PostMapping("/api/payments")
+    Payment createPayment(PaymentRequest req);
+}
+`;
+        const result = await scanJavaKotlinAst('/src/PaymentClient.java', content);
+        const feignCalls = result.signals.filter(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'FeignClient',
+        );
+
+        expect(feignCalls).toHaveLength(2);
+        expect(feignCalls[0]?.symbol).toBe('http://payment-service/api/payments/{id}');
+        expect(feignCalls[0]?.metadata).toMatchObject({ method: 'GET', path: '/api/payments/{id}' });
+        expect(feignCalls[1]?.symbol).toBe('http://payment-service/api/payments');
+        expect(feignCalls[1]?.metadata).toMatchObject({ method: 'POST', path: '/api/payments' });
+        expect(feignCalls[0]?.confidence).toBeCloseTo(0.92);
+    });
+
+    it('@FeignClient + @RequestMapping prefix를 결합해야 한다', async () => {
+        const content = `
+@FeignClient(name = "order-service")
+@RequestMapping("/api/v1")
+public interface OrderClient {
+    @GetMapping("/orders")
+    List<Order> listOrders();
+}
+`;
+        const result = await scanJavaKotlinAst('/src/OrderClient.java', content);
+        const feignCalls = result.signals.filter(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'FeignClient',
+        );
+
+        expect(feignCalls).toHaveLength(1);
+        expect(feignCalls[0]?.symbol).toBe('http://order-service/api/v1/orders');
+    });
+
+    it('@FeignClient에 매핑 메서드가 없으면 서비스 레벨 fallback', async () => {
         const content = `
 @FeignClient(name = "payment-service", url = "http://payment:8080")
 public interface PaymentClient {}
@@ -170,8 +212,25 @@ public interface PaymentClient {}
 
         const call = result.signals.find((s) => s.kind === 'call');
         expect(call?.symbol).toBe('payment-service');
-        expect(call?.confidence).toBeCloseTo(0.9); // Phase 1: 0.7 → Phase 2: 0.9
+        expect(call?.confidence).toBeCloseTo(0.9);
         expect(call?.metadata).toMatchObject({ client: 'FeignClient' });
+    });
+
+    it('@FeignClient("service") 단축 형태도 지원해야 한다', async () => {
+        const content = `
+@FeignClient("inventory-service")
+public interface InventoryClient {
+    @GetMapping("/api/stock")
+    Stock getStock();
+}
+`;
+        const result = await scanJavaKotlinAst('/src/InventoryClient.java', content);
+        const feignCalls = result.signals.filter(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'FeignClient',
+        );
+
+        expect(feignCalls).toHaveLength(1);
+        expect(feignCalls[0]?.symbol).toBe('http://inventory-service/api/stock');
     });
 
     it('@FeignClient에 name이 없으면 call 신호를 생성하지 않아야 한다', async () => {
