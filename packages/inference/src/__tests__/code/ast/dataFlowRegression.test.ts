@@ -4,9 +4,9 @@
  * AST vs Regex 결과 비교로 품질 저하를 조기 감지한다.
  */
 import { describe, it, expect } from 'vitest';
-import { scanJavaKotlinAst } from '../../../code/ast/astJavaKotlin';
-import { scanTypeScriptAst } from '../../../code/ast/astTypeScript';
-import { scanPythonAst } from '../../../code/ast/astPython';
+import { scanJavaKotlinAst } from '@/code/ast/astJavaKotlin';
+import { scanTypeScriptAst } from '@/code/ast/astTypeScript';
+import { scanPythonAst } from '@/code/ast/astPython';
 
 // ─── Java/Kotlin: 변수 추적 회귀 ──────────────────────────────────────────────
 

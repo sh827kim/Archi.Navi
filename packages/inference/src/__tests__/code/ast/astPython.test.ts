@@ -6,7 +6,7 @@
  *  - confidence +0.1~0.2 상향
  */
 import { describe, it, expect } from 'vitest';
-import { scanPythonAst } from '../../../code/ast/astPython';
+import { scanPythonAst } from '@/code/ast/astPython';
 
 describe('scanPythonAst — Python AST 스캐너 (Phase 2)', () => {
     // ─── API 노출 (Flask/FastAPI 데코레이터) ──────────────────────────────────

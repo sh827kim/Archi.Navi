@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import type { SyntaxNode } from 'web-tree-sitter';
-import { findChildByType, getChildren, extractStringValue } from '../../../code/ast/astScanner';
+import { findChildByType, getChildren, extractStringValue } from '@/code/ast/astScanner';
 
 interface FakeNodeInput {
   type: string;

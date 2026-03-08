@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { detectProjects, detectSingleProject } from '../../utils/project-detector';
+import { detectProjects, detectSingleProject } from '@/utils/project-detector';
 
 describe('project-detector', () => {
   let root: string;

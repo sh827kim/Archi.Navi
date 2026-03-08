@@ -3,12 +3,12 @@
  * 설계 참조: docs/09-llm-inference-filtering.md §5
  */
 import { describe, it, expect } from 'vitest';
-import { processBatch } from '../../llm/batchProcessor.js';
+import { processBatch } from '@/llm/batchProcessor';
 import type {
   CandidateContext,
   GenerateAssessmentFn,
   LlmAssessment,
-} from '../../llm/types.js';
+} from '@/llm/types';
 
 function makeContext(id: string, name: string): CandidateContext {
   return {

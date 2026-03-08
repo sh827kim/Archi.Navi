@@ -7,7 +7,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { createPgliteClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects, workspaces } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { extractHybridCodeSignals } from '../../code/hybridCodeSignalExtractor';
+import { extractHybridCodeSignals } from '@/code/hybridCodeSignalExtractor';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 

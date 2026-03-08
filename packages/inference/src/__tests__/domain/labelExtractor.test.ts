@@ -3,7 +3,7 @@
  * 순수 함수이므로 PGlite 불필요
  */
 import { describe, it, expect } from 'vitest';
-import { extractLabelCandidates } from '../../domain/labelExtractor.js';
+import { extractLabelCandidates } from '@/domain/labelExtractor';
 
 describe('extractLabelCandidates', () => {
     it('T1: 빈 배열 입력 → 빈 배열 반환', () => {

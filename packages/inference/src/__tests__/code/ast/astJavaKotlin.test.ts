@@ -6,7 +6,7 @@
  *  - confidence +0.1~0.2 상향
  */
 import { describe, it, expect } from 'vitest';
-import { scanJavaKotlinAst } from '../../../code/ast/astJavaKotlin';
+import { scanJavaKotlinAst } from '@/code/ast/astJavaKotlin';
 
 describe('scanJavaKotlinAst — Java/Kotlin AST 스캐너 (Phase 2)', () => {
     // ─── API 노출 (@Mapping 어노테이션) ──────────────────────────────────────

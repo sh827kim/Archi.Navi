@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { ExtractedSignal } from '../../code/codeSignalExtractor';
-import { mergeHybridSignals } from '../../code/hybridSignalMerge';
+import type { ExtractedSignal } from '@/code/codeSignalExtractor';
+import { mergeHybridSignals } from '@/code/hybridSignalMerge';
 
 function buildSignal(overrides: Partial<ExtractedSignal> = {}): ExtractedSignal {
   return {

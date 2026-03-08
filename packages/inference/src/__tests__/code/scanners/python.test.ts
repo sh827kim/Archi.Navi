@@ -2,7 +2,7 @@
  * Python 스캐너 단위 테스트
  */
 import { describe, it, expect } from 'vitest';
-import { scanPython } from '../../../code/scanners/python';
+import { scanPython } from '@/code/scanners/python';
 
 describe('scanPython', () => {
     // ─── HTTP 호출 패턴 ───────────────────────────────────────────────────────

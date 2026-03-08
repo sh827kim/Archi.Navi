@@ -38,7 +38,7 @@ import {
   getWasmParser,
   detectLanguage,
   resetParsers,
-} from '../../../code/ast/wasmParser';
+} from '@/code/ast/wasmParser';
 
 describe('wasmParser', () => {
   beforeEach(() => {

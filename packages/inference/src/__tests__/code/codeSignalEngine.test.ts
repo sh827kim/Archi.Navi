@@ -3,21 +3,21 @@ import {
   extractCodeSignalsWithEngine,
   normalizeCodeSignalEngine,
   ENGINE_POLICY,
-} from '../../code/codeSignalEngine';
-import type { CodeSignalMetrics } from '../../code/codeSignalEngine';
-import { extractCodeSignals } from '../../code/codeSignalExtractor';
-import { extractAstCodeSignals } from '../../code/ast/extractAstCodeSignals';
-import { extractHybridCodeSignals } from '../../code/hybridCodeSignalExtractor';
+} from '@/code/codeSignalEngine';
+import type { CodeSignalMetrics } from '@/code/codeSignalEngine';
+import { extractCodeSignals } from '@/code/codeSignalExtractor';
+import { extractAstCodeSignals } from '@/code/ast/extractAstCodeSignals';
+import { extractHybridCodeSignals } from '@/code/hybridCodeSignalExtractor';
 
-vi.mock('../../code/codeSignalExtractor', () => ({
+vi.mock('@/code/codeSignalExtractor', () => ({
   extractCodeSignals: vi.fn(),
 }));
 
-vi.mock('../../code/ast/extractAstCodeSignals', () => ({
+vi.mock('@/code/ast/extractAstCodeSignals', () => ({
   extractAstCodeSignals: vi.fn(),
 }));
 
-vi.mock('../../code/hybridCodeSignalExtractor', () => ({
+vi.mock('@/code/hybridCodeSignalExtractor', () => ({
   extractHybridCodeSignals: vi.fn(),
 }));
 

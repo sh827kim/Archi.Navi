@@ -3,8 +3,8 @@
  * 설계 참조: docs/09-llm-inference-filtering.md §4
  */
 import { describe, it, expect } from 'vitest';
-import { buildRelationAssessmentPrompt } from '../../llm/prompts.js';
-import type { CandidateContext } from '../../llm/types.js';
+import { buildRelationAssessmentPrompt } from '@/llm/prompts';
+import type { CandidateContext } from '@/llm/types';
 
 function makeContext(overrides: Partial<CandidateContext> = {}): CandidateContext {
   return {

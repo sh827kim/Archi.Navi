@@ -4,7 +4,10 @@
     "lib": ["ES2022"],
     "types": ["node"],
     "outDir": "./dist",
-    "rootDir": "./src"
+    "rootDir": "./src",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
   },
   "include": ["src"],
   "exclude": ["src/__tests__/**"]

@@ -5,7 +5,7 @@
  *  - confidence +0.1~0.2 상향
  */
 import { describe, it, expect } from 'vitest';
-import { scanTypeScriptAst } from '../../../code/ast/astTypeScript';
+import { scanTypeScriptAst } from '@/code/ast/astTypeScript';
 
 describe('scanTypeScriptAst — TypeScript/JavaScript AST 스캐너 (Phase 2)', () => {
     // ─── API 노출 (Express 라우트) ────────────────────────────────────────────

@@ -17,7 +17,7 @@ import {
 } from '@archi-navi/db';
 import { and, eq } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
-import { approveRelationCandidate } from '../../relation/approveRelationCandidate.js';
+import { approveRelationCandidate } from '@/relation/approveRelationCandidate';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 

@@ -2,7 +2,7 @@
  * TypeScript/JavaScript 스캐너 단위 테스트
  */
 import { describe, it, expect } from 'vitest';
-import { scanTypeScript } from '../../../code/scanners/typeScript';
+import { scanTypeScript } from '@/code/scanners/typeScript';
 
 describe('scanTypeScript', () => {
     // ─── API 노출 패턴 ────────────────────────────────────────────────────────
