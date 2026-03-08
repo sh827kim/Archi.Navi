@@ -116,10 +116,10 @@ describe('rebuildRollups (전체 리빌드)', () => {
     });
 
     it('T1: 전체 리빌드 후 새 generation version을 반환해야 한다', async () => {
-        // 빈 데이터 (call 없음, expose 없음, read/write/produce/consume 없음, S2S rollup 없음 등)
+        // 빈 데이터 (call+join 없음, depend_on 없음, read/write/produce/consume 없음, S2S rollup 없음 등)
         const selectResponses: Array<unknown[]> = [
-            [], // call relations
-            [], // expose relations
+            [], // call + join (S2S)
+            [], // depend_on (S2S)
             [], // read + join
             [], // write + join
             [], // produce + join
@@ -137,19 +137,17 @@ describe('rebuildRollups (전체 리빌드)', () => {
         expect(invalidateCache).toHaveBeenCalledWith(WORKSPACE_ID);
     });
 
-    it('T2: call + expose 관계 → SERVICE_TO_SERVICE rollup이 생성되어야 한다', async () => {
-        const { relations } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+    it('T2: call + parentId 관계 → SERVICE_TO_SERVICE rollup이 생성되어야 한다', async () => {
+        const { callJoined } = scenario;
 
         const selectResponses: Array<unknown[]> = [
-            callRels,    // call relations
-            exposeRels,  // expose relations
+            callJoined,  // call + join (S2S)
+            [],          // depend_on (S2S)
             [],          // read + join
             [],          // write + join
             [],          // produce + join
             [],          // consume + join
-            [],          // S2S rollups for D2D (insert가 되지만 다음 select에선 아직 없음)
+            [],          // S2S rollups for D2D
             [], [], [], [], // graphStats 4 levels
         ];
 
@@ -171,13 +169,11 @@ describe('rebuildRollups (전체 리빌드)', () => {
     });
 
     it('T3: 동일 서비스 쌍의 여러 endpoint call → edgeWeight가 합산되어야 한다', async () => {
-        const { relations } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { callJoined } = scenario;
 
         // svcA → epB1(call), svcA → epB2(call) → edgeWeight = 2
         const selectResponses: Array<unknown[]> = [
-            callRels, exposeRels,
+            callJoined, [],
             [], [], [], [], [], [], [], [], [],
         ];
 
@@ -193,12 +189,10 @@ describe('rebuildRollups (전체 리빌드)', () => {
     });
 
     it('T4: confidence는 avg(base.confidence)이어야 한다', async () => {
-        const { relations } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { callJoined } = scenario;
 
         const selectResponses: Array<unknown[]> = [
-            callRels, exposeRels,
+            callJoined, [],
             [], [], [], [], [], [], [], [], [],
         ];
 
@@ -225,7 +219,7 @@ describe('rebuildRollups (전체 리빌드)', () => {
             }));
 
         const selectResponses: Array<unknown[]> = [
-            [], [], [],  // call, expose, depend_on (S2S)
+            [], [],       // call+join, depend_on (S2S)
             readJoined,   // read + join
             [],           // write + join
             [], [],       // produce, consume (S2B)
@@ -257,8 +251,8 @@ describe('rebuildRollups (전체 리빌드)', () => {
             }));
 
         const selectResponses: Array<unknown[]> = [
-            [], [], [],   // S2S (call, expose, depend_on)
-            [], [],       // S2DB read, write
+            [], [],        // S2S (call+join, depend_on)
+            [], [],        // S2DB read, write
             produceJoined, // produce + join
             [],            // consume + join
             [],            // D2D
@@ -292,12 +286,12 @@ describe('rebuildRollups (전체 리빌드)', () => {
         }];
 
         const selectResponses: Array<unknown[]> = [
-            [], [], [],  // S2S (빈 call/expose/depend_on - S2S rollup은 이미 있다 가정)
+            [], [],      // S2S (빈 call+join/depend_on - S2S rollup은 이미 있다 가정)
             [], [],      // S2DB
             [], [],      // S2B
             s2sRollup,   // D2D: S2S rollup 조회
-            affinities,  // D2D: affinity 조회 (mock rollup id가 없어 provenance 조회는 생략)
-            // graphStats: 4 levels (S2S에서 rollup 없으므로 빈 결과)
+            affinities,  // D2D: affinity 조회
+            // graphStats: 4 levels
             [], [], [], [],
         ];
 
@@ -333,7 +327,7 @@ describe('rebuildRollups (전체 리빌드)', () => {
         ];
 
         const selectResponses: Array<unknown[]> = [
-            [], [], [], [], [], [],
+            [], [], [], [], [], [],  // S2S(2) + S2DB(2) + S2B(2)
             s2sRollup, lowAffinities,
             [], [], [], [],
         ];
@@ -362,8 +356,8 @@ describe('rebuildRollups (전체 리빌드)', () => {
         ];
 
         const selectResponses: Array<unknown[]> = [
-            [], [], [], [], [], [], // S2S, S2DB, S2B 모두 빈 결과
-            [],                    // D2D S2S rollup 조회
+            [], [], [], [], [], [],  // S2S(2) + S2DB(2) + S2B(2) 모두 빈 결과
+            [],                      // D2D S2S rollup 조회
             // graphStats: S2S level에서만 rollup 있음
             s2sRollupForStats, // S2S stats
             [],                // S2DB stats
@@ -420,16 +414,13 @@ describe('rebuildRollups (전체 리빌드)', () => {
         expect(activateGeneration).not.toHaveBeenCalled();
     });
 
-    it('T12: full rebuild에서 방어 분기(미노출 endpoint/null confidence/null parent)를 처리해야 한다', async () => {
+    it('T12: full rebuild에서 방어 분기(self-call/null confidence/null parent)를 처리해야 한다', async () => {
         const { svcA, svcB, epB1, epB2, tableX, topicP, dbX, brokerM } = scenario;
 
-        const callRels = [
-            makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB2.id, confidence: 0.7 }), // self-expose -> skip
-            makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: null }), // confidence null
-        ];
-        const exposeRels = [
-            makeRelation({ relationType: 'expose', subjectObjectId: svcA.id, objectId: epB2.id }),
-            makeRelation({ relationType: 'expose', subjectObjectId: svcB.id, objectId: epB1.id }),
+        // call + join 형식: epB2.parent=svcA → self-call(skip), epB1.parent=svcB → 유효
+        const callJoinedDef = [
+            { relation: makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB2.id, confidence: 0.7 }), targetParentId: svcA.id, targetGranularity: 'ATOMIC' }, // self → skip
+            { relation: makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: null }), targetParentId: svcB.id, targetGranularity: 'ATOMIC' }, // confidence null
         ];
         const dependOnRels = [
             makeRelation({ relationType: 'depend_on', subjectObjectId: svcA.id, objectId: svcA.id, confidence: 0.5 }), // self-loop -> skip
@@ -457,9 +448,8 @@ describe('rebuildRollups (전체 리빌드)', () => {
         }];
 
         const selectResponses: Array<unknown[]> = [
-            callRels,      // call
-            exposeRels,    // expose
-            dependOnRels,  // depend_on
+            callJoinedDef, // call+join (S2S)
+            dependOnRels,  // depend_on (S2S)
             readJoined,    // read+join
             [],            // write+join
             produceJoined, // produce+join
@@ -508,7 +498,7 @@ describe('rebuildRollups (전체 리빌드)', () => {
         ];
 
         const selectResponses: Array<unknown[]> = [
-            [], [], [], // call, expose, depend_on
+            [], [],     // call+join, depend_on (S2S)
             [], [],     // read, write
             [], [],     // produce, consume
             s2sRollup,  // D2D s2s
@@ -559,33 +549,24 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     });
 
     it('T2: call relation 승인 → S2S rollup에 새 edge 추가', async () => {
-        const { relations, svcA, svcB, epB1 } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { callJoined, svcA, svcB, epB1 } = scenario;
 
-        // incrementalRebuild 쿼리 순서:
-        // 1. resolveAffectedScope 내 findCallersOfEndpoint/findSubjectsReferencingObject 없음 (RELATION_APPROVED)
-        // 2. incrementalBuildS2S:
-        //    - delete rollups (affected nodes)
-        //    - select call relations
-        //    - select depend_on relations
-        //    - select expose relations
-        // 3. D2D (S2S 변경 → D2D 연쇄):
-        //    - delete D2D rollups
-        //    - select S2S rollups (for D2D rebuild)
-        //    → 이후 S2S rollup이 있으면 affinities 조회
-        // 4. incrementalBuildGraphStats:
-        //    - delete S2S stats
-        //    - select S2S rollups (for stats)
-        //    - delete D2D stats
-        //    - select D2D rollups (for stats)
+        // incrementalBuildS2S 쿼리 순서:
+        //   - delete rollups (affected nodes)
+        //   - select call + join (innerJoin)
+        //   - select depend_on
+        // D2D (S2S 변경 → D2D 연쇄):
+        //   - delete D2D rollups
+        //   - select S2S rollups (for D2D rebuild)
+        // incrementalBuildGraphStats:
+        //   - delete S2S stats → select S2S rollups for stats
+        //   - delete D2D stats → select D2D rollups for stats
 
         const selectResponses: Array<unknown[]> = [
             // S2S rebuild
-            callRels,     // call relations
-            [],           // depend_on relations
-            exposeRels,   // expose relations
-            // D2D rebuild (S2S rollup 조회 — 아직 insert 전이므로 빈 결과)
+            callJoined,   // call + join
+            [],           // depend_on
+            // D2D rebuild
             [],           // S2S rollups for D2D
             // graphStats: S2S level, D2D level
             [],           // S2S rollups for stats
@@ -731,13 +712,11 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     });
 
     it('T7: S2S 변경 시 → D2D도 연쇄 재계산', async () => {
-        const { relations, svcA, svcB, epB1, affinities } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { callJoined, svcA, svcB, epB1, affinities } = scenario;
 
         const selectResponses: Array<unknown[]> = [
             // S2S rebuild
-            callRels, exposeRels,
+            callJoined, [],  // call+join, depend_on
             // D2D rebuild: S2S rollups → 빈 결과 (아직 insert 전)
             [],
             // graphStats
@@ -758,12 +737,10 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     });
 
     it('T8: generation version이 변경되지 않아야 한다 (동일 generation 유지)', async () => {
-        const { svcA, epB1, relations } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { svcA, epB1, callJoined } = scenario;
 
         const selectResponses: Array<unknown[]> = [
-            callRels, exposeRels, [], [], [],
+            callJoined, [], [], [], [],
         ];
 
         const { db } = createTestDb(selectResponses);
@@ -778,12 +755,10 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     });
 
     it('T9: generation meta에 lastIncrementalAt이 기록되어야 한다', async () => {
-        const { svcA, epB1, relations } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { svcA, epB1, callJoined } = scenario;
 
         const selectResponses: Array<unknown[]> = [
-            callRels, exposeRels, [], [], [],
+            callJoined, [], [], [], [],
         ];
 
         const { db } = createTestDb(selectResponses);
@@ -800,12 +775,10 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     });
 
     it('T10: 캐시가 무효화되어야 한다', async () => {
-        const { svcA, epB1, relations } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { svcA, epB1, callJoined } = scenario;
 
         const selectResponses: Array<unknown[]> = [
-            callRels, exposeRels, [], [], [],
+            callJoined, [], [], [], [],
         ];
 
         const { db } = createTestDb(selectResponses);
@@ -821,9 +794,12 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     it('T11: 복수 이벤트 batch → 영향 범위 올바르게 합산', async () => {
         const { svcA, svcB, epB1, tableX, dbX } = scenario;
 
-        // call + read 동시 이벤트
-        const callRels = [makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: 0.9 })];
-        const exposeRels = [makeRelation({ relationType: 'expose', subjectObjectId: svcB.id, objectId: epB1.id })];
+        // call + read 동시 이벤트 — call은 joined format
+        const callJoinedLocal = [{
+            relation: makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: 0.9 }),
+            targetParentId: svcB.id,
+            targetGranularity: 'ATOMIC',
+        }];
 
         const readJoined = [{
             relation: makeRelation({ relationType: 'read', subjectObjectId: svcA.id, objectId: tableX.id, confidence: 0.7 }),
@@ -832,7 +808,7 @@ describe('incrementalRebuild (증분 리빌드)', () => {
 
         const selectResponses: Array<unknown[]> = [
             // S2S rebuild
-            callRels, [], exposeRels,
+            callJoinedLocal, [],  // call+join, depend_on
             // S2DB rebuild
             readJoined, // read
             [],         // write
@@ -861,19 +837,16 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     });
 
     it('T12: expose 변경 → 해당 endpoint를 call하는 서비스도 affected에 포함', async () => {
-        const { svcA, svcB, epB1, relations } = scenario;
+        const { svcA, svcB, epB1, callJoined } = scenario;
 
         // expose 변경 시, findCallersOfEndpoint로 call하는 서비스 역추적
         const callerRows = [{ subjectObjectId: svcA.id }];
-
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
 
         const selectResponses: Array<unknown[]> = [
             // resolveAffectedScope → findCallersOfEndpoint
             callerRows,
             // S2S rebuild
-            callRels, exposeRels,
+            callJoined, [],  // call+join, depend_on
             // D2D
             [],
             // graphStats
@@ -939,10 +912,9 @@ describe('incrementalRebuild (증분 리빌드)', () => {
         ];
 
         const selectResponses: Array<unknown[]> = [
-            // S2S rebuild: call, depend_on, expose
+            // S2S rebuild: call+join, depend_on
             [],
             dependOnRels,
-            [],
             // D2D rebuild
             [],
             // graphStats: S2S, D2D
@@ -964,15 +936,17 @@ describe('incrementalRebuild (증분 리빌드)', () => {
 
     it('T15: 증분 graph stats에서 level rollup이 있으면 in/outDegree를 저장해야 한다', async () => {
         const { svcA, svcB, epB1 } = scenario;
-        const callRels = [makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: 0.9 })];
-        const exposeRels = [makeRelation({ relationType: 'expose', subjectObjectId: svcB.id, objectId: epB1.id, confidence: 1 })];
+        const callJoinedLocal = [{
+            relation: makeRelation({ relationType: 'call', subjectObjectId: svcA.id, objectId: epB1.id, confidence: 0.9 }),
+            targetParentId: svcB.id,
+            targetGranularity: 'ATOMIC',
+        }];
         const s2sRollupsForStats = [{ subjectObjectId: svcA.id, objectId: svcB.id }];
 
         const selectResponses: Array<unknown[]> = [
-            // S2S rebuild: call, depend_on, expose
-            callRels,
+            // S2S rebuild: call+join, depend_on
+            callJoinedLocal,
             [],
-            exposeRels,
             // D2D rebuild (S2S rollup 조회)
             [],
             // graphStats: S2S, D2D
@@ -998,15 +972,12 @@ describe('incrementalRebuild (증분 리빌드)', () => {
     });
 
     it('T16: RELATION_APPROVED(expose) 이벤트도 S2S/D2D 재계산을 유발해야 한다', async () => {
-        const { svcB, epB1, relations } = scenario;
-        const callRels = relations.filter((r) => r.relationType === 'call');
-        const exposeRels = relations.filter((r) => r.relationType === 'expose');
+        const { svcB, epB1, callJoined } = scenario;
 
         const selectResponses: Array<unknown[]> = [
-            // S2S rebuild: call, depend_on, expose
-            callRels,
+            // S2S rebuild: call+join, depend_on
+            callJoined,
             [],
-            exposeRels,
             // D2D rebuild
             [],
             // graphStats: S2S, D2D
