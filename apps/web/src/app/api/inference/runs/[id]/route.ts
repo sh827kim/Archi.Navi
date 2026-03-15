@@ -14,7 +14,8 @@ function authorizeInferenceRunsRequest(req: NextRequest): NextResponse | null {
   }
 
   const authorization = req.headers.get('authorization');
-  const bearerToken = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : null;
+  const bearerMatch = authorization?.match(/^Bearer\s+(.+)$/i);
+  const bearerToken = bearerMatch?.[1]?.trim() ?? null;
   const headerToken = req.headers.get('x-inference-runs-token')?.trim();
   const providedToken = bearerToken ?? headerToken;
 
