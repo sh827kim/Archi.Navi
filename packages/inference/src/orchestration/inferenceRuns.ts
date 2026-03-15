@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync, statSync } from 'node:fs';
+import { existsSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { and, desc, eq, inArray } from 'drizzle-orm';
@@ -44,6 +44,40 @@ function isLocalDirectory(pathValue: string): boolean {
   } catch {
     return false;
   }
+}
+
+function getAllowedInferenceRoots(): string[] {
+  const configuredRoots = (process.env['ARCHI_NAVI_ALLOWED_INFERENCE_ROOTS'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  const fallbackRoot = process.env['ARCHI_NAVI_WORKSPACE_ROOT'] ?? process.cwd();
+  const fallbackRoots = [fallbackRoot, tmpdir()];
+  return (configuredRoots.length > 0 ? configuredRoots : fallbackRoots)
+    .map((root) => resolve(root))
+    .filter(isLocalDirectory)
+    .map((root) => {
+      try {
+        return realpathSync(root);
+      } catch {
+        return root;
+      }
+    });
+}
+
+function isPathWithinAllowedRoots(pathValue: string, allowedRoots: string[]): boolean {
+  if (allowedRoots.length === 0) return false;
+
+  const normalized = resolve(pathValue);
+  let realPath = normalized;
+  try {
+    realPath = realpathSync(normalized);
+  } catch {
+    // fallback to resolved path if realpath is unavailable.
+  }
+
+  return allowedRoots.some((root) => realPath === root || realPath.startsWith(`${root}/`));
 }
 
 function normalizeModes(input?: string[]): InferenceMode[] {
@@ -324,6 +358,7 @@ async function resolveRunnableSources(
   const warnings: string[] = [];
   const errors: Array<{ sourceId: string; message: string }> = [];
   const sourceResolvedRoots = new Map<string, string>();
+  const allowedInferenceRoots = getAllowedInferenceRoots();
 
   for (const source of input.sources) {
     if (source.sourceType === 'local') {
@@ -344,6 +379,31 @@ async function resolveRunnableSources(
           eventType: 'SOURCE_RESOLVE_FAILED',
           message,
           payload: { sourceId: source.id, sourceRef: source.sourceRef, resolvedRepoRoot: normalized },
+        });
+        continue;
+      }
+
+      if (!isPathWithinAllowedRoots(normalized, allowedInferenceRoots)) {
+        const message = `허용된 local source 경로가 아닙니다: ${normalized}`;
+        await updateRunSource(db, {
+          sourceId: source.id,
+          status: 'FAILED',
+          resolvedRepoRoot: normalized,
+          message,
+        });
+        errors.push({ sourceId: source.id, message });
+        await appendRunEvent(db, {
+          workspaceId: input.workspaceId,
+          runId: input.runId,
+          level: 'ERROR',
+          eventType: 'SOURCE_RESOLVE_FAILED',
+          message,
+          payload: {
+            sourceId: source.id,
+            sourceRef: source.sourceRef,
+            resolvedRepoRoot: normalized,
+            allowedInferenceRoots,
+          },
         });
         continue;
       }
