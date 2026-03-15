@@ -91,6 +91,9 @@ function mergeAstAndRegexRecovery(
   if (astResult.scanErrorFilePaths) {
     merged.scanErrorFilePaths = astResult.scanErrorFilePaths;
   }
+  if (astResult.scanFailures && astResult.scanFailures.length > 0) {
+    merged.scanFailures = astResult.scanFailures;
+  }
   return merged;
 }
 

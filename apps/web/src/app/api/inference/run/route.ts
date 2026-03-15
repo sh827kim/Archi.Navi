@@ -157,6 +157,7 @@ export async function POST(req: NextRequest) {
       enginesUsed: [] as CodeSignalEngineUsed[],
       fallbackCount: 0,
       fallbackRepoRoots: [] as string[],
+      scanFailures: [] as Array<{ filePath: string; reason: string; language: string }>,
     };
     let dbResult:
       | null
@@ -207,6 +208,9 @@ export async function POST(req: NextRequest) {
             codeResult.fallbackRepoRoots.push(repoRoot);
           }
           if (result.warning) warnings.push(`[code:${repoRoot}] ${result.warning}`);
+          if (result.scanFailures && result.scanFailures.length > 0) {
+            codeResult.scanFailures.push(...result.scanFailures);
+          }
 
           const codeCand = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
           codeResult.candidateCount += codeCand.candidateCount;

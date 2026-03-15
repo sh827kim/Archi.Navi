@@ -659,6 +659,7 @@ export async function executeInferenceRun(
     enginesUsed: [] as string[],
     fallbackCount: 0,
     fallbackRepoRoots: [] as string[],
+    scanFailures: [] as Array<{ filePath: string; reason: string; language: string }>,
   };
   let dbResult:
     | null
@@ -737,6 +738,9 @@ export async function executeInferenceRun(
           codeResult.fallbackRepoRoots.push(localSource.repoRoot);
         }
         if (result.warning) warnings.push(`[code:${localSource.repoRoot}] ${result.warning}`);
+        if (result.scanFailures && result.scanFailures.length > 0) {
+          codeResult.scanFailures.push(...result.scanFailures);
+        }
 
         const codeCand = await inferRelationsFromCodeSignals(db, {
           workspaceId: input.workspaceId,

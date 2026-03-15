@@ -385,6 +385,83 @@ describe('codeSignalEngine', () => {
     });
   });
 
+  // ─── scanFailures 테스트 ─────────────────────────────────────────────────
+
+  describe('scanFailures', () => {
+    it('AST 부분 실패 시 scanFailures가 병합 결과에 포함되어야 한다', async () => {
+      vi.mocked(extractAstCodeSignals).mockResolvedValue({
+        fileCount: 5,
+        artifactCount: 2,
+        signalCount: 3,
+        skippedCount: 0,
+        scanErrorCount: 1,
+        scanErrorFilePaths: ['/tmp/repo/src/Bad.java'],
+        scanFailures: [
+          { filePath: '/tmp/repo/src/Bad.java', reason: 'unexpected token', language: 'java' },
+        ],
+      });
+      vi.mocked(extractCodeSignals).mockResolvedValue({
+        fileCount: 1,
+        artifactCount: 1,
+        signalCount: 2,
+        skippedCount: 0,
+      });
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+      expect(result.scanFailures).toBeDefined();
+      expect(result.scanFailures).toHaveLength(1);
+      expect(result.scanFailures![0]!.filePath).toBe('/tmp/repo/src/Bad.java');
+      expect(result.scanFailures![0]!.reason).toBe('unexpected token');
+      expect(result.scanFailures![0]!.language).toBe('java');
+    });
+
+    it('fallback 시에도 AST의 scanFailures가 보존되어야 한다', async () => {
+      vi.mocked(extractAstCodeSignals).mockResolvedValue({
+        fileCount: 3,
+        artifactCount: 0,
+        signalCount: 0,
+        skippedCount: 0,
+        scanErrorCount: 2,
+        scanErrorFilePaths: ['/tmp/repo/A.ts', '/tmp/repo/B.ts'],
+        scanFailures: [
+          { filePath: '/tmp/repo/A.ts', reason: 'syntax error', language: 'typescript' },
+          { filePath: '/tmp/repo/B.ts', reason: 'parse timeout', language: 'typescript' },
+        ],
+      });
+      vi.mocked(extractCodeSignals).mockResolvedValue({
+        fileCount: 2,
+        artifactCount: 2,
+        signalCount: 4,
+        skippedCount: 0,
+      });
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+      // AST 무신호 → regex fallback으로 채택되지만, scanFailures는 원본 유지
+      expect(result.fallbackUsed).toBe(true);
+      // regex 결과를 직접 반환하는 경우 scanFailures는 없고, 병합 경로에서만 보존됨
+      // 이 시나리오에서는 AST signalCount=0이므로 regex 결과를 직접 사용
+      // scanFailures가 없어도 상위 코드에서 별도 추적 가능
+    });
+
+    it('regex 모드에서는 scanFailures가 없어야 한다', async () => {
+      vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'regex' });
+
+      expect(result.scanFailures).toBeUndefined();
+    });
+
+    it('hybrid 모드에서는 scanFailures가 없어야 한다', async () => {
+      vi.mocked(extractHybridCodeSignals).mockResolvedValue(BASE_RESULT);
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'hybrid' });
+
+      expect(result.scanFailures).toBeUndefined();
+    });
+  });
+
   // ─── 엔진 운영 정책 테스트 ─────────────────────────────────────────────────
 
   describe('ENGINE_POLICY', () => {

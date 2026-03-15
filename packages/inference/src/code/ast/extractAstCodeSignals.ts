@@ -15,7 +15,7 @@ import { and, eq } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import type { CodeSignalOptions, CodeSignalResult, FileScanResult } from '../codeSignalExtractor';
+import type { CodeSignalOptions, CodeSignalResult, FileScanResult, ScanFailureDetail } from '../codeSignalExtractor';
 import { scanJavaKotlinAst } from './astJavaKotlin';
 import { scanTypeScriptAst } from './astTypeScript';
 import { scanPythonAst } from './astPython';
@@ -190,6 +190,7 @@ async function processFile(
                 confidence: signal.confidence,
                 language: scanResult.language,
                 phase: 2,
+                extractionMode: 'ast',
                 ...signal.metadata,
             },
         });
@@ -237,6 +238,7 @@ export async function extractAstCodeSignals(
         );
 
     const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
+    const scanFailures: ScanFailureDetail[] = [];
     const result: CodeSignalResult = {
         fileCount: 0,
         artifactCount: 0,
@@ -244,6 +246,7 @@ export async function extractAstCodeSignals(
         skippedCount: 0,
         scanErrorCount: 0,
         scanErrorFilePaths: [],
+        scanFailures,
     };
 
     function filterTargetFiles(files: string[]): string[] {
@@ -273,9 +276,17 @@ export async function extractAstCodeSignals(
                     // 런타임/grammar 초기화 실패는 파일 단위 파싱 에러가 아니라 AST 엔진 전체 실패로 간주한다.
                     throw error;
                 }
-                // AST 파싱 실패 시 스킵
+                // AST 파싱 실패 시 스킵 + 실패 사유 수집
                 result.scanErrorCount = (result.scanErrorCount ?? 0) + 1;
                 result.scanErrorFilePaths?.push(filePath);
+                const ext = filePath.split('.').pop()?.toLowerCase() ?? '';
+                const lang = ext === 'java' ? 'java'
+                    : (ext === 'kt' || ext === 'kts') ? 'kotlin'
+                    : ['ts', 'tsx', 'js', 'jsx'].includes(ext) ? 'typescript'
+                    : ext === 'py' ? 'python'
+                    : 'unknown';
+                const reason = error instanceof Error ? error.message.slice(0, 200) : 'unknown parse error';
+                scanFailures.push({ filePath, reason, language: lang });
                 continue;
             }
 
