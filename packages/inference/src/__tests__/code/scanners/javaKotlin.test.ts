@@ -2,7 +2,7 @@
  * Java/Kotlin 스캐너 단위 테스트
  */
 import { describe, it, expect } from 'vitest';
-import { scanJavaKotlin, scanMyBatisXml } from '../../../code/scanners/javaKotlin';
+import { scanJavaKotlin, scanMyBatisXml } from '@/code/scanners/javaKotlin';
 
 describe('scanJavaKotlin', () => {
     // ─── API 노출 패턴 ────────────────────────────────────────────────────────

@@ -5,7 +5,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { objects, relationCandidates, workspaces } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 
-vi.mock('../../llm/batchProcessor', () => ({
+vi.mock('@/llm/batchProcessor', () => ({
   processBatch: vi.fn(async () => [
     {
       candidateId: 'non-existent-candidate-id',
@@ -22,7 +22,7 @@ vi.mock('../../llm/batchProcessor', () => ({
   ]),
 }));
 
-import { filterCandidates } from '../../llm/candidateFilter.js';
+import { filterCandidates } from '@/llm/candidateFilter';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 

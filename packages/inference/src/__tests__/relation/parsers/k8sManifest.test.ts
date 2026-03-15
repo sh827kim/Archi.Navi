@@ -2,7 +2,7 @@
  * K8s manifest 파서 단위 테스트
  */
 import { describe, it, expect } from 'vitest';
-import { parseK8sManifest } from '../../../relation/parsers/k8sManifest';
+import { parseK8sManifest } from '@/relation/parsers/k8sManifest';
 
 describe('parseK8sManifest', () => {
   // ─── 정상 케이스 ────────────────────────────────────────────────────────────

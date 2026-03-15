@@ -13,11 +13,13 @@ import { getDb, objects } from '@archi-navi/db';
 import {
   inferRelationsFromConfig,
   inferRelationsFromCodeSignals,
+  bindConfigToCodeEndpoints,
   extractCodeSignalsWithEngine,
   extractDbSchemaSignals,
   normalizeCodeSignalEngine,
   type CodeSignalEngine,
   type CodeSignalEngineUsed,
+  type ConfigCodeBindingResult,
 } from '@archi-navi/inference';
 
 type InferenceMode = 'config' | 'code' | 'db';
@@ -262,6 +264,18 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    // config+code 모두 실행된 경우 → 크로스 바인딩으로 COMPOUND→ATOMIC 후보 보강
+    let crossBindingResult: ConfigCodeBindingResult | null = null;
+    if (modeSet.has('config') && modeSet.has('code')) {
+      try {
+        crossBindingResult = await bindConfigToCodeEndpoints(db, { workspaceId });
+      } catch (error) {
+        warnings.push(
+          `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
+    }
+
     if (modeSet.has('db')) {
       try {
         dbResult = await extractDbSchemaSignals(db, { workspaceId, incremental });
@@ -293,9 +307,10 @@ export async function POST(req: NextRequest) {
 
     const dbCandidateCount =
       (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
+    const crossBindingCandidateCount = crossBindingResult?.createdEndpointCandidateCount ?? 0;
 
     const relationCandidatesCreated =
-      configResult.candidateCount + dbCandidateCount + codeResult.candidateCount;
+      configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
     const hasAnySuccess =
       configResult.repoCount > 0 ||
       codeResult.repoCount > 0 ||
@@ -329,6 +344,7 @@ export async function POST(req: NextRequest) {
         config: configResult,
         code: codeResult,
         db: dbResult,
+        crossBinding: crossBindingResult,
       },
       summary: {
         relationCandidatesCreated,

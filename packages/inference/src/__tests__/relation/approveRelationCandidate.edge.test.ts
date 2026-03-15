@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { approveRelationCandidate } from '../../relation/approveRelationCandidate';
+import { approveRelationCandidate } from '@/relation/approveRelationCandidate';
 
 describe('approveRelationCandidate edge cases', () => {
   it('insert 충돌 후 기존 relation 조회도 실패하면 오류를 던져야 한다', async () => {

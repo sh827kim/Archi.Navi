@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-02  
+> 최종 점검일: 2026-03-08
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -15,7 +15,8 @@
 | Relation 추론 파이프라인 | ⚠️ | `/api/inference/run`으로 config/code/db 실행 가능, code 기반 후보 생성(Phase 1: endpoint/topic)은 진행, 운영 오케스트레이션/모니터링은 보강 필요 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
-| 문서-실행 예제 정합성 | ⚠️ | 2026-03-01 기준 주요 문서 정리 중, 일부 운영 가이드는 추가 동기화 필요 |
+| 추론 엔진 고도화 (P4) | 📋 | Inter-procedural AST, Cross-Signal Validation, LLM 부스터 설계 완료 |
+| 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
 
@@ -99,9 +100,38 @@
 
 ---
 
-## 3) 참고: 현재 주요 실행 엔트리포인트
+## 3) 설계 완료 / 구현 대기 (P4, P5)
 
-### 3.1 Web API
+> 아래 항목들은 설계 문서(Design + SPEC)가 완료되어 구현 대기 중인 항목이다.
+> 상세는 `docs/03-roadmap.md` P4/P5 섹션 및 각 SPEC 문서 참조.
+
+### 3.1 P4: 추론 엔진 고도화 (v3.0) — ★ 최우선
+
+| 항목 | SPEC | 상태 |
+|------|------|------|
+| 4-1. Inter-procedural AST 분석 | `docs/spec/18-inter-procedural-ast-spec.md` | 📋 Draft |
+| 4-2. Cross-Signal Validation | `docs/spec/19-cross-signal-validation-spec.md` | 📋 Draft |
+| 4-3. LLM 추론 부스터 | `docs/spec/20-llm-inference-boost-spec.md` | 📋 Draft |
+| 4-4. 프레임워크 플러그인 시스템 | `docs/spec/21-framework-plugin-system-spec.md` | 📋 Draft |
+| 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/22-realtime-rollup-spec.md` | 📋 Draft |
+| 4-6. 추론 피드백 루프 | `docs/spec/23-inference-feedback-loop-spec.md` | 📋 Draft |
+
+### 3.2 P5: 개발자 생산성 기능 (v3.1+)
+
+| 항목 | SPEC | 상태 |
+|------|------|------|
+| 5-1. Change Impact Preview | `docs/spec/24-change-impact-preview-spec.md` | 📋 Draft |
+| 5-2. Architecture Drift Detection | `docs/spec/25-architecture-drift-detection-spec.md` | 📋 Draft |
+| 5-3. Personal Architecture Journal | `docs/spec/26-personal-architecture-journal-spec.md` | 📋 Draft |
+| 5-4. API Contract Diff | `docs/spec/27-api-contract-diff-spec.md` | 📋 Draft |
+| 5-5. Architecture Health Score | `docs/spec/28-architecture-health-score-spec.md` | 📋 Draft |
+| 5-6. 구조적 개선 (서비스 레이어/커버리지/공유/Watcher) | `docs/design/08-developer-productivity.md` §7 | 📋 Draft |
+
+---
+
+## 4) 참고: 현재 주요 실행 엔트리포인트
+
+### 4.1 Web API
 
 - `POST /api/scan`
 - `POST /api/inference/run`
@@ -117,7 +147,7 @@
 - `POST /api/chat`
 - `POST /api/rollups`
 
-### 3.2 CLI
+### 4.2 CLI
 
 - `anavi up [--port <n>] [--prod]`
 - `anavi scan --workspace <id> [--path|--workspace-dir|--github-repo|--github-org]`

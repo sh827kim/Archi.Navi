@@ -2,20 +2,22 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   extractCodeSignalsWithEngine,
   normalizeCodeSignalEngine,
-} from '../../code/codeSignalEngine';
-import { extractCodeSignals } from '../../code/codeSignalExtractor';
-import { extractAstCodeSignals } from '../../code/ast/extractAstCodeSignals';
-import { extractHybridCodeSignals } from '../../code/hybridCodeSignalExtractor';
+  ENGINE_POLICY,
+} from '@/code/codeSignalEngine';
+import type { CodeSignalMetrics } from '@/code/codeSignalEngine';
+import { extractCodeSignals } from '@/code/codeSignalExtractor';
+import { extractAstCodeSignals } from '@/code/ast/extractAstCodeSignals';
+import { extractHybridCodeSignals } from '@/code/hybridCodeSignalExtractor';
 
-vi.mock('../../code/codeSignalExtractor', () => ({
+vi.mock('@/code/codeSignalExtractor', () => ({
   extractCodeSignals: vi.fn(),
 }));
 
-vi.mock('../../code/ast/extractAstCodeSignals', () => ({
+vi.mock('@/code/ast/extractAstCodeSignals', () => ({
   extractAstCodeSignals: vi.fn(),
 }));
 
-vi.mock('../../code/hybridCodeSignalExtractor', () => ({
+vi.mock('@/code/hybridCodeSignalExtractor', () => ({
   extractHybridCodeSignals: vi.fn(),
 }));
 
@@ -301,5 +303,102 @@ describe('codeSignalEngine', () => {
     expect(extractCodeSignals).not.toHaveBeenCalled();
     expect(result.engineRequested).toBe('ast');
     expect(result.engineUsed).toBe('ast');
+  });
+
+  // ─── 관측 지표(metrics) 테스트 ─────────────────────────────────────────────
+
+  describe('metrics', () => {
+    it('모든 모드에서 metrics 객체가 반환되어야 한다', async () => {
+      vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+      vi.mocked(extractAstCodeSignals).mockResolvedValue(BASE_RESULT);
+      vi.mocked(extractHybridCodeSignals).mockResolvedValue(BASE_RESULT);
+
+      const regexResult = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'regex' });
+      expect(regexResult.metrics).toBeDefined();
+      expect(regexResult.metrics.timings.primary).toBeGreaterThanOrEqual(0);
+      expect(regexResult.metrics.timings.total).toBeGreaterThanOrEqual(0);
+      expect(regexResult.metrics.fallbackRate).toBe(0);
+      expect(regexResult.metrics.fallbackFileCount).toBe(0);
+
+      const astResult = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+      expect(astResult.metrics).toBeDefined();
+
+      const hybridResult = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'hybrid' });
+      expect(hybridResult.metrics).toBeDefined();
+    });
+
+    it('AST 부분 실패 fallback 시 fallbackRate/fallbackFileCount가 정확해야 한다', async () => {
+      vi.mocked(extractAstCodeSignals).mockResolvedValue({
+        fileCount: 10,
+        artifactCount: 6,
+        signalCount: 15,
+        skippedCount: 0,
+        scanErrorCount: 3,
+        scanErrorFilePaths: ['/a/A.java', '/a/B.kt', '/a/C.ts'],
+      });
+      vi.mocked(extractCodeSignals).mockResolvedValue({
+        fileCount: 3,
+        artifactCount: 2,
+        signalCount: 5,
+        skippedCount: 0,
+      });
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+      expect(result.metrics.fallbackUsed ?? result.fallbackUsed).toBeTruthy();
+      expect(result.metrics.fallbackFileCount).toBe(3);
+      expect(result.metrics.fallbackRate).toBeCloseTo(0.3, 1); // 3/10
+      expect(result.metrics.timings.fallback).toBeGreaterThanOrEqual(0);
+    });
+
+    it('AST 전체 실패 시 fallbackRate=1 이어야 한다', async () => {
+      vi.mocked(extractAstCodeSignals).mockRejectedValue(new Error('WASM init failed'));
+      vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+      expect(result.metrics.fallbackRate).toBe(1);
+      expect(result.metrics.timings.primary).toBe(0);
+      expect(result.metrics.timings.fallback).toBeGreaterThanOrEqual(0);
+    });
+
+    it('언어별 에러 지표(byLanguage)가 올바르게 분류되어야 한다', async () => {
+      vi.mocked(extractAstCodeSignals).mockResolvedValue({
+        fileCount: 10,
+        artifactCount: 5,
+        signalCount: 12,
+        skippedCount: 0,
+        scanErrorCount: 3,
+        scanErrorFilePaths: ['/src/A.java', '/src/B.kt', '/src/C.ts'],
+      });
+      vi.mocked(extractCodeSignals).mockResolvedValue({
+        fileCount: 3, artifactCount: 2, signalCount: 5, skippedCount: 0,
+      });
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+      const byLang = result.metrics.byLanguage;
+
+      expect(byLang).toBeDefined();
+      expect(byLang?.java?.errorCount).toBe(1);
+      expect(byLang?.kotlin?.errorCount).toBe(1);
+      expect(byLang?.typescript?.errorCount).toBe(1);
+    });
+  });
+
+  // ─── 엔진 운영 정책 테스트 ─────────────────────────────────────────────────
+
+  describe('ENGINE_POLICY', () => {
+    it('3개 모드 모두 정책이 정의되어야 한다', () => {
+      expect(ENGINE_POLICY.hybrid).toBeDefined();
+      expect(ENGINE_POLICY.ast).toBeDefined();
+      expect(ENGINE_POLICY.regex).toBeDefined();
+    });
+
+    it('각 정책에 description과 recommended가 있어야 한다', () => {
+      for (const mode of ['hybrid', 'ast', 'regex'] as const) {
+        expect(ENGINE_POLICY[mode].description).toBeTruthy();
+        expect(ENGINE_POLICY[mode].recommended).toBeTruthy();
+      }
+    });
   });
 });

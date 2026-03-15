@@ -14,7 +14,7 @@ import {
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { createInferenceRun, executeInferenceRun } from '../../orchestration/inferenceRuns';
+import { createInferenceRun, executeInferenceRun } from '@/orchestration/inferenceRuns';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 const workspaceId = '00000000-0000-0000-0000-000000000020';

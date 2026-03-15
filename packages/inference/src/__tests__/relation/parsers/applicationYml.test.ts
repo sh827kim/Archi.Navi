@@ -2,7 +2,7 @@
  * application.yml 파서 단위 테스트
  */
 import { describe, it, expect } from 'vitest';
-import { parseApplicationYml } from '../../../relation/parsers/applicationYml';
+import { parseApplicationYml } from '@/relation/parsers/applicationYml';
 
 describe('parseApplicationYml', () => {
   // ─── 정상 케이스 ────────────────────────────────────────────────────────────

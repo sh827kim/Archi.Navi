@@ -192,10 +192,21 @@ export function createStandardScenario() {
         makeAffinity({ objectId: svcB.id, domainId: domOrder.id, affinity: 0.2 }),
     ];
 
+    // call 관계를 innerJoin 결과 형식으로 변환 (S2S rollup에서 사용)
+    const objMap = new Map(objects.map((o) => [o.id, o]));
+    const callJoined = relations
+        .filter((r) => r.relationType === 'call')
+        .map((r) => ({
+            relation: r,
+            targetParentId: objMap.get(r.objectId)?.parentId ?? null,
+            targetGranularity: objMap.get(r.objectId)?.granularity ?? 'ATOMIC',
+        }));
+
     return {
         objects,
         relations,
         affinities,
+        callJoined,
         svcA, svcB, epB1, epB2, dbX, tableX, brokerM, topicP, domOrder, domPayment,
     };
 }

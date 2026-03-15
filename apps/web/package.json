@@ -17,6 +17,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "test:unit": "vitest run src/__tests__",
+    "test:unit:coverage": "vitest run src/__tests__ --coverage --coverage.provider=v8 --coverage.exclude=src/__tests__/** --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --coverage.thresholds.lines=80 --coverage.thresholds.functions=80 --coverage.thresholds.branches=80 --coverage.thresholds.statements=80 --coverage.thresholds.perFile=true",
     "test:e2e": "playwright test"
   },
   "dependencies": {
@@ -59,14 +61,18 @@
   "devDependencies": {
     "@playwright/test": "^1.58.2",
     "@tailwindcss/postcss": "^4.2.0",
+    "@testing-library/react": "^16.3.0",
+    "@vitest/coverage-v8": "^4.0.18",
     "@types/node": "^25.3.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@types/three": "^0.183.1",
     "eslint": "^9.39.3",
     "eslint-config-next": "^16.1.6",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^4.2.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.18"
   },
   "publishConfig": {
     "access": "public"

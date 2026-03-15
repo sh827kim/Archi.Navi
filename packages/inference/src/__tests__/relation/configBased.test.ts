@@ -10,7 +10,7 @@ import { createPgliteClient } from '@archi-navi/db';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { objects, relationCandidates, objectRelations, evidences, workspaces, codeArtifacts } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
-import { inferRelationsFromConfig } from '../../relation/configBased';
+import { inferRelationsFromConfig } from '@/relation/configBased';
 import { generateId, buildUrn } from '@archi-navi/shared';
 
 // vitest는 package 루트(packages/inference/)에서 실행됨

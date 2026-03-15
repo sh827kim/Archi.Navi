@@ -2,7 +2,7 @@
  * Rollup Builder - Materialized Roll-up 계산 파이프라인
  *
  * 계산 순서:
- * 1. SERVICE_TO_SERVICE (call+expose → service-to-service)
+ * 1. SERVICE_TO_SERVICE (call+parentId → service-to-service)
  * 2. SERVICE_TO_DATABASE (read/write + parent → service-to-db)
  * 3. SERVICE_TO_BROKER (produce/consume + parent → service-to-broker)
  * 4. DOMAIN_TO_DOMAIN (SERVICE_TO_SERVICE + affinities → domain-to-domain)
@@ -120,27 +120,19 @@ async function buildServiceToService(
   workspaceId: string,
   generationVersion: number,
 ): Promise<void> {
-  // call 관계 조회 (service → api_endpoint)
+  // call 관계 + 대상 객체 정보 조회 (parentId로 endpoint→service 역추적)
   const callRelations = await db
-    .select()
+    .select({
+      relation: objectRelations,
+      targetParentId: objects.parentId,
+      targetGranularity: objects.granularity,
+    })
     .from(objectRelations)
+    .innerJoin(objects, eq(objectRelations.objectId, objects.id))
     .where(
       and(
         eq(objectRelations.workspaceId, workspaceId),
         eq(objectRelations.relationType, 'call'),
-        eq(objectRelations.isDerived, false),
-        eq(objectRelations.status, 'APPROVED'),
-      ),
-    );
-
-  // expose 관계 조회 (service → api_endpoint)
-  const exposeRelations = await db
-    .select()
-    .from(objectRelations)
-    .where(
-      and(
-        eq(objectRelations.workspaceId, workspaceId),
-        eq(objectRelations.relationType, 'expose'),
         eq(objectRelations.isDerived, false),
         eq(objectRelations.status, 'APPROVED'),
       ),
@@ -159,13 +151,8 @@ async function buildServiceToService(
       ),
     );
 
-  // endpoint별 expose 서비스 매핑
-  const endpointToService = new Map<string, string>();
-  for (const expose of exposeRelations) {
-    endpointToService.set(expose.objectId, expose.subjectObjectId);
-  }
-
-  // A --call--> E, E --expose--> B → A --call--> B 집계
+  // A --call--> E(endpoint), E.parent = B(service) → A --call--> B 집계
+  // A --call--> B(service, COMPOUND) → A --call--> B 직접 집계
   // + service --depend_on--> service 직접 관계 집계
   const rollupMap = new Map<
     string,
@@ -177,14 +164,17 @@ async function buildServiceToService(
     }
   >();
 
-  for (const call of callRelations) {
-    const callerServiceId = call.subjectObjectId;
-    const endpointId = call.objectId;
-    const exposingServiceId = endpointToService.get(endpointId);
+  for (const { relation, targetParentId, targetGranularity } of callRelations) {
+    const callerServiceId = relation.subjectObjectId;
 
-    if (!exposingServiceId || callerServiceId === exposingServiceId) continue;
+    // 대상이 ATOMIC(endpoint)이면 parentId로 서비스 역추적, COMPOUND(service)면 직접 사용
+    const targetServiceId = targetGranularity === 'COMPOUND'
+      ? relation.objectId
+      : targetParentId;
 
-    const key = `call|${callerServiceId}|${exposingServiceId}`;
+    if (!targetServiceId || callerServiceId === targetServiceId) continue;
+
+    const key = `call|${callerServiceId}|${targetServiceId}`;
     const existing = rollupMap.get(key) ?? {
       relationType: 'call',
       edgeWeight: 0,
@@ -192,8 +182,8 @@ async function buildServiceToService(
       baseRelationIds: new Set<string>(),
     };
     existing.edgeWeight += 1;
-    if (call.confidence != null) existing.confidences.push(call.confidence);
-    existing.baseRelationIds.add(call.id);
+    if (relation.confidence != null) existing.confidences.push(relation.confidence);
+    existing.baseRelationIds.add(relation.id);
     rollupMap.set(key, existing);
   }
 
@@ -786,7 +776,7 @@ async function deleteRollupsByAffectedNodes(
 
 /**
  * S2S 증분 재계산
- * affected 서비스 관련 기존 edge 삭제 → 전체 call/expose 기반 재계산 후 affected 관련만 insert
+ * affected 서비스 관련 기존 edge 삭제 → 전체 call+parentId 기반 재계산 후 affected 관련만 insert
  */
 async function incrementalBuildS2S(
   db: DbClient,
@@ -799,10 +789,15 @@ async function incrementalBuildS2S(
   // 기존 affected 관련 S2S rollup 삭제
   await deleteRollupsByAffectedNodes(db, workspaceId, generationVersion, 'SERVICE_TO_SERVICE', affectedServiceIds);
 
-  // 전체 call/expose/depend_on relation 조회 (변경된 서비스의 edge를 정확히 재계산하려면 전체 필요)
+  // 전체 call relation + 대상 객체 정보 조회 (parentId로 endpoint→service 역추적)
   const callRelations = await db
-    .select()
+    .select({
+      relation: objectRelations,
+      targetParentId: objects.parentId,
+      targetGranularity: objects.granularity,
+    })
     .from(objectRelations)
+    .innerJoin(objects, eq(objectRelations.objectId, objects.id))
     .where(
       and(
         eq(objectRelations.workspaceId, workspaceId),
@@ -824,24 +819,6 @@ async function incrementalBuildS2S(
       ),
     );
 
-  const exposeRelations = await db
-    .select()
-    .from(objectRelations)
-    .where(
-      and(
-        eq(objectRelations.workspaceId, workspaceId),
-        eq(objectRelations.relationType, 'expose'),
-        eq(objectRelations.isDerived, false),
-        eq(objectRelations.status, 'APPROVED'),
-      ),
-    );
-
-  // endpoint → 서비스 매핑
-  const endpointToService = new Map<string, string>();
-  for (const expose of exposeRelations) {
-    endpointToService.set(expose.objectId, expose.subjectObjectId);
-  }
-
   // S2S 집계 (affected 관련만 필터)
   const rollupMap = new Map<
     string,
@@ -852,15 +829,17 @@ async function incrementalBuildS2S(
       baseRelationIds: Set<string>;
     }
   >();
-  for (const call of callRelations) {
-    const callerServiceId = call.subjectObjectId;
-    const exposingServiceId = endpointToService.get(call.objectId);
-    if (!exposingServiceId || callerServiceId === exposingServiceId) continue;
+  for (const { relation, targetParentId, targetGranularity } of callRelations) {
+    const callerServiceId = relation.subjectObjectId;
+    const targetServiceId = targetGranularity === 'COMPOUND'
+      ? relation.objectId
+      : targetParentId;
+    if (!targetServiceId || callerServiceId === targetServiceId) continue;
 
     // affected 서비스가 caller 또는 target인 경우만
-    if (!affectedServiceIds.has(callerServiceId) && !affectedServiceIds.has(exposingServiceId)) continue;
+    if (!affectedServiceIds.has(callerServiceId) && !affectedServiceIds.has(targetServiceId)) continue;
 
-    const key = `call|${callerServiceId}|${exposingServiceId}`;
+    const key = `call|${callerServiceId}|${targetServiceId}`;
     const existing = rollupMap.get(key) ?? {
       relationType: 'call',
       edgeWeight: 0,
@@ -868,8 +847,8 @@ async function incrementalBuildS2S(
       baseRelationIds: new Set<string>(),
     };
     existing.edgeWeight += 1;
-    if (call.confidence != null) existing.confidences.push(call.confidence);
-    existing.baseRelationIds.add(call.id);
+    if (relation.confidence != null) existing.confidences.push(relation.confidence);
+    existing.baseRelationIds.add(relation.id);
     rollupMap.set(key, existing);
   }
 

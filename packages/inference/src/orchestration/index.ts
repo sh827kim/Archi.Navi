@@ -16,3 +16,10 @@ export type {
   InferenceRunListItem,
   InferenceRunDetail,
 } from './inferenceRuns';
+
+export { executeSmartPipeline } from './smartPipeline';
+export type {
+  SmartPipelineOptions,
+  SmartPipelineResult,
+  LlmGenerateFn,
+} from './smartPipeline';

@@ -212,30 +212,10 @@ function processSpringMappingAnnotations(
             }
         }
 
-        // @FeignClient(name = "service") 처리
+        // @FeignClient는 processFeignClientInterfaces에서 처리 (여기서는 스킵)
+        // 인터페이스 선언 단위로 메서드별 call 시그널을 생성해야 하기 때문
         if (annName === 'FeignClient') {
-            const argList = findChildByType(ann, 'annotation_argument_list');
-            if (!argList) continue;
-
-            const args = extractAnnotationArgs(argList);
-            const nameValueNode = args.get('name');
-
-            if (nameValueNode?.type === 'string_literal') {
-                const serviceName = extractStringValue(nameValueNode);
-                if (serviceName) {
-                    signals.push(
-                        makeSignal({
-                            kind: 'call',
-                            symbol: serviceName,
-                            lineStart: ann.startPosition.row + 1,
-                            lineEnd: ann.endPosition.row + 1,
-                            excerpt,
-                            confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
-                            metadata: { client: 'FeignClient' },
-                        }),
-                    );
-                }
-            }
+            // no-op: 아래 processFeignClientInterfaces()에서 별도 처리
         }
 
         // @KafkaListener(topics = "topic") 처리
@@ -432,6 +412,204 @@ function processMethodInvocations(
 }
 /* c8 ignore stop */
 
+// ─── FeignClient 인터페이스 메서드별 call 시그널 ──────────────────────────────
+
+/**
+ * @FeignClient 인터페이스를 찾아 각 메서드의 매핑 어노테이션에서
+ * call 시그널을 생성한다.
+ *
+ * 예: @FeignClient(name = "order-service")
+ *     public interface OrderClient {
+ *         @GetMapping("/api/orders/{id}")
+ *         OrderDto getOrder(@PathVariable String id);
+ *     }
+ * → call 시그널: symbol = "http://order-service/api/orders/{id}", method = "GET"
+ */
+/* c8 ignore start */
+function processFeignClientInterfaces(
+    root: SyntaxNode,
+    signals: ExtractedSignal[],
+): void {
+    // interface_declaration 노드 중 @FeignClient가 달린 것만 찾기
+    const interfaces = findNodes(root, 'interface_declaration');
+
+    for (const iface of interfaces) {
+        // 어노테이션 탐색: 인터페이스 자체의 modifiers에서 @FeignClient 찾기
+        const serviceName = extractFeignServiceName(iface);
+        if (!serviceName) continue;
+
+        // 인터페이스 레벨 @RequestMapping prefix 추출
+        const classPrefix = extractClassLevelRequestMapping(iface);
+
+        // 인터페이스 body에서 method_declaration 찾기
+        const body = findChildByType(iface, 'interface_body');
+        if (!body) continue;
+
+        const methods = getChildren(body).filter((c) => c.type === 'method_declaration');
+        let hasMethodSignals = false;
+
+        for (const method of methods) {
+            // 메서드 어노테이션에서 매핑 정보 추출
+            const mappingInfo = extractMethodMappingAnnotation(method);
+            if (!mappingInfo) continue;
+
+            const fullPath = classPrefix
+                ? normalizePath(`${classPrefix}/${mappingInfo.path}`)
+                : mappingInfo.path;
+
+            const symbol = `http://${serviceName}${fullPath}`;
+            const excerpt = method.text.split('\n')[0] || method.text;
+
+            signals.push(
+                makeSignal({
+                    kind: 'call',
+                    symbol,
+                    lineStart: method.startPosition.row + 1,
+                    lineEnd: method.endPosition.row + 1,
+                    excerpt,
+                    confidence: 0.92,
+                    metadata: {
+                        client: 'FeignClient',
+                        method: mappingInfo.httpMethod,
+                        path: fullPath,
+                        serviceName,
+                    },
+                }),
+            );
+            hasMethodSignals = true;
+        }
+
+        // 메서드에서 매핑 정보를 못 찾으면 서비스 레벨 fallback
+        if (!hasMethodSignals) {
+            const excerpt = iface.text.split('\n')[0] || iface.text;
+            signals.push(
+                makeSignal({
+                    kind: 'call',
+                    symbol: serviceName,
+                    lineStart: iface.startPosition.row + 1,
+                    lineEnd: iface.endPosition.row + 1,
+                    excerpt,
+                    confidence: 0.9,
+                    metadata: { client: 'FeignClient' },
+                }),
+            );
+        }
+    }
+}
+
+/** 인터페이스 노드에서 @FeignClient의 name/value 속성 추출 */
+function extractFeignServiceName(iface: SyntaxNode): string | null {
+    // modifiers → annotation 목록
+    const modifiers = findChildByType(iface, 'modifiers');
+    const annotationSources = modifiers
+        ? getChildren(modifiers).filter((c) => c.type === 'annotation')
+        : getChildren(iface).filter((c) => c.type === 'annotation');
+
+    for (const ann of annotationSources) {
+        const annChildren = getChildren(ann);
+        const nameNode = annChildren.find((c) => c.type === 'identifier');
+        if (nameNode?.text !== 'FeignClient') continue;
+
+        const argList = findChildByType(ann, 'annotation_argument_list');
+        if (!argList) continue;
+
+        const args = extractAnnotationArgs(argList);
+
+        // name 또는 value 속성에서 서비스명 추출
+        const nameValueNode = args.get('name') ?? args.get('value');
+        if (nameValueNode?.type === 'string_literal') {
+            return extractStringValue(nameValueNode);
+        }
+
+        // @FeignClient("service-name") 단축 형태
+        const firstString = getChildren(argList).find((c) => c.type === 'string_literal');
+        if (firstString) return extractStringValue(firstString);
+    }
+    return null;
+}
+
+/** 인터페이스/클래스 레벨 @RequestMapping 경로 prefix 추출 */
+function extractClassLevelRequestMapping(iface: SyntaxNode): string | null {
+    const modifiers = findChildByType(iface, 'modifiers');
+    const annotations = modifiers
+        ? getChildren(modifiers).filter((c) => c.type === 'annotation')
+        : getChildren(iface).filter((c) => c.type === 'annotation');
+
+    for (const ann of annotations) {
+        const annChildren = getChildren(ann);
+        const nameNode = annChildren.find((c) => c.type === 'identifier');
+        if (nameNode?.text !== 'RequestMapping') continue;
+
+        const argList = findChildByType(ann, 'annotation_argument_list');
+        if (!argList) continue;
+
+        const args = extractAnnotationArgs(argList);
+        const valueNode = args.get('value') ?? args.get('path');
+        if (valueNode) {
+            if (valueNode.type === 'string_literal') return extractStringValue(valueNode);
+            if (valueNode.type === 'element_value_array_initializer') return extractFirstFromArray(valueNode);
+        }
+
+        // @RequestMapping("/prefix") 단축 형태
+        const firstString = getChildren(argList).find((c) => c.type === 'string_literal');
+        if (firstString) return extractStringValue(firstString);
+    }
+    return null;
+}
+
+/** 메서드 노드에서 @GetMapping/@PostMapping 등의 매핑 정보 추출 */
+function extractMethodMappingAnnotation(
+    method: SyntaxNode,
+): { httpMethod: string; path: string } | null {
+    // 메서드 내 modifiers에서 어노테이션 탐색
+    const modifiers = findChildByType(method, 'modifiers');
+    const annotations = modifiers
+        ? getChildren(modifiers).filter((c) => c.type === 'annotation')
+        : getChildren(method).filter((c) => c.type === 'annotation');
+
+    for (const ann of annotations) {
+        const annChildren = getChildren(ann);
+        const nameNode = annChildren.find((c) => c.type === 'identifier');
+        if (!nameNode) continue;
+
+        const annName = nameNode.text;
+        const allMappings: Record<string, string> = { ...MAPPING_ANNOTATIONS, ...EXCHANGE_ANNOTATIONS };
+        if (!(annName in allMappings)) continue;
+
+        const httpMethod = allMappings[annName] ?? 'ANY';
+        const argList = findChildByType(ann, 'annotation_argument_list');
+
+        let path = '/';
+        if (argList) {
+            const args = extractAnnotationArgs(argList);
+            const valueNode = args.get('value') ?? args.get('path');
+            if (valueNode) {
+                if (valueNode.type === 'string_literal') {
+                    path = extractStringValue(valueNode) ?? '/';
+                } else if (valueNode.type === 'element_value_array_initializer') {
+                    path = extractFirstFromArray(valueNode) ?? '/';
+                }
+            } else {
+                // @GetMapping("/path") 단축 형태
+                const firstString = getChildren(argList).find((c) => c.type === 'string_literal');
+                if (firstString) path = extractStringValue(firstString) ?? '/';
+            }
+        }
+
+        // path가 /로 시작하지 않으면 보정
+        if (!path.startsWith('/')) path = `/${path}`;
+
+        return { httpMethod, path };
+    }
+    return null;
+}
+
+/** 경로 정규화: 중복 슬래시 제거 */
+function normalizePath(path: string): string {
+    return path.replace(/\/+/g, '/');
+}
+/* c8 ignore stop */
+
 // ─── 패키지명 추출 ────────────────────────────────────────────────────────────
 
 function extractPackageName(root: SyntaxNode): string | undefined {
@@ -473,6 +651,7 @@ export async function scanJavaKotlinAst(filePath: string, content: string): Prom
     const signals: ExtractedSignal[] = [];
 
     processSpringMappingAnnotations(root, signals);
+    processFeignClientInterfaces(root, signals);
     processMethodInvocations(root, varMap, signals);
 
     const result: FileScanResult = packageName

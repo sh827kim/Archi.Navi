@@ -1,8 +1,8 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22
+> 작성일: 2026-02-22 | 최종 갱신: 2026-03-08
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
-> 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0 참고
+> 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
 ---
 
@@ -10,26 +10,30 @@
 
 | 등급 | 의미 | 예상 시기 |
 |------|------|----------|
-| **P1** | 추론 파이프라인 MVP — 70%+ 자동화 달성 | v2.0 |
-| **P2** | AST 정밀 추출 + AI 고도화 | v2.1 |
-| **P3** | 대규모 그래프 성능 + 추론 고도화 | v2.2+ |
+| **P1** | 추론 파이프라인 MVP — 70%+ 자동화 달성 | v2.0 ✅ |
+| **P2** | AST 정밀 추출 + AI 고도화 | v2.1 (부분 완료) |
+| **P3** | 대규모 그래프 성능 + 추론 고도화 | v2.2 ✅ |
+| **P4** | 🔥 추론 엔진 고도화 — 90%+ 정밀도 달성 | v3.0 |
+| **P5** | 개발자 생산성 기능 + 구조 개선 | v3.1+ |
 
 ---
 
-## 현재 상태 요약 (2026-03-02)
+## 현재 상태 요약 (2026-03-08)
 
 | 구간 | 상태 | 비고 |
 |------|------|------|
 | P1 (1-1 ~ 1-6) | ✅ 완료 | 추론 MVP 기능/승인 플로우 구현 완료 |
 | P2 (2-1) | ⚠️ 부분 구현 | 기본 경로는 `hybrid(AST+Regex 병합)`로 전환됐으나 운영 정책/모니터링 보강 필요 |
 | P2 (2-2 ~ 2-5) | ✅ 완료 | Evidence Assembler/Answer Composer/DOMAIN_SUMMARY/Message 시그널 반영 완료 |
-| P2 (운영 고도화) | ⚠️ 부분 구현 | 비동기 run 이력/API 골격(`inference_runs*`, `/api/inference/runs`) 추가, 원격 커넥터/재시도 정책은 후속 |
-| P2 (2-7) | ⚠️ 부분 구현 | Code Signal 기반 후보 생성(Compound->Atomic): endpoint/topic은 진행, RabbitMQ queue/DB table은 후속 |
+| P2 (2-6) | ⚠️ 부분 구현 | 비동기 run 이력/API 골격 추가, 원격 커넥터/재시도 정책은 후속 |
+| P2 (2-7) | ⚠️ 부분 구현 | endpoint/topic 진행, RabbitMQ queue/DB table 후속 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
+| P4 (4-1 ~ 4-6) | 📋 Draft | 추론 엔진 고도화 설계 완료, 구현 대기 |
+| P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
 
-## P1: 추론 파이프라인 MVP (v2.0)
+## P1: 추론 파이프라인 MVP (v2.0) ✅
 
 > **목표**: Regex + Config 파싱으로 전체 Relation의 60~80% 자동 추론
 
@@ -117,6 +121,7 @@
 - **출력:** Phase 1과 동일 형식 (`code_artifacts`, `code_call_edges`, `code_import_edges`)
 - **의존:** tree-sitter 바인딩 + 언어별 grammar
 - **참조:** 03-inference-engine.md §6.2
+- **확장:** P4 4-1에서 Inter-procedural 분석으로 고도화
 
 ### ✅ 2-2. Evidence Assembler (완료)
 - **파일:** `packages/core/src/ai/evidence-assembler.ts` (신규)
@@ -172,7 +177,7 @@
 
 ---
 
-## P3: 대규모 그래프 성능 + 추론 고도화 (v2.2+)
+## P3: 대규모 그래프 성능 + 추론 고도화 (v2.2) ✅
 
 ### ✅ 3-1. 증분 리빌드 (완료)
 - **SPEC:** `docs/spec/06-incremental-rollup-rebuild-spec.md`
@@ -242,6 +247,173 @@
 
 ---
 
+## 🔥 P4: 추론 엔진 고도화 (v3.0)
+
+> **목표**: 추론 정밀도 90~95% 달성 + 노이즈 50% 이상 감소
+> **설계 문서**: `docs/design/07-inference-engine-advanced.md`
+> **우선순위**: P2 잔여 항목(2-1, 2-6, 2-7)보다 높음 — 추론 품질이 전체 시스템 가치를 결정
+
+### 📋 4-1. Inter-procedural AST 분석 (기존 2-1 확장)
+- **SPEC:** `docs/spec/18-inter-procedural-ast-spec.md`
+- **설계:** `docs/design/07-inference-engine-advanced.md` §2
+- **핵심:**
+  - Multi-file Symbol Table 구축 (클래스/인터페이스/메서드 계보)
+  - Call Chain Resolution — 메서드 호출 체인 추적 (최대 depth 3)
+  - Spring 프로퍼티 전파 (`@Value` → application.yml 연결 → URL 확정)
+  - 인터페이스 → 구현체 매핑 (FeignClient 등)
+- **기대 효과:**
+  - 현재 미감지 패턴 (간접 호출, 프로퍼티 주입 URL) 커버
+  - 기존 AST 분석의 confidence 추가 상향 (+0.05~0.1)
+- **의존:** 기존 2-1(AST hybrid) 완료 기반
+
+### 📋 4-2. Cross-Signal Validation (교차 검증)
+- **SPEC:** `docs/spec/19-cross-signal-validation-spec.md`
+- **설계:** `docs/design/07-inference-engine-advanced.md` §3
+- **핵심:**
+  - config + code + db 시그널 간 교차 검증
+  - 복수 시그널 지지 시 신뢰도 부스트 (Bayesian 업데이트)
+  - 모순 감지 (Stale Config, Phantom Call, Dead Topic, Orphan FK)
+  - 승인 UI에 교차 검증 배지 표시
+- **기대 효과:**
+  - 동일 관계 2+ 소스 지지 시 confidence 0.08~0.12 부스트
+  - stale config/phantom call 등 노이즈 후보 사전 경고
+- **의존:** 추론 실행 시 2+ 모드 동시 실행
+
+### 📋 4-3. LLM 추론 부스터 (기존 LLM 필터 확장)
+- **SPEC:** `docs/spec/20-llm-inference-boost-spec.md`
+- **설계:** `docs/design/07-inference-engine-advanced.md` §4
+- **기존 참조:** `docs/spec/04-llm-inference-filtering-spec.md` (post-filter, 구현 완료)
+- **핵심:**
+  - 코드 의도 분석 (Pre-inference): 동적 URL, 리플렉션 등 미확정 시그널 보완
+  - 관계 설명 자동 생성: 각 후보에 "왜 이 관계가 존재하는가" 자연어 생성
+  - 도메인 라벨 정제: Track B Discovery의 label_candidates를 자연스러운 이름으로 변환
+  - 배치 그룹화 최적화 + 비용 제어 파라미터
+- **기대 효과:**
+  - Regex/AST 미감지 패턴 5~10% 추가 발견
+  - 승인 판단 시간 단축 (설명 제공)
+  - 도메인 이름 품질 향상
+
+### 📋 4-4. 프레임워크 플러그인 시스템
+- **SPEC:** `docs/spec/21-framework-plugin-system-spec.md`
+- **설계:** `docs/design/07-inference-engine-advanced.md` §5
+- **핵심:**
+  - FrameworkPlugin 인터페이스 (regexPatterns, astExtractor, configParsers, detector)
+  - PluginRegistry (등록, 자동 감지, 조회)
+  - 기존 하드코딩 패턴을 빌트인 플러그인으로 마이그레이션
+  - 프로젝트별 자동 플러그인 선택
+- **기대 효과:**
+  - gRPC, GraphQL, tRPC, Quarkus 등 새 프레임워크 지원 용이
+  - 오픈소스 커뮤니티 기여 진입 장벽 대폭 감소
+
+### 📋 4-5. Delta Rollup + 실시간 그래프 갱신
+- **SPEC:** `docs/spec/22-realtime-rollup-spec.md`
+- **핵심:**
+  - 관계 승인/삭제 시 해당 rollup 엣지만 delta update (full rebuild 없이)
+  - WebSocket으로 프론트엔드에 그래프 변경 push
+  - 일괄 승인 시 배치 delta 처리
+- **기대 효과:**
+  - 대규모 코드베이스에서 수백 건 일괄 승인 시 성능 향상
+  - 실시간 시각적 피드백
+
+### 📋 4-6. 추론 피드백 루프
+- **SPEC:** `docs/spec/23-inference-feedback-loop-spec.md`
+- **설계:** `docs/design/07-inference-engine-advanced.md` §6
+- **핵심:**
+  - 승인/거절 패턴을 시그널 유형별로 집계
+  - 기본 신뢰도 자동 보정 (최소 10건 이상 축적 시)
+  - domain_inference_profiles에 피드백 데이터 저장
+- **기대 효과:**
+  - 사용할수록 노이즈 감소 (반복 거절 패턴 학습)
+  - 워크스페이스별 맞춤 신뢰도 프로필 자동 형성
+
+---
+
+## P5: 개발자 생산성 기능 + 구조 개선 (v3.1+)
+
+> **목표**: 추론 엔진의 아키텍처 지식을 일상 개발 워크플로우에 직접 연결
+> **설계 문서**: `docs/design/08-developer-productivity.md`
+
+### 📋 5-1. Change Impact Preview (변경 영향도 미리보기)
+- **SPEC:** `docs/spec/24-change-impact-preview-spec.md`
+- **설계:** `docs/design/08-developer-productivity.md` §2
+- **핵심:**
+  - `git diff` → 변경 파일 → code_artifacts 매핑 → 영향받는 서비스/API/토픽 식별
+  - CLI: `anavi impact --workspace <id> --diff HEAD~1`
+  - Query Engine IMPACT_ANALYSIS 연동
+- **기대 효과:** PR 리뷰 시 변경 영향도 즉시 파악
+
+### 📋 5-2. Architecture Drift Detection (드리프트 감지)
+- **SPEC:** `docs/spec/25-architecture-drift-detection-spec.md`
+- **설계:** `docs/design/08-developer-productivity.md` §3
+- **핵심:**
+  - rollup generation 간 diff → 새 의존성/소멸/순환 의존 감지
+  - 심각도 판정 (INFO/WARNING/CRITICAL)
+  - CLI: `anavi drift --workspace <id>`
+- **기대 효과:** 아키텍처 변화를 능동적으로 감지
+
+### 📋 5-3. Personal Architecture Journal (개인 아키텍처 저널)
+- **SPEC:** `docs/spec/26-personal-architecture-journal-spec.md`
+- **설계:** `docs/design/08-developer-productivity.md` §5
+- **핵심:**
+  - 서비스/관계에 개인 메모/태그 연결 (warning, tip, todo, context, decision)
+  - Object Mapping 그래프에 메모 아이콘 표시
+  - export/import 지원
+- **기대 효과:** 암묵지 체계화 → 온보딩 자료 자동 축적
+
+### 📋 5-4. API Contract Diff (API 계약 변경 감지)
+- **SPEC:** `docs/spec/27-api-contract-diff-spec.md`
+- **설계:** `docs/design/08-developer-productivity.md` §6
+- **핵심:**
+  - expose 시그널 버전별 비교 → 엔드포인트 추가/삭제/변경 감지
+  - 삭제된 endpoint의 caller 자동 경고
+- **기대 효과:** API 호환성 파괴 사전 감지
+
+### 📋 5-5. Architecture Health Score (아키텍처 건강도)
+- **SPEC:** `docs/spec/28-architecture-health-score-spec.md`
+- **설계:** `docs/design/08-developer-productivity.md` §4
+- **핵심:**
+  - 6개 지표 (결합도, 도메인 순수도, 순환 의존, Hub 집중도, Evidence 커버리지, Approval 비율)
+  - 서비스별/워크스페이스별 점수 산출 + 등급 판정
+  - CLI: `anavi health --workspace <id>`
+- **기대 효과:** 아키텍처 품질 수치화 + 개선 방향 제시
+
+### 📋 5-6. 구조적 개선
+- **설계:** `docs/design/08-developer-productivity.md` §7
+- **항목:**
+  - **서비스 레이어 분리**: API route를 thin HTTP 어댑터로, 비즈니스 로직을 패키지로 완전 분리
+  - **추론 커버리지 리포트**: 분석 성공/실패 비율 + 언어별 커버리지 노출
+  - **Workspace 공유**: snapshot export/import/merge 확장
+  - **파일 시스템 Watcher**: `anavi watch` — chokidar 기반 자동 증분 추론
+
+---
+
+## 구현 순서 가이드
+
+```
+P2 잔여 (2-1 완성, 2-6, 2-7)     P4 고도화 (★ 최우선)
+──────────────────────────────────────────────────
+2-1 AST 운영 완성 ─────→ 4-1 Inter-procedural AST
+                         4-2 Cross-Signal Validation
+                         4-3 LLM 추론 부스터
+                         ─────────────────────────
+                         4-4 플러그인 시스템
+2-7 RabbitMQ/DB table    4-5 Delta Rollup
+2-6 운영 오케스트레이션  4-6 피드백 루프
+                         ─────────────────────────
+                         P5 생산성 기능
+                         5-1 Change Impact
+                         5-2 Drift Detection
+                         5-5 Health Score
+                         5-3 Journal
+                         5-4 API Contract Diff
+                         5-6 구조 개선
+```
+
+> **핵심**: 4-1 → 4-2 → 4-3은 추론 품질을 구조적으로 끌어올리는 핵심 3요소로,
+> P2 잔여 항목보다 우선 구현한다. 2-1 AST 운영 완성은 4-1의 전제 조건이므로 먼저 완료.
+
+---
+
 ## 참고 설계 문서
 
 | 로드맵 항목 | 참조 문서 |
@@ -263,3 +435,16 @@
 | DB 추론 확장(3-6) | `docs/spec/01-db-inference-index-unique-spec.md` |
 | 3D 렌더러 전환(3-7) | `docs/spec/02-object-mapping-3d-renderer-spec.md` |
 | Domain-first | `docs/design/05-rollup-and-graph.md` §6 Navigation Strategy |
+| **Inter-procedural AST(4-1)** | `docs/spec/18-inter-procedural-ast-spec.md` |
+| **Cross-Signal Validation(4-2)** | `docs/spec/19-cross-signal-validation-spec.md` |
+| **LLM 추론 부스터(4-3)** | `docs/spec/20-llm-inference-boost-spec.md` |
+| **플러그인 시스템(4-4)** | `docs/spec/21-framework-plugin-system-spec.md` |
+| **Delta Rollup(4-5)** | `docs/spec/22-realtime-rollup-spec.md` |
+| **피드백 루프(4-6)** | `docs/spec/23-inference-feedback-loop-spec.md` |
+| **Change Impact(5-1)** | `docs/spec/24-change-impact-preview-spec.md` |
+| **Drift Detection(5-2)** | `docs/spec/25-architecture-drift-detection-spec.md` |
+| **Journal(5-3)** | `docs/spec/26-personal-architecture-journal-spec.md` |
+| **API Contract Diff(5-4)** | `docs/spec/27-api-contract-diff-spec.md` |
+| **Health Score(5-5)** | `docs/spec/28-architecture-health-score-spec.md` |
+| **추론 엔진 고도화(P4 전체)** | `docs/design/07-inference-engine-advanced.md` |
+| **생산성 기능(P5 전체)** | `docs/design/08-developer-productivity.md` |

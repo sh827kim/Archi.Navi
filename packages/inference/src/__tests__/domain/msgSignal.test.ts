@@ -18,8 +18,8 @@ import {
 } from '@archi-navi/db';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
-import { extractTopicPrefix, computeMsgScores } from '../../domain/msgSignal.js';
-import { runSeedBasedInference } from '../../domain/seedBased.js';
+import { extractTopicPrefix, computeMsgScores } from '@/domain/msgSignal';
+import { runSeedBasedInference } from '@/domain/seedBased';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 

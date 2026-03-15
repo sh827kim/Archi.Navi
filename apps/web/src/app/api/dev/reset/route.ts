@@ -94,7 +94,21 @@ export async function POST(req: NextRequest) {
         .delete(codeArtifacts)
         .where(eq(codeArtifacts.workspaceId, workspaceId));
 
-      // 3) 후보/확정 관계와 연결 테이블
+      // 3) 롤업 provenance를 먼저 삭제 (objectRelations ON DELETE CASCADE 충돌 방지)
+      await tx
+        .delete(objectRollupProvenances)
+        .where(eq(objectRollupProvenances.workspaceId, workspaceId));
+      await tx
+        .delete(objectGraphStats)
+        .where(eq(objectGraphStats.workspaceId, workspaceId));
+      await tx
+        .delete(objectRollups)
+        .where(eq(objectRollups.workspaceId, workspaceId));
+      await tx
+        .delete(rollupGenerations)
+        .where(eq(rollupGenerations.workspaceId, workspaceId));
+
+      // 4) 후보/확정 관계와 연결 테이블
       await tx
         .delete(domainCandidateEvidences)
         .where(eq(domainCandidateEvidences.workspaceId, workspaceId));
@@ -117,20 +131,6 @@ export async function POST(req: NextRequest) {
       await tx
         .delete(objectRelations)
         .where(eq(objectRelations.workspaceId, workspaceId));
-
-      // 4) 롤업 본체/통계/세대
-      await tx
-        .delete(objectRollupProvenances)
-        .where(eq(objectRollupProvenances.workspaceId, workspaceId));
-      await tx
-        .delete(objectGraphStats)
-        .where(eq(objectGraphStats.workspaceId, workspaceId));
-      await tx
-        .delete(objectRollups)
-        .where(eq(objectRollups.workspaceId, workspaceId));
-      await tx
-        .delete(rollupGenerations)
-        .where(eq(rollupGenerations.workspaceId, workspaceId));
 
       // 5) 근거 원문 / 태깅 / 레이어 배치
       await tx

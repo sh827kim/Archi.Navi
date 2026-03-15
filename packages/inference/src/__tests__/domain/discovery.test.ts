@@ -16,7 +16,7 @@ import {
 } from '@archi-navi/db';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
-import { runDiscovery } from '../../domain/discovery.js';
+import { runDiscovery } from '@/domain/discovery';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 

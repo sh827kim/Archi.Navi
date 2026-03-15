@@ -11,7 +11,7 @@ import { createPgliteClient } from '@archi-navi/db';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { codeArtifacts, codeCallEdges, evidences, objects, workspaces } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
-import { extractAstCodeSignals } from '../../../code/ast/extractAstCodeSignals';
+import { extractAstCodeSignals } from '@/code/ast/extractAstCodeSignals';
 import { generateId } from '@archi-navi/shared';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');

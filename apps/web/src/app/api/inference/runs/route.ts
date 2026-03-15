@@ -43,7 +43,7 @@ async function collectSources(
     sourceMap.set(`${source.type}:${ref}`, {
       type: source.type,
       ref,
-      metadata: source.metadata,
+      ...(source.metadata ? { metadata: source.metadata } : {}),
     });
   }
 
@@ -114,11 +114,11 @@ export async function POST(req: NextRequest) {
     const run = await createInferenceRun(db, {
       workspaceId,
       modes,
-      codeEngine: body.codeEngine,
-      incremental: body.incremental,
-      triggerType: body.triggerType,
-      maxAttempts: body.maxAttempts,
-      idempotencyKey: body.idempotencyKey,
+      ...(body.codeEngine != null ? { codeEngine: body.codeEngine } : {}),
+      ...(body.incremental != null ? { incremental: body.incremental } : {}),
+      ...(body.triggerType != null ? { triggerType: body.triggerType } : {}),
+      ...(body.maxAttempts != null ? { maxAttempts: body.maxAttempts } : {}),
+      ...(body.idempotencyKey != null ? { idempotencyKey: body.idempotencyKey } : {}),
       sources,
     });
 
@@ -157,7 +157,7 @@ export async function GET(req: NextRequest) {
     const limit = Number.isFinite(rawLimit) ? rawLimit : 20;
 
     const db = await getDb();
-    const items = await listInferenceRuns(db, { workspaceId, status: status ?? undefined, limit });
+    const items = await listInferenceRuns(db, { workspaceId, ...(status ? { status } : {}), limit });
     return NextResponse.json({ ok: true, items });
   } catch (error) {
     console.error('[GET /api/inference/runs]', error);

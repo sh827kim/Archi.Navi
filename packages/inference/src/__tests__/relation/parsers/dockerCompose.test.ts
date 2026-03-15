@@ -2,7 +2,7 @@
  * docker-compose.yml 파서 단위 테스트
  */
 import { describe, it, expect } from 'vitest';
-import { parseDockerCompose } from '../../../relation/parsers/dockerCompose';
+import { parseDockerCompose } from '@/relation/parsers/dockerCompose';
 
 describe('parseDockerCompose', () => {
   // ─── 정상 케이스 ────────────────────────────────────────────────────────────

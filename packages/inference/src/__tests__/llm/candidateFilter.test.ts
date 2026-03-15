@@ -16,12 +16,12 @@ import {
 } from '@archi-navi/db';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
-import { filterCandidates } from '../../llm/candidateFilter.js';
+import { filterCandidates } from '@/llm/candidateFilter';
 import type {
   LlmAssessment,
   GenerateAssessmentFn,
   CandidateContext,
-} from '../../llm/types.js';
+} from '@/llm/types';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 

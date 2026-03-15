@@ -4,7 +4,7 @@
  */
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import { toast } from 'sonner';
 import {
@@ -27,6 +27,9 @@ import {
   CheckCircle2,
   SkipForward,
   Tag,
+  FolderOpen,
+  History,
+  ChevronRight,
 } from 'lucide-react';
 import {
   DndContext,
@@ -67,6 +70,7 @@ import {
   SelectValue,
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { isAbsoluteScanPathPrefix } from '@/lib/scanPathPrefix';
 
 /* ─── 타입 ─── */
 interface LayerItem {
@@ -1364,6 +1368,12 @@ type ScanStreamEvent =
   | { type: 'complete'; result: ScanApiResult }
   | { type: 'error'; message: string };
 
+/** 디렉토리 자동완성 항목 */
+interface DirSuggestion {
+  name: string;
+  path: string;
+}
+
 function ScanSettings({ workspaceId }: { workspaceId: string }) {
   const [mode, setMode] = useState<'local' | 'workspace-dir' | 'github-repo' | 'github-org'>('local');
   const [target, setTarget] = useState('');
@@ -1374,8 +1384,107 @@ function ScanSettings({ workspaceId }: { workspaceId: string }) {
   const [progressMessage, setProgressMessage] = useState('');
   const [progressTotal, setProgressTotal] = useState(0); // 총 레포 수
 
+  // 자동완성 관련 상태
+  const [suggestions, setSuggestions] = useState<DirSuggestion[]>([]);
+  const [savedPaths, setSavedPaths] = useState<string[]>([]);
+  const [savedParentDirs, setSavedParentDirs] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  const [selectedIdx, setSelectedIdx] = useState(-1);
+  const inputRef = useRef<HTMLInputElement>(null);
+  const suggestionsRef = useRef<HTMLDivElement>(null);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const selectedMode = SCAN_MODES.find((m) => m.value === mode)!;
   const isGithub = mode === 'github-repo' || mode === 'github-org';
+
+  // 워크스페이스의 기존 스캔 경로 로드 + 기본값 복원
+  useEffect(() => {
+    if (!workspaceId) return;
+    fetch(`/api/scan/paths?workspaceId=${encodeURIComponent(workspaceId)}`)
+      .then((res) => res.json())
+      .then((data: { paths?: string[]; parentDirs?: string[] }) => {
+        const paths = data.paths ?? [];
+        const parents = data.parentDirs ?? [];
+        setSavedPaths(paths);
+        setSavedParentDirs(parents);
+        // 기존 스캔 경로가 있으면 가장 첫 번째 부모 디렉토리를 기본값으로 설정
+        const first = parents[0];
+        if (first && !target) {
+          setTarget(first);
+        }
+      })
+      .catch(() => { /* 실패 시 무시 */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  // 디렉토리 자동완성 fetch (로컬 모드 전용)
+  const fetchSuggestions = useCallback((prefix: string) => {
+    if (!prefix || !isAbsoluteScanPathPrefix(prefix)) {
+      setSuggestions([]);
+      return;
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/fs/browse?prefix=${encodeURIComponent(prefix)}`);
+        const data = (await res.json()) as { dirs?: DirSuggestion[] };
+        setSuggestions(data.dirs ?? []);
+      } catch {
+        setSuggestions([]);
+      }
+    }, 200);
+  }, []);
+
+  // 외부 클릭 시 드롭다운 닫기
+  useEffect(() => {
+    const handleClick = (e: MouseEvent) => {
+      if (
+        suggestionsRef.current &&
+        !suggestionsRef.current.contains(e.target as Node) &&
+        inputRef.current &&
+        !inputRef.current.contains(e.target as Node)
+      ) {
+        setShowSuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClick);
+    return () => document.removeEventListener('mousedown', handleClick);
+  }, []);
+
+  // 자동완성 항목 선택 핸들러
+  const selectSuggestion = (path: string) => {
+    setTarget(path);
+    setResult(null);
+    setShowSuggestions(false);
+    setSelectedIdx(-1);
+    inputRef.current?.focus();
+  };
+
+  // 현재 모드가 로컬(파일시스템) 인지
+  const isLocalMode = mode === 'local' || mode === 'workspace-dir';
+
+  // 드롭다운에 표시할 항목 조합: 등록된 경로 + 자동완성 디렉토리
+  const combinedSuggestions = (() => {
+    if (!isLocalMode) return [];
+    const items: Array<{ type: 'saved' | 'dir'; label: string; path: string }> = [];
+
+    // 등록된 경로 (target이 비어있거나 매칭되는 것만)
+    const relevantPaths = mode === 'workspace-dir' ? savedParentDirs : savedPaths;
+    for (const p of relevantPaths) {
+      if (!target || p.toLowerCase().includes(target.toLowerCase())) {
+        items.push({ type: 'saved', label: p, path: p });
+      }
+    }
+
+    // 자동완성 디렉토리 (등록된 경로와 중복 제거)
+    const savedSet = new Set(items.map((i) => i.path));
+    for (const dir of suggestions) {
+      if (!savedSet.has(dir.path)) {
+        items.push({ type: 'dir', label: dir.name, path: dir.path });
+      }
+    }
+    return items;
+  })();
 
   /** 스캔 실행 (SSE 스트리밍으로 진행 상황 수신) */
   const executeScan = async (dryRun: boolean) => {
@@ -1574,19 +1683,130 @@ function ScanSettings({ workspaceId }: { workspaceId: string }) {
             </div>
           )}
 
-          {/* 대상 입력 */}
+          {/* 대상 입력 — 로컬 모드: 자동완성 드롭다운 포함 */}
           <div className="space-y-1.5">
             <label className="text-sm font-medium text-foreground">
               스캔 대상
             </label>
-            <Input
-              placeholder={selectedMode.placeholder}
-              value={target}
-              onChange={(e) => { setTarget(e.target.value); setResult(null); }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void executeScan(true);
-              }}
-            />
+            <div className="relative">
+              <Input
+                ref={inputRef}
+                placeholder={selectedMode.placeholder}
+                value={target}
+                onChange={(e) => {
+                  const val = e.target.value;
+                  setTarget(val);
+                  setResult(null);
+                  setSelectedIdx(-1);
+                  if (isLocalMode) {
+                    fetchSuggestions(val);
+                    setShowSuggestions(true);
+                  }
+                }}
+                onFocus={() => {
+                  if (isLocalMode) setShowSuggestions(true);
+                }}
+                onKeyDown={(e) => {
+                  // 드롭다운 키보드 네비게이션
+                  if (showSuggestions && combinedSuggestions.length > 0) {
+                    if (e.key === 'ArrowDown') {
+                      e.preventDefault();
+                      setSelectedIdx((prev) =>
+                        prev < combinedSuggestions.length - 1 ? prev + 1 : 0,
+                      );
+                      return;
+                    }
+                    if (e.key === 'ArrowUp') {
+                      e.preventDefault();
+                      setSelectedIdx((prev) =>
+                        prev > 0 ? prev - 1 : combinedSuggestions.length - 1,
+                      );
+                      return;
+                    }
+                    if (e.key === 'Enter' && selectedIdx >= 0) {
+                      e.preventDefault();
+                      const sel = combinedSuggestions[selectedIdx];
+                      if (sel) selectSuggestion(sel.path);
+                      return;
+                    }
+                    if (e.key === 'Escape') {
+                      setShowSuggestions(false);
+                      return;
+                    }
+                  }
+                  if (e.key === 'Enter') void executeScan(true);
+                }}
+              />
+
+              {/* 자동완성 드롭다운 */}
+              {showSuggestions && isLocalMode && combinedSuggestions.length > 0 && (
+                <div
+                  ref={suggestionsRef}
+                  className="absolute z-50 top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto rounded-lg border border-border bg-card shadow-lg"
+                >
+                  {/* 등록된 경로 섹션 */}
+                  {combinedSuggestions.some((s) => s.type === 'saved') && (
+                    <>
+                      <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider bg-muted/30">
+                        <History className="inline h-3 w-3 mr-1 -mt-0.5" />
+                        최근 스캔 경로
+                      </div>
+                      {combinedSuggestions
+                        .filter((s) => s.type === 'saved')
+                        .map((item, i) => {
+                          const globalIdx = combinedSuggestions.indexOf(item);
+                          return (
+                            <button
+                              key={`saved-${item.path}`}
+                              type="button"
+                              className={cn(
+                                'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-accent/50 transition-colors',
+                                globalIdx === selectedIdx && 'bg-accent/50',
+                              )}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => selectSuggestion(item.path)}
+                            >
+                              <History className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="truncate text-foreground">{item.path}</span>
+                            </button>
+                          );
+                        })}
+                    </>
+                  )}
+
+                  {/* 디렉토리 후보 섹션 */}
+                  {combinedSuggestions.some((s) => s.type === 'dir') && (
+                    <>
+                      <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider bg-muted/30">
+                        <FolderOpen className="inline h-3 w-3 mr-1 -mt-0.5" />
+                        디렉토리
+                      </div>
+                      {combinedSuggestions
+                        .filter((s) => s.type === 'dir')
+                        .map((item) => {
+                          const globalIdx = combinedSuggestions.indexOf(item);
+                          return (
+                            <button
+                              key={`dir-${item.path}`}
+                              type="button"
+                              className={cn(
+                                'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-accent/50 transition-colors',
+                                globalIdx === selectedIdx && 'bg-accent/50',
+                              )}
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => selectSuggestion(item.path)}
+                            >
+                              <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                              <span className="truncate text-foreground">{item.label}</span>
+                              <ChevronRight className="h-3 w-3 text-muted-foreground ml-auto shrink-0" />
+                            </button>
+                          );
+                        })}
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           {/* 버튼 */}

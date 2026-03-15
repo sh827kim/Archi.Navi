@@ -30,24 +30,55 @@ export async function GET(req: NextRequest) {
       )
       .limit(100);
 
-    // Object 이름 맵
+    // Object 정보 맵 (이름, granularity, parentId 포함)
     const allObjects = await db
-      .select({ id: objects.id, displayName: objects.displayName, name: objects.name })
+      .select({
+        id: objects.id,
+        displayName: objects.displayName,
+        name: objects.name,
+        granularity: objects.granularity,
+        parentId: objects.parentId,
+        objectType: objects.objectType,
+      })
       .from(objects)
       .where(eq(objects.workspaceId, workspaceId));
-    const objMap = new Map(
-      allObjects.map((o: { id: string; displayName: string | null; name: string }) => [o.id, o.displayName ?? o.name])
+
+    type ObjInfo = {
+      displayName: string | null;
+      name: string;
+      granularity: string;
+      parentId: string | null;
+      objectType: string;
+    };
+    const objMap = new Map<string, ObjInfo>(
+      allObjects.map((o) => [o.id, o])
     );
 
-    // 응답 변환 (llmAssessment가 있으면 포함)
+    // 응답 변환 (granularity, parent 정보 포함)
     const result = candidates.map((c: typeof candidates[0]) => {
       const meta = c.metadata as Record<string, unknown> | null;
       const llmAssessment = meta?.llmAssessment ?? null;
+
+      const subjectObj = objMap.get(c.subjectObjectId);
+      const objectObj = objMap.get(c.objectId);
+
+      // ATOMIC인 경우 parent(COMPOUND) 이름 조회
+      const subjectParent = subjectObj?.parentId ? objMap.get(subjectObj.parentId) : null;
+      const objectParent = objectObj?.parentId ? objMap.get(objectObj.parentId) : null;
+
       return {
         id: c.id,
-        subjectName: objMap.get(c.subjectObjectId) ?? c.subjectObjectId,
+        subjectName: subjectObj?.displayName ?? subjectObj?.name ?? c.subjectObjectId,
+        subjectGranularity: subjectObj?.granularity ?? 'ATOMIC',
+        subjectParentName: subjectParent ? (subjectParent.displayName ?? subjectParent.name) : null,
+        subjectObjectType: subjectObj?.objectType ?? null,
         relationType: c.relationType,
-        objectName: objMap.get(c.objectId) ?? c.objectId,
+        objectName: objectObj?.displayName ?? objectObj?.name ?? c.objectId,
+        objectGranularity: objectObj?.granularity ?? 'ATOMIC',
+        objectParentName: objectParent ? (objectParent.displayName ?? objectParent.name) : null,
+        objectObjectType: objectObj?.objectType ?? null,
+        objectId: c.objectId,
+        subjectObjectId: c.subjectObjectId,
         confidence: c.confidence,
         status: c.status,
         ...(llmAssessment ? { llmAssessment } : {}),

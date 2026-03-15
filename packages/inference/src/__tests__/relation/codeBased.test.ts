@@ -13,7 +13,7 @@ import {
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import { eq, and } from 'drizzle-orm';
-import { inferRelationsFromCodeSignals } from '../../relation/codeBased';
+import { inferRelationsFromCodeSignals } from '@/relation/codeBased';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 
