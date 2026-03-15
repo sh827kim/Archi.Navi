@@ -12,6 +12,7 @@
 import type { DbClient } from '@archi-navi/db';
 import {
     objects,
+    objectRelations,
     relationCandidates,
     relationCandidateEvidences,
 } from '@archi-navi/db';
@@ -115,6 +116,22 @@ export async function bindConfigToCodeEndpoints(
         const baseMeta = (candidate.metadata ?? {}) as Record<string, unknown>;
 
         for (const endpoint of endpoints) {
+            const existingRelation = await db
+                .select({ id: objectRelations.id })
+                .from(objectRelations)
+                .where(
+                    and(
+                        eq(objectRelations.workspaceId, workspaceId),
+                        eq(objectRelations.relationType, 'call'),
+                        eq(objectRelations.subjectObjectId, candidate.subjectObjectId),
+                        eq(objectRelations.objectId, endpoint.id),
+                        eq(objectRelations.isDerived, false),
+                    ),
+                )
+                .limit(1);
+
+            if (existingRelation.length > 0) continue;
+
             // 이미 동일 후보가 있는지 확인
             const existing = await db
                 .select({ id: relationCandidates.id })

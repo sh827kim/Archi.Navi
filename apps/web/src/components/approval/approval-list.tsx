@@ -245,9 +245,24 @@ export function ApprovalList() {
         body: JSON.stringify({ endpointIds: [...selectedEndpoints] }),
       });
       if (!res.ok) throw new Error();
-      const data = (await res.json()) as { createdRelationCount: number };
-      if (data.createdRelationCount > 0) {
-        toast.success(`${data.createdRelationCount}개 엔드포인트 관계 생성됨`);
+      const data = (await res.json()) as {
+        createdRelationCount: number;
+        resolvedRelationCount?: number;
+        reusedRelationCount?: number;
+      };
+      const resolvedRelationCount = data.resolvedRelationCount ?? data.createdRelationCount;
+      const reusedRelationCount = data.reusedRelationCount ?? 0;
+
+      if (resolvedRelationCount > 0) {
+        if (data.createdRelationCount > 0 && reusedRelationCount > 0) {
+          toast.success(
+            `${data.createdRelationCount}개 엔드포인트 관계 생성, ${reusedRelationCount}개 기존 관계 재사용`,
+          );
+        } else if (data.createdRelationCount > 0) {
+          toast.success(`${data.createdRelationCount}개 엔드포인트 관계 생성됨`);
+        } else {
+          toast.success(`${resolvedRelationCount}개 기존 엔드포인트 관계를 재사용해 원본 후보를 정리했습니다.`);
+        }
         setCandidates((prev) => prev.filter((c) => c.id !== mappingTarget.id));
         closeMappingSheet();
       } else {

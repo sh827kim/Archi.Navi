@@ -4,7 +4,7 @@
  */
 import { type NextRequest, NextResponse } from 'next/server';
 import { readdirSync, statSync } from 'fs';
-import { resolve, dirname, basename } from 'path';
+import { basename, dirname, isAbsolute, resolve, win32 } from 'path';
 
 /** 항상 무시할 디렉토리 */
 const SKIP_DIRS = new Set([
@@ -16,6 +16,14 @@ const SKIP_DIRS = new Set([
 /** 최대 반환 항목 수 */
 const MAX_RESULTS = 30;
 
+function shouldUseWindowsPathApi(prefix: string): boolean {
+    return win32.isAbsolute(prefix);
+}
+
+function isSupportedAbsolutePath(prefix: string): boolean {
+    return isAbsolute(prefix) || win32.isAbsolute(prefix);
+}
+
 export async function GET(req: NextRequest) {
     try {
         const prefix = req.nextUrl.searchParams.get('prefix')?.trim();
@@ -24,12 +32,16 @@ export async function GET(req: NextRequest) {
         }
 
         // 절대 경로만 허용 (보안)
-        if (!prefix.startsWith('/')) {
+        if (!isSupportedAbsolutePath(prefix)) {
             return NextResponse.json({ error: '절대 경로만 지원합니다' }, { status: 400 });
         }
 
+        const pathApi = shouldUseWindowsPathApi(prefix)
+            ? { resolve: win32.resolve, dirname: win32.dirname, basename: win32.basename }
+            : { resolve, dirname, basename };
+
         // 경로 정규화 (상위 탐색 차단)
-        const normalized = resolve(prefix);
+        const normalized = pathApi.resolve(prefix);
 
         // prefix가 기존 디렉토리인지, 아니면 부분 입력인지 판별
         let parentDir: string;
@@ -43,13 +55,13 @@ export async function GET(req: NextRequest) {
                 filter = '';
             } else {
                 // 파일이면 부모 디렉토리 탐색
-                parentDir = dirname(normalized);
-                filter = basename(normalized).toLowerCase();
+                parentDir = pathApi.dirname(normalized);
+                filter = pathApi.basename(normalized).toLowerCase();
             }
         } catch {
             // 존재하지 않는 경로 → 부모 디렉토리에서 prefix 필터
-            parentDir = dirname(normalized);
-            filter = basename(normalized).toLowerCase();
+            parentDir = pathApi.dirname(normalized);
+            filter = pathApi.basename(normalized).toLowerCase();
         }
 
         let entries: string[];
@@ -67,7 +79,7 @@ export async function GET(req: NextRequest) {
             if (filter && !entry.toLowerCase().startsWith(filter)) continue;
 
             try {
-                const fullPath = resolve(parentDir, entry);
+                const fullPath = pathApi.resolve(parentDir, entry);
                 const stat = statSync(fullPath);
                 if (stat.isDirectory()) {
                     dirs.push({ name: entry, path: fullPath });

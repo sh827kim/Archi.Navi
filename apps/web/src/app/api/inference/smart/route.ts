@@ -51,35 +51,42 @@ const callExtractionSchema = z.object({
 
 // ── AI 모델 선택 ────────────────────────────────────
 
+function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
+  if (headerApiKey) return headerApiKey;
+
+  switch (provider) {
+    case 'anthropic':
+      return process.env['ANTHROPIC_API_KEY'] ?? null;
+    case 'google':
+      return process.env['GOOGLE_GENERATIVE_AI_API_KEY'] ?? null;
+    default:
+      return process.env['OPENAI_API_KEY'] ?? null;
+  }
+}
+
 function getModel(req: Request): { model: LanguageModel; modelName: string } | null {
   const headerProvider = req.headers.get('x-ai-provider');
   const headerApiKey = req.headers.get('x-ai-api-key');
   const headerModel = req.headers.get('x-ai-model');
 
   const provider = headerProvider ?? process.env['AI_PROVIDER'] ?? 'openai';
-
-  const hasKey =
-    !!headerApiKey ||
-    !!process.env['OPENAI_API_KEY'] ||
-    !!process.env['ANTHROPIC_API_KEY'] ||
-    !!process.env['GOOGLE_GENERATIVE_AI_API_KEY'];
-
-  if (!hasKey) return null;
+  const apiKey = resolveProviderApiKey(provider, headerApiKey);
+  if (!apiKey) return null;
 
   switch (provider) {
     case 'anthropic': {
       const modelName = headerModel ?? 'claude-haiku-4-5-20251001';
-      const sdk = createAnthropic(headerApiKey ? { apiKey: headerApiKey } : {});
+      const sdk = createAnthropic({ apiKey });
       return { model: sdk(modelName), modelName };
     }
     case 'google': {
       const modelName = headerModel ?? 'gemini-2.0-flash';
-      const sdk = createGoogleGenerativeAI(headerApiKey ? { apiKey: headerApiKey } : {});
+      const sdk = createGoogleGenerativeAI({ apiKey });
       return { model: sdk(modelName), modelName };
     }
     default: {
       const modelName = headerModel ?? 'gpt-4o-mini';
-      const sdk = createOpenAI(headerApiKey ? { apiKey: headerApiKey } : {});
+      const sdk = createOpenAI({ apiKey });
       return { model: sdk(modelName), modelName };
     }
   }
