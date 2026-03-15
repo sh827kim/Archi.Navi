@@ -156,7 +156,7 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
-      error: '엔드포인트 매핑은 call 후보에만 허용됩니다',
+      error: '엔드포인트 매핑은 call 관계 후보에만 허용됩니다',
     });
   });
 
