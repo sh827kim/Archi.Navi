@@ -4,13 +4,31 @@
  */
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, objects, relationCandidates, objectRelations, relationCandidateEvidences, relationEvidences } from '@archi-navi/db';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, or } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
+import { approveRelationCandidate } from '@archi-navi/inference';
 import { applyRollupChanges, createRelationChangeEvent } from '@/lib/rollup-change-events';
 
 interface MapEndpointsBody {
   /** 선택한 엔드포인트 ID 목록 */
   endpointIds: string[];
+}
+
+async function linkCandidateEvidenceToRelation(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string,
+  relationId: string,
+  evidenceLinks: Array<{ evidenceId: string }>,
+) {
+  for (const { evidenceId } of evidenceLinks) {
+    await db.insert(relationEvidences)
+      .values({
+        workspaceId,
+        relationId,
+        evidenceId,
+      })
+      .onConflictDoNothing();
+  }
 }
 
 export async function POST(
@@ -53,6 +71,7 @@ export async function POST(
       .where(eq(relationCandidateEvidences.candidateId, id));
 
     const createdRelations: Array<{ endpointId: string; relationId: string }> = [];
+    let createdRelationCount = 0;
 
     // 선택된 각 엔드포인트에 대해 relation 생성
     for (const endpointId of endpointIds) {
@@ -71,6 +90,58 @@ export async function POST(
 
       if (!endpoint || endpoint.parentId !== candidate.objectId) continue;
 
+      const [existingCandidate] = await db
+        .select({ id: relationCandidates.id, status: relationCandidates.status })
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, candidate.workspaceId),
+            eq(relationCandidates.relationType, candidate.relationType),
+            eq(relationCandidates.subjectObjectId, candidate.subjectObjectId),
+            eq(relationCandidates.objectId, endpointId),
+            or(
+              eq(relationCandidates.status, 'PENDING'),
+              eq(relationCandidates.status, 'APPROVED'),
+            ),
+          ),
+        )
+        .limit(1);
+
+      if (existingCandidate) {
+        let relationId: string | undefined;
+
+        if (existingCandidate.status === 'PENDING') {
+          const approved = await approveRelationCandidate(db, existingCandidate.id, 'APPROVED');
+          relationId = approved.relationId;
+        } else {
+          const [existingApprovedRelation] = await db
+            .select({ id: objectRelations.id })
+            .from(objectRelations)
+            .where(
+              and(
+                eq(objectRelations.workspaceId, candidate.workspaceId),
+                eq(objectRelations.relationType, candidate.relationType),
+                eq(objectRelations.subjectObjectId, candidate.subjectObjectId),
+                eq(objectRelations.objectId, endpointId),
+                eq(objectRelations.isDerived, false),
+              ),
+            )
+            .limit(1);
+
+          relationId = existingApprovedRelation?.id;
+          if (!relationId) {
+            const approved = await approveRelationCandidate(db, existingCandidate.id, 'APPROVED');
+            relationId = approved.relationId;
+          }
+        }
+
+        if (relationId) {
+          await linkCandidateEvidenceToRelation(db, candidate.workspaceId, relationId, evidenceLinks);
+          createdRelations.push({ endpointId, relationId });
+        }
+        continue;
+      }
+
       // 중복 relation 확인
       const existingRelation = await db
         .select({ id: objectRelations.id })
@@ -85,7 +156,16 @@ export async function POST(
         )
         .limit(1);
 
-      if (existingRelation.length > 0) continue;
+      if (existingRelation.length > 0) {
+        await linkCandidateEvidenceToRelation(
+          db,
+          candidate.workspaceId,
+          existingRelation[0]!.id,
+          evidenceLinks,
+        );
+        createdRelations.push({ endpointId, relationId: existingRelation[0]!.id });
+        continue;
+      }
 
       // relation 생성
       const relationId = generateId();
@@ -104,24 +184,17 @@ export async function POST(
         },
       });
 
-      // evidence 연결
-      for (const { evidenceId } of evidenceLinks) {
-        await db.insert(relationEvidences)
-          .values({
-            workspaceId: candidate.workspaceId,
-            relationId,
-            evidenceId,
-          })
-          .onConflictDoNothing();
-      }
+      await linkCandidateEvidenceToRelation(db, candidate.workspaceId, relationId, evidenceLinks);
 
       createdRelations.push({ endpointId, relationId });
+      createdRelationCount += 1;
     }
 
-    const mappedRelationCount = createdRelations.length;
+    const resolvedRelationCount = createdRelations.length;
+    const reusedRelationCount = resolvedRelationCount - createdRelationCount;
 
     // 실제로 endpoint 매핑이 생성된 경우에만 원본 후보를 처리 완료로 마킹
-    if (mappedRelationCount > 0) {
+    if (resolvedRelationCount > 0) {
       await db
         .update(relationCandidates)
         .set({
@@ -130,7 +203,9 @@ export async function POST(
           metadata: {
             ...((candidate.metadata as Record<string, unknown>) ?? {}),
             mappedEndpoints: endpointIds,
-            mappedRelationCount,
+            mappedRelationCount: resolvedRelationCount,
+            createdRelationCount,
+            reusedRelationCount,
           },
         })
         .where(eq(relationCandidates.id, id));
@@ -142,7 +217,9 @@ export async function POST(
           metadata: {
             ...((candidate.metadata as Record<string, unknown>) ?? {}),
             mappedEndpoints: endpointIds,
-            mappedRelationCount,
+            mappedRelationCount: 0,
+            createdRelationCount: 0,
+            reusedRelationCount: 0,
           },
         })
         .where(eq(relationCandidates.id, id));
@@ -163,7 +240,9 @@ export async function POST(
     return NextResponse.json({
       ok: true,
       candidateId: id,
-      createdRelationCount: createdRelations.length,
+      createdRelationCount,
+      resolvedRelationCount,
+      reusedRelationCount,
       createdRelations,
     });
   } catch (error) {

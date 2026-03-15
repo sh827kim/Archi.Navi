@@ -69,14 +69,14 @@ interface EndpointInfo {
   path: string;
 }
 
-function createCandidate(id: string, objectName: string): RelationCandidate {
+function createCandidate(id: string, objectName: string, relationType = 'call'): RelationCandidate {
   return {
     id,
     subjectName: `caller-${id}`,
     subjectGranularity: 'COMPOUND',
     subjectParentName: null,
     subjectObjectType: 'service',
-    relationType: 'call',
+    relationType,
     objectName,
     objectGranularity: 'COMPOUND',
     objectParentName: null,
@@ -206,5 +206,30 @@ describe('ApprovalList', () => {
     });
     expect(screen.getByText('서비스 간 관계 — 세부 매핑 필요 (1건)')).toBeTruthy();
     expect(screen.getByTestId('mapping-sheet')).toBeTruthy();
+  });
+
+  it('non-call COMPOUND 후보도 세부 매핑 대상으로 유지되어야 한다', async () => {
+    const candidate = createCandidate('cand-2', 'service-2', 'depend_on');
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([candidate]));
+      }
+      if (url.endsWith('/cand-2/endpoints')) {
+        return Promise.resolve(jsonResponse({
+          endpoints: [createEndpoint('ep-2', '/service-2/dependency')],
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('service-2');
+
+    expect(screen.queryByRole('button', { name: /승인/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /세부 매핑/ }));
+    await screen.findByText('/service-2/dependency');
   });
 });

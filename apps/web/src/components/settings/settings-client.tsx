@@ -70,6 +70,7 @@ import {
   SelectValue,
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { isAbsoluteScanPathPrefix } from '@/lib/scanPathPrefix';
 
 /* ─── 타입 ─── */
 interface LayerItem {
@@ -1418,7 +1419,7 @@ function ScanSettings({ workspaceId }: { workspaceId: string }) {
 
   // 디렉토리 자동완성 fetch (로컬 모드 전용)
   const fetchSuggestions = useCallback((prefix: string) => {
-    if (!prefix || !prefix.startsWith('/')) {
+    if (!prefix || !isAbsoluteScanPathPrefix(prefix)) {
       setSuggestions([]);
       return;
     }

@@ -12,7 +12,14 @@ import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname, relative, basename } from 'path';
 import { eq, and, or } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
-import { objects, relationCandidates, evidences, relationCandidateEvidences } from '@archi-navi/db';
+import {
+    objects,
+    relationCandidates,
+    objectRelations,
+    evidences,
+    relationCandidateEvidences,
+    relationEvidences,
+} from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import { importOpenApiSpecs, type OpenApiImportResult } from '../openapi/openApiImporter';
 import {
@@ -163,6 +170,75 @@ function getServiceRepoRoot(service: ServiceRecord): string | null {
     return scanPath;
 }
 
+async function attachEvidenceToRelationOrCandidate(
+    db: DbClient,
+    workspaceId: string,
+    target: { candidateId?: string; relationId?: string },
+    evidenceId: string,
+) {
+    if (target.candidateId) {
+        await db.insert(relationCandidateEvidences)
+            .values({ workspaceId, candidateId: target.candidateId, evidenceId })
+            .onConflictDoNothing();
+        return;
+    }
+
+    if (target.relationId) {
+        await db.insert(relationEvidences)
+            .values({ workspaceId, relationId: target.relationId, evidenceId })
+            .onConflictDoNothing();
+    }
+}
+
+async function findReusableRelationTarget(
+    db: DbClient,
+    workspaceId: string,
+    relationType: string,
+    subjectObjectId: string,
+    objectId: string,
+): Promise<{ candidateId?: string; relationId?: string } | null> {
+    const [existingRelation] = await db
+        .select({ id: objectRelations.id })
+        .from(objectRelations)
+        .where(
+            and(
+                eq(objectRelations.workspaceId, workspaceId),
+                eq(objectRelations.relationType, relationType),
+                eq(objectRelations.subjectObjectId, subjectObjectId),
+                eq(objectRelations.objectId, objectId),
+                eq(objectRelations.isDerived, false),
+            ),
+        )
+        .limit(1);
+
+    if (existingRelation) {
+        return { relationId: existingRelation.id };
+    }
+
+    const [existingCandidate] = await db
+        .select({ id: relationCandidates.id })
+        .from(relationCandidates)
+        .where(
+            and(
+                eq(relationCandidates.workspaceId, workspaceId),
+                eq(relationCandidates.relationType, relationType),
+                eq(relationCandidates.subjectObjectId, subjectObjectId),
+                eq(relationCandidates.objectId, objectId),
+                or(
+                    eq(relationCandidates.status, 'PENDING'),
+                    eq(relationCandidates.status, 'APPROVED'),
+                ),
+            ),
+        )
+        .limit(1);
+
+    if (existingCandidate) {
+        return { candidateId: existingCandidate.id };
+    }
+
+    return null;
+}
+
 // ── Phase 2: Config → LLM → Compound 의존성 ────────
 
 async function phase2ConfigAnalysis(
@@ -283,29 +359,16 @@ async function saveLlmCompoundDependencies(
             metadata: { source: 'LLM_CONFIG_ANALYSIS', confidence: dep.confidence },
         });
 
-        // 중복 체크
-        const existing = await db
-            .select({ id: relationCandidates.id, status: relationCandidates.status })
-            .from(relationCandidates)
-            .where(
-                and(
-                    eq(relationCandidates.workspaceId, workspaceId),
-                    eq(relationCandidates.relationType, dep.relationType),
-                    eq(relationCandidates.subjectObjectId, sourceServiceId),
-                    eq(relationCandidates.objectId, targetServiceId),
-                    or(
-                        eq(relationCandidates.status, 'PENDING'),
-                        eq(relationCandidates.status, 'APPROVED'),
-                    ),
-                ),
-            )
-            .limit(1);
+        const reusableTarget = await findReusableRelationTarget(
+            db,
+            workspaceId,
+            dep.relationType,
+            sourceServiceId,
+            targetServiceId,
+        );
 
-        if (existing.length > 0) {
-            // evidence만 추가 링크
-            await db.insert(relationCandidateEvidences)
-                .values({ workspaceId, candidateId: existing[0]!.id, evidenceId })
-                .onConflictDoNothing();
+        if (reusableTarget) {
+            await attachEvidenceToRelationOrCandidate(db, workspaceId, reusableTarget, evidenceId);
             continue;
         }
 
@@ -517,28 +580,16 @@ async function saveLlmCallCandidate(
         },
     });
 
-    // 중복 체크
-    const existing = await db
-        .select({ id: relationCandidates.id, status: relationCandidates.status })
-        .from(relationCandidates)
-        .where(
-            and(
-                eq(relationCandidates.workspaceId, workspaceId),
-                eq(relationCandidates.relationType, 'call'),
-                eq(relationCandidates.subjectObjectId, sourceServiceId),
-                eq(relationCandidates.objectId, targetObjectId),
-                or(
-                    eq(relationCandidates.status, 'PENDING'),
-                    eq(relationCandidates.status, 'APPROVED'),
-                ),
-            ),
-        )
-        .limit(1);
+    const reusableTarget = await findReusableRelationTarget(
+        db,
+        workspaceId,
+        'call',
+        sourceServiceId,
+        targetObjectId,
+    );
 
-    if (existing.length > 0) {
-        await db.insert(relationCandidateEvidences)
-            .values({ workspaceId, candidateId: existing[0]!.id, evidenceId })
-            .onConflictDoNothing();
+    if (reusableTarget) {
+        await attachEvidenceToRelationOrCandidate(db, workspaceId, reusableTarget, evidenceId);
         return false;
     }
 
