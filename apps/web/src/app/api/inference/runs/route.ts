@@ -24,6 +24,25 @@ interface InferenceRunRequestBody {
   useServiceMetadataPaths?: boolean;
 }
 
+function authorizeInferenceRunsRequest(req: NextRequest): NextResponse | null {
+  const expectedToken = process.env['INFERENCE_RUNS_API_TOKEN']?.trim();
+  if (!expectedToken) {
+    console.error('[inference/runs] INFERENCE_RUNS_API_TOKEN is not configured');
+    return NextResponse.json({ error: 'Inference run API is not configured' }, { status: 503 });
+  }
+
+  const authorization = req.headers.get('authorization');
+  const bearerToken = authorization?.startsWith('Bearer ') ? authorization.slice(7).trim() : null;
+  const headerToken = req.headers.get('x-inference-runs-token')?.trim();
+  const providedToken = bearerToken ?? headerToken;
+
+  if (!providedToken || providedToken !== expectedToken) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  return null;
+}
+
 function isSourceType(value: string): value is InferenceSourceType {
   return value === 'local' || value === 'githubRepo' || value === 'githubOrg';
 }
@@ -87,6 +106,9 @@ async function collectSources(
 
 export async function POST(req: NextRequest) {
   try {
+    const authError = authorizeInferenceRunsRequest(req);
+    if (authError) return authError;
+
     const body = (await req.json().catch(() => ({}))) as InferenceRunRequestBody;
     const workspaceId = body.workspaceId?.trim();
     if (!workspaceId) {
@@ -146,6 +168,9 @@ export async function POST(req: NextRequest) {
 
 export async function GET(req: NextRequest) {
   try {
+    const authError = authorizeInferenceRunsRequest(req);
+    if (authError) return authError;
+
     const url = new URL(req.url);
     const workspaceId = url.searchParams.get('workspaceId')?.trim();
     if (!workspaceId) {
