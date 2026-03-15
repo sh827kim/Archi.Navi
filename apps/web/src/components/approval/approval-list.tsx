@@ -7,7 +7,7 @@
  */
 'use client';
 
-import { useEffect, useState, useTransition, useCallback } from 'react';
+import { useEffect, useState, useTransition, useCallback, useRef } from 'react';
 import { Check, X, Sparkles, Link2, ChevronRight } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -91,6 +91,7 @@ export function ApprovalList() {
   const [selectedEndpoints, setSelectedEndpoints] = useState<Set<string>>(new Set());
   const [loadingEndpoints, setLoadingEndpoints] = useState(false);
   const [submittingMapping, setSubmittingMapping] = useState(false);
+  const endpointRequestSeqRef = useRef(0);
 
   const loadCandidates = useCallback(async () => {
     setLoading(true);
@@ -128,15 +129,37 @@ export function ApprovalList() {
         summary?: { relationCandidatesCreated?: number };
         results?: {
           config?: { processedFileCount?: number };
-          code?: { signalCount?: number };
+          code?: {
+            signalCount?: number;
+            enginesUsed?: string[];
+            fallbackCount?: number;
+            scanFailures?: Array<{ filePath: string; reason: string; language: string }>;
+          };
         };
         warnings?: string[];
       };
       if (!res.ok) throw new Error(payload.error ?? '추론 실행 실패');
 
       const created = payload.summary?.relationCandidatesCreated ?? 0;
+      const enginesUsed = payload.results?.code?.enginesUsed ?? [];
+      const fallbackCount = payload.results?.code?.fallbackCount ?? 0;
+      const scanFailureCount = payload.results?.code?.scanFailures?.length ?? 0;
+
+      // 엔진 메타 정보 문자열 조립
+      const engineParts: string[] = [];
+      if (enginesUsed.length > 0) {
+        engineParts.push(`엔진: ${enginesUsed.join('+')}`);
+      }
+      if (fallbackCount > 0) {
+        engineParts.push(`fallback ${fallbackCount}건`);
+      }
+      if (scanFailureCount > 0) {
+        engineParts.push(`파싱 실패 ${scanFailureCount}건`);
+      }
+      const engineSuffix = engineParts.length > 0 ? ` (${engineParts.join(', ')})` : '';
+
       if (created > 0) {
-        toast.success(`추론 실행 완료 — 관계 후보 ${created}개 생성`);
+        toast.success(`추론 실행 완료 — 관계 후보 ${created}개 생성${engineSuffix}`);
       } else {
         const codeSignals = payload.results?.code?.signalCount ?? 0;
         const processedConfigFiles = payload.results?.config?.processedFileCount ?? 0;
@@ -179,20 +202,34 @@ export function ApprovalList() {
     });
   }
 
+  const closeMappingSheet = useCallback(() => {
+    endpointRequestSeqRef.current += 1;
+    setMappingTarget(null);
+    setEndpoints([]);
+    setSelectedEndpoints(new Set());
+    setLoadingEndpoints(false);
+  }, []);
+
   // 세부 매핑: 엔드포인트 목록 로드
   const openMappingSheet = async (cand: RelationCandidate) => {
+    const requestSeq = endpointRequestSeqRef.current + 1;
+    endpointRequestSeqRef.current = requestSeq;
     setMappingTarget(cand);
+    setEndpoints([]);
     setSelectedEndpoints(new Set());
     setLoadingEndpoints(true);
     try {
       const res = await fetch(`/api/inference/candidates/${cand.id}/endpoints`);
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { endpoints: EndpointInfo[] };
+      if (requestSeq !== endpointRequestSeqRef.current) return;
       setEndpoints(data.endpoints);
     } catch {
+      if (requestSeq !== endpointRequestSeqRef.current) return;
       setEndpoints([]);
       toast.error('엔드포인트 목록 로드 실패');
     } finally {
+      if (requestSeq !== endpointRequestSeqRef.current) return;
       setLoadingEndpoints(false);
     }
   };
@@ -209,9 +246,13 @@ export function ApprovalList() {
       });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { createdRelationCount: number };
-      toast.success(`${data.createdRelationCount}개 엔드포인트 관계 생성됨`);
-      setCandidates((prev) => prev.filter((c) => c.id !== mappingTarget.id));
-      setMappingTarget(null);
+      if (data.createdRelationCount > 0) {
+        toast.success(`${data.createdRelationCount}개 엔드포인트 관계 생성됨`);
+        setCandidates((prev) => prev.filter((c) => c.id !== mappingTarget.id));
+        closeMappingSheet();
+      } else {
+        toast.warning('생성된 엔드포인트 관계가 없어 원본 후보를 유지했습니다.');
+      }
     } catch {
       toast.error('매핑 처리 실패');
     } finally {
@@ -413,7 +454,7 @@ export function ApprovalList() {
       {/* 세부 매핑 Sheet */}
       <Sheet
         open={!!mappingTarget}
-        onOpenChange={(open) => { if (!open) setMappingTarget(null); }}
+        onOpenChange={(open) => { if (!open) closeMappingSheet(); }}
       >
         <SheetContent className="sm:max-w-lg">
           <SheetHeader>
@@ -495,7 +536,7 @@ export function ApprovalList() {
           <SheetFooter className="mt-4">
             <Button
               variant="outline"
-              onClick={() => setMappingTarget(null)}
+              onClick={closeMappingSheet}
             >
               취소
             </Button>

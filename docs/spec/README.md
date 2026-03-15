@@ -36,3 +36,4 @@
 - [26-personal-architecture-journal-spec.md](./26-personal-architecture-journal-spec.md)
 - [27-api-contract-diff-spec.md](./27-api-contract-diff-spec.md)
 - [28-architecture-health-score-spec.md](./28-architecture-health-score-spec.md)
+- [29-approval-mapping-ui-consistency-spec.md](./29-approval-mapping-ui-consistency-spec.md)
