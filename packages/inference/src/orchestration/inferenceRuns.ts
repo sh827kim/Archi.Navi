@@ -936,3 +936,129 @@ export async function getInferenceRunDetail(
 export function normalizeInferenceRunModes(input?: string[]): InferenceMode[] {
   return normalizeModes(input);
 }
+
+/**
+ * 실행 중인 inference run을 취소한다.
+ * QUEUED 또는 RUNNING 상태일 때만 취소 가능.
+ */
+export async function cancelInferenceRun(
+  db: DbClient,
+  input: { workspaceId: string; runId: string },
+): Promise<{ canceled: boolean; status: string }> {
+  const runRows = await db
+    .select({ id: inferenceRuns.id, status: inferenceRuns.status })
+    .from(inferenceRuns)
+    .where(
+      and(
+        eq(inferenceRuns.id, input.runId),
+        eq(inferenceRuns.workspaceId, input.workspaceId),
+      ),
+    )
+    .limit(1);
+
+  const run = runRows[0];
+  if (!run) {
+    throw new Error(`Inference run을 찾을 수 없습니다: ${input.runId}`);
+  }
+
+  if (run.status !== 'QUEUED' && run.status !== 'RUNNING') {
+    return { canceled: false, status: run.status };
+  }
+
+  const updated = await db
+    .update(inferenceRuns)
+    .set({
+      status: 'CANCELED',
+      finishedAt: new Date(),
+      updatedAt: new Date(),
+      errorMessage: '사용자에 의해 취소됨',
+    })
+    .where(
+      and(
+        eq(inferenceRuns.id, run.id),
+        eq(inferenceRuns.workspaceId, input.workspaceId),
+        inArray(inferenceRuns.status, ['QUEUED', 'RUNNING']),
+      ),
+    )
+    .returning({ id: inferenceRuns.id });
+
+  if (updated.length === 0) {
+    // 이미 상태가 변경됨 (race condition)
+    const refreshed = await db
+      .select({ status: inferenceRuns.status })
+      .from(inferenceRuns)
+      .where(eq(inferenceRuns.id, run.id))
+      .limit(1);
+    return { canceled: false, status: refreshed[0]?.status ?? 'UNKNOWN' };
+  }
+
+  await appendRunEvent(db, {
+    workspaceId: input.workspaceId,
+    runId: run.id,
+    level: 'WARN',
+    eventType: 'RUN_CANCELED',
+    message: '사용자에 의해 실행이 취소되었습니다.',
+  });
+
+  return { canceled: true, status: 'CANCELED' };
+}
+
+/**
+ * 실패한 inference run을 재시도한다.
+ * FAILED 상태이고 attemptCount < maxAttempts인 경우만 재시도 가능.
+ * 새 run을 만드는 대신, 동일 run의 상태를 QUEUED로 되돌린다.
+ */
+export async function retryInferenceRun(
+  db: DbClient,
+  input: { workspaceId: string; runId: string },
+): Promise<{ retried: boolean; status: string; reason?: string }> {
+  const runRows = await db
+    .select()
+    .from(inferenceRuns)
+    .where(
+      and(
+        eq(inferenceRuns.id, input.runId),
+        eq(inferenceRuns.workspaceId, input.workspaceId),
+      ),
+    )
+    .limit(1);
+
+  const run = runRows[0];
+  if (!run) {
+    throw new Error(`Inference run을 찾을 수 없습니다: ${input.runId}`);
+  }
+
+  if (run.status !== 'FAILED') {
+    return { retried: false, status: run.status, reason: `현재 상태(${run.status})에서는 재시도할 수 없습니다.` };
+  }
+
+  if (run.attemptCount >= run.maxAttempts) {
+    return { retried: false, status: run.status, reason: `최대 시도 횟수(${run.maxAttempts})에 도달했습니다.` };
+  }
+
+  await db
+    .update(inferenceRuns)
+    .set({
+      status: 'QUEUED',
+      errorMessage: null,
+      finishedAt: null,
+      updatedAt: new Date(),
+    })
+    .where(
+      and(
+        eq(inferenceRuns.id, run.id),
+        eq(inferenceRuns.workspaceId, input.workspaceId),
+        eq(inferenceRuns.status, 'FAILED'),
+      ),
+    );
+
+  await appendRunEvent(db, {
+    workspaceId: input.workspaceId,
+    runId: run.id,
+    eventType: 'RUN_RETRIED',
+    message: `재시도가 예약되었습니다 (시도 ${run.attemptCount + 1}/${run.maxAttempts}).`,
+    payload: { attemptCount: run.attemptCount, maxAttempts: run.maxAttempts },
+  });
+
+  return { retried: true, status: 'QUEUED' };
+}

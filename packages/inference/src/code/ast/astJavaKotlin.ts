@@ -249,6 +249,48 @@ function processSpringMappingAnnotations(
             }
         }
 
+        // @RabbitListener(queues = "queue") 처리
+        if (annName === 'RabbitListener') {
+            const argList = findChildByType(ann, 'annotation_argument_list');
+            if (!argList) continue;
+
+            const args = extractAnnotationArgs(argList);
+            const queuesNode = args.get('queues');
+            if (!queuesNode) continue;
+
+            // 단일 큐 또는 배열에서 모든 큐 이름 추출
+            const queueNames: string[] = [];
+            if (queuesNode.type === 'string_literal') {
+                const q = extractStringValue(queuesNode);
+                if (q) queueNames.push(q);
+            } else if (queuesNode.type === 'element_value_array_initializer') {
+                for (const child of getChildren(queuesNode)) {
+                    if (child.type === 'string_literal') {
+                        const q = extractStringValue(child);
+                        if (q) queueNames.push(q);
+                    }
+                }
+            }
+
+            for (const queueName of queueNames) {
+                signals.push(
+                    makeSignal({
+                        kind: 'consume',
+                        symbol: queueName,
+                        lineStart: ann.startPosition.row + 1,
+                        lineEnd: ann.endPosition.row + 1,
+                        excerpt,
+                        confidence: 0.95,
+                        metadata: {
+                            annotation: '@RabbitListener',
+                            broker: 'rabbitmq',
+                            channelType: 'queue',
+                        },
+                    }),
+                );
+            }
+        }
+
         // @Table(name = "table_name") 처리
         if (annName === 'Table') {
             const argList = findChildByType(ann, 'annotation_argument_list');
@@ -402,6 +444,34 @@ function processMethodInvocations(
                             excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
                             metadata: { client: 'KafkaTemplate' },
+                        }),
+                    );
+                }
+            }
+        }
+
+        // rabbitTemplate.convertAndSend("queue", ...) / rabbitTemplate.send("queue", ...) 처리
+        if (
+            /^(?:rabbitTemplate|amqpTemplate)$/i.test(objectName) &&
+            (methodName === 'convertAndSend' || methodName === 'send')
+        ) {
+            const firstArg = getFirstArg(argList);
+            if (firstArg) {
+                const queueName = resolveStringArg(firstArg, varMap);
+                if (queueName) {
+                    signals.push(
+                        makeSignal({
+                            kind: 'produce',
+                            symbol: queueName,
+                            lineStart: mi.startPosition.row + 1,
+                            lineEnd: mi.endPosition.row + 1,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
+                            confidence: 0.9,
+                            metadata: {
+                                client: 'RabbitTemplate',
+                                broker: 'rabbitmq',
+                                channelType: 'queue',
+                            },
                         }),
                     );
                 }
