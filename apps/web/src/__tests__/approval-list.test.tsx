@@ -208,7 +208,7 @@ describe('ApprovalList', () => {
     expect(screen.getByTestId('mapping-sheet')).toBeTruthy();
   });
 
-  it('non-call COMPOUND 후보는 세부 매핑 대신 승인/거부 액션을 유지해야 한다', async () => {
+  it('non-call COMPOUND 후보도 세부 매핑 대상으로 유지되어야 한다', async () => {
     const candidate = createCandidate('cand-2', 'service-2', 'depend_on');
 
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
@@ -216,8 +216,10 @@ describe('ApprovalList', () => {
       if (url.includes('/api/inference/candidates?')) {
         return Promise.resolve(jsonResponse([candidate]));
       }
-      if (url.endsWith('/api/inference/candidates/cand-2')) {
-        return Promise.resolve(jsonResponse({ ok: true }));
+      if (url.endsWith('/cand-2/endpoints')) {
+        return Promise.resolve(jsonResponse({
+          endpoints: [createEndpoint('ep-2', '/service-2/dependency')],
+        }));
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
@@ -226,12 +228,8 @@ describe('ApprovalList', () => {
 
     await screen.findByText('service-2');
 
-    expect(screen.queryByRole('button', { name: /세부 매핑/ })).toBeNull();
-
-    fireEvent.click(screen.getByRole('button', { name: /승인/ }));
-
-    await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('관계 승인됨');
-    });
+    expect(screen.queryByRole('button', { name: /승인/ })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /세부 매핑/ }));
+    await screen.findByText('/service-2/dependency');
   });
 });

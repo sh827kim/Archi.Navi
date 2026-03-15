@@ -58,11 +58,6 @@ function isCompoundToCompound(c: RelationCandidate): boolean {
   return c.subjectGranularity === 'COMPOUND' && c.objectGranularity === 'COMPOUND';
 }
 
-/** 엔드포인트 세부 매핑이 필요한 후보 여부 */
-function requiresEndpointMapping(c: RelationCandidate): boolean {
-  return isCompoundToCompound(c) && c.relationType === 'call';
-}
-
 /** 오브젝트명 렌더링 (ATOMIC이면 parent 서비스명 포함) */
 function ObjectLabel({ name, granularity, parentName, objectType }: {
   name: string;
@@ -327,9 +322,9 @@ export function ApprovalList() {
     );
   }
 
-  // 엔드포인트 매핑이 필요한 call 후보와 일반 승인 후보를 분리
-  const compoundCandidates = candidates.filter(requiresEndpointMapping);
-  const atomicCandidates = candidates.filter((c) => !requiresEndpointMapping(c));
+  // COMPOUND→COMPOUND 후보와 나머지를 분리
+  const compoundCandidates = candidates.filter(isCompoundToCompound);
+  const atomicCandidates = candidates.filter((c) => !isCompoundToCompound(c));
 
   return (
     <>

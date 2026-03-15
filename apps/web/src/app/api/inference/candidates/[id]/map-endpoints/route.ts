@@ -64,13 +64,6 @@ export async function POST(
       return NextResponse.json({ error: '이미 처리된 후보입니다' }, { status: 400 });
     }
 
-    if (candidate.relationType !== 'call') {
-      return NextResponse.json(
-        { error: '엔드포인트 매핑은 call 관계 후보에만 허용됩니다' },
-        { status: 400 },
-      );
-    }
-
     // 원본 후보의 evidence 조회
     const evidenceLinks = await db
       .select({ evidenceId: relationCandidateEvidences.evidenceId })
@@ -103,7 +96,7 @@ export async function POST(
         .where(
           and(
             eq(relationCandidates.workspaceId, candidate.workspaceId),
-            eq(relationCandidates.relationType, 'call'),
+            eq(relationCandidates.relationType, candidate.relationType),
             eq(relationCandidates.subjectObjectId, candidate.subjectObjectId),
             eq(relationCandidates.objectId, endpointId),
             or(
@@ -127,7 +120,7 @@ export async function POST(
             .where(
               and(
                 eq(objectRelations.workspaceId, candidate.workspaceId),
-                eq(objectRelations.relationType, 'call'),
+                eq(objectRelations.relationType, candidate.relationType),
                 eq(objectRelations.subjectObjectId, candidate.subjectObjectId),
                 eq(objectRelations.objectId, endpointId),
                 eq(objectRelations.isDerived, false),
@@ -179,7 +172,7 @@ export async function POST(
       await db.insert(objectRelations).values({
         id: relationId,
         workspaceId: candidate.workspaceId,
-        relationType: 'call',
+        relationType: candidate.relationType,
         subjectObjectId: candidate.subjectObjectId,
         objectId: endpointId,
         confidence: candidate.confidence,

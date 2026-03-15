@@ -142,8 +142,8 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
     return { sourceServiceId, targetServiceId, otherServiceId, endpointId, candidateId };
   }
 
-  it('call 이 아닌 후보는 endpoint 매핑을 거부해야 한다', async () => {
-    const { candidateId, endpointId } = await seedBaseGraph('depend_on');
+  it('non-call 후보도 endpoint 매핑을 허용하고 relationType을 유지해야 한다', async () => {
+    const { candidateId, endpointId, sourceServiceId } = await seedBaseGraph('depend_on');
 
     const response = await POST(
       new Request('http://localhost', {
@@ -154,10 +154,25 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
       { params: Promise.resolve({ id: candidateId }) },
     );
 
-    expect(response.status).toBe(400);
+    expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
-      error: '엔드포인트 매핑은 call 관계 후보에만 허용됩니다',
+      createdRelationCount: 1,
+      resolvedRelationCount: 1,
+      reusedRelationCount: 0,
     });
+
+    const relations = await dbHolder.db!
+      .select()
+      .from(objectRelations)
+      .where(
+        and(
+          eq(objectRelations.workspaceId, workspaceId),
+          eq(objectRelations.subjectObjectId, sourceServiceId),
+          eq(objectRelations.objectId, endpointId),
+          eq(objectRelations.relationType, 'depend_on'),
+        ),
+      );
+    expect(relations).toHaveLength(1);
   });
 
   it('동일 endpoint 후보가 이미 PENDING 이면 이를 승인해 재사용해야 한다', async () => {
