@@ -5,8 +5,9 @@
  * - db: db_table metadata 기반 fk_reference 후보 생성
  */
 import { type NextRequest, NextResponse } from 'next/server';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, realpathSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
+import { tmpdir } from 'node:os';
 import { and, eq } from 'drizzle-orm';
 import { getDb, objects } from '@archi-navi/db';
 import {
@@ -50,6 +51,40 @@ function isLocalDirectory(pathValue: string): boolean {
   }
 }
 
+function getAllowedInferenceRoots(): string[] {
+  const configuredRoots = (process.env['ARCHI_NAVI_ALLOWED_INFERENCE_ROOTS'] ?? '')
+    .split(',')
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  const fallbackRoot = process.env['ARCHI_NAVI_WORKSPACE_ROOT'] ?? process.cwd();
+  const fallbackRoots = [fallbackRoot, tmpdir()];
+  return (configuredRoots.length > 0 ? configuredRoots : fallbackRoots)
+    .map((root) => resolve(root))
+    .filter(isLocalDirectory)
+    .map((root) => {
+      try {
+        return realpathSync(root);
+      } catch {
+        return root;
+      }
+    });
+}
+
+function isPathWithinAllowedRoots(pathValue: string, allowedRoots: string[]): boolean {
+  if (allowedRoots.length === 0) return false;
+
+  const normalized = resolve(pathValue);
+  let realPath = normalized;
+  try {
+    realPath = realpathSync(normalized);
+  } catch {
+    // Fallback to resolved path if realpath is unavailable.
+  }
+
+  return allowedRoots.some((root) => realPath === root || realPath.startsWith(`${root}/`));
+}
+
 function normalizeModes(input?: string[]): InferenceMode[] {
   const requested = (input ?? ['config', 'db']).map((m) => m.toLowerCase().trim());
   const valid = requested.filter(isInferenceMode);
@@ -69,6 +104,7 @@ export async function POST(req: NextRequest) {
     const codeEngine: CodeSignalEngine = normalizeCodeSignalEngine(body.codeEngine);
 
     const db = await getDb();
+    const allowedInferenceRoots = getAllowedInferenceRoots();
 
     const providedRoots = (body.repoRoots ?? [])
       .map((p) => p.trim())
@@ -99,6 +135,7 @@ export async function POST(req: NextRequest) {
     const usedRepoRoots: string[] = [];
     const skippedNonLocalRoots: string[] = [];
     const skippedMissingRoots: string[] = [];
+    const skippedDisallowedRoots: string[] = [];
 
     for (const repoRoot of mergedRoots) {
       if (isLikelyRemotePath(repoRoot)) {
@@ -109,6 +146,11 @@ export async function POST(req: NextRequest) {
       const normalized = resolve(repoRoot);
       if (!isLocalDirectory(normalized)) {
         if (!skippedMissingRoots.includes(normalized)) skippedMissingRoots.push(normalized);
+        continue;
+      }
+
+      if (!isPathWithinAllowedRoots(normalized, allowedInferenceRoots)) {
+        if (!skippedDisallowedRoots.includes(normalized)) skippedDisallowedRoots.push(normalized);
         continue;
       }
 
@@ -125,6 +167,8 @@ export async function POST(req: NextRequest) {
             discoveredFromServices,
             skippedNonLocalRoots,
             skippedMissingRoots,
+            skippedDisallowedRoots,
+            allowedInferenceRoots,
           },
         },
         { status: 400 },
@@ -241,6 +285,12 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    if (skippedDisallowedRoots.length > 0) {
+      warnings.push(
+        `허용 경로 외 디렉터리(${skippedDisallowedRoots.length}개)가 제외되었습니다.`,
+      );
+    }
+
     const dbCandidateCount =
       (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
 
@@ -272,6 +322,8 @@ export async function POST(req: NextRequest) {
         used: usedRepoRoots,
         skippedNonLocal: skippedNonLocalRoots,
         skippedMissing: skippedMissingRoots,
+        skippedDisallowed: skippedDisallowedRoots,
+        allowed: allowedInferenceRoots,
       },
       results: {
         config: configResult,
