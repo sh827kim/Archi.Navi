@@ -46,6 +46,13 @@ export async function POST(
       return NextResponse.json({ error: '이미 처리된 후보입니다' }, { status: 400 });
     }
 
+    if (candidate.relationType !== 'call') {
+      return NextResponse.json(
+        { error: '엔드포인트 매핑은 call 관계 후보에만 허용됩니다' },
+        { status: 400 },
+      );
+    }
+
     // 원본 후보의 evidence 조회
     const evidenceLinks = await db
       .select({ evidenceId: relationCandidateEvidences.evidenceId })
