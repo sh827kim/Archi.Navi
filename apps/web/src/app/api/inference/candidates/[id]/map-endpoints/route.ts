@@ -118,19 +118,35 @@ export async function POST(
       createdRelations.push({ endpointId, relationId });
     }
 
-    // 원본 COMPOUND→COMPOUND 후보를 APPROVED (처리 완료)로 마킹
-    await db
-      .update(relationCandidates)
-      .set({
-        status: 'APPROVED',
-        reviewedAt: new Date(),
-        metadata: {
-          ...(candidate.metadata as Record<string, unknown> ?? {}),
-          mappedEndpoints: endpointIds,
-          mappedRelationCount: createdRelations.length,
-        },
-      })
-      .where(eq(relationCandidates.id, id));
+    const mappedRelationCount = createdRelations.length;
+
+    // 실제로 endpoint 매핑이 생성된 경우에만 원본 후보를 처리 완료로 마킹
+    if (mappedRelationCount > 0) {
+      await db
+        .update(relationCandidates)
+        .set({
+          status: 'APPROVED',
+          reviewedAt: new Date(),
+          metadata: {
+            ...((candidate.metadata as Record<string, unknown>) ?? {}),
+            mappedEndpoints: endpointIds,
+            mappedRelationCount,
+          },
+        })
+        .where(eq(relationCandidates.id, id));
+    } else {
+      // 유효한 매핑이 없으면 PENDING 유지 + 시도 정보만 기록
+      await db
+        .update(relationCandidates)
+        .set({
+          metadata: {
+            ...((candidate.metadata as Record<string, unknown>) ?? {}),
+            mappedEndpoints: endpointIds,
+            mappedRelationCount,
+          },
+        })
+        .where(eq(relationCandidates.id, id));
+    }
 
     // 롤업 변경 적용
     const rollupEvents = createdRelations.map((r) =>

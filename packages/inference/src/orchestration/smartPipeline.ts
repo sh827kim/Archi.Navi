@@ -10,7 +10,7 @@
  */
 import { readFileSync, readdirSync, statSync } from 'fs';
 import { join, extname, relative, basename } from 'path';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, or } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { objects, relationCandidates, evidences, relationCandidateEvidences } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -285,7 +285,7 @@ async function saveLlmCompoundDependencies(
 
         // 중복 체크
         const existing = await db
-            .select({ id: relationCandidates.id })
+            .select({ id: relationCandidates.id, status: relationCandidates.status })
             .from(relationCandidates)
             .where(
                 and(
@@ -293,7 +293,10 @@ async function saveLlmCompoundDependencies(
                     eq(relationCandidates.relationType, dep.relationType),
                     eq(relationCandidates.subjectObjectId, sourceServiceId),
                     eq(relationCandidates.objectId, targetServiceId),
-                    eq(relationCandidates.status, 'PENDING'),
+                    or(
+                        eq(relationCandidates.status, 'PENDING'),
+                        eq(relationCandidates.status, 'APPROVED'),
+                    ),
                 ),
             )
             .limit(1);
@@ -516,7 +519,7 @@ async function saveLlmCallCandidate(
 
     // 중복 체크
     const existing = await db
-        .select({ id: relationCandidates.id })
+        .select({ id: relationCandidates.id, status: relationCandidates.status })
         .from(relationCandidates)
         .where(
             and(
@@ -524,7 +527,10 @@ async function saveLlmCallCandidate(
                 eq(relationCandidates.relationType, 'call'),
                 eq(relationCandidates.subjectObjectId, sourceServiceId),
                 eq(relationCandidates.objectId, targetObjectId),
-                eq(relationCandidates.status, 'PENDING'),
+                or(
+                    eq(relationCandidates.status, 'PENDING'),
+                    eq(relationCandidates.status, 'APPROVED'),
+                ),
             ),
         )
         .limit(1);
