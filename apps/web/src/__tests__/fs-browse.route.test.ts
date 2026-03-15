@@ -47,4 +47,28 @@ describe('GET /api/fs/browse', () => {
       dirs: [{ name: 'src', path: 'C:\\repo\\src' }],
     });
   });
+
+  it('POSIX 절대 경로는 win32 path API로 우회하지 않아야 한다', async () => {
+    statSyncMock.mockImplementation((input: string) => {
+      if (input === '/tmp') {
+        return { isDirectory: () => true };
+      }
+      if (input === '/tmp/src') {
+        return { isDirectory: () => true };
+      }
+      throw new Error(`unexpected path: ${input}`);
+    });
+    readdirSyncMock.mockReturnValue(['src']);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/fs/browse?prefix=%2Ftmp'),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      parent: '/tmp',
+      dirs: [{ name: 'src', path: '/tmp/src' }],
+    });
+    expect(statSyncMock).not.toHaveBeenCalledWith('\\tmp');
+  });
 });

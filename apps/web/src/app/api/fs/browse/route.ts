@@ -17,7 +17,7 @@ const SKIP_DIRS = new Set([
 const MAX_RESULTS = 30;
 
 function shouldUseWindowsPathApi(prefix: string): boolean {
-    return win32.isAbsolute(prefix);
+    return /^[A-Za-z]:[\\/]/.test(prefix) || /^\\\\[^\\]+\\[^\\]+/.test(prefix);
 }
 
 function isSupportedAbsolutePath(prefix: string): boolean {
