@@ -117,7 +117,7 @@ function extractCandidateCount(stats: Record<string, unknown>): number {
   return 0;
 }
 
-export function InferenceRunList() {
+export function InferenceRunList({ apiToken }: { apiToken: string }) {
   const { workspaceId } = useWorkspace();
   const [runs, setRuns] = useState<InferenceRunItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -126,7 +126,9 @@ export function InferenceRunList() {
   const loadRuns = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/inference/runs?workspaceId=${workspaceId}&limit=30`);
+      const res = await fetch(`/api/inference/runs?workspaceId=${workspaceId}&limit=30`, {
+        headers: apiToken ? { 'x-inference-runs-token': apiToken } : {},
+      });
       if (!res.ok) throw new Error();
       const data = (await res.json()) as { items: InferenceRunItem[] };
       setRuns(data.items ?? []);
@@ -135,7 +137,7 @@ export function InferenceRunList() {
     } finally {
       setLoading(false);
     }
-  }, [workspaceId]);
+  }, [apiToken, workspaceId]);
 
   useEffect(() => {
     void loadRuns();
@@ -146,7 +148,10 @@ export function InferenceRunList() {
     try {
       const res = await fetch(`/api/inference/runs/${runId}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(apiToken ? { 'x-inference-runs-token': apiToken } : {}),
+        },
         body: JSON.stringify({ workspaceId, action }),
       });
       const data = (await res.json()) as {

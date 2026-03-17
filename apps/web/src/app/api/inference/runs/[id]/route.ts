@@ -65,6 +65,9 @@ export async function GET(req: NextRequest, context: RouteContext) {
  */
 export async function PATCH(req: NextRequest, context: RouteContext) {
   try {
+    const authError = authorizeInferenceRunsRequest(req);
+    if (authError) return authError;
+
     const { id } = await context.params;
     const runId = id?.trim();
     const body = (await req.json().catch(() => ({}))) as {

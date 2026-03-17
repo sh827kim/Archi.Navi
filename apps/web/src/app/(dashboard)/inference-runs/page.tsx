@@ -10,6 +10,8 @@ export const metadata: Metadata = {
 };
 
 export default function InferenceRunsPage() {
+  const apiToken = process.env['INFERENCE_RUNS_API_TOKEN']?.trim() ?? '';
+
   return (
     <div className="p-6">
       <div className="mb-6">
@@ -18,7 +20,7 @@ export default function InferenceRunsPage() {
           추론 실행 이력을 확인하고, 실패한 실행을 재시도하거나 진행 중인 실행을 취소합니다
         </p>
       </div>
-      <InferenceRunList />
+      <InferenceRunList apiToken={apiToken} />
     </div>
   );
 }
