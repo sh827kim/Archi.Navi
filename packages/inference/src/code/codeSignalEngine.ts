@@ -91,7 +91,29 @@ function mergeAstAndRegexRecovery(
   if (astResult.scanErrorFilePaths) {
     merged.scanErrorFilePaths = astResult.scanErrorFilePaths;
   }
+  if (astResult.scanFailures && astResult.scanFailures.length > 0) {
+    merged.scanFailures = astResult.scanFailures;
+  }
   return merged;
+}
+
+function preserveAstFailureDiagnostics(
+  baseResult: CodeSignalResult,
+  astResult: CodeSignalResult,
+): CodeSignalResult {
+  const preserved: CodeSignalResult = {
+    ...baseResult,
+  };
+  if (typeof astResult.scanErrorCount === 'number') {
+    preserved.scanErrorCount = astResult.scanErrorCount;
+  }
+  if (astResult.scanErrorFilePaths) {
+    preserved.scanErrorFilePaths = astResult.scanErrorFilePaths;
+  }
+  if (astResult.scanFailures && astResult.scanFailures.length > 0) {
+    preserved.scanFailures = astResult.scanFailures;
+  }
+  return preserved;
 }
 
 export function normalizeCodeSignalEngine(value: string | null | undefined): CodeSignalEngine {
@@ -254,7 +276,7 @@ export async function extractCodeSignalsWithEngine(
         }
 
         return {
-          ...regexResult,
+          ...preserveAstFailureDiagnostics(regexResult, astResult),
           engineRequested,
           engineUsed: 'regex',
           fallbackUsed: true,

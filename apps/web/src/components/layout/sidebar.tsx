@@ -15,6 +15,7 @@ import {
   Server,         // Services
   GitBranch,      // Relations
   CheckCircle,    // Approval
+  Activity,       // Inference Runs
   Settings,       // Settings
   Compass,        // 로고
   Sun,
@@ -54,6 +55,12 @@ const navItems = [
     label: '승인 대기',
     icon: CheckCircle,
     description: '추론된 관계 승인/거부',
+  },
+  {
+    href: '/inference-runs',
+    label: '추론 이력',
+    icon: Activity,
+    description: '추론 실행 이력 및 상태 모니터링',
   },
 ] as const;
 

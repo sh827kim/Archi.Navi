@@ -385,6 +385,87 @@ describe('codeSignalEngine', () => {
     });
   });
 
+  // ─── scanFailures 테스트 ─────────────────────────────────────────────────
+
+  describe('scanFailures', () => {
+    it('AST 부분 실패 시 scanFailures가 병합 결과에 포함되어야 한다', async () => {
+      vi.mocked(extractAstCodeSignals).mockResolvedValue({
+        fileCount: 5,
+        artifactCount: 2,
+        signalCount: 3,
+        skippedCount: 0,
+        scanErrorCount: 1,
+        scanErrorFilePaths: ['/tmp/repo/src/Bad.java'],
+        scanFailures: [
+          { filePath: '/tmp/repo/src/Bad.java', reason: 'unexpected token', language: 'java' },
+        ],
+      });
+      vi.mocked(extractCodeSignals).mockResolvedValue({
+        fileCount: 1,
+        artifactCount: 1,
+        signalCount: 2,
+        skippedCount: 0,
+      });
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+      expect(result.scanFailures).toBeDefined();
+      expect(result.scanFailures).toHaveLength(1);
+      expect(result.scanFailures![0]!.filePath).toBe('/tmp/repo/src/Bad.java');
+      expect(result.scanFailures![0]!.reason).toBe('unexpected token');
+      expect(result.scanFailures![0]!.language).toBe('java');
+    });
+
+    it('fallback 시에도 AST의 scanFailures가 보존되어야 한다', async () => {
+      vi.mocked(extractAstCodeSignals).mockResolvedValue({
+        fileCount: 3,
+        artifactCount: 0,
+        signalCount: 0,
+        skippedCount: 0,
+        scanErrorCount: 2,
+        scanErrorFilePaths: ['/tmp/repo/A.ts', '/tmp/repo/B.ts'],
+        scanFailures: [
+          { filePath: '/tmp/repo/A.ts', reason: 'syntax error', language: 'typescript' },
+          { filePath: '/tmp/repo/B.ts', reason: 'parse timeout', language: 'typescript' },
+        ],
+      });
+      vi.mocked(extractCodeSignals).mockResolvedValue({
+        fileCount: 2,
+        artifactCount: 2,
+        signalCount: 4,
+        skippedCount: 0,
+      });
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
+
+      expect(result.fallbackUsed).toBe(true);
+      expect(result.engineUsed).toBe('regex');
+      expect(result.scanFailures).toHaveLength(2);
+      expect(result.scanFailures?.map((item) => item.filePath)).toEqual([
+        '/tmp/repo/A.ts',
+        '/tmp/repo/B.ts',
+      ]);
+      expect(result.scanErrorCount).toBe(2);
+      expect(result.scanErrorFilePaths).toEqual(['/tmp/repo/A.ts', '/tmp/repo/B.ts']);
+    });
+
+    it('regex 모드에서는 scanFailures가 없어야 한다', async () => {
+      vi.mocked(extractCodeSignals).mockResolvedValue(BASE_RESULT);
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'regex' });
+
+      expect(result.scanFailures).toBeUndefined();
+    });
+
+    it('hybrid 모드에서는 scanFailures가 없어야 한다', async () => {
+      vi.mocked(extractHybridCodeSignals).mockResolvedValue(BASE_RESULT);
+
+      const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'hybrid' });
+
+      expect(result.scanFailures).toBeUndefined();
+    });
+  });
+
   // ─── 엔진 운영 정책 테스트 ─────────────────────────────────────────────────
 
   describe('ENGINE_POLICY', () => {

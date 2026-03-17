@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -14,7 +14,21 @@ import {
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { createInferenceRun, executeInferenceRun } from '@/orchestration/inferenceRuns';
+import * as configBasedModule from '@/relation/configBased';
+import {
+  cancelInferenceRun,
+  createInferenceRun,
+  executeInferenceRun,
+  retryInferenceRun,
+} from '@/orchestration/inferenceRuns';
+
+vi.mock('@/relation/configBased', async () => {
+  const actual = await vi.importActual<typeof import('@/relation/configBased')>('@/relation/configBased');
+  return {
+    ...actual,
+    inferRelationsFromConfig: vi.fn(actual.inferRelationsFromConfig),
+  };
+});
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 const workspaceId = '00000000-0000-0000-0000-000000000020';
@@ -44,6 +58,66 @@ async function createWorkspaceAndService(db: TestDb) {
   });
 }
 
+function createRetryRaceDb() {
+  const run = {
+    id: 'retry-run-1',
+    workspaceId,
+    status: 'FAILED',
+    attemptCount: 0,
+    maxAttempts: 2,
+  };
+  let selectCount = 0;
+  let appendedEventCount = 0;
+
+  const db = {
+    select() {
+      return {
+        from() {
+          return {
+            where() {
+              return {
+                async limit() {
+                  selectCount += 1;
+                  if (selectCount === 1) return [run];
+                  return [{ status: 'RUNNING' }];
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    update() {
+      return {
+        set() {
+          return {
+            where() {
+              return {
+                async returning() {
+                  return [];
+                },
+              };
+            },
+          };
+        },
+      };
+    },
+    insert() {
+      return {
+        async values() {
+          appendedEventCount += 1;
+          return [];
+        },
+      };
+    },
+  };
+
+  return {
+    db: db as unknown as TestDb,
+    getAppendedEventCount: () => appendedEventCount,
+  };
+}
+
 describe('inference orchestration runs', () => {
   let db: TestDb;
   let tempDir: string;
@@ -53,6 +127,7 @@ describe('inference orchestration runs', () => {
     tempDir = join(tmpdir(), `archi-navi-infrun-${Date.now()}`);
     mkdirSync(tempDir, { recursive: true });
     await createWorkspaceAndService(db);
+    vi.clearAllMocks();
   });
 
   afterEach(() => {
@@ -124,5 +199,49 @@ spring:
       .from(inferenceRunEvents)
       .where(and(eq(inferenceRunEvents.workspaceId, workspaceId), eq(inferenceRunEvents.runId, run.id)));
     expect(eventRows.length).toBeGreaterThan(0);
+  });
+
+  it('RUNNING 중 취소되면 최종 상태를 CANCELED로 유지해야 한다', async () => {
+    const inferRelationsFromConfigMock = vi.mocked(configBasedModule.inferRelationsFromConfig);
+    let runId = '';
+    inferRelationsFromConfigMock.mockImplementationOnce(async () => {
+      const cancelResult = await cancelInferenceRun(db, { workspaceId, runId });
+      expect(cancelResult).toEqual({ canceled: true, status: 'CANCELED' });
+      return {
+        fileCount: 1,
+        processedFileCount: 1,
+        skippedFileCount: 0,
+        candidateCount: 0,
+        objectCount: 0,
+      };
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    runId = run.id;
+
+    const detail = await executeInferenceRun(db, { workspaceId, runId });
+
+    expect(detail.run.status).toBe('CANCELED');
+    expect(detail.run.errorMessage).toBe('사용자에 의해 취소됨');
+    expect(detail.events.some((event) => event.eventType === 'RUN_CANCELED')).toBe(true);
+    expect(detail.events.some((event) => event.eventType === 'RUN_COMPLETED')).toBe(false);
+  });
+
+  it('재시도 경쟁 상태에서 상태 전이가 없으면 retried=false를 반환해야 한다', async () => {
+    const race = createRetryRaceDb();
+
+    const result = await retryInferenceRun(race.db, {
+      workspaceId,
+      runId: 'retry-run-1',
+    });
+
+    expect(result.retried).toBe(false);
+    expect(result.status).toBe('RUNNING');
+    expect(result.reason).toContain('상태가 변경');
+    expect(race.getAppendedEventCount()).toBe(0);
   });
 });

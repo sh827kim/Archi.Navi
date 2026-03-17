@@ -48,6 +48,13 @@ export interface FileScanResult {
     signals: ExtractedSignal[];
 }
 
+/** 파일별 스캔 실패 상세 정보 */
+export interface ScanFailureDetail {
+    filePath: string;
+    reason: string;
+    language: string;
+}
+
 // ─── 추출기 옵션 / 결과 ───────────────────────────────────────────────────────
 
 /** extractCodeSignals 입력 옵션 */
@@ -75,6 +82,8 @@ export interface CodeSignalResult {
     scanErrorCount?: number;
     /** 스캐너/파서 오류가 발생한 파일 경로 목록 (주로 AST 모드에서 사용) */
     scanErrorFilePaths?: string[];
+    /** 파일별 스캔 실패 상세 정보 (파일 경로, 사유, 언어) */
+    scanFailures?: ScanFailureDetail[];
 }
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
@@ -321,6 +330,7 @@ async function processFile(
                 kind: signal.kind,
                 confidence: signal.confidence,
                 language: scanResult.language,
+                extractionMode: 'regex',
                 ...signal.metadata,
             },
         });
