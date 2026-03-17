@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-08
+> 최종 점검일: 2026-03-17
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -12,7 +12,7 @@
 | Architecture / Mapping UI | ✅ | 레이어드 아키텍처(Cytoscape), 매핑 뷰(3D Force 단일 렌더러), rollup 기반 상위 엣지 반영 |
 | Query Engine | ✅ | PATH/IMPACT/USAGE/DOMAIN_SUMMARY 구현, `generationVersion` 미지정 시 ACTIVE 자동 적용 |
 | Rollup Engine | ✅ | 4단계 rollup + generation 관리 + seed 후 재빌드 |
-| Relation 추론 파이프라인 | ⚠️ | `/api/inference/run`으로 config/code/db 실행 가능, code 기반 후보 생성(Phase 1: endpoint/topic)은 진행, 운영 오케스트레이션/모니터링은 보강 필요 |
+| Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 추론 엔진 고도화 (P4) | 📋 | Inter-procedural AST, Cross-Signal Validation, LLM 부스터 설계 완료 |
@@ -56,8 +56,9 @@
 - ✅ Relation 추론(구현 존재)
   - Config 기반: `inferRelationsFromConfig`
   - Code Signal(AST/Regex): `extractCodeSignalsWithEngine` (`hybrid` 기본, `ast`는 AST 실패 시 Regex fallback)
-  - Code Signal 기반 후보 생성(부분 구현): `mode=code`로 `relation_candidates` 생성 (SPEC: `docs/spec/14-*`, `docs/spec/15-*`)
+  - Code Signal 기반 후보 생성: `mode=code`로 `relation_candidates` 생성 (endpoint/topic/queue/db_table 포함, SPEC: `docs/spec/14-*`, `docs/spec/15-*`, `docs/spec/16-*`, `docs/spec/17-*`)
   - DB Signal: `extractDbSchemaSignals` (FK/implicit 후보 + schema evidence 연결)
+  - 비동기 실행 오케스트레이션: `createInferenceRun` / `executeInferenceRun` / `listInferenceRuns` / `getInferenceRunDetail`
 - ✅ Domain 추론
   - Track A(Seed-based): `runSeedBasedInference`
   - Track B(Discovery): `runDiscovery`
@@ -77,26 +78,19 @@
 
 ---
 
-## 2) 부분 완료 / 남은 작업
+## 2) 후속 고도화 메모
 
-### 2.1 Inference 운영 플로우
+### 2.1 추론 엔진 품질 고도화 (P4)
 
-- ⚠️ `/api/inference/run`은 구현되었지만, 현재는 로컬 repo 경로(`repoRoots` 또는 `service.metadata.scanPath`) 의존
-- ⚠️ 조직 단위/원격 소스까지 포함하는 운영 오케스트레이션은 보강 필요
+- 📋 Inter-procedural AST, Cross-Signal Validation, LLM 부스터는 설계 완료 상태이며 P2 완료 이후의 다음 고도화 범위다.
 
-### 2.2 Evidence-first 체인 강화 (완료)
+### 2.2 실행 오케스트레이션 Phase 2+
 
-- ✅ 관계 후보 승인 시 evidence 승격(`relation_candidate_evidences -> relation_evidences`) 구현 완료
-- ✅ rollup/query 응답의 `baseRelationIds` provenance 저장/조회 구현 완료
+- 📋 `cancel/retry`, 큐/워커 분리, 운영 대시보드는 `docs/spec/13-inference-run-orchestration-spec.md`의 후속 범위로 남아 있다.
 
-### 2.3 설정 반영 (완료)
+### 2.3 도메인 추론 운영 UX
 
-- ✅ Settings > 추론/Rollup 저장 시 `domain_inference_profiles` 기본 프로필과 동기화
-- ✅ 도메인 추론 실행 API에서 profile 미지정 시 기본 프로필 자동 적용
-
-### 2.4 AST 고도화
-
-- ⚠️ `/api/inference/run` 기본 경로는 `hybrid(AST+Regex 병합)`로 전환되었으나, fallback 모니터링/운영 정책(UI/CLI)은 추가 보강 필요
+- ⚠️ Track A/B 실행 UX와 운영 가시성은 더 개선할 여지가 있지만, 구현 상태 자체는 P2 블로커가 아니다.
 
 ---
 
