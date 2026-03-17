@@ -18,6 +18,7 @@ export type {
     CodeSignalResult,
     ExtractedSignal,
     FileScanResult,
+    ScanFailureDetail,
     SignalKind,
 } from './codeSignalExtractor';
 export type {

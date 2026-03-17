@@ -4,6 +4,8 @@ export {
   listInferenceRuns,
   getInferenceRunDetail,
   normalizeInferenceRunModes,
+  cancelInferenceRun,
+  retryInferenceRun,
 } from './inferenceRuns';
 
 export type {
