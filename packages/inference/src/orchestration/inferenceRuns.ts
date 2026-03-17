@@ -257,6 +257,34 @@ function summarizeSources(sources: Array<{ sourceType: string }>): Record<string
   return summary;
 }
 
+async function getInferenceRunStatus(
+  db: DbClient,
+  input: { workspaceId: string; runId: string },
+): Promise<InferenceRunStatus | null> {
+  const rows = await db
+    .select({ status: inferenceRuns.status })
+    .from(inferenceRuns)
+    .where(
+      and(
+        eq(inferenceRuns.workspaceId, input.workspaceId),
+        eq(inferenceRuns.id, input.runId),
+      ),
+    )
+    .limit(1);
+
+  const status = rows[0]?.status;
+  if (
+    status === 'QUEUED'
+    || status === 'RUNNING'
+    || status === 'SUCCEEDED'
+    || status === 'FAILED'
+    || status === 'CANCELED'
+  ) {
+    return status;
+  }
+  return null;
+}
+
 export async function createInferenceRun(
   db: DbClient,
   input: CreateInferenceRunInput,
@@ -736,13 +764,6 @@ export async function executeInferenceRun(
     });
   }
 
-  const sourceErrorMap = new Map<string, boolean>();
-  for (const localSource of sourceResolution.localSources) {
-    if (!sourceErrorMap.has(localSource.sourceId)) {
-      sourceErrorMap.set(localSource.sourceId, false);
-    }
-  }
-
   const cleanupDirs = Array.from(
     new Set(
       sourceResolution.localSources
@@ -750,6 +771,56 @@ export async function executeInferenceRun(
         .filter((dir): dir is string => typeof dir === 'string' && dir.length > 0),
     ),
   );
+
+  let cleanedUp = false;
+  const cleanupResolvedDirectories = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    for (const dir of cleanupDirs) {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  };
+
+  const sourceExecutionResult = new Map<string, boolean>();
+  const flushSourceStatuses = async (markRemainingSkipped: boolean) => {
+    for (const localSource of sourceResolution.localSources) {
+      const hasError = sourceExecutionResult.get(localSource.sourceId);
+      if (typeof hasError === 'boolean') {
+        await updateRunSource(db, {
+          sourceId: localSource.sourceId,
+          status: hasError ? 'FAILED' : 'SUCCEEDED',
+          resolvedRepoRoot: sourceResolution.sourceResolvedRoots.get(localSource.sourceId) ?? null,
+          message: hasError ? '일부 mode 실행 실패' : '완료',
+        });
+        continue;
+      }
+
+      if (markRemainingSkipped) {
+        await updateRunSource(db, {
+          sourceId: localSource.sourceId,
+          status: 'SKIPPED',
+          resolvedRepoRoot: sourceResolution.sourceResolvedRoots.get(localSource.sourceId) ?? null,
+          message: '실행 중 취소되어 남은 source를 스킵했습니다.',
+        });
+      }
+    }
+  };
+
+  const returnCurrentRunDetail = async (markRemainingSkipped: boolean) => {
+    await flushSourceStatuses(markRemainingSkipped);
+    cleanupResolvedDirectories();
+    return await getInferenceRunDetail(db, {
+      workspaceId: input.workspaceId,
+      runId: run.id,
+    });
+  };
+
+  const isRunCanceled = async () =>
+    (await getInferenceRunStatus(db, { workspaceId: input.workspaceId, runId: run.id })) === 'CANCELED';
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
 
   for (const localSource of sourceResolution.localSources) {
     let sourceHasError = false;
@@ -775,6 +846,10 @@ export async function executeInferenceRun(
           message: error instanceof Error ? error.message : 'unknown config error',
         });
       }
+    }
+
+    if (await isRunCanceled()) {
+      return await returnCurrentRunDetail(true);
     }
 
     if (modeSet.has('code')) {
@@ -817,16 +892,17 @@ export async function executeInferenceRun(
       }
     }
 
-    sourceErrorMap.set(localSource.sourceId, (sourceErrorMap.get(localSource.sourceId) ?? false) || sourceHasError);
+    if (await isRunCanceled()) {
+      return await returnCurrentRunDetail(true);
+    }
+
+    sourceExecutionResult.set(localSource.sourceId, sourceHasError);
   }
 
-  for (const [sourceId, hasError] of sourceErrorMap) {
-    await updateRunSource(db, {
-      sourceId,
-      status: hasError ? 'FAILED' : 'SUCCEEDED',
-      resolvedRepoRoot: sourceResolution.sourceResolvedRoots.get(sourceId) ?? null,
-      message: hasError ? '일부 mode 실행 실패' : '완료',
-    });
+  await flushSourceStatuses(false);
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
   }
 
   if (modeSet.has('db')) {
@@ -841,6 +917,10 @@ export async function executeInferenceRun(
         message: error instanceof Error ? error.message : 'unknown db error',
       });
     }
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
   }
 
   const dbCandidateCount =
@@ -863,7 +943,7 @@ export async function executeInferenceRun(
     },
   };
 
-  await db
+  const finalizedRows = await db
     .update(inferenceRuns)
     .set({
       status: finalStatus,
@@ -874,7 +954,18 @@ export async function executeInferenceRun(
       finishedAt: new Date(),
       updatedAt: new Date(),
     })
-    .where(eq(inferenceRuns.id, run.id));
+    .where(
+      and(
+        eq(inferenceRuns.id, run.id),
+        eq(inferenceRuns.workspaceId, input.workspaceId),
+        eq(inferenceRuns.status, 'RUNNING'),
+      ),
+    )
+    .returning({ id: inferenceRuns.id });
+
+  if (finalizedRows.length === 0) {
+    return await returnCurrentRunDetail(await isRunCanceled());
+  }
 
   await appendRunEvent(db, {
     workspaceId: input.workspaceId,
@@ -893,9 +984,7 @@ export async function executeInferenceRun(
     },
   });
 
-  for (const dir of cleanupDirs) {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  cleanupResolvedDirectories();
 
   return await getInferenceRunDetail(db, {
     workspaceId: input.workspaceId,
@@ -1096,7 +1185,7 @@ export async function retryInferenceRun(
     return { retried: false, status: run.status, reason: `최대 시도 횟수(${run.maxAttempts})에 도달했습니다.` };
   }
 
-  await db
+  const updated = await db
     .update(inferenceRuns)
     .set({
       status: 'QUEUED',
@@ -1110,7 +1199,27 @@ export async function retryInferenceRun(
         eq(inferenceRuns.workspaceId, input.workspaceId),
         eq(inferenceRuns.status, 'FAILED'),
       ),
-    );
+    )
+    .returning({ id: inferenceRuns.id });
+
+  if (updated.length === 0) {
+    const refreshed = await db
+      .select({ status: inferenceRuns.status })
+      .from(inferenceRuns)
+      .where(
+        and(
+          eq(inferenceRuns.id, run.id),
+          eq(inferenceRuns.workspaceId, input.workspaceId),
+        ),
+      )
+      .limit(1);
+
+    return {
+      retried: false,
+      status: refreshed[0]?.status ?? 'UNKNOWN',
+      reason: '상태가 변경되어 재시도 예약에 실패했습니다.',
+    };
+  }
 
   await appendRunEvent(db, {
     workspaceId: input.workspaceId,
