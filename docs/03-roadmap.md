@@ -1,6 +1,6 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22 | 최종 갱신: 2026-03-08
+> 작성일: 2026-02-22 | 최종 갱신: 2026-03-17
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
 > 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
@@ -11,22 +11,22 @@
 | 등급 | 의미 | 예상 시기 |
 |------|------|----------|
 | **P1** | 추론 파이프라인 MVP — 70%+ 자동화 달성 | v2.0 ✅ |
-| **P2** | AST 정밀 추출 + AI 고도화 | v2.1 (부분 완료) |
+| **P2** | AST 정밀 추출 + AI 고도화 | v2.1 ✅ |
 | **P3** | 대규모 그래프 성능 + 추론 고도화 | v2.2 ✅ |
 | **P4** | 🔥 추론 엔진 고도화 — 90%+ 정밀도 달성 | v3.0 |
 | **P5** | 개발자 생산성 기능 + 구조 개선 | v3.1+ |
 
 ---
 
-## 현재 상태 요약 (2026-03-08)
+## 현재 상태 요약 (2026-03-17)
 
 | 구간 | 상태 | 비고 |
 |------|------|------|
 | P1 (1-1 ~ 1-6) | ✅ 완료 | 추론 MVP 기능/승인 플로우 구현 완료 |
-| P2 (2-1) | ⚠️ 부분 구현 | 기본 경로는 `hybrid(AST+Regex 병합)`로 전환됐으나 운영 정책/모니터링 보강 필요 |
+| P2 (2-1) | ✅ 완료 | `hybrid/ast/regex` 모드, AST fallback, 요청/실사용 엔진 노출, 기본 UI 설정까지 반영 완료 |
 | P2 (2-2 ~ 2-5) | ✅ 완료 | Evidence Assembler/Answer Composer/DOMAIN_SUMMARY/Message 시그널 반영 완료 |
-| P2 (2-6) | ⚠️ 부분 구현 | 비동기 run 이력/API 골격 추가, 원격 커넥터/재시도 정책은 후속 |
-| P2 (2-7) | ⚠️ 부분 구현 | endpoint/topic 진행, RabbitMQ queue/DB table 후속 |
+| P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
+| P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
 | P4 (4-1 ~ 4-6) | 📋 Draft | 추론 엔진 고도화 설계 완료, 구현 대기 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
@@ -102,17 +102,16 @@
 
 > **목표**: AST로 추론 정밀도 85~95% 달성, Evidence 기반 AI Chat 고도화
 
-### ⚠️ 2-1. AST Plugin (Tree-sitter) — Phase 2 (부분 구현)
+### ✅ 2-1. AST Plugin (Tree-sitter) — Phase 2 (완료)
 - **파일:** `packages/inference/src/code/ast/` (신규)
 - **SPEC:** `docs/spec/11-ast-default-code-signal-spec.md`
 - **언어:** Java/Kotlin, TypeScript/JavaScript, Python
-- **현재 상태:**
-  - AST 분석 모듈/파서는 존재
-  - `/api/inference/run`의 기본 코드 추출 경로는 `hybrid(AST+Regex 병합)`
-- **남은 작업:**
-  - `hybrid/ast/regex` 모드 운영 정책(UI/CLI 노출 여부) 정리
-  - fallback 발생률/실패 원인 관측 지표 노출
-  - 언어별 data-flow 정확도 회귀 테스트 보강
+- **구현 완료:**
+  - AST 분석 모듈/파서 구현
+  - `/api/inference/run` 기본 코드 추출 경로를 `hybrid(AST+Regex 병합)`로 전환
+  - `hybrid/ast/regex` 엔진 선택과 `auto -> ast` 정규화 지원
+  - 요청 엔진/실사용 엔진/fallback 여부 및 관련 테스트 반영
+  - 설정 UI에서 코드 시그널 엔진 기본값 선택 지원
 - **Phase 1 대비 개선:**
   - 변수/상수로 지정된 URL 추적 (data-flow analysis)
   - 간접 호출 감지 (인터페이스 구현체 매핑)
@@ -121,7 +120,7 @@
 - **출력:** Phase 1과 동일 형식 (`code_artifacts`, `code_call_edges`, `code_import_edges`)
 - **의존:** tree-sitter 바인딩 + 언어별 grammar
 - **참조:** 03-inference-engine.md §6.2
-- **확장:** P4 4-1에서 Inter-procedural 분석으로 고도화
+- **후속 고도화:** P4 4-1에서 Inter-procedural 분석으로 확장
 
 ### ✅ 2-2. Evidence Assembler (완료)
 - **파일:** `packages/core/src/ai/evidence-assembler.ts` (신규)
@@ -148,32 +147,35 @@
   - 토픽 네이밍 패턴 분석 → producer/consumer 결합도 → 도메인 affinity
   - `msgScore` 계산값을 Seed-based 도메인 추론에 실제 반영
 
-### ⚠️ 2-6. Inference 운영 오케스트레이션 고도화 (부분 구현)
+### ✅ 2-6. Inference 운영 오케스트레이션 고도화 (완료)
 - **SPEC:** `docs/spec/13-inference-run-orchestration-spec.md`
-- **1차 구현 완료:**
-  - 비동기 실행 API 골격: `POST/GET /api/inference/runs`, `GET /api/inference/runs/:id`
+- **구현 완료:**
+  - 비동기 실행 API: `POST/GET /api/inference/runs`, `GET /api/inference/runs/:id`
   - 실행 상태 저장 테이블: `inference_runs`, `inference_run_sources`, `inference_run_events`
   - local source 기준 background 실행 + 상태 전이/경고/오류 이력 저장
   - `githubRepo`/`githubOrg` source를 `gh` 기반 clone으로 실행 경로에 연결
+  - source별 상태(`QUEUED/RUNNING/SUCCEEDED/FAILED/SKIPPED`) 및 run 이벤트 로그 저장
   - 기존 `/api/inference/run` quick run 경로는 유지
-- **남은 작업:**
+- **후속 고도화(Phase 2+):**
   - 재시도(backoff), 취소, 실행 큐/워커 분리
   - 운영 UI 상태 카드/지표 대시보드
 
-### ⚠️ 2-7. Compound → Atomic 후보 추론 고도화 (부분 구현)
+### ✅ 2-7. Compound → Atomic 후보 추론 고도화 (완료)
 - **SPEC:**
   - `docs/spec/14-code-based-relation-candidate-spec.md`
   - `docs/spec/15-compound-to-atomic-inference-spec.md`
   - `docs/spec/16-rabbitmq-queue-code-signal-spec.md` (RabbitMQ 우선)
   - `docs/spec/17-db-table-code-signal-spec.md` (db_table은 database 소속 필수)
 - **목표:** 설정 파일이 없더라도 `mode=code`만으로 Atomic 생성 및 `relation_candidates` 생성이 가능해야 한다.
-- **1차 구현/진행 범위:**
-  - `expose` 기반 `api_endpoint` Atomic upsert (후보 생성은 아님)
+- **구현 완료:**
+  - `expose` 기반 `api_endpoint` Atomic upsert
   - URL(host+path) 기반 `call`의 endpoint 매핑 시도(유일 매칭이면 `service -> api_endpoint`, 실패 시 `service -> service` fallback)
   - `produce/consume` 기반 `service -> topic` 후보 생성
-- **남은 작업(우선순위):**
   - RabbitMQ queue 추출/후보 생성(`queue`, produce/consume)
   - `db_table` read/write 후보 생성 및 database parent 연결(항상 parent 보장)
+- **후속 고도화:**
+  - path-only 호출의 타깃 서비스 식별 정밀도 향상
+  - queue/db_table 동적 이름 추적, SQL/프레임워크별 정밀도 강화
 
 ---
 
@@ -251,7 +253,7 @@
 
 > **목표**: 추론 정밀도 90~95% 달성 + 노이즈 50% 이상 감소
 > **설계 문서**: `docs/design/07-inference-engine-advanced.md`
-> **우선순위**: P2 잔여 항목(2-1, 2-6, 2-7)보다 높음 — 추론 품질이 전체 시스템 가치를 결정
+> **우선순위**: P2 완료 기반 위에서 가장 먼저 착수할 고도화 영역 — 추론 품질이 전체 시스템 가치를 결정
 
 ### 📋 4-1. Inter-procedural AST 분석 (기존 2-1 확장)
 - **SPEC:** `docs/spec/18-inter-procedural-ast-spec.md`
@@ -390,27 +392,26 @@
 ## 구현 순서 가이드
 
 ```
-P2 잔여 (2-1 완성, 2-6, 2-7)     P4 고도화 (★ 최우선)
+P2 완료 기반                   P4 고도화 (★ 최우선)
 ──────────────────────────────────────────────────
-2-1 AST 운영 완성 ─────→ 4-1 Inter-procedural AST
-                         4-2 Cross-Signal Validation
-                         4-3 LLM 추론 부스터
-                         ─────────────────────────
-                         4-4 플러그인 시스템
-2-7 RabbitMQ/DB table    4-5 Delta Rollup
-2-6 운영 오케스트레이션  4-6 피드백 루프
-                         ─────────────────────────
-                         P5 생산성 기능
-                         5-1 Change Impact
-                         5-2 Drift Detection
-                         5-5 Health Score
-                         5-3 Journal
-                         5-4 API Contract Diff
-                         5-6 구조 개선
+2-1 AST/hybrid 운영 완료 ──→ 4-1 Inter-procedural AST
+2-6 비동기 run 오케스트레이션 → 4-6 피드백 루프
+2-7 Atomic 후보 생성 완료 ─→ 4-2 Cross-Signal Validation
+                              4-3 LLM 추론 부스터
+                              4-4 플러그인 시스템
+                              4-5 Delta Rollup
+                              ─────────────────────
+                              P5 생산성 기능
+                              5-1 Change Impact
+                              5-2 Drift Detection
+                              5-5 Health Score
+                              5-3 Journal
+                              5-4 API Contract Diff
+                              5-6 구조 개선
 ```
 
-> **핵심**: 4-1 → 4-2 → 4-3은 추론 품질을 구조적으로 끌어올리는 핵심 3요소로,
-> P2 잔여 항목보다 우선 구현한다. 2-1 AST 운영 완성은 4-1의 전제 조건이므로 먼저 완료.
+> **핵심**: P2는 완료되었고, 이제 4-1 → 4-2 → 4-3이 추론 품질을 구조적으로 끌어올리는 핵심 3요소다.
+> 특히 4-1은 현재 AST/hybrid 기반 위에 추가되는 다음 단계 고도화다.
 
 ---
 
