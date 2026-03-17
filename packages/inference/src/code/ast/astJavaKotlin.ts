@@ -95,6 +95,12 @@ function getFirstArg(argList: SyntaxNode): SyntaxNode | null {
     );
 }
 
+function getArgs(argList: SyntaxNode): SyntaxNode[] {
+    return getChildren(argList).filter(
+        (c) => c.type !== '(' && c.type !== ')' && c.type !== ',' && c.type !== ' ',
+    );
+}
+
 // ─── 어노테이션 분석 ───────────────────────────────────────────────────────────
 
 /**
@@ -455,9 +461,11 @@ function processMethodInvocations(
             /^(?:rabbitTemplate|amqpTemplate)$/i.test(objectName) &&
             (methodName === 'convertAndSend' || methodName === 'send')
         ) {
-            const firstArg = getFirstArg(argList);
-            if (firstArg) {
-                const queueName = resolveStringArg(firstArg, varMap);
+            const args = getArgs(argList);
+            // convertAndSend(exchange, routingKey, payload) / send(exchange, routingKey, message)
+            // 형태는 queue 목적지로 단정할 수 없어 보수적으로 스킵한다.
+            if (args.length === 2) {
+                const queueName = resolveStringArg(args[0]!, varMap);
                 if (queueName) {
                     signals.push(
                         makeSignal({

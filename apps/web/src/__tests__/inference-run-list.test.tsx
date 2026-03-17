@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { InferenceRunList } from '@/components/inference/inference-run-list';
 
+const { listDashboardInferenceRunsMock, mutateDashboardInferenceRunMock } = vi.hoisted(() => ({
+  listDashboardInferenceRunsMock: vi.fn(),
+  mutateDashboardInferenceRunMock: vi.fn(),
+}));
+
 const { toast } = vi.hoisted(() => ({
   toast: {
     success: vi.fn(),
@@ -12,6 +17,11 @@ const { toast } = vi.hoisted(() => ({
 }));
 
 vi.mock('sonner', () => ({ toast }));
+
+vi.mock('@/actions/inference-runs', () => ({
+  listDashboardInferenceRuns: listDashboardInferenceRunsMock,
+  mutateDashboardInferenceRun: mutateDashboardInferenceRunMock,
+}));
 
 vi.mock('@/contexts/workspace-context', () => ({
   useWorkspace: () => ({ workspaceId: 'ws-1' }),
@@ -86,6 +96,8 @@ function jsonResponse(data: unknown, ok = true): Response {
 describe('InferenceRunList', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    listDashboardInferenceRunsMock.mockResolvedValue([createRun()]);
+    mutateDashboardInferenceRunMock.mockResolvedValue({ canceled: true, status: 'CANCELED' });
   });
 
   afterEach(() => {
@@ -93,44 +105,26 @@ describe('InferenceRunList', () => {
     vi.unstubAllGlobals();
   });
 
-  it('목록 조회와 액션 요청에 inference runs 토큰 헤더를 포함해야 한다', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/api/inference/runs?')) {
-        return Promise.resolve(jsonResponse({ items: [createRun()] }));
-      }
-      if (url.endsWith('/api/inference/runs/run-1')) {
-        return Promise.resolve(jsonResponse({ canceled: true, status: 'CANCELED' }));
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(<InferenceRunList apiToken="secret-token" />);
+  it('목록 조회와 액션 요청을 서버 액션으로 수행해야 한다', async () => {
+    render(<InferenceRunList />);
 
     await screen.findByRole('button', { name: /취소/ });
 
-    expect(fetchMock).toHaveBeenNthCalledWith(
-      1,
-      '/api/inference/runs?workspaceId=ws-1&limit=30',
-      expect.objectContaining({
-        headers: { 'x-inference-runs-token': 'secret-token' },
-      }),
-    );
+    expect(listDashboardInferenceRunsMock).toHaveBeenNthCalledWith(1, {
+      workspaceId: 'ws-1',
+      limit: 30,
+    });
 
     fireEvent.click(screen.getByRole('button', { name: /취소/ }));
 
     await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/inference/runs/run-1',
-        expect.objectContaining({
-          method: 'PATCH',
-          headers: expect.objectContaining({
-            'Content-Type': 'application/json',
-            'x-inference-runs-token': 'secret-token',
-          }),
-        }),
-      );
+      expect(mutateDashboardInferenceRunMock).toHaveBeenCalledWith({
+        workspaceId: 'ws-1',
+        runId: 'run-1',
+        action: 'cancel',
+      });
     });
+
+    expect(listDashboardInferenceRunsMock).toHaveBeenCalledTimes(2);
   });
 });

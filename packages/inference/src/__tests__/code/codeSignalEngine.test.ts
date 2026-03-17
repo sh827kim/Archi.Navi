@@ -438,11 +438,15 @@ describe('codeSignalEngine', () => {
 
       const result = await extractCodeSignalsWithEngine(db, { ...options, codeEngine: 'ast' });
 
-      // AST 무신호 → regex fallback으로 채택되지만, scanFailures는 원본 유지
       expect(result.fallbackUsed).toBe(true);
-      // regex 결과를 직접 반환하는 경우 scanFailures는 없고, 병합 경로에서만 보존됨
-      // 이 시나리오에서는 AST signalCount=0이므로 regex 결과를 직접 사용
-      // scanFailures가 없어도 상위 코드에서 별도 추적 가능
+      expect(result.engineUsed).toBe('regex');
+      expect(result.scanFailures).toHaveLength(2);
+      expect(result.scanFailures?.map((item) => item.filePath)).toEqual([
+        '/tmp/repo/A.ts',
+        '/tmp/repo/B.ts',
+      ]);
+      expect(result.scanErrorCount).toBe(2);
+      expect(result.scanErrorFilePaths).toEqual(['/tmp/repo/A.ts', '/tmp/repo/B.ts']);
     });
 
     it('regex 모드에서는 scanFailures가 없어야 한다', async () => {

@@ -97,6 +97,25 @@ function mergeAstAndRegexRecovery(
   return merged;
 }
 
+function preserveAstFailureDiagnostics(
+  baseResult: CodeSignalResult,
+  astResult: CodeSignalResult,
+): CodeSignalResult {
+  const preserved: CodeSignalResult = {
+    ...baseResult,
+  };
+  if (typeof astResult.scanErrorCount === 'number') {
+    preserved.scanErrorCount = astResult.scanErrorCount;
+  }
+  if (astResult.scanErrorFilePaths) {
+    preserved.scanErrorFilePaths = astResult.scanErrorFilePaths;
+  }
+  if (astResult.scanFailures && astResult.scanFailures.length > 0) {
+    preserved.scanFailures = astResult.scanFailures;
+  }
+  return preserved;
+}
+
 export function normalizeCodeSignalEngine(value: string | null | undefined): CodeSignalEngine {
   if (value === 'ast' || value === 'auto') return 'ast';
   if (value === 'regex') return 'regex';
@@ -257,7 +276,7 @@ export async function extractCodeSignalsWithEngine(
         }
 
         return {
-          ...regexResult,
+          ...preserveAstFailureDiagnostics(regexResult, astResult),
           engineRequested,
           engineUsed: 'regex',
           fallbackUsed: true,

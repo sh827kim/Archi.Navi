@@ -309,6 +309,31 @@ kafkaTemplate.send(ORDER_TOPIC, event);
         expect(produce?.symbol).toBe('order.created');
     });
 
+    it('rabbitTemplate.convertAndSend("queue", payload)에서 queue produce 신호를 추출해야 한다', async () => {
+        const content = `
+rabbitTemplate.convertAndSend("email.queue", payload);
+`;
+        const result = await scanJavaKotlinAst('/src/EmailPublisher.java', content);
+
+        const produce = result.signals.find((s) => s.kind === 'produce');
+        expect(produce?.symbol).toBe('email.queue');
+        expect(produce?.metadata).toMatchObject({
+            client: 'RabbitTemplate',
+            broker: 'rabbitmq',
+            channelType: 'queue',
+        });
+    });
+
+    it('rabbitTemplate.convertAndSend(exchange, routingKey, payload)는 queue 신호를 생성하지 않아야 한다', async () => {
+        const content = `
+rabbitTemplate.convertAndSend("orders.exchange", "orders.created", payload);
+`;
+        const result = await scanJavaKotlinAst('/src/OrderPublisher.java', content);
+
+        const produces = result.signals.filter((s) => s.kind === 'produce');
+        expect(produces).toHaveLength(0);
+    });
+
     it('@KafkaListener(topics = "topic")에서 consume 신호를 추출해야 한다 (Phase 2: confidence 0.95)', async () => {
         const content = `
 @KafkaListener(topics = "payment.completed", groupId = "order-group")

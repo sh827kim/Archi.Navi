@@ -11,27 +11,12 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button, Badge, Spinner } from '@archi-navi/ui';
+import {
+  listDashboardInferenceRuns,
+  mutateDashboardInferenceRun,
+  type DashboardInferenceRunItem,
+} from '@/actions/inference-runs';
 import { useWorkspace } from '@/contexts/workspace-context';
-
-/** API 응답 타입 */
-interface InferenceRunItem {
-  id: string;
-  status: string;
-  triggerType: string;
-  requestedModes: string[];
-  requestedCodeEngine: string | null;
-  requestedIncremental: boolean;
-  attemptCount: number;
-  maxAttempts: number;
-  sourceSummary: Record<string, number>;
-  stats: Record<string, unknown>;
-  warnings: string[];
-  errors: Array<{ mode: string; message: string }>;
-  errorMessage: string | null;
-  startedAt: string | null;
-  finishedAt: string | null;
-  createdAt: string;
-}
 
 /** 상태별 아이콘/색상 */
 function StatusBadge({ status }: { status: string }) {
@@ -117,27 +102,23 @@ function extractCandidateCount(stats: Record<string, unknown>): number {
   return 0;
 }
 
-export function InferenceRunList({ apiToken }: { apiToken: string }) {
+export function InferenceRunList() {
   const { workspaceId } = useWorkspace();
-  const [runs, setRuns] = useState<InferenceRunItem[]>([]);
+  const [runs, setRuns] = useState<DashboardInferenceRunItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionRunId, setActionRunId] = useState<string | null>(null);
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/inference/runs?workspaceId=${workspaceId}&limit=30`, {
-        headers: apiToken ? { 'x-inference-runs-token': apiToken } : {},
-      });
-      if (!res.ok) throw new Error();
-      const data = (await res.json()) as { items: InferenceRunItem[] };
-      setRuns(data.items ?? []);
+      const items = await listDashboardInferenceRuns({ workspaceId, limit: 30 });
+      setRuns(items);
     } catch {
       setRuns([]);
     } finally {
       setLoading(false);
     }
-  }, [apiToken, workspaceId]);
+  }, [workspaceId]);
 
   useEffect(() => {
     void loadRuns();
@@ -146,21 +127,16 @@ export function InferenceRunList({ apiToken }: { apiToken: string }) {
   const handleAction = async (runId: string, action: 'cancel' | 'retry') => {
     setActionRunId(runId);
     try {
-      const res = await fetch(`/api/inference/runs/${runId}`, {
-        method: 'PATCH',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(apiToken ? { 'x-inference-runs-token': apiToken } : {}),
-        },
-        body: JSON.stringify({ workspaceId, action }),
-      });
-      const data = (await res.json()) as {
+      const data = await mutateDashboardInferenceRun({
+        workspaceId,
+        runId,
+        action,
+      }) as {
         canceled?: boolean;
         retried?: boolean;
         reason?: string;
         status?: string;
       };
-      if (!res.ok) throw new Error('요청 실패');
 
       if (action === 'cancel') {
         if (data.canceled) {
