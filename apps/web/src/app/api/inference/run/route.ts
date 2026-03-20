@@ -14,6 +14,7 @@ import {
   inferRelationsFromConfig,
   inferRelationsFromCodeSignals,
   bindConfigToCodeEndpoints,
+  crossValidatePendingRelationCandidates,
   extractCodeSignalsWithEngine,
   extractDbSchemaSignals,
   normalizeCodeSignalEngine,
@@ -210,6 +211,13 @@ export async function POST(req: NextRequest) {
           fkCandidateCount: number;
           implicitFkCandidateCount: number;
         } = null;
+    let crossValidationResult:
+      | null
+      | {
+          candidateCount: number;
+          validatedCount: number;
+          skippedSingleSourceCount: number;
+        } = null;
 
     if (modeSet.has('config')) {
       for (const repoRoot of usedRepoRoots) {
@@ -291,6 +299,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (modeSet.size >= 2) {
+      try {
+        crossValidationResult = await crossValidatePendingRelationCandidates(db, { workspaceId });
+      } catch (error) {
+        warnings.push(
+          `cross-signal validation 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
+    }
+
     if (skippedNonLocalRoots.length > 0) {
       warnings.push(
         `원격 경로(${skippedNonLocalRoots.length}개)는 현재 /api/inference/run에서 직접 처리하지 않아 제외되었습니다.`,
@@ -349,6 +367,7 @@ export async function POST(req: NextRequest) {
         code: codeResult,
         db: dbResult,
         crossBinding: crossBindingResult,
+        crossValidation: crossValidationResult,
       },
       summary: {
         relationCandidatesCreated,

@@ -3,9 +3,54 @@
  * POST /api/inference/run — 추론 실행
  */
 import { type NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@archi-navi/db';
-import { relationCandidates, objects } from '@archi-navi/db';
-import { eq, and } from 'drizzle-orm';
+import {
+  evidences,
+  getDb,
+  objects,
+  relationCandidateEvidences,
+  relationCandidates,
+} from '@archi-navi/db';
+import { eq, and, inArray } from 'drizzle-orm';
+import {
+  CROSS_VALIDATION_CONTRADICTION_TYPES,
+  CROSS_VALIDATION_RULE_IDS,
+  summarizeCrossValidation,
+  type CrossValidationContradiction,
+} from '@/lib/cross-validation';
+
+function isCrossValidationRuleId(value: unknown): value is CrossValidationContradiction['ruleId'] {
+  return typeof value === 'string'
+    && CROSS_VALIDATION_RULE_IDS.includes(value as CrossValidationContradiction['ruleId']);
+}
+
+function isCrossValidationContradictionType(
+  value: unknown,
+): value is CrossValidationContradiction['type'] {
+  return typeof value === 'string'
+    && CROSS_VALIDATION_CONTRADICTION_TYPES.includes(value as CrossValidationContradiction['type']);
+}
+
+function asCrossValidationContradictions(value: unknown): CrossValidationContradiction[] {
+  if (!Array.isArray(value)) return [];
+
+  return value.flatMap((item) => {
+    if (item === null || typeof item !== 'object' || Array.isArray(item)) return [];
+    const record = item as Record<string, unknown>;
+    if (
+      !isCrossValidationRuleId(record['ruleId'])
+      || !isCrossValidationContradictionType(record['type'])
+      || typeof record['penalty'] !== 'number'
+    ) {
+      return [];
+    }
+
+    return [{
+      ruleId: record['ruleId'],
+      type: record['type'],
+      penalty: record['penalty'],
+    }];
+  });
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -29,6 +74,30 @@ export async function GET(req: NextRequest) {
         ),
       )
       .limit(100);
+
+    const candidateIds = candidates.map((candidate) => candidate.id);
+    const evidenceRows = candidateIds.length > 0
+      ? await db
+        .select({
+          candidateId: relationCandidateEvidences.candidateId,
+          evidenceType: evidences.evidenceType,
+        })
+        .from(relationCandidateEvidences)
+        .innerJoin(evidences, eq(relationCandidateEvidences.evidenceId, evidences.id))
+        .where(
+          and(
+            eq(relationCandidateEvidences.workspaceId, workspaceId),
+            inArray(relationCandidateEvidences.candidateId, candidateIds),
+          ),
+        )
+      : [];
+
+    const groupedEvidenceRows = new Map<string, Array<{ evidenceType: string | null }>>();
+    for (const row of evidenceRows) {
+      const current = groupedEvidenceRows.get(row.candidateId) ?? [];
+      current.push({ evidenceType: row.evidenceType });
+      groupedEvidenceRows.set(row.candidateId, current);
+    }
 
     // Object 정보 맵 (이름, granularity, parentId 포함)
     const allObjects = await db
@@ -58,6 +127,18 @@ export async function GET(req: NextRequest) {
     const result = candidates.map((c: typeof candidates[0]) => {
       const meta = c.metadata as Record<string, unknown> | null;
       const llmAssessment = meta?.llmAssessment ?? null;
+      const source = typeof meta?.source === 'string' ? meta.source : null;
+      const metadataCrossValidation =
+        meta?.crossValidation !== null && typeof meta?.crossValidation === 'object'
+          ? meta.crossValidation as Record<string, unknown>
+          : null;
+      const contradictions = asCrossValidationContradictions(
+        metadataCrossValidation?.contradictions,
+      );
+      const crossValidation = summarizeCrossValidation(
+        groupedEvidenceRows.get(c.id) ?? [],
+        contradictions,
+      );
 
       const subjectObj = objMap.get(c.subjectObjectId);
       const objectObj = objMap.get(c.objectId);
@@ -81,6 +162,8 @@ export async function GET(req: NextRequest) {
         subjectObjectId: c.subjectObjectId,
         confidence: c.confidence,
         status: c.status,
+        crossValidation,
+        ...(source ? { source } : {}),
         ...(llmAssessment ? { llmAssessment } : {}),
       };
     });

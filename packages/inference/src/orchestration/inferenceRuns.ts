@@ -16,6 +16,7 @@ import {
 } from '../code/codeSignalEngine';
 import { extractDbSchemaSignals } from '../db/dbSchemaSignal';
 import { inferRelationsFromConfig } from '../relation/configBased';
+import { crossValidatePendingRelationCandidates } from '../relation/crossSignalValidation';
 import { inferRelationsFromCodeSignals } from '../relation/codeBased';
 
 export type InferenceMode = 'config' | 'code' | 'db';
@@ -749,13 +750,20 @@ export async function executeInferenceRun(
     fallbackRepoRoots: [] as string[],
     scanFailures: [] as Array<{ filePath: string; reason: string; language: string }>,
   };
-  let dbResult:
-    | null
-    | {
-        tableCount: number;
-        fkCandidateCount: number;
-        implicitFkCandidateCount: number;
-      } = null;
+    let dbResult:
+      | null
+      | {
+          tableCount: number;
+          fkCandidateCount: number;
+          implicitFkCandidateCount: number;
+        } = null;
+    let crossValidationResult:
+      | null
+      | {
+          candidateCount: number;
+          validatedCount: number;
+          skippedSingleSourceCount: number;
+        } = null;
 
   if ((modeSet.has('config') || modeSet.has('code')) && sourceResolution.localSources.length === 0) {
     errors.push({
@@ -923,6 +931,22 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
+  if (modeSet.size >= 2) {
+    try {
+      crossValidationResult = await crossValidatePendingRelationCandidates(db, {
+        workspaceId: input.workspaceId,
+      });
+    } catch (error) {
+      warnings.push(
+        `cross-signal validation 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
   const dbCandidateCount =
     (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
   const relationCandidatesCreated =
@@ -941,6 +965,7 @@ export async function executeInferenceRun(
       relationCandidatesCreated,
       executionMode: Array.from(modeSet),
     },
+    crossValidation: crossValidationResult,
   };
 
   const finalizedRows = await db

@@ -15,6 +15,10 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import {
+  getCrossValidationContradictionLabel,
+  type CrossValidationContradiction,
+} from '@/lib/cross-validation';
 
 /** 후보 관계 타입 (API 응답) */
 interface RelationCandidate {
@@ -33,6 +37,12 @@ interface RelationCandidate {
   confidence: number;
   source: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  crossValidation?: {
+    validated: boolean;
+    supportCount: number;
+    supportingSources: string[];
+    contradictions?: CrossValidationContradiction[];
+  };
 }
 
 /** 엔드포인트 (세부 매핑용) */
@@ -42,6 +52,9 @@ interface EndpointInfo {
   method: string;
   path: string;
 }
+
+type CrossValidationFilter = 'all' | 'warnings' | 'supported' | 'single';
+type CrossValidationSort = 'cross-validation-priority' | 'confidence-desc' | 'confidence-asc';
 
 const CODE_ENGINE_LS_KEY = 'archi-navi:inference:code-engine';
 
@@ -56,6 +69,68 @@ function resolveCodeEngine(): 'hybrid' | 'ast' | 'regex' {
 /** 서비스 레벨 후보 여부 */
 function isCompoundToCompound(c: RelationCandidate): boolean {
   return c.subjectGranularity === 'COMPOUND' && c.objectGranularity === 'COMPOUND';
+}
+
+function getContradictionBadge(candidate: RelationCandidate) {
+  const contradictions = Array.isArray(candidate.crossValidation?.contradictions)
+    ? candidate.crossValidation.contradictions
+    : [];
+  const primaryContradiction = contradictions[0];
+  if (primaryContradiction) {
+    return {
+      label: getCrossValidationContradictionLabel(primaryContradiction.type),
+      variant: 'warning' as const,
+    };
+  }
+  return null;
+}
+
+function getCrossValidationBadge(candidate: RelationCandidate) {
+  if (getContradictionBadge(candidate)) {
+    return null;
+  }
+
+  const supportingSources = Array.isArray(candidate.crossValidation?.supportingSources)
+    ? candidate.crossValidation.supportingSources
+    : [];
+  const supportCount = candidate.crossValidation?.supportCount ?? supportingSources.length;
+  if (supportCount >= 2) {
+    return { label: '2+ 소스 지지', variant: 'secondary' as const };
+  }
+  return { label: '단일 소스', variant: 'outline' as const };
+}
+
+function getCandidateCrossValidationState(candidate: RelationCandidate): CrossValidationFilter {
+  const contradictions = Array.isArray(candidate.crossValidation?.contradictions)
+    ? candidate.crossValidation.contradictions
+    : [];
+  if (contradictions.length > 0) return 'warnings';
+
+  const supportCount = candidate.crossValidation?.supportCount
+    ?? candidate.crossValidation?.supportingSources.length
+    ?? 0;
+  if (supportCount >= 2 && candidate.crossValidation?.validated) return 'supported';
+  return 'single';
+}
+
+function compareCandidates(a: RelationCandidate, b: RelationCandidate, sort: CrossValidationSort): number {
+  if (sort === 'confidence-desc') {
+    return b.confidence - a.confidence;
+  }
+  if (sort === 'confidence-asc') {
+    return a.confidence - b.confidence;
+  }
+
+  const priority = (candidate: RelationCandidate) => {
+    const state = getCandidateCrossValidationState(candidate);
+    if (state === 'warnings') return 0;
+    if (state === 'supported') return 1;
+    return 2;
+  };
+
+  const priorityGap = priority(a) - priority(b);
+  if (priorityGap !== 0) return priorityGap;
+  return b.confidence - a.confidence;
 }
 
 /** 오브젝트명 렌더링 (ATOMIC이면 parent 서비스명 포함) */
@@ -92,6 +167,10 @@ export function ApprovalList() {
   const [loadingEndpoints, setLoadingEndpoints] = useState(false);
   const [submittingMapping, setSubmittingMapping] = useState(false);
   const endpointRequestSeqRef = useRef(0);
+  const [crossValidationFilter, setCrossValidationFilter] = useState<CrossValidationFilter>('all');
+  const [crossValidationSort, setCrossValidationSort] = useState<CrossValidationSort>(
+    'cross-validation-priority',
+  );
 
   const loadCandidates = useCallback(async () => {
     setLoading(true);
@@ -322,13 +401,48 @@ export function ApprovalList() {
     );
   }
 
-  // COMPOUND→COMPOUND 후보와 나머지를 분리
-  const compoundCandidates = candidates.filter(isCompoundToCompound);
-  const atomicCandidates = candidates.filter((c) => !isCompoundToCompound(c));
+  const visibleCandidates = [...candidates]
+    .filter((candidate) => {
+      if (crossValidationFilter === 'all') return true;
+      return getCandidateCrossValidationState(candidate) === crossValidationFilter;
+    })
+    .sort((a, b) => compareCandidates(a, b, crossValidationSort));
+
+  const compoundCandidates = visibleCandidates.filter(isCompoundToCompound);
+  const atomicCandidates = visibleCandidates.filter((c) => !isCompoundToCompound(c));
 
   return (
     <>
-      <div className="mb-3 flex justify-end">
+      <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
+        <div className="flex flex-col gap-3 sm:flex-row">
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>표시</span>
+            <select
+              aria-label="교차 검증 필터"
+              value={crossValidationFilter}
+              onChange={(event) => setCrossValidationFilter(event.target.value as CrossValidationFilter)}
+              className="min-w-40 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+            >
+              <option value="all">전체</option>
+              <option value="warnings">경고 있음</option>
+              <option value="supported">다중 소스 지지</option>
+              <option value="single">단일 소스</option>
+            </select>
+          </label>
+          <label className="flex flex-col gap-1 text-xs text-muted-foreground">
+            <span>정렬</span>
+            <select
+              aria-label="교차 검증 정렬"
+              value={crossValidationSort}
+              onChange={(event) => setCrossValidationSort(event.target.value as CrossValidationSort)}
+              className="min-w-48 rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+            >
+              <option value="cross-validation-priority">교차 검증 우선</option>
+              <option value="confidence-desc">신뢰도 높은 순</option>
+              <option value="confidence-asc">신뢰도 낮은 순</option>
+            </select>
+          </label>
+        </div>
         <Button
           variant="outline"
           onClick={() => void runInference()}
@@ -339,86 +453,46 @@ export function ApprovalList() {
         </Button>
       </div>
 
-      {/* ATOMIC 레벨 후보: 승인/거부 */}
-      {atomicCandidates.length > 0 && (
-        <div className="space-y-2">
-          {atomicCandidates.map((cand) => (
-            <div
-              key={cand.id}
-              className="flex items-center justify-between rounded-xl p-4 transition-all glass-card"
-            >
-              {/* 관계 정보 */}
-              <div className="flex items-center gap-3 flex-wrap">
-                <ObjectLabel
-                  name={cand.subjectName}
-                  granularity={cand.subjectGranularity}
-                  parentName={cand.subjectParentName}
-                  objectType={cand.subjectObjectType}
-                />
-                <Badge variant="outline">{cand.relationType}</Badge>
-                <ObjectLabel
-                  name={cand.objectName}
-                  granularity={cand.objectGranularity}
-                  parentName={cand.objectParentName}
-                  objectType={cand.objectObjectType}
-                />
-              </div>
-
-              {/* 메타 + 액션 */}
-              <div className="flex items-center gap-4">
-                <div className="text-right">
-                  <div className="text-xs text-muted-foreground">신뢰도</div>
-                  <div className="text-sm font-medium text-foreground">
-                    {Math.round(cand.confidence * 100)}%
-                  </div>
-                </div>
-
-                <div className="flex gap-1.5">
-                  <Button
-                    size="sm"
-                    onClick={() => handleAction(cand.id, 'APPROVED')}
-                    disabled={isPending}
-                    className="bg-green-600 hover:bg-green-700 text-white"
-                  >
-                    <Check className="h-3.5 w-3.5 mr-1" />
-                    승인
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setRejectTarget(cand)}
-                    disabled={isPending}
-                    className="text-destructive hover:bg-destructive/10"
-                  >
-                    <X className="h-3.5 w-3.5 mr-1" />
-                    거부
-                  </Button>
-                </div>
-              </div>
-            </div>
-          ))}
+      {visibleCandidates.length === 0 && (
+        <div className="rounded-xl border border-dashed border-border/60 px-4 py-10 text-center text-sm text-muted-foreground">
+          현재 필터 조건에 맞는 승인 후보가 없습니다.
         </div>
       )}
 
-      {/* COMPOUND→COMPOUND 후보: 세부 매핑 */}
-      {compoundCandidates.length > 0 && (
-        <div className="mt-6">
-          <h3 className="text-sm font-medium text-muted-foreground mb-2">
-            서비스 간 관계 — 세부 매핑 필요 ({compoundCandidates.length}건)
-          </h3>
-          <div className="space-y-2">
-            {compoundCandidates.map((cand) => (
+      {/* ATOMIC 레벨 후보: 승인/거부 */}
+      {atomicCandidates.length > 0 && (
+        <div className="space-y-2">
+          {atomicCandidates.map((cand) => {
+            const contradictionBadge = getContradictionBadge(cand);
+            const badge = getCrossValidationBadge(cand);
+
+            return (
               <div
                 key={cand.id}
-                className="flex items-center justify-between rounded-xl p-4 transition-all glass-card border border-dashed border-muted-foreground/30"
+                data-testid="approval-candidate-card"
+                data-candidate-id={cand.id}
+                className="flex items-center justify-between rounded-xl p-4 transition-all glass-card"
               >
+              {/* 관계 정보 */}
                 <div className="flex items-center gap-3 flex-wrap">
-                  <span className="font-medium text-foreground">{cand.subjectName}</span>
+                  <ObjectLabel
+                    name={cand.subjectName}
+                    granularity={cand.subjectGranularity}
+                    parentName={cand.subjectParentName}
+                    objectType={cand.subjectObjectType}
+                  />
                   <Badge variant="outline">{cand.relationType}</Badge>
-                  <span className="font-medium text-foreground">{cand.objectName}</span>
-                  <Badge variant="secondary" className="text-xs">서비스 레벨</Badge>
+                  {contradictionBadge && <Badge variant={contradictionBadge.variant}>{contradictionBadge.label}</Badge>}
+                  {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
+                  <ObjectLabel
+                    name={cand.objectName}
+                    granularity={cand.objectGranularity}
+                    parentName={cand.objectParentName}
+                    objectType={cand.objectObjectType}
+                  />
                 </div>
 
+                {/* 메타 + 액션 */}
                 <div className="flex items-center gap-4">
                   <div className="text-right">
                     <div className="text-xs text-muted-foreground">신뢰도</div>
@@ -430,25 +504,89 @@ export function ApprovalList() {
                   <div className="flex gap-1.5">
                     <Button
                       size="sm"
-                      variant="outline"
-                      onClick={() => void openMappingSheet(cand)}
+                      onClick={() => handleAction(cand.id, 'APPROVED')}
+                      disabled={isPending}
+                      className="bg-green-600 hover:bg-green-700 text-white"
                     >
-                      <Link2 className="h-3.5 w-3.5 mr-1" />
-                      세부 매핑
+                      <Check className="h-3.5 w-3.5 mr-1" />
+                      승인
                     </Button>
                     <Button
                       size="sm"
-                      variant="ghost"
+                      variant="outline"
                       onClick={() => setRejectTarget(cand)}
                       disabled={isPending}
-                      className="text-muted-foreground hover:text-destructive"
+                      className="text-destructive hover:bg-destructive/10"
                     >
-                      <X className="h-3.5 w-3.5" />
+                      <X className="h-3.5 w-3.5 mr-1" />
+                      거부
                     </Button>
                   </div>
                 </div>
               </div>
-            ))}
+            );
+          })}
+        </div>
+      )}
+
+      {/* COMPOUND→COMPOUND 후보: 세부 매핑 */}
+      {compoundCandidates.length > 0 && (
+        <div className="mt-6">
+          <h3 className="text-sm font-medium text-muted-foreground mb-2">
+            서비스 간 관계 — 세부 매핑 필요 ({compoundCandidates.length}건)
+          </h3>
+          <div className="space-y-2">
+            {compoundCandidates.map((cand) => {
+              const contradictionBadge = getContradictionBadge(cand);
+              const badge = getCrossValidationBadge(cand);
+
+              return (
+                <div
+                  key={cand.id}
+                  data-testid="approval-candidate-card"
+                  data-candidate-id={cand.id}
+                  className="flex items-center justify-between rounded-xl p-4 transition-all glass-card border border-dashed border-muted-foreground/30"
+                >
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <span className="font-medium text-foreground">{cand.subjectName}</span>
+                    <Badge variant="outline">{cand.relationType}</Badge>
+                    {contradictionBadge && <Badge variant={contradictionBadge.variant}>{contradictionBadge.label}</Badge>}
+                    {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
+                    <span className="font-medium text-foreground">{cand.objectName}</span>
+                    <Badge variant="secondary" className="text-xs">서비스 레벨</Badge>
+                  </div>
+
+                  <div className="flex items-center gap-4">
+                    <div className="text-right">
+                      <div className="text-xs text-muted-foreground">신뢰도</div>
+                      <div className="text-sm font-medium text-foreground">
+                        {Math.round(cand.confidence * 100)}%
+                      </div>
+                    </div>
+
+                    <div className="flex gap-1.5">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => void openMappingSheet(cand)}
+                      >
+                        <Link2 className="h-3.5 w-3.5 mr-1" />
+                        세부 매핑
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => setRejectTarget(cand)}
+                        disabled={isPending}
+                        className="text-muted-foreground hover:text-destructive"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

@@ -15,6 +15,7 @@ import {
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import * as configBasedModule from '@/relation/configBased';
+import * as crossValidationModule from '@/relation/crossSignalValidation';
 import {
   cancelInferenceRun,
   createInferenceRun,
@@ -27,6 +28,14 @@ vi.mock('@/relation/configBased', async () => {
   return {
     ...actual,
     inferRelationsFromConfig: vi.fn(actual.inferRelationsFromConfig),
+  };
+});
+
+vi.mock('@/relation/crossSignalValidation', async () => {
+  const actual = await vi.importActual<typeof import('@/relation/crossSignalValidation')>('@/relation/crossSignalValidation');
+  return {
+    ...actual,
+    crossValidatePendingRelationCandidates: vi.fn(actual.crossValidatePendingRelationCandidates),
   };
 });
 
@@ -167,6 +176,33 @@ spring:
       .from(relationCandidates)
       .where(eq(relationCandidates.workspaceId, workspaceId));
     expect(candidates.length).toBeGreaterThan(0);
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
+  });
+
+  it('2개 이상 mode 실행 시 cross validation을 호출해야 한다', async () => {
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config', 'db'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
+      db,
+      { workspaceId },
+    );
   });
 
   it('github source 준비 실패 시 run/source가 FAILED로 기록되어야 한다', async () => {

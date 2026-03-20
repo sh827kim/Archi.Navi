@@ -83,6 +83,11 @@ export const domainInferenceProfiles = pgTable(
     resolution: real('resolution'),
 
     enabledLayers: jsonb('enabled_layers').default(['call', 'db', 'msg', 'code']),
+    crossValidation: jsonb('cross_validation').default({
+      enabled: true,
+      boostFactor: 0.3,
+      penaltyFactor: 0.85,
+    }),
 
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
