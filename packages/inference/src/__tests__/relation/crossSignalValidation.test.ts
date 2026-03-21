@@ -7,6 +7,7 @@ import {
   objectRelations,
   evidences,
   objects,
+  relationEvidences,
   relationCandidateEvidences,
   relationCandidates,
   workspaces,
@@ -423,7 +424,7 @@ async function seedEndpointCallCandidate(
 
 async function seedApprovedEndpointCallRelation(
   db: TestDb,
-  input: { subjectObjectId: string; endpointId: string; source?: string | null },
+  input: { subjectObjectId: string; endpointId: string; evidenceType?: 'CONFIG' | 'FILE' | 'LLM_CODE' },
 ) {
   const relationId = generateId();
 
@@ -436,8 +437,66 @@ async function seedApprovedEndpointCallRelation(
     confidence: 0.7,
     status: 'APPROVED',
     source: 'INFERRED',
-    metadata: input.source ? { source: input.source, targetType: 'api_endpoint' } : {},
+    metadata: { targetType: 'api_endpoint' },
   });
+
+  if (input.evidenceType) {
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: input.evidenceType,
+      excerpt: `${input.evidenceType} evidence`,
+      metadata: {},
+    });
+    await db.insert(relationEvidences).values({
+      workspaceId,
+      relationId,
+      evidenceId,
+    });
+  }
+
+  return { relationId };
+}
+
+async function seedApprovedReadWriteRelation(
+  db: TestDb,
+  input: {
+    subjectObjectId: string;
+    objectId: string;
+    relationType?: 'read' | 'write';
+    evidenceType?: 'FILE' | 'LLM_CODE' | 'CONFIG';
+  },
+) {
+  const relationId = generateId();
+
+  await db.insert(objectRelations).values({
+    id: relationId,
+    workspaceId,
+    relationType: input.relationType ?? 'read',
+    subjectObjectId: input.subjectObjectId,
+    objectId: input.objectId,
+    confidence: 0.7,
+    status: 'APPROVED',
+    source: 'INFERRED',
+    metadata: {},
+  });
+
+  if (input.evidenceType) {
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: input.evidenceType,
+      excerpt: `${input.evidenceType} evidence`,
+      metadata: {},
+    });
+    await db.insert(relationEvidences).values({
+      workspaceId,
+      relationId,
+      evidenceId,
+    });
+  }
 
   return { relationId };
 }
@@ -771,6 +830,45 @@ describe('crossValidatePendingRelationCandidates', () => {
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
+  it('config evidence만 있는 승인 db_table relation은 STALE_CONFIG 근거로 사용하지 않아야 한다', async () => {
+    const { candidateId, serviceId, databaseId } = await seedDatabaseCandidate(db, 0.9);
+    await linkEvidence(db, candidateId, 'CONFIG');
+    const { tableId, candidateId: codeCandidateId } = await seedCodeDbTableCandidate(db, { serviceId, databaseId });
+    await db.delete(relationCandidates).where(eq(relationCandidates.id, codeCandidateId));
+    await seedApprovedReadWriteRelation(
+      db,
+      { subjectObjectId: serviceId, objectId: tableId, evidenceType: 'CONFIG' },
+    );
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      contradictionCount: 1,
+      staleConfigCount: 1,
+    });
+  });
+
+  it('FILE evidence가 있는 승인 db_table relation은 STALE_CONFIG 근거로 사용해야 한다', async () => {
+    const { candidateId, serviceId, databaseId } = await seedDatabaseCandidate(db, 0.9);
+    await linkEvidence(db, candidateId, 'CONFIG');
+    const { tableId, candidateId: codeCandidateId } = await seedCodeDbTableCandidate(db, { serviceId, databaseId });
+    await db.delete(relationCandidates).where(eq(relationCandidates.id, codeCandidateId));
+    await seedApprovedReadWriteRelation(
+      db,
+      { subjectObjectId: serviceId, objectId: tableId, evidenceType: 'FILE' },
+    );
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      contradictionCount: 0,
+      staleConfigCount: 0,
+      skippedSingleSourceCount: 1,
+    });
+  });
+
   it('code 기반 service call 후보에 endpoint 근거가 없으면 PHANTOM_CALL을 기록해야 한다', async () => {
     const { candidateId } = await seedBaseCandidate(db, 0.6);
     await linkEvidence(db, candidateId, 'FILE');
@@ -886,7 +984,7 @@ describe('crossValidatePendingRelationCandidates', () => {
     const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
     await seedApprovedEndpointCallRelation(
       db,
-      { subjectObjectId: sourceServiceId, endpointId, source: 'CODE' },
+      { subjectObjectId: sourceServiceId, endpointId, evidenceType: 'FILE' },
     );
 
     const result = await crossValidatePendingRelationCandidates(db, { workspaceId });

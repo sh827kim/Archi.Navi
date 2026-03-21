@@ -6,6 +6,7 @@ import {
   objects,
   relationCandidateEvidences,
   relationCandidates,
+  relationEvidences,
 } from '@archi-navi/db';
 
 export type CrossValidationSource = 'config' | 'code' | 'db';
@@ -266,11 +267,20 @@ export async function crossValidatePendingRelationCandidates(
     );
   const approvedReadWriteRelations = await db
     .select({
+      relationId: objectRelations.id,
       subjectObjectId: objectRelations.subjectObjectId,
       objectId: objectRelations.objectId,
-      source: objectRelations.source,
+      evidenceType: evidences.evidenceType,
     })
     .from(objectRelations)
+    .innerJoin(
+      relationEvidences,
+      and(
+        eq(relationEvidences.workspaceId, objectRelations.workspaceId),
+        eq(relationEvidences.relationId, objectRelations.id),
+      ),
+    )
+    .innerJoin(evidences, eq(relationEvidences.evidenceId, evidences.id))
     .where(
       and(
         eq(objectRelations.workspaceId, input.workspaceId),
@@ -294,11 +304,20 @@ export async function crossValidatePendingRelationCandidates(
     );
   const approvedCallRelations = await db
     .select({
+      relationId: objectRelations.id,
       subjectObjectId: objectRelations.subjectObjectId,
       objectId: objectRelations.objectId,
-      metadata: objectRelations.metadata,
+      evidenceType: evidences.evidenceType,
     })
     .from(objectRelations)
+    .innerJoin(
+      relationEvidences,
+      and(
+        eq(relationEvidences.workspaceId, objectRelations.workspaceId),
+        eq(relationEvidences.relationId, objectRelations.id),
+      ),
+    )
+    .innerJoin(evidences, eq(relationEvidences.evidenceId, evidences.id))
     .where(
       and(
         eq(objectRelations.workspaceId, input.workspaceId),
@@ -326,7 +345,7 @@ export async function crossValidatePendingRelationCandidates(
     );
   }
   for (const approvedRelation of approvedReadWriteRelations) {
-    if (approvedRelation.source !== 'INFERRED') continue;
+    if (normalizeEvidenceType(approvedRelation.evidenceType) !== 'code') continue;
 
     const targetObject = objectMap.get(approvedRelation.objectId);
     if (!targetObject || targetObject.objectType !== 'db_table') continue;
@@ -352,8 +371,8 @@ export async function crossValidatePendingRelationCandidates(
   for (const approvedRelation of approvedCallRelations) {
     const targetObject = objectMap.get(approvedRelation.objectId);
     if (!targetObject || targetObject.objectType !== 'api_endpoint' || !targetObject.parentId) continue;
-    const metadata = asRecord(approvedRelation.metadata) ?? {};
-    if (!isCodeOrConfigEndpointEvidenceSource(asString(metadata.source))) continue;
+    const evidenceSource = normalizeEvidenceType(approvedRelation.evidenceType);
+    if (evidenceSource !== 'code' && evidenceSource !== 'config') continue;
 
     endpointEvidenceKeys.add(
       buildRelationUsageKey(approvedRelation.subjectObjectId, targetObject.parentId),

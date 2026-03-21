@@ -762,6 +762,7 @@ export async function executeInferenceRun(
         implicitFkCandidateCount: number;
       } = null;
   let crossBindingResult: ConfigCodeBindingResult | null = null;
+  let successfulCodeRelationRepoCount = 0;
   let crossValidationResult:
     | null
     | {
@@ -895,6 +896,7 @@ export async function executeInferenceRun(
           repoRoot: localSource.repoRoot,
         });
         codeResult.candidateCount += codeCand.candidateCount;
+        successfulCodeRelationRepoCount += 1;
       } catch (error) {
         sourceHasError = true;
         errors.push({
@@ -918,7 +920,7 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  if (modeSet.has('config') && modeSet.has('code')) {
+  if (modeSet.has('config') && modeSet.has('code') && successfulCodeRelationRepoCount > 0) {
     try {
       crossBindingResult = await bindConfigToCodeEndpoints(db, {
         workspaceId: input.workspaceId,
@@ -952,7 +954,7 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  if (modeSet.has('code') && modeSet.size >= 2 && codeResult.repoCount > 0) {
+  if (modeSet.has('code') && modeSet.size >= 2 && successfulCodeRelationRepoCount > 0) {
     try {
       crossValidationResult = await crossValidatePendingRelationCandidates(db, {
         workspaceId: input.workspaceId,

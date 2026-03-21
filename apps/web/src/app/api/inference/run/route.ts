@@ -219,6 +219,8 @@ export async function POST(req: NextRequest) {
           skippedSingleSourceCount: number;
         } = null;
 
+    let successfulCodeRelationRepoCount = 0;
+
     if (modeSet.has('config')) {
       for (const repoRoot of usedRepoRoots) {
         try {
@@ -266,6 +268,7 @@ export async function POST(req: NextRequest) {
 
           const codeCand = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
           codeResult.candidateCount += codeCand.candidateCount;
+          successfulCodeRelationRepoCount += 1;
         } catch (error) {
           errors.push({
             mode: 'code',
@@ -278,7 +281,7 @@ export async function POST(req: NextRequest) {
 
     // config+code 모두 실행된 경우 → 크로스 바인딩으로 COMPOUND→ATOMIC 후보 보강
     let crossBindingResult: ConfigCodeBindingResult | null = null;
-    if (modeSet.has('config') && modeSet.has('code')) {
+    if (modeSet.has('config') && modeSet.has('code') && successfulCodeRelationRepoCount > 0) {
       try {
         crossBindingResult = await bindConfigToCodeEndpoints(db, { workspaceId });
       } catch (error) {
@@ -299,7 +302,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (modeSet.has('code') && modeSet.size >= 2 && codeResult.repoCount > 0) {
+    if (modeSet.has('code') && modeSet.size >= 2 && successfulCodeRelationRepoCount > 0) {
       try {
         crossValidationResult = await crossValidatePendingRelationCandidates(db, { workspaceId });
       } catch (error) {

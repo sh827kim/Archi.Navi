@@ -181,4 +181,42 @@ describe('POST /api/inference/run', () => {
     expect(response.status).toBe(200);
     expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
   });
+
+  it('code 신호 추출은 성공해도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
+    getDbMock.mockResolvedValue({});
+    inferRelationsFromConfigMock.mockResolvedValue({
+      candidateCount: 1,
+      objectCount: 0,
+      fileCount: 1,
+      processedFileCount: 1,
+      skippedFileCount: 0,
+    });
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock.mockRejectedValue(new Error('relation inference failed'));
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['config', 'code'],
+          repoRoots: [process.cwd()],
+          useServiceMetadataPaths: false,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(bindConfigToCodeEndpointsMock).not.toHaveBeenCalled();
+    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
+  });
 });

@@ -15,6 +15,7 @@ import {
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import * as codeSignalEngineModule from '@/code/codeSignalEngine';
+import * as codeBasedModule from '@/relation/codeBased';
 import * as configBasedModule from '@/relation/configBased';
 import * as configCodeBindingModule from '@/relation/configCodeBinding';
 import * as crossValidationModule from '@/relation/crossSignalValidation';
@@ -46,6 +47,14 @@ vi.mock('@/relation/crossSignalValidation', async () => {
   return {
     ...actual,
     crossValidatePendingRelationCandidates: vi.fn(actual.crossValidatePendingRelationCandidates),
+  };
+});
+
+vi.mock('@/relation/codeBased', async () => {
+  const actual = await vi.importActual<typeof import('@/relation/codeBased')>('@/relation/codeBased');
+  return {
+    ...actual,
+    inferRelationsFromCodeSignals: vi.fn(actual.inferRelationsFromCodeSignals),
   };
 });
 
@@ -277,6 +286,52 @@ spring:
 
     await executeInferenceRun(db, { workspaceId, runId: run.id });
 
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
+    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
+  });
+
+  it('code 추출은 성공해도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+    );
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+    vi.mocked(configBasedModule.inferRelationsFromConfig).mockResolvedValueOnce({
+      fileCount: 1,
+      processedFileCount: 1,
+      skippedFileCount: 0,
+      candidateCount: 1,
+      objectCount: 1,
+    });
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    vi.mocked(codeBasedModule.inferRelationsFromCodeSignals).mockRejectedValueOnce(
+      new Error('relation inference failed'),
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config', 'code'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
     expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
   });
 
