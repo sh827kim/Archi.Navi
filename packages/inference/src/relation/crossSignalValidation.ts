@@ -176,9 +176,33 @@ function contradictionPenalty(config: CrossValidationConfig): number {
 
 export async function crossValidatePendingRelationCandidates(
   db: DbClient,
-  input: { workspaceId: string },
+  input: { workspaceId: string; repoRoots?: string[] },
 ): Promise<CrossValidationSummary> {
-  const candidates = await db
+  const scopedRepoRoots = Array.from(
+    new Set(
+      (input.repoRoots ?? [])
+        .map((repoRoot) => repoRoot.replace(/\\/g, '/').replace(/\/+$/, ''))
+        .filter((repoRoot) => repoRoot.length > 0),
+    ),
+  );
+  const repoScopeEnabled = scopedRepoRoots.length > 0;
+  const isPathInRepoScope = (value: string | null): boolean => {
+    if (!value) return false;
+    const normalizedValue = value.replace(/\\/g, '/');
+    return scopedRepoRoots.some(
+      (repoRoot) => normalizedValue === repoRoot || normalizedValue.startsWith(`${repoRoot}/`),
+    );
+  };
+  const matchesRepoScope = (metadata: unknown, evidenceFilePaths: string[]): boolean => {
+    if (!repoScopeEnabled) return true;
+
+    const record = asRecord(metadata) ?? {};
+    if (isPathInRepoScope(asString(record.repoRoot))) return true;
+    if (isPathInRepoScope(asString(record.specFile))) return true;
+    return evidenceFilePaths.some((filePath) => isPathInRepoScope(filePath));
+  };
+
+  const allCandidates = await db
     .select({
       id: relationCandidates.id,
       relationType: relationCandidates.relationType,
@@ -194,6 +218,32 @@ export async function crossValidatePendingRelationCandidates(
         eq(relationCandidates.status, 'PENDING'),
       ),
     );
+  const candidateEvidencePathRows = allCandidates.length > 0
+    ? await db
+      .select({
+        candidateId: relationCandidateEvidences.candidateId,
+        filePath: evidences.filePath,
+      })
+      .from(relationCandidateEvidences)
+      .innerJoin(evidences, eq(relationCandidateEvidences.evidenceId, evidences.id))
+      .where(
+        and(
+          eq(relationCandidateEvidences.workspaceId, input.workspaceId),
+          inArray(
+            relationCandidateEvidences.candidateId,
+            allCandidates.map((candidate) => candidate.id),
+          ),
+        ),
+      )
+    : [];
+  const evidencePathsByCandidateId = new Map<string, string[]>();
+  for (const row of candidateEvidencePathRows) {
+    const bucket = evidencePathsByCandidateId.get(row.candidateId) ?? [];
+    if (row.filePath) bucket.push(row.filePath);
+    evidencePathsByCandidateId.set(row.candidateId, bucket);
+  }
+  const candidates = allCandidates.filter((candidate) =>
+    matchesRepoScope(candidate.metadata, evidencePathsByCandidateId.get(candidate.id) ?? []));
 
   const profileRows = await db
     .execute<{ cross_validation: unknown }>(sql`
@@ -265,12 +315,16 @@ export async function crossValidatePendingRelationCandidates(
         or(eq(relationCandidates.relationType, 'read'), eq(relationCandidates.relationType, 'write')),
       ),
     );
+  const scopedReadWriteCandidates = repoScopeEnabled
+    ? relatedReadWriteCandidates.filter((candidate) => matchesRepoScope(candidate.metadata, []))
+    : relatedReadWriteCandidates;
   const approvedReadWriteRelations = await db
     .select({
       relationId: objectRelations.id,
       subjectObjectId: objectRelations.subjectObjectId,
       objectId: objectRelations.objectId,
       evidenceType: evidences.evidenceType,
+      filePath: evidences.filePath,
     })
     .from(objectRelations)
     .innerJoin(
@@ -302,6 +356,9 @@ export async function crossValidatePendingRelationCandidates(
         eq(relationCandidates.relationType, 'call'),
       ),
     );
+  const scopedCallCandidates = repoScopeEnabled
+    ? relatedCallCandidates.filter((candidate) => matchesRepoScope(candidate.metadata, []))
+    : relatedCallCandidates;
   const approvedCallRelations = await db
     .select({
       relationId: objectRelations.id,
@@ -309,6 +366,7 @@ export async function crossValidatePendingRelationCandidates(
       objectId: objectRelations.objectId,
       metadata: objectRelations.metadata,
       evidenceType: evidences.evidenceType,
+      filePath: evidences.filePath,
     })
     .from(objectRelations)
     .innerJoin(
@@ -331,7 +389,7 @@ export async function crossValidatePendingRelationCandidates(
   const codeTableAccessObjectIds = new Set<string>();
   const endpointEvidenceKeys = new Set<string>();
   const codeTopicUsageKeys = new Set<string>();
-  for (const relatedCandidate of relatedReadWriteCandidates) {
+  for (const relatedCandidate of scopedReadWriteCandidates) {
     const metadata = asRecord(relatedCandidate.metadata) ?? {};
     if (asString(metadata.source) !== 'CODE') continue;
 
@@ -346,6 +404,9 @@ export async function crossValidatePendingRelationCandidates(
     );
   }
   for (const approvedRelation of approvedReadWriteRelations) {
+    if (repoScopeEnabled && !matchesRepoScope(null, approvedRelation.filePath ? [approvedRelation.filePath] : [])) {
+      continue;
+    }
     if (normalizeEvidenceType(approvedRelation.evidenceType) !== 'code') continue;
 
     const targetObject = objectMap.get(approvedRelation.objectId);
@@ -358,7 +419,7 @@ export async function crossValidatePendingRelationCandidates(
       buildStaleConfigUsageKey(approvedRelation.subjectObjectId, targetObject.parentId),
     );
   }
-  for (const relatedCandidate of relatedCallCandidates) {
+  for (const relatedCandidate of scopedCallCandidates) {
     const targetObject = objectMap.get(relatedCandidate.objectId);
     if (!targetObject || targetObject.objectType !== 'api_endpoint' || !targetObject.parentId) continue;
 
@@ -371,6 +432,15 @@ export async function crossValidatePendingRelationCandidates(
     );
   }
   for (const approvedRelation of approvedCallRelations) {
+    if (
+      repoScopeEnabled
+      && !matchesRepoScope(
+        approvedRelation.metadata,
+        approvedRelation.filePath ? [approvedRelation.filePath] : [],
+      )
+    ) {
+      continue;
+    }
     const targetObject = objectMap.get(approvedRelation.objectId);
     if (!targetObject || targetObject.objectType !== 'api_endpoint' || !targetObject.parentId) continue;
     const metadata = asRecord(approvedRelation.metadata) ?? {};
@@ -400,7 +470,10 @@ export async function crossValidatePendingRelationCandidates(
         ),
       ),
     );
-  for (const relatedCandidate of relatedProduceConsumeCandidates) {
+  const scopedProduceConsumeCandidates = repoScopeEnabled
+    ? relatedProduceConsumeCandidates.filter((candidate) => matchesRepoScope(candidate.metadata, []))
+    : relatedProduceConsumeCandidates;
+  for (const relatedCandidate of scopedProduceConsumeCandidates) {
     const metadata = asRecord(relatedCandidate.metadata) ?? {};
     if (asString(metadata.source) !== 'CODE') continue;
 

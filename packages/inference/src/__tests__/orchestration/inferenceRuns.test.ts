@@ -252,7 +252,7 @@ spring:
 
     expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
       db,
-      { workspaceId },
+      { workspaceId, repoRoots: [tempDir] },
     );
   });
 
@@ -376,11 +376,11 @@ zuul:
 
     expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).toHaveBeenCalledWith(
       db,
-      { workspaceId },
+      { workspaceId, repoRoots: [tempDir] },
     );
     expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
       db,
-      { workspaceId },
+      { workspaceId, repoRoots: [tempDir] },
     );
 
     const bindingCallOrder = vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints).mock.invocationCallOrder[0];
@@ -420,6 +420,95 @@ zuul:
       .from(inferenceRunEvents)
       .where(and(eq(inferenceRunEvents.workspaceId, workspaceId), eq(inferenceRunEvents.runId, run.id)));
     expect(eventRows.length).toBeGreaterThan(0);
+  });
+
+  it('선택한 code source 중 일부라도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
+    const secondDir = join(tmpdir(), `archi-navi-infrun-${Date.now()}-b`);
+    mkdirSync(secondDir, { recursive: true });
+    try {
+      writeFileSync(
+        join(tempDir, 'application.yml'),
+        `
+spring:
+  application:
+    name: order-service
+zuul:
+  routes:
+    order:
+      serviceId: order-service
+`,
+      );
+      writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+      writeFileSync(join(secondDir, 'application.yml'), 'spring:\n  application:\n    name: order-service\n');
+      writeFileSync(join(secondDir, 'index.ts'), 'export const secondOrderService = true;\n');
+
+      vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValue({
+        fileCount: 1,
+        artifactCount: 1,
+        signalCount: 1,
+        skippedCount: 0,
+        engineUsed: 'hybrid',
+        fallbackUsed: false,
+        warning: null,
+        scanFailures: [],
+      });
+      vi.mocked(codeBasedModule.inferRelationsFromCodeSignals)
+        .mockResolvedValueOnce({
+          edgeCount: 1,
+          processedEdgeCount: 1,
+          skippedEdgeCount: 0,
+          candidateCount: 1,
+          createdTopicCount: 0,
+          createdQueueCount: 0,
+          createdDatabaseCount: 0,
+          createdDbTableCount: 0,
+          createdEndpointCount: 0,
+        })
+        .mockRejectedValueOnce(new Error('relation inference failed'));
+
+      const run = await createInferenceRun(db, {
+        workspaceId,
+        modes: ['config', 'code'],
+        sources: [
+          { type: 'local', ref: tempDir },
+          { type: 'local', ref: secondDir },
+        ],
+      });
+
+      await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+      expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
+      expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
+    } finally {
+      rmSync(secondDir, { recursive: true, force: true });
+    }
+  });
+
+  it('code-only 실행에서 relation inference가 전부 실패하면 run이 FAILED로 완료되어야 한다', async () => {
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    vi.mocked(codeBasedModule.inferRelationsFromCodeSignals).mockRejectedValueOnce(
+      new Error('relation inference failed'),
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['code'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(detail.run.status).toBe('FAILED');
+    expect(detail.sources[0]?.status).toBe('FAILED');
   });
 
   it('RUNNING 중 취소되면 최종 상태를 CANCELED로 유지해야 한다', async () => {

@@ -152,7 +152,10 @@ describe('POST /api/inference/run', () => {
     );
 
     expect(response.status).toBe(200);
-    expect(crossValidatePendingRelationCandidatesMock).toHaveBeenCalledWith({}, { workspaceId: 'ws-1' });
+    expect(crossValidatePendingRelationCandidatesMock).toHaveBeenCalledWith(
+      {},
+      { workspaceId: 'ws-1', repoRoots: [process.cwd()] },
+    );
   });
 
   it('code mode가 포함되어도 code 추론이 실패하면 cross validation을 호출하지 않아야 한다', async () => {
@@ -218,5 +221,76 @@ describe('POST /api/inference/run', () => {
     expect(response.status).toBe(200);
     expect(bindConfigToCodeEndpointsMock).not.toHaveBeenCalled();
     expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
+  });
+
+  it('선택한 code root 중 일부라도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
+    const repoA = process.cwd();
+    const repoB = `${process.cwd()}/src`;
+    getDbMock.mockResolvedValue({});
+    inferRelationsFromConfigMock.mockResolvedValue({
+      candidateCount: 1,
+      objectCount: 0,
+      fileCount: 1,
+      processedFileCount: 1,
+      skippedFileCount: 0,
+    });
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock
+      .mockResolvedValueOnce({ candidateCount: 1 })
+      .mockRejectedValueOnce(new Error('relation inference failed'));
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['config', 'code'],
+          repoRoots: [repoA, repoB],
+          useServiceMetadataPaths: false,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(bindConfigToCodeEndpointsMock).not.toHaveBeenCalled();
+    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
+  });
+
+  it('code-only 실행에서 relation inference가 전부 실패하면 500을 반환해야 한다', async () => {
+    getDbMock.mockResolvedValue({});
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock.mockRejectedValue(new Error('relation inference failed'));
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['code'],
+          repoRoots: [process.cwd()],
+          useServiceMetadataPaths: false,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(500);
   });
 });

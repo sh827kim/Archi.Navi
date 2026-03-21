@@ -220,6 +220,7 @@ export async function POST(req: NextRequest) {
         } = null;
 
     let successfulCodeRelationRepoCount = 0;
+    const successfulCodeRepoRoots: string[] = [];
 
     if (modeSet.has('config')) {
       for (const repoRoot of usedRepoRoots) {
@@ -269,6 +270,7 @@ export async function POST(req: NextRequest) {
           const codeCand = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
           codeResult.candidateCount += codeCand.candidateCount;
           successfulCodeRelationRepoCount += 1;
+          successfulCodeRepoRoots.push(repoRoot);
         } catch (error) {
           errors.push({
             mode: 'code',
@@ -281,9 +283,16 @@ export async function POST(req: NextRequest) {
 
     // config+code 모두 실행된 경우 → 크로스 바인딩으로 COMPOUND→ATOMIC 후보 보강
     let crossBindingResult: ConfigCodeBindingResult | null = null;
-    if (modeSet.has('config') && modeSet.has('code') && successfulCodeRelationRepoCount > 0) {
+    const allSelectedCodeRootsSucceeded =
+      modeSet.has('code')
+      && usedRepoRoots.length > 0
+      && successfulCodeRelationRepoCount === usedRepoRoots.length;
+    if (modeSet.has('config') && allSelectedCodeRootsSucceeded) {
       try {
-        crossBindingResult = await bindConfigToCodeEndpoints(db, { workspaceId });
+        crossBindingResult = await bindConfigToCodeEndpoints(db, {
+          workspaceId,
+          repoRoots: successfulCodeRepoRoots,
+        });
       } catch (error) {
         warnings.push(
           `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
@@ -302,9 +311,12 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (modeSet.has('code') && modeSet.size >= 2 && successfulCodeRelationRepoCount > 0) {
+    if (modeSet.has('code') && modeSet.size >= 2 && allSelectedCodeRootsSucceeded) {
       try {
-        crossValidationResult = await crossValidatePendingRelationCandidates(db, { workspaceId });
+        crossValidationResult = await crossValidatePendingRelationCandidates(db, {
+          workspaceId,
+          repoRoots: successfulCodeRepoRoots,
+        });
       } catch (error) {
         warnings.push(
           `cross-signal validation 실패: ${error instanceof Error ? error.message : 'unknown'}`,
@@ -338,7 +350,7 @@ export async function POST(req: NextRequest) {
       configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
     const hasAnySuccess =
       configResult.repoCount > 0 ||
-      codeResult.repoCount > 0 ||
+      successfulCodeRelationRepoCount > 0 ||
       dbResult !== null;
 
     if (!hasAnySuccess && errors.length > 0) {

@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
 import { migrate } from 'drizzle-orm/pglite/migrator';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
   createPgliteClient,
   objectRelations,
@@ -1052,6 +1052,245 @@ describe('crossValidatePendingRelationCandidates', () => {
     );
 
     const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      contradictionCount: 1,
+    });
+  });
+
+  it('repo root가 지정되면 해당 범위 후보만 cross validation으로 갱신해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'cross-validation-test' });
+
+    const repoA = '/tmp/repo-a';
+    const repoB = '/tmp/repo-b';
+    const sourceServiceId = generateId();
+    const targetServiceId = generateId();
+    const candidateA = generateId();
+    const candidateB = generateId();
+    const evidenceA = generateId();
+    const evidenceB = generateId();
+    const endpointEvidenceCandidateId = generateId();
+    const endpointId = generateId();
+
+    await db.insert(objects).values([
+      {
+        id: sourceServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'gateway',
+        path: `/${sourceServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: targetServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'orders',
+        path: `/${targetServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /orders',
+        parentId: targetServiceId,
+        path: `/${targetServiceId}/${endpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/orders', repoRoot: repoA, source: 'CODE' },
+      },
+    ]);
+    await db.insert(relationCandidates).values([
+      {
+        id: candidateA,
+        workspaceId,
+        relationType: 'call',
+        subjectObjectId: sourceServiceId,
+        objectId: targetServiceId,
+        confidence: 0.9,
+        status: 'PENDING',
+        metadata: {
+          source: 'CODE',
+          repoRoot: repoA,
+          crossValidation: {
+            validated: true,
+            supportingSources: ['config', 'code'],
+            originalConfidence: 0.6,
+            adjustedConfidence: 0.9,
+          },
+        },
+      },
+      {
+        id: candidateB,
+        workspaceId,
+        relationType: 'call',
+        subjectObjectId: sourceServiceId,
+        objectId: targetServiceId,
+        confidence: 0.92,
+        status: 'PENDING',
+        metadata: {
+          source: 'CODE',
+          repoRoot: repoB,
+          crossValidation: {
+            validated: true,
+            supportingSources: ['config', 'code'],
+            originalConfidence: 0.62,
+            adjustedConfidence: 0.92,
+          },
+        },
+      },
+      {
+        id: endpointEvidenceCandidateId,
+        workspaceId,
+        relationType: 'call',
+        subjectObjectId: sourceServiceId,
+        objectId: endpointId,
+        confidence: 0.7,
+        status: 'PENDING',
+        metadata: {
+          source: 'CODE',
+          repoRoot: repoA,
+          targetType: 'api_endpoint',
+          targetServiceId,
+        },
+      },
+    ]);
+    await db.insert(evidences).values([
+      {
+        id: evidenceA,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `${repoA}/src/A.java`,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'call A',
+        metadata: {},
+      },
+      {
+        id: evidenceB,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `${repoB}/src/B.java`,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'call B',
+        metadata: {},
+      },
+    ]);
+    await db.insert(relationCandidateEvidences).values([
+      { workspaceId, candidateId: candidateA, evidenceId: evidenceA },
+      { workspaceId, candidateId: candidateB, evidenceId: evidenceB },
+    ]);
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: [repoA],
+    });
+
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      skippedSingleSourceCount: 2,
+    });
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(inArray(relationCandidates.id, [candidateA, candidateB]));
+    const updatedA = candidates.find((candidate) => candidate.id === candidateA);
+    const untouchedB = candidates.find((candidate) => candidate.id === candidateB);
+
+    expect(updatedA?.confidence).toBeCloseTo(0.6);
+    expect(
+      ((updatedA?.metadata ?? {}) as Record<string, unknown>)['crossValidation'],
+    ).toBeUndefined();
+    expect(untouchedB?.confidence).toBeCloseTo(0.92);
+    expect(
+      ((untouchedB?.metadata ?? {}) as Record<string, unknown>)['crossValidation'],
+    ).toBeTruthy();
+  });
+
+  it('다른 repo root의 승인 endpoint relation은 scoped run의 PHANTOM_CALL 근거를 해소하지 않아야 한다', async () => {
+    const repoA = '/tmp/repo-a';
+    const repoB = '/tmp/repo-b';
+    const { sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
+    const candidateId = generateId();
+    const evidenceId = generateId();
+
+    await db.insert(relationCandidates).values({
+      id: candidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: targetServiceId,
+      confidence: 0.6,
+      status: 'PENDING',
+      metadata: {
+        source: 'CODE',
+        repoRoot: repoA,
+      },
+    });
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: `${repoA}/src/A.java`,
+      lineStart: 1,
+      lineEnd: 1,
+      excerpt: 'call A',
+      metadata: {},
+    });
+    await db.insert(relationCandidateEvidences).values({
+      workspaceId,
+      candidateId,
+      evidenceId,
+    });
+
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    const approvedRelationId = generateId();
+    const approvedEvidenceId = generateId();
+    await db.insert(objectRelations).values({
+      id: approvedRelationId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: endpointId,
+      confidence: 0.7,
+      status: 'APPROVED',
+      source: 'INFERRED',
+      metadata: { targetType: 'api_endpoint' },
+    });
+    await db.insert(evidences).values({
+      id: approvedEvidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: `${repoB}/src/B.java`,
+      lineStart: 1,
+      lineEnd: 1,
+      excerpt: 'call B',
+      metadata: {},
+    });
+    await db.insert(relationEvidences).values({
+      workspaceId,
+      relationId: approvedRelationId,
+      evidenceId: approvedEvidenceId,
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: [repoA],
+    });
 
     expect(result).toMatchObject({
       candidateCount: 1,

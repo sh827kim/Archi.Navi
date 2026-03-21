@@ -763,6 +763,7 @@ export async function executeInferenceRun(
       } = null;
   let crossBindingResult: ConfigCodeBindingResult | null = null;
   let successfulCodeRelationRepoCount = 0;
+  const successfulCodeRepoRoots: string[] = [];
   let crossValidationResult:
     | null
     | {
@@ -897,6 +898,7 @@ export async function executeInferenceRun(
         });
         codeResult.candidateCount += codeCand.candidateCount;
         successfulCodeRelationRepoCount += 1;
+        successfulCodeRepoRoots.push(localSource.repoRoot);
       } catch (error) {
         sourceHasError = true;
         errors.push({
@@ -920,10 +922,16 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  if (modeSet.has('config') && modeSet.has('code') && successfulCodeRelationRepoCount > 0) {
+  const allSelectedCodeRootsSucceeded =
+    modeSet.has('code')
+    && sourceResolution.localSources.length > 0
+    && successfulCodeRelationRepoCount === sourceResolution.localSources.length;
+
+  if (modeSet.has('config') && allSelectedCodeRootsSucceeded) {
     try {
       crossBindingResult = await bindConfigToCodeEndpoints(db, {
         workspaceId: input.workspaceId,
+        repoRoots: successfulCodeRepoRoots,
       });
     } catch (error) {
       warnings.push(
@@ -954,10 +962,11 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  if (modeSet.has('code') && modeSet.size >= 2 && successfulCodeRelationRepoCount > 0) {
+  if (modeSet.has('code') && modeSet.size >= 2 && allSelectedCodeRootsSucceeded) {
     try {
       crossValidationResult = await crossValidatePendingRelationCandidates(db, {
         workspaceId: input.workspaceId,
+        repoRoots: successfulCodeRepoRoots,
       });
     } catch (error) {
       warnings.push(
@@ -976,7 +985,7 @@ export async function executeInferenceRun(
   const relationCandidatesCreated =
     configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
   const hasAnySuccess =
-    configResult.repoCount > 0 || codeResult.repoCount > 0 || dbResult !== null;
+    configResult.repoCount > 0 || successfulCodeRelationRepoCount > 0 || dbResult !== null;
 
   const finalStatus: InferenceRunStatus =
     !hasAnySuccess && errors.length > 0 ? 'FAILED' : 'SUCCEEDED';

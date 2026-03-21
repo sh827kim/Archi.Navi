@@ -4,8 +4,10 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { and, eq } from 'drizzle-orm';
 import {
   createPgliteClient,
+  evidences,
   objectRelations,
   objects,
+  relationCandidateEvidences,
   relationCandidates,
   workspaces,
 } from '@archi-navi/db';
@@ -115,5 +117,107 @@ describe('bindConfigToCodeEndpoints', () => {
       );
 
     expect(endpointCandidates).toHaveLength(0);
+  });
+
+  it('stale crossValidation 상태를 endpoint 후보로 복제하지 않아야 한다', async () => {
+    const sourceServiceId = generateId();
+    const targetServiceId = generateId();
+    const endpointId = generateId();
+    const compoundCandidateId = generateId();
+    const evidenceId = generateId();
+    const repoRoot = '/tmp/repo-a';
+
+    await db.insert(objects).values([
+      {
+        id: sourceServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'gateway',
+        path: `/gateway/${sourceServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: targetServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'orders',
+        path: `/orders/${targetServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/orders',
+        parentId: targetServiceId,
+        path: `/orders/${targetServiceId}/${endpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/orders', repoRoot, source: 'CODE' },
+      },
+    ]);
+
+    await db.insert(relationCandidates).values({
+      id: compoundCandidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: targetServiceId,
+      confidence: 0.95,
+      metadata: {
+        source: 'application_yml',
+        crossValidation: {
+          validated: true,
+          supportingSources: ['config', 'code'],
+          originalConfidence: 0.7,
+          adjustedConfidence: 0.95,
+        },
+      },
+      status: 'PENDING',
+    });
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'CONFIG',
+      filePath: `${repoRoot}/application.yml`,
+      excerpt: 'zuul.routes.order.serviceId=orders',
+      metadata: {},
+    });
+    await db.insert(relationCandidateEvidences).values({
+      workspaceId,
+      candidateId: compoundCandidateId,
+      evidenceId,
+    });
+
+    const result = await bindConfigToCodeEndpoints(db, { workspaceId, repoRoots: [repoRoot] });
+
+    expect(result.createdEndpointCandidateCount).toBe(1);
+
+    const endpointCandidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.subjectObjectId, sourceServiceId),
+          eq(relationCandidates.objectId, endpointId),
+        ),
+      );
+
+    expect(endpointCandidates).toHaveLength(1);
+    expect(endpointCandidates[0]?.confidence).toBeCloseTo(0.595);
+    expect(
+      ((endpointCandidates[0]?.metadata ?? {}) as Record<string, unknown>)['crossValidation'],
+    ).toBeUndefined();
   });
 });
