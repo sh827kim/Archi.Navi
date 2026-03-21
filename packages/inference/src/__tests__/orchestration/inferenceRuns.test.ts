@@ -179,7 +179,7 @@ spring:
     expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
   });
 
-  it('2개 이상 mode 실행 시 cross validation을 호출해야 한다', async () => {
+  it('code mode 없이 config+db 실행이면 cross validation을 호출하지 않아야 한다', async () => {
     writeFileSync(
       join(tempDir, 'application.yml'),
       `
@@ -194,6 +194,20 @@ spring:
     const run = await createInferenceRun(db, {
       workspaceId,
       modes: ['config', 'db'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
+  });
+
+  it('code mode가 포함된 다중 mode 실행이면 cross validation을 호출해야 한다', async () => {
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['code', 'db'],
       sources: [{ type: 'local', ref: tempDir }],
     });
 

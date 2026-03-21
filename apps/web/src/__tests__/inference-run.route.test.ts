@@ -75,7 +75,7 @@ describe('POST /api/inference/run', () => {
     expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
   });
 
-  it('2개 이상 mode 실행이면 cross validation을 호출해야 한다', async () => {
+  it('code mode 없이 config+db 실행이면 cross validation을 호출하지 않아야 한다', async () => {
     getDbMock.mockResolvedValue({});
     inferRelationsFromConfigMock.mockResolvedValue({
       candidateCount: 1,
@@ -101,6 +101,50 @@ describe('POST /api/inference/run', () => {
         body: JSON.stringify({
           workspaceId: 'ws-1',
           modes: ['config', 'db'],
+          repoRoots: [process.cwd()],
+          useServiceMetadataPaths: false,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
+  });
+
+  it('code mode가 포함된 다중 mode 실행이면 cross validation을 호출해야 한다', async () => {
+    getDbMock.mockResolvedValue({});
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock.mockResolvedValue({
+      candidateCount: 1,
+    });
+    extractDbSchemaSignalsMock.mockResolvedValue({
+      tableCount: 0,
+      fkCandidateCount: 0,
+      implicitFkCandidateCount: 0,
+    });
+    crossValidatePendingRelationCandidatesMock.mockResolvedValue({
+      candidateCount: 1,
+      validatedCount: 1,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 0,
+      staleConfigCount: 0,
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['code', 'db'],
           repoRoots: [process.cwd()],
           useServiceMetadataPaths: false,
         }),
