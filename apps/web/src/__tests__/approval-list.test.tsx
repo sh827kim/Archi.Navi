@@ -505,4 +505,39 @@ describe('ApprovalList', () => {
     expect(cards[0]?.textContent).toContain('billing-service');
     expect(cards[1]?.textContent).toContain('GET /orders');
   });
+
+  it('approval 목록은 페이지를 넘겨 전체 후보를 가져온 뒤 정렬/필터해야 한다', async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) =>
+      createCandidate(`cand-page-${index}`, `service-${index}`),
+    );
+    const secondPage = [
+      createCandidate('cand-last', 'late-warning', 'call', {
+        validated: false,
+        supportCount: 1,
+        supportingSources: ['code'],
+        contradictions: [{ ruleId: 'C2', type: 'PHANTOM_CALL', penalty: 0.15 }],
+      }),
+    ];
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/inference/candidates') {
+        const offset = url.searchParams.get('offset');
+        if (offset === '0') return Promise.resolve(jsonResponse(firstPage));
+        if (offset === '200') return Promise.resolve(jsonResponse(secondPage));
+        throw new Error(`Unexpected offset: ${offset}`);
+      }
+      throw new Error(`Unexpected fetch: ${url.toString()}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('late-warning');
+    fireEvent.change(screen.getByLabelText('교차 검증 필터'), {
+      target: { value: 'warnings' },
+    });
+
+    expect(screen.getByText('late-warning')).toBeTruthy();
+    expect(screen.queryByText('service-0')).toBeNull();
+  });
 });

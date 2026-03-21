@@ -10,7 +10,7 @@ import {
   relationCandidateEvidences,
   relationCandidates,
 } from '@archi-navi/db';
-import { eq, and, inArray } from 'drizzle-orm';
+import { eq, and, inArray, asc, desc } from 'drizzle-orm';
 import {
   CROSS_VALIDATION_CONTRADICTION_TYPES,
   CROSS_VALIDATION_RULE_IDS,
@@ -108,6 +108,10 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
     }
     const status = searchParams.get('status') ?? 'PENDING';
+    const requestedLimit = Number.parseInt(searchParams.get('limit') ?? '100', 10);
+    const requestedOffset = Number.parseInt(searchParams.get('offset') ?? '0', 10);
+    const limit = Number.isFinite(requestedLimit) ? Math.min(Math.max(requestedLimit, 1), 500) : 100;
+    const offset = Number.isFinite(requestedOffset) ? Math.max(requestedOffset, 0) : 0;
 
     const db = await getDb();
 
@@ -121,7 +125,13 @@ export async function GET(req: NextRequest) {
           eq(relationCandidates.status, status as 'PENDING' | 'APPROVED' | 'REJECTED'),
         ),
       )
-      .limit(100);
+      .orderBy(
+        desc(relationCandidates.confidence),
+        asc(relationCandidates.createdAt),
+        asc(relationCandidates.id),
+      )
+      .limit(limit)
+      .offset(offset);
 
     const candidateIds = candidates.map((candidate) => candidate.id);
     const evidenceRows = candidateIds.length > 0

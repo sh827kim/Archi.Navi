@@ -9,12 +9,16 @@ const {
   relationCandidateEvidencesMock,
   objectsMock,
   evidencesMock,
+  descMock,
+  ascMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
   relationCandidatesMock: {
     workspaceId: 'relation_candidates.workspace_id',
     status: 'relation_candidates.status',
     id: 'relation_candidates.id',
+    confidence: 'relation_candidates.confidence',
+    createdAt: 'relation_candidates.created_at',
     subjectObjectId: 'relation_candidates.subject_object_id',
     objectId: 'relation_candidates.object_id',
   },
@@ -36,6 +40,8 @@ const {
     id: 'evidences.id',
     evidenceType: 'evidences.evidence_type',
   },
+  descMock: vi.fn((value: unknown) => ({ type: 'desc', value })),
+  ascMock: vi.fn((value: unknown) => ({ type: 'asc', value })),
 }));
 
 vi.mock('@archi-navi/db', () => ({
@@ -50,6 +56,8 @@ vi.mock('drizzle-orm', () => ({
   eq: vi.fn(() => ({ type: 'eq' })),
   and: vi.fn((...args: unknown[]) => ({ type: 'and', args })),
   inArray: vi.fn(() => ({ type: 'inArray' })),
+  desc: descMock,
+  asc: ascMock,
 }));
 
 import { GET } from '@/app/api/inference/candidates/route';
@@ -100,7 +108,11 @@ describe('GET /api/inference/candidates', () => {
         .mockReturnValueOnce({
           from: () => ({
             where: () => ({
-              limit: async () => candidates,
+              orderBy: () => ({
+                limit: () => ({
+                  offset: async () => candidates,
+                }),
+              }),
             }),
           }),
         })
@@ -182,7 +194,11 @@ describe('GET /api/inference/candidates', () => {
         .mockReturnValueOnce({
           from: () => ({
             where: () => ({
-              limit: async () => candidates,
+              orderBy: () => ({
+                limit: () => ({
+                  offset: async () => candidates,
+                }),
+              }),
             }),
           }),
         })
@@ -266,7 +282,11 @@ describe('GET /api/inference/candidates', () => {
         .mockReturnValueOnce({
           from: () => ({
             where: () => ({
-              limit: async () => candidates,
+              orderBy: () => ({
+                limit: () => ({
+                  offset: async () => candidates,
+                }),
+              }),
             }),
           }),
         })
@@ -356,7 +376,11 @@ describe('GET /api/inference/candidates', () => {
         .mockReturnValueOnce({
           from: () => ({
             where: () => ({
-              limit: async () => candidates,
+              orderBy: () => ({
+                limit: () => ({
+                  offset: async () => candidates,
+                }),
+              }),
             }),
           }),
         })
@@ -391,5 +415,41 @@ describe('GET /api/inference/candidates', () => {
         }),
       }),
     ]));
+  });
+
+  it('limit/offset query를 후보 조회에 반영해야 한다', async () => {
+    const offsetSpy = vi.fn(async () => []);
+    const limitSpy = vi.fn(() => ({
+      offset: offsetSpy,
+    }));
+    const orderBySpy = vi.fn(() => ({
+      limit: limitSpy,
+    }));
+    const db = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: () => ({
+            where: () => ({
+              orderBy: orderBySpy,
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            where: async () => [],
+          }),
+        }),
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/candidates?workspaceId=ws-1&limit=250&offset=50'),
+    );
+
+    expect(response.status).toBe(200);
+    expect(orderBySpy).toHaveBeenCalled();
+    expect(limitSpy).toHaveBeenCalledWith(250);
+    expect(offsetSpy).toHaveBeenCalledWith(50);
   });
 });

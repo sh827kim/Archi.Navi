@@ -230,6 +230,31 @@ function hashDbTableSchema(
     return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value !== null && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null;
+}
+
+function restoreRawConfidence(metadata: unknown, fallbackConfidence: number): number {
+    const crossValidation = asRecord(asRecord(metadata)?.crossValidation);
+    const originalConfidence = crossValidation?.originalConfidence;
+    return typeof originalConfidence === 'number' && Number.isFinite(originalConfidence)
+        ? originalConfidence
+        : fallbackConfidence;
+}
+
+function stripCrossValidationMetadata(metadata: unknown): Record<string, unknown> {
+    const record = asRecord(metadata) ?? {};
+    if (!Object.prototype.hasOwnProperty.call(record, 'crossValidation')) {
+        return record;
+    }
+
+    const nextMetadata = { ...record };
+    delete nextMetadata.crossValidation;
+    return nextMetadata;
+}
+
 function dbSchemaArtifactPath(tableId: string): string {
     return `db-table://${tableId}`;
 }
@@ -306,9 +331,8 @@ export async function extractDbSchemaSignals(
         return existing?.sha256 !== hash;
     });
 
-    if (tablesToProcess.length === 0) {
-        return { tableCount: dbTables.length, fkCandidateCount: 0, implicitFkCandidateCount: 0 };
-    }
+    const candidateRefreshTableIds = (tablesToProcess.length > 0 ? tablesToProcess : dbTables)
+        .map((table) => table.id);
 
     // 증분 모드에서만: 변경된 테이블의 기존 PENDING fk_reference 후보를 정리 후 재계산한다.
     if (incremental) {
@@ -324,6 +348,39 @@ export async function extractDbSchemaSignals(
                     ),
                 );
         }
+    }
+
+    const staleValidatedCandidates = await db
+        .select({
+            id: relationCandidates.id,
+            confidence: relationCandidates.confidence,
+            metadata: relationCandidates.metadata,
+        })
+        .from(relationCandidates)
+        .where(
+            and(
+                eq(relationCandidates.workspaceId, workspaceId),
+                eq(relationCandidates.status, 'PENDING'),
+                eq(relationCandidates.relationType, 'fk_reference'),
+                inArray(relationCandidates.subjectObjectId, candidateRefreshTableIds),
+            ),
+        );
+
+    for (const candidate of staleValidatedCandidates) {
+        const nextMetadata = stripCrossValidationMetadata(candidate.metadata);
+        if (nextMetadata === candidate.metadata && candidate.metadata !== null) continue;
+
+        await db
+            .update(relationCandidates)
+            .set({
+                confidence: restoreRawConfidence(candidate.metadata, candidate.confidence),
+                metadata: nextMetadata,
+            })
+            .where(eq(relationCandidates.id, candidate.id));
+    }
+
+    if (tablesToProcess.length === 0) {
+        return { tableCount: dbTables.length, fkCandidateCount: 0, implicitFkCandidateCount: 0 };
     }
 
     let fkCandidateCount = 0;

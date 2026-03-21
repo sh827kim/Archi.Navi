@@ -57,6 +57,7 @@ type CrossValidationFilter = 'all' | 'warnings' | 'supported' | 'single';
 type CrossValidationSort = 'cross-validation-priority' | 'confidence-desc' | 'confidence-asc';
 
 const CODE_ENGINE_LS_KEY = 'archi-navi:inference:code-engine';
+const CANDIDATE_PAGE_SIZE = 200;
 
 function resolveCodeEngine(): 'hybrid' | 'ast' | 'regex' {
   if (typeof window === 'undefined') return 'hybrid';
@@ -175,10 +176,22 @@ export function ApprovalList() {
   const loadCandidates = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch(`/api/inference/candidates?workspaceId=${workspaceId}&status=PENDING`);
-      if (!res.ok) throw new Error();
-      const data = (await res.json()) as RelationCandidate[];
-      setCandidates(data);
+      const allCandidates: RelationCandidate[] = [];
+      let offset = 0;
+
+      while (true) {
+        const res = await fetch(
+          `/api/inference/candidates?workspaceId=${workspaceId}&status=PENDING&limit=${CANDIDATE_PAGE_SIZE}&offset=${offset}`,
+        );
+        if (!res.ok) throw new Error();
+
+        const page = (await res.json()) as RelationCandidate[];
+        allCandidates.push(...page);
+        if (page.length < CANDIDATE_PAGE_SIZE) break;
+        offset += page.length;
+      }
+
+      setCandidates(allCandidates);
     } catch {
       setCandidates([]);
     } finally {
