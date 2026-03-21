@@ -465,4 +465,44 @@ describe('ApprovalList', () => {
     expect(cards[1]?.textContent).toContain('mid-confidence');
     expect(cards[2]?.textContent).toContain('high-confidence');
   });
+
+  it('mixed atomic/compound 목록에서도 교차 검증 정렬 우선순서를 유지해야 한다', async () => {
+    const atomicSingle = {
+      ...createCandidate('cand-17', 'GET /orders'),
+      objectGranularity: 'ATOMIC' as const,
+      objectParentName: 'order-service',
+      objectObjectType: 'api_endpoint',
+      confidence: 0.95,
+      crossValidation: {
+        validated: false,
+        supportCount: 1,
+        supportingSources: ['code'],
+      },
+    };
+    const compoundWarning = {
+      ...createCandidate('cand-18', 'billing-service'),
+      confidence: 0.4,
+      crossValidation: {
+        validated: false,
+        supportCount: 1,
+        supportingSources: ['config'],
+        contradictions: [{ ruleId: 'C2', type: 'PHANTOM_CALL' as const, penalty: 0.15 }],
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([atomicSingle, compoundWarning]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('GET /orders');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('billing-service');
+    expect(cards[1]?.textContent).toContain('GET /orders');
+  });
 });

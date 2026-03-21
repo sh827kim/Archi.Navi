@@ -16,6 +16,10 @@ import {
 } from '../code/codeSignalEngine';
 import { extractDbSchemaSignals } from '../db/dbSchemaSignal';
 import { inferRelationsFromConfig } from '../relation/configBased';
+import {
+  bindConfigToCodeEndpoints,
+  type ConfigCodeBindingResult,
+} from '../relation/configCodeBinding';
 import { crossValidatePendingRelationCandidates } from '../relation/crossSignalValidation';
 import { inferRelationsFromCodeSignals } from '../relation/codeBased';
 
@@ -750,18 +754,19 @@ export async function executeInferenceRun(
     fallbackRepoRoots: [] as string[],
     scanFailures: [] as Array<{ filePath: string; reason: string; language: string }>,
   };
-    let dbResult:
-      | null
-      | {
-          tableCount: number;
-          fkCandidateCount: number;
-          implicitFkCandidateCount: number;
-        } = null;
-    let crossValidationResult:
-      | null
-      | {
-          candidateCount: number;
-          validatedCount: number;
+  let dbResult:
+    | null
+    | {
+        tableCount: number;
+        fkCandidateCount: number;
+        implicitFkCandidateCount: number;
+      } = null;
+  let crossBindingResult: ConfigCodeBindingResult | null = null;
+  let crossValidationResult:
+    | null
+    | {
+        candidateCount: number;
+        validatedCount: number;
           skippedSingleSourceCount: number;
         } = null;
 
@@ -913,6 +918,22 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
+  if (modeSet.has('config') && modeSet.has('code')) {
+    try {
+      crossBindingResult = await bindConfigToCodeEndpoints(db, {
+        workspaceId: input.workspaceId,
+      });
+    } catch (error) {
+      warnings.push(
+        `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
   if (modeSet.has('db')) {
     try {
       dbResult = await extractDbSchemaSignals(db, {
@@ -949,8 +970,9 @@ export async function executeInferenceRun(
 
   const dbCandidateCount =
     (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
+  const crossBindingCandidateCount = crossBindingResult?.createdEndpointCandidateCount ?? 0;
   const relationCandidatesCreated =
-    configResult.candidateCount + dbCandidateCount + codeResult.candidateCount;
+    configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
   const hasAnySuccess =
     configResult.repoCount > 0 || codeResult.repoCount > 0 || dbResult !== null;
 
@@ -961,6 +983,7 @@ export async function executeInferenceRun(
     config: configResult,
     code: codeResult,
     db: dbResult,
+    crossBinding: crossBindingResult,
     summary: {
       relationCandidatesCreated,
       executionMode: Array.from(modeSet),

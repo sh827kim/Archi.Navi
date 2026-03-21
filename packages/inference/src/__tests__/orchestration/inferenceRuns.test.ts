@@ -15,6 +15,7 @@ import {
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import * as configBasedModule from '@/relation/configBased';
+import * as configCodeBindingModule from '@/relation/configCodeBinding';
 import * as crossValidationModule from '@/relation/crossSignalValidation';
 import {
   cancelInferenceRun,
@@ -28,6 +29,14 @@ vi.mock('@/relation/configBased', async () => {
   return {
     ...actual,
     inferRelationsFromConfig: vi.fn(actual.inferRelationsFromConfig),
+  };
+});
+
+vi.mock('@/relation/configCodeBinding', async () => {
+  const actual = await vi.importActual<typeof import('@/relation/configCodeBinding')>('@/relation/configCodeBinding');
+  return {
+    ...actual,
+    bindConfigToCodeEndpoints: vi.fn(actual.bindConfigToCodeEndpoints),
   };
 });
 
@@ -217,6 +226,51 @@ spring:
       db,
       { workspaceId },
     );
+  });
+
+  it('config+code 실행이면 cross binding을 먼저 수행한 뒤 cross validation을 호출해야 한다', async () => {
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      `
+spring:
+  application:
+    name: order-service
+zuul:
+  routes:
+    order:
+      serviceId: order-service
+`,
+    );
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+
+    vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints).mockResolvedValueOnce({
+      compoundCandidateCount: 1,
+      createdEndpointCandidateCount: 1,
+      skippedNoEndpointCount: 0,
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config', 'code'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).toHaveBeenCalledWith(
+      db,
+      { workspaceId },
+    );
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
+      db,
+      { workspaceId },
+    );
+
+    const bindingCallOrder = vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints).mock.invocationCallOrder[0];
+    const crossValidationCallOrder =
+      vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates).mock.invocationCallOrder[0];
+
+    expect(bindingCallOrder).toBeLessThan(crossValidationCallOrder);
   });
 
   it('github source 준비 실패 시 run/source가 FAILED로 기록되어야 한다', async () => {
