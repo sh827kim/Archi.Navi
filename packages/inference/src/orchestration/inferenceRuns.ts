@@ -952,7 +952,7 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  if (modeSet.has('code') && modeSet.size >= 2) {
+  if (modeSet.has('code') && modeSet.size >= 2 && codeResult.repoCount > 0) {
     try {
       crossValidationResult = await crossValidatePendingRelationCandidates(db, {
         workspaceId: input.workspaceId,

@@ -154,4 +154,31 @@ describe('POST /api/inference/run', () => {
     expect(response.status).toBe(200);
     expect(crossValidatePendingRelationCandidatesMock).toHaveBeenCalledWith({}, { workspaceId: 'ws-1' });
   });
+
+  it('code mode가 포함되어도 code 추론이 실패하면 cross validation을 호출하지 않아야 한다', async () => {
+    getDbMock.mockResolvedValue({});
+    inferRelationsFromConfigMock.mockResolvedValue({
+      candidateCount: 1,
+      objectCount: 0,
+      fileCount: 1,
+      processedFileCount: 1,
+      skippedFileCount: 0,
+    });
+    extractCodeSignalsWithEngineMock.mockRejectedValue(new Error('parser failed'));
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['config', 'code'],
+          repoRoots: [process.cwd()],
+          useServiceMetadataPaths: false,
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
+  });
 });

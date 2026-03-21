@@ -691,6 +691,30 @@ describe('crossValidatePendingRelationCandidates', () => {
     expect((rows[0]?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
+  it('profile 에서 cross validation 을 비활성화하면 기존 metadata와 confidence를 원복해야 한다', async () => {
+    const { candidateId } = await seedBaseCandidate(db, 0.6);
+    await linkEvidence(db, candidateId, 'CONFIG');
+    await linkEvidence(db, candidateId, 'FILE');
+
+    await crossValidatePendingRelationCandidates(db, { workspaceId });
+    await seedDefaultCrossValidationProfile(db, { enabled: false });
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 0,
+      validatedCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.6);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
   it('config 기반 database 후보에 code 하위 db_table 접근이 없으면 STALE_CONFIG를 기록해야 한다', async () => {
     const { candidateId } = await seedDatabaseCandidate(db, 0.9);
     await linkEvidence(db, candidateId, 'CONFIG');
@@ -800,6 +824,32 @@ describe('crossValidatePendingRelationCandidates', () => {
     const candidate = rows[0]!;
     expect(candidate.confidence).toBe(0.6);
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('LLM_CODE endpoint 후보도 PHANTOM_CALL 근거로 사용해야 한다', async () => {
+    const { candidateId, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
+    await linkEvidence(db, candidateId, 'FILE');
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    await seedEndpointCallCandidate(
+      db,
+      { subjectObjectId: sourceServiceId, endpointId, source: 'LLM_CODE' },
+    );
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      validatedCount: 0,
+      skippedSingleSourceCount: 2,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
   it('provenance 없는 승인 endpoint relation은 PHANTOM_CALL 근거로 사용하지 않아야 한다', async () => {

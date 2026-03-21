@@ -14,6 +14,7 @@ import {
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import * as codeSignalEngineModule from '@/code/codeSignalEngine';
 import * as configBasedModule from '@/relation/configBased';
 import * as configCodeBindingModule from '@/relation/configCodeBinding';
 import * as crossValidationModule from '@/relation/crossSignalValidation';
@@ -45,6 +46,14 @@ vi.mock('@/relation/crossSignalValidation', async () => {
   return {
     ...actual,
     crossValidatePendingRelationCandidates: vi.fn(actual.crossValidatePendingRelationCandidates),
+  };
+});
+
+vi.mock('@/code/codeSignalEngine', async () => {
+  const actual = await vi.importActual<typeof import('@/code/codeSignalEngine')>('@/code/codeSignalEngine');
+  return {
+    ...actual,
+    extractCodeSignalsWithEngine: vi.fn(actual.extractCodeSignalsWithEngine),
   };
 });
 
@@ -213,6 +222,16 @@ spring:
 
   it('code mode가 포함된 다중 mode 실행이면 cross validation을 호출해야 한다', async () => {
     writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
 
     const run = await createInferenceRun(db, {
       workspaceId,
@@ -226,6 +245,39 @@ spring:
       db,
       { workspaceId },
     );
+  });
+
+  it('code mode가 포함되어도 code pass가 실패하면 cross validation을 호출하지 않아야 한다', async () => {
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+    );
+    vi.mocked(configBasedModule.inferRelationsFromConfig).mockResolvedValueOnce({
+      fileCount: 1,
+      processedFileCount: 1,
+      skippedFileCount: 0,
+      candidateCount: 1,
+      objectCount: 1,
+    });
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockRejectedValueOnce(
+      new Error('parser failed'),
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config', 'code'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
   });
 
   it('config+code 실행이면 cross binding을 먼저 수행한 뒤 cross validation을 호출해야 한다', async () => {
@@ -242,6 +294,16 @@ zuul:
 `,
     );
     writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
 
     vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints).mockResolvedValueOnce({
       compoundCandidateCount: 1,

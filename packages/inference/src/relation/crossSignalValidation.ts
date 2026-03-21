@@ -114,7 +114,36 @@ function buildRelationUsageKey(subjectObjectId: string, objectId: string): strin
 }
 
 function isCodeOrConfigEndpointEvidenceSource(source: string | null): boolean {
-  return source === 'CODE' || (source !== null && CONFIG_ENDPOINT_SOURCES.has(source));
+  return source === 'CODE'
+    || source === 'LLM_CODE'
+    || (source !== null && CONFIG_ENDPOINT_SOURCES.has(source));
+}
+
+async function clearStoredCrossValidationState(
+  db: DbClient,
+  candidates: Array<{
+    id: string;
+    confidence: number;
+    metadata: unknown;
+  }>,
+) {
+  for (const candidate of candidates) {
+    const metadata = asRecord(candidate.metadata) ?? {};
+    const existingCrossValidation = readCrossValidationMetadata(metadata);
+    if (!existingCrossValidation) continue;
+
+    const restoredConfidence = getOriginalConfidence(candidate.confidence, existingCrossValidation);
+    const nextMetadata = { ...metadata };
+    delete nextMetadata.crossValidation;
+
+    await db
+      .update(relationCandidates)
+      .set({
+        confidence: restoredConfidence,
+        metadata: nextMetadata,
+      })
+      .where(eq(relationCandidates.id, candidate.id));
+  }
 }
 
 function normalizeCrossValidationConfig(value: unknown): CrossValidationConfig {
@@ -148,25 +177,6 @@ export async function crossValidatePendingRelationCandidates(
   db: DbClient,
   input: { workspaceId: string },
 ): Promise<CrossValidationSummary> {
-  const profileRows = await db
-    .execute<{ cross_validation: unknown }>(sql`
-      select cross_validation
-      from domain_inference_profiles
-      where workspace_id = ${input.workspaceId}
-        and is_default = true
-      limit 1
-    `);
-  const config = normalizeCrossValidationConfig(profileRows.rows[0]?.cross_validation);
-  if (!config.enabled) {
-    return {
-      candidateCount: 0,
-      validatedCount: 0,
-      skippedSingleSourceCount: 0,
-      contradictionCount: 0,
-      staleConfigCount: 0,
-    };
-  }
-
   const candidates = await db
     .select({
       id: relationCandidates.id,
@@ -183,6 +193,26 @@ export async function crossValidatePendingRelationCandidates(
         eq(relationCandidates.status, 'PENDING'),
       ),
     );
+
+  const profileRows = await db
+    .execute<{ cross_validation: unknown }>(sql`
+      select cross_validation
+      from domain_inference_profiles
+      where workspace_id = ${input.workspaceId}
+        and is_default = true
+      limit 1
+    `);
+  const config = normalizeCrossValidationConfig(profileRows.rows[0]?.cross_validation);
+  if (!config.enabled) {
+    await clearStoredCrossValidationState(db, candidates);
+    return {
+      candidateCount: 0,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 0,
+      staleConfigCount: 0,
+    };
+  }
 
   if (candidates.length === 0) {
     return {

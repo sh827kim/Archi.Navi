@@ -299,7 +299,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (modeSet.has('code') && modeSet.size >= 2) {
+    if (modeSet.has('code') && modeSet.size >= 2 && codeResult.repoCount > 0) {
       try {
         crossValidationResult = await crossValidatePendingRelationCandidates(db, { workspaceId });
       } catch (error) {
