@@ -15,6 +15,7 @@ import {
   CROSS_VALIDATION_CONTRADICTION_TYPES,
   CROSS_VALIDATION_RULE_IDS,
   summarizeCrossValidation,
+  type CrossValidationSource,
   type CrossValidationContradiction,
 } from '@/lib/cross-validation';
 
@@ -50,6 +51,53 @@ function asCrossValidationContradictions(value: unknown): CrossValidationContrad
       penalty: record['penalty'],
     }];
   });
+}
+
+function isCrossValidationSource(value: unknown): value is CrossValidationSource {
+  return value === 'config' || value === 'code' || value === 'db';
+}
+
+function asCrossValidationSources(value: unknown): CrossValidationSource[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter(isCrossValidationSource);
+}
+
+function summarizePersistedCrossValidation(
+  metadataCrossValidation: Record<string, unknown> | null,
+  evidenceRows: Array<{ evidenceType: string | null }>,
+) {
+  const derivedSummary = summarizeCrossValidation(evidenceRows);
+  const contradictions = asCrossValidationContradictions(
+    metadataCrossValidation?.contradictions,
+  );
+  if (metadataCrossValidation) {
+    const hasSupportingSources = Object.prototype.hasOwnProperty.call(
+      metadataCrossValidation,
+      'supportingSources',
+    );
+    const supportingSources = hasSupportingSources
+      ? asCrossValidationSources(metadataCrossValidation.supportingSources)
+      : derivedSummary.supportingSources;
+    const supportCount =
+      Object.prototype.hasOwnProperty.call(metadataCrossValidation, 'supportCount')
+      && typeof metadataCrossValidation.supportCount === 'number'
+      && Number.isFinite(metadataCrossValidation.supportCount)
+        ? metadataCrossValidation.supportCount
+        : supportingSources.length;
+    const validated = Object.prototype.hasOwnProperty.call(metadataCrossValidation, 'validated')
+      && typeof metadataCrossValidation.validated === 'boolean'
+      ? metadataCrossValidation.validated
+      : (supportCount >= 2 && contradictions.length === 0);
+
+    return {
+      validated,
+      supportCount,
+      supportingSources,
+      contradictions,
+    };
+  }
+
+  return summarizeCrossValidation(evidenceRows, contradictions);
 }
 
 export async function GET(req: NextRequest) {
@@ -132,12 +180,9 @@ export async function GET(req: NextRequest) {
         meta?.crossValidation !== null && typeof meta?.crossValidation === 'object'
           ? meta.crossValidation as Record<string, unknown>
           : null;
-      const contradictions = asCrossValidationContradictions(
-        metadataCrossValidation?.contradictions,
-      );
-      const crossValidation = summarizeCrossValidation(
+      const crossValidation = summarizePersistedCrossValidation(
+        metadataCrossValidation,
         groupedEvidenceRows.get(c.id) ?? [],
-        contradictions,
       );
 
       const subjectObj = objMap.get(c.subjectObjectId);

@@ -266,6 +266,7 @@ export async function crossValidatePendingRelationCandidates(
     .select({
       subjectObjectId: objectRelations.subjectObjectId,
       objectId: objectRelations.objectId,
+      metadata: objectRelations.metadata,
     })
     .from(objectRelations)
     .where(
@@ -321,6 +322,8 @@ export async function crossValidatePendingRelationCandidates(
   for (const approvedRelation of approvedCallRelations) {
     const targetObject = objectMap.get(approvedRelation.objectId);
     if (!targetObject || targetObject.objectType !== 'api_endpoint' || !targetObject.parentId) continue;
+    const metadata = asRecord(approvedRelation.metadata) ?? {};
+    if (!isCodeOrConfigEndpointEvidenceSource(asString(metadata.source))) continue;
 
     endpointEvidenceKeys.add(
       buildRelationUsageKey(approvedRelation.subjectObjectId, targetObject.parentId),

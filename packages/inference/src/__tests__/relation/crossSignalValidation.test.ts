@@ -4,6 +4,7 @@ import { migrate } from 'drizzle-orm/pglite/migrator';
 import { and, eq, sql } from 'drizzle-orm';
 import {
   createPgliteClient,
+  objectRelations,
   evidences,
   objects,
   relationCandidateEvidences,
@@ -420,6 +421,27 @@ async function seedEndpointCallCandidate(
   return { candidateId };
 }
 
+async function seedApprovedEndpointCallRelation(
+  db: TestDb,
+  input: { subjectObjectId: string; endpointId: string; source?: string | null },
+) {
+  const relationId = generateId();
+
+  await db.insert(objectRelations).values({
+    id: relationId,
+    workspaceId,
+    relationType: 'call',
+    subjectObjectId: input.subjectObjectId,
+    objectId: input.endpointId,
+    confidence: 0.7,
+    status: 'APPROVED',
+    source: 'INFERRED',
+    metadata: input.source ? { source: input.source, targetType: 'api_endpoint' } : {},
+  });
+
+  return { relationId };
+}
+
 async function linkEvidence(
   db: TestDb,
   candidateId: string,
@@ -778,6 +800,60 @@ describe('crossValidatePendingRelationCandidates', () => {
     const candidate = rows[0]!;
     expect(candidate.confidence).toBe(0.6);
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('provenance 없는 승인 endpoint relation은 PHANTOM_CALL 근거로 사용하지 않아야 한다', async () => {
+    const { candidateId, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
+    await linkEvidence(db, candidateId, 'FILE');
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    await seedApprovedEndpointCallRelation(db, { subjectObjectId: sourceServiceId, endpointId });
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 1,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const crossValidation = (
+      (candidate?.metadata as Record<string, unknown>)['crossValidation']
+    ) as Record<string, unknown>;
+
+    expect(crossValidation['contradictions']).toEqual([
+      { ruleId: 'C2', type: 'PHANTOM_CALL', penalty: 0.15 },
+    ]);
+  });
+
+  it('code provenance가 있는 승인 endpoint relation은 PHANTOM_CALL 근거로 사용해야 한다', async () => {
+    const { candidateId, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
+    await linkEvidence(db, candidateId, 'FILE');
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    await seedApprovedEndpointCallRelation(
+      db,
+      { subjectObjectId: sourceServiceId, endpointId, source: 'CODE' },
+    );
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 1,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
   it('config 기반 topic 후보에 code produce/consume 후보가 없으면 DEAD_TOPIC을 기록해야 한다', async () => {

@@ -306,4 +306,90 @@ describe('GET /api/inference/candidates', () => {
       }),
     ]));
   });
+
+  it('persisted crossValidation이 있으면 stale evidence 링크보다 저장된 validated 상태를 우선해야 한다', async () => {
+    const candidates = [
+      {
+        id: 'cand-4',
+        subjectObjectId: 'svc-1',
+        objectId: 'svc-2',
+        relationType: 'call',
+        confidence: 0.9,
+        status: 'PENDING',
+        metadata: {
+          source: 'CODE',
+          crossValidation: {
+            validated: false,
+            supportCount: 0,
+            supportingSources: [],
+            contradictions: [],
+          },
+        },
+      },
+    ];
+    const allObjects = [
+      {
+        id: 'svc-1',
+        displayName: 'order-service',
+        name: 'order-service',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+      {
+        id: 'svc-2',
+        displayName: 'billing-service',
+        name: 'billing-service',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+    ];
+    const evidenceRows = [
+      { candidateId: 'cand-4', evidenceType: 'CONFIG' },
+      { candidateId: 'cand-4', evidenceType: 'FILE' },
+    ];
+
+    const db = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: () => ({
+            where: () => ({
+              limit: async () => candidates,
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            innerJoin: () => ({
+              where: async () => evidenceRows,
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            where: async () => allObjects,
+          }),
+        }),
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/candidates?workspaceId=ws-1'),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cand-4',
+        crossValidation: expect.objectContaining({
+          validated: false,
+          supportCount: 0,
+          supportingSources: [],
+          contradictions: [],
+        }),
+      }),
+    ]));
+  });
 });
