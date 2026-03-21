@@ -116,6 +116,99 @@ describe('inferRelationsFromCodeSignals', () => {
     expect(links[0]?.evidenceId).toBe(evidenceId);
   });
 
+  it('crossValidation 보정 confidence보다 낮아도 원본 confidence보다 높으면 code 후보를 갱신해야 한다', async () => {
+    const aId = generateId();
+    const bId = generateId();
+    await db.insert(objects).values([
+      {
+        id: aId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'api-gateway',
+        path: `/${aId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: bId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'user-service',
+        path: `/${bId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+    ]);
+
+    const candidateId = generateId();
+    await db.insert(relationCandidates).values({
+      id: candidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: aId,
+      objectId: bId,
+      confidence: 0.95,
+      status: 'PENDING',
+      metadata: {
+        source: 'old',
+        crossValidation: {
+          validated: true,
+          supportingSources: ['config', 'code'],
+          originalConfidence: 0.6,
+          adjustedConfidence: 0.95,
+        },
+      },
+    });
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'java',
+      repoRoot,
+      filePath: 'src/A.java',
+      ownerObjectId: aId,
+      sha256: 'x',
+    });
+
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/A.java',
+      lineStart: 1,
+      lineEnd: 1,
+      excerpt: 'restTemplate.getForObject("http://user-service/api/users", String.class);',
+      metadata: { kind: 'call', confidence: 0.9 },
+    });
+
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'http://user-service/api/users',
+      weight: 1,
+      evidenceId,
+    });
+
+    await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.9);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
   it('expose + call(URL host+path) 조합이면 service -> api_endpoint 후보를 생성해야 한다', async () => {
     const callerId = generateId();
     const targetServiceId = generateId();

@@ -367,6 +367,30 @@ async function findServiceByName(
   return null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function getRawCandidateConfidence(confidence: number, metadata: unknown): number {
+  const crossValidation = asRecord(asRecord(metadata)?.crossValidation);
+  const originalConfidence = crossValidation?.originalConfidence;
+  return typeof originalConfidence === 'number' && Number.isFinite(originalConfidence)
+    ? originalConfidence
+    : confidence;
+}
+
+function stripCrossValidationMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(metadata, 'crossValidation')) {
+    return metadata;
+  }
+
+  const nextMetadata = { ...metadata };
+  delete nextMetadata.crossValidation;
+  return nextMetadata;
+}
+
 // ─── relation_candidate 저장 ───────────────────────────────────────────────────
 
 /**
@@ -414,7 +438,12 @@ async function saveRelationCandidate(
 
   // APPROVED 또는 PENDING 후보 조회
   const existingCandidates = await db
-    .select({ id: relationCandidates.id, status: relationCandidates.status, confidence: relationCandidates.confidence })
+    .select({
+      id: relationCandidates.id,
+      status: relationCandidates.status,
+      confidence: relationCandidates.confidence,
+      metadata: relationCandidates.metadata,
+    })
     .from(relationCandidates)
     .where(
       and(
@@ -436,10 +465,14 @@ async function saveRelationCandidate(
   // PENDING 후보가 있고 새 confidence가 더 높으면 업데이트
   const pending = existingCandidates.find((c) => c.status === 'PENDING');
   if (pending) {
-    if (confidence > (pending.confidence ?? 0)) {
+    const pendingRawConfidence = getRawCandidateConfidence(pending.confidence ?? 0, pending.metadata);
+    if (confidence > pendingRawConfidence) {
       await db
         .update(relationCandidates)
-        .set({ confidence, metadata })
+        .set({
+          confidence,
+          metadata: stripCrossValidationMetadata(metadata),
+        })
         .where(eq(relationCandidates.id, pending.id));
     }
     // evidence 연결 추가

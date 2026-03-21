@@ -69,7 +69,9 @@ function asFiniteNumber(value: unknown): number | null {
 
 function normalizeEvidenceType(type: string): CrossValidationSource | null {
   if (type === 'CONFIG') return 'config';
+  if (type === 'LLM_CONFIG') return 'config';
   if (type === 'FILE') return 'code';
+  if (type === 'LLM_CODE') return 'code';
   if (type === 'SCHEMA') return 'db';
   return null;
 }
@@ -90,6 +92,13 @@ function computeAdjustedConfidence(
 
 function readCrossValidationMetadata(metadata: Record<string, unknown>): CrossValidationMetadata | null {
   return asRecord(metadata.crossValidation) as CrossValidationMetadata | null;
+}
+
+function getOriginalConfidence(
+  candidateConfidence: number,
+  crossValidation: CrossValidationMetadata | null,
+): number {
+  return asFiniteNumber(crossValidation?.originalConfidence) ?? candidateConfidence;
 }
 
 function asString(value: unknown): string | null {
@@ -369,8 +378,7 @@ export async function crossValidatePendingRelationCandidates(
     const isDbTableSubject = subjectObject?.objectType === 'db_table';
     const isDbTableTarget = targetObject?.objectType === 'db_table';
     const isTopicTarget = targetObject?.objectType === 'topic'
-      || targetObject?.objectType === 'kafka_topic'
-      || targetObject?.objectType === 'message_broker';
+      || targetObject?.objectType === 'kafka_topic';
     const hasConfigSupport = supportingSources.includes('config');
     const hasCodeSupport = supportingSources.includes('code');
     const hasDbSupport = supportingSources.includes('db');
@@ -391,7 +399,8 @@ export async function crossValidatePendingRelationCandidates(
       buildRelationUsageKey(candidate.subjectObjectId, candidate.objectId),
     );
     const metadata = asRecord(candidate.metadata) ?? {};
-    const existingCrossValidation = readCrossValidationMetadata(metadata) ?? {};
+    const existingCrossValidation = readCrossValidationMetadata(metadata);
+    const hadCrossValidation = Object.prototype.hasOwnProperty.call(metadata, 'crossValidation');
 
     const contradictions: CrossValidationContradiction[] = [];
     if (
@@ -450,19 +459,22 @@ export async function crossValidatePendingRelationCandidates(
 
     if (supportingSources.length < 2 && contradictions.length === 0) {
       skippedSingleSourceCount += 1;
-      if ((existingCrossValidation.contradictions?.length ?? 0) > 0) {
+      if (hadCrossValidation) {
+        const restoredConfidence = getOriginalConfidence(candidate.confidence, existingCrossValidation);
         const nextMetadata = { ...metadata };
         delete nextMetadata.crossValidation;
         await db
           .update(relationCandidates)
-          .set({ metadata: nextMetadata })
+          .set({
+            confidence: restoredConfidence,
+            metadata: nextMetadata,
+          })
           .where(eq(relationCandidates.id, candidate.id));
       }
       continue;
     }
 
-    const originalConfidence = asFiniteNumber(existingCrossValidation.originalConfidence)
-      ?? candidate.confidence;
+    const originalConfidence = getOriginalConfidence(candidate.confidence, existingCrossValidation);
     const totalPenalty = contradictions.reduce((sum, contradiction) => sum + contradiction.penalty, 0);
     const adjustedConfidence = computeAdjustedConfidence(
       originalConfidence,
@@ -485,12 +497,10 @@ export async function crossValidatePendingRelationCandidates(
 
     await db
       .update(relationCandidates)
-      .set({ metadata: nextMetadata })
-      .where(eq(relationCandidates.id, candidate.id));
-
-    await db
-      .update(relationCandidates)
-      .set({ confidence: adjustedConfidence })
+      .set({
+        confidence: adjustedConfidence,
+        metadata: nextMetadata,
+      })
       .where(eq(relationCandidates.id, candidate.id));
 
     if (supportingSources.length > 1) {

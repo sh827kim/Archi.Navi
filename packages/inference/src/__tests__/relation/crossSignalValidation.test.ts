@@ -171,6 +171,57 @@ async function seedTopicCandidate(
   return { candidateId, serviceId, topicId };
 }
 
+async function seedBrokerCandidate(
+  db: TestDb,
+  input: { relationType?: 'produce' | 'consume'; confidence?: number },
+) {
+  await db.insert(workspaces).values({ id: workspaceId, name: 'cross-validation-broker-test' });
+
+  const serviceId = generateId();
+  const brokerId = generateId();
+  const candidateId = generateId();
+
+  await db.insert(objects).values([
+    {
+      id: serviceId,
+      workspaceId,
+      objectType: 'service',
+      category: 'COMPUTE',
+      granularity: 'COMPOUND',
+      name: 'notification-service',
+      path: '/notification-service',
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    },
+    {
+      id: brokerId,
+      workspaceId,
+      objectType: 'message_broker',
+      category: 'CHANNEL',
+      granularity: 'COMPOUND',
+      name: 'kafka',
+      path: '/kafka',
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    },
+  ]);
+
+  await db.insert(relationCandidates).values({
+    id: candidateId,
+    workspaceId,
+    relationType: input.relationType ?? 'produce',
+    subjectObjectId: serviceId,
+    objectId: brokerId,
+    confidence: input.confidence ?? 0.85,
+    metadata: {},
+    status: 'PENDING',
+  });
+
+  return { candidateId, serviceId, brokerId };
+}
+
 async function seedCodeTopicCandidate(
   db: TestDb,
   input: { serviceId: string; topicId: string; relationType?: 'produce' | 'consume' },
@@ -372,7 +423,7 @@ async function seedEndpointCallCandidate(
 async function linkEvidence(
   db: TestDb,
   candidateId: string,
-  evidenceType: 'CONFIG' | 'FILE' | 'SCHEMA',
+  evidenceType: 'CONFIG' | 'FILE' | 'SCHEMA' | 'LLM_CONFIG' | 'LLM_CODE',
 ) {
   const evidenceId = generateId();
   await db.insert(evidences).values({
@@ -387,6 +438,8 @@ async function linkEvidence(
     candidateId,
     evidenceId,
   });
+
+  return evidenceId;
 }
 
 async function seedDefaultCrossValidationProfile(
@@ -449,6 +502,32 @@ describe('crossValidatePendingRelationCandidates', () => {
     expect(crossValidation['adjustedConfidence']).toBeCloseTo(0.9);
   });
 
+  it('LLM evidence 타입도 config/code 지원 소스로 인식해야 한다', async () => {
+    const { candidateId } = await seedBaseCandidate(db, 0.6);
+    await linkEvidence(db, candidateId, 'LLM_CONFIG');
+    await linkEvidence(db, candidateId, 'LLM_CODE');
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 1,
+      skippedSingleSourceCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const crossValidation = (
+      (candidate?.metadata as Record<string, unknown>)['crossValidation']
+    ) as Record<string, unknown>;
+
+    expect(candidate?.confidence).toBeCloseTo(0.9);
+    expect(crossValidation['supportingSources']).toEqual(['config', 'code']);
+    expect(crossValidation['validated']).toBe(true);
+  });
+
   it('단일 소스 후보는 no-op 이어야 한다', async () => {
     const { candidateId } = await seedBaseCandidate(db, 0.65);
     await linkEvidence(db, candidateId, 'CONFIG');
@@ -493,6 +572,34 @@ describe('crossValidatePendingRelationCandidates', () => {
     expect(candidate.confidence).toBeCloseTo(0.85);
     expect(crossValidation['originalConfidence']).toBe(0.55);
     expect(crossValidation['adjustedConfidence']).toBeCloseTo(0.85);
+  });
+
+  it('다중 소스 후보가 단일 소스로 돌아가면 confidence와 crossValidation 상태를 원복해야 한다', async () => {
+    const { candidateId } = await seedBaseCandidate(db, 0.55);
+    await linkEvidence(db, candidateId, 'CONFIG');
+    const codeEvidenceId = await linkEvidence(db, candidateId, 'FILE');
+
+    await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    await db.delete(relationCandidateEvidences).where(eq(relationCandidateEvidences.evidenceId, codeEvidenceId));
+    await db.delete(evidences).where(eq(evidences.id, codeEvidenceId));
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 1,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.55);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
   it('profile boostFactor 값을 사용해 multi-source boost를 계산해야 한다', async () => {
@@ -725,6 +832,28 @@ describe('crossValidatePendingRelationCandidates', () => {
     const candidate = rows[0]!;
     expect(candidate.confidence).toBe(0.85);
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('message_broker 대상 produce 후보는 DEAD_TOPIC 판정에서 제외해야 한다', async () => {
+    const { candidateId } = await seedBrokerCandidate(db, { relationType: 'produce', confidence: 0.85 });
+    await linkEvidence(db, candidateId, 'CONFIG');
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 1,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.85);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
   it('db FK 기반 후보인데 code 테이블 접근이 없으면 ORPHAN_FK를 기록해야 한다', async () => {
