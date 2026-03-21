@@ -307,6 +307,7 @@ export async function crossValidatePendingRelationCandidates(
       relationId: objectRelations.id,
       subjectObjectId: objectRelations.subjectObjectId,
       objectId: objectRelations.objectId,
+      metadata: objectRelations.metadata,
       evidenceType: evidences.evidenceType,
     })
     .from(objectRelations)
@@ -362,6 +363,7 @@ export async function crossValidatePendingRelationCandidates(
     if (!targetObject || targetObject.objectType !== 'api_endpoint' || !targetObject.parentId) continue;
 
     const metadata = asRecord(relatedCandidate.metadata) ?? {};
+    if (metadata.crossBound === true) continue;
     if (!isCodeOrConfigEndpointEvidenceSource(asString(metadata.source))) continue;
 
     endpointEvidenceKeys.add(
@@ -371,6 +373,8 @@ export async function crossValidatePendingRelationCandidates(
   for (const approvedRelation of approvedCallRelations) {
     const targetObject = objectMap.get(approvedRelation.objectId);
     if (!targetObject || targetObject.objectType !== 'api_endpoint' || !targetObject.parentId) continue;
+    const metadata = asRecord(approvedRelation.metadata) ?? {};
+    if (metadata.crossBound === true) continue;
     const evidenceSource = normalizeEvidenceType(approvedRelation.evidenceType);
     if (evidenceSource !== 'code' && evidenceSource !== 'config') continue;
 

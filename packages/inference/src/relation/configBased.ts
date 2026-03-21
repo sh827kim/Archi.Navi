@@ -466,12 +466,21 @@ async function saveRelationCandidate(
   const pending = existingCandidates.find((c) => c.status === 'PENDING');
   if (pending) {
     const pendingRawConfidence = getRawCandidateConfidence(pending.confidence ?? 0, pending.metadata);
+    const pendingMetadata = asRecord(pending.metadata) ?? {};
     if (confidence > pendingRawConfidence) {
       await db
         .update(relationCandidates)
         .set({
           confidence,
           metadata: stripCrossValidationMetadata(metadata),
+        })
+        .where(eq(relationCandidates.id, pending.id));
+    } else if (Object.prototype.hasOwnProperty.call(pendingMetadata, 'crossValidation')) {
+      await db
+        .update(relationCandidates)
+        .set({
+          confidence: pendingRawConfidence,
+          metadata: stripCrossValidationMetadata(pendingMetadata),
         })
         .where(eq(relationCandidates.id, pending.id));
     }
