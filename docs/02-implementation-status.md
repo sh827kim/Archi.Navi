@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-17
+> 최종 점검일: 2026-03-22
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -15,7 +15,7 @@
 | Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
-| 추론 엔진 고도화 (P4) | 📋 | Inter-procedural AST, Cross-Signal Validation, LLM 부스터 설계 완료 |
+| 추론 엔진 고도화 (P4) | ⚠️ | Cross-Signal Validation 완료, 나머지 고도화 항목은 설계/구현 대기 |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -32,8 +32,12 @@
 - ✅ `Approval > 관계 후보`
   - `POST /api/inference/run` 호출 버튼 제공
   - 실행 후 PENDING 후보 즉시 재조회
+  - cross-validation 배지/경고 표시, 필터/정렬, endpoint 세부 매핑 제공
 - ✅ `Approval > 도메인 후보`
   - `GET/PATCH /api/inference/domain-candidates*`로 승인/거부 처리
+- ✅ Inference Run 운영 UI/API
+  - `GET/POST /api/inference/runs`, `GET /api/inference/runs/:id`
+  - quick run과 queued run 모두 binding/cross-validation 최종화 반영
 - ✅ `Object Mapping` 3D 렌더러 전환
   - `3D(Force)` 단일 렌더러 제공(2D 선택 UI 제거)
   - WebGL 미지원 환경 fallback 메시지 제공
@@ -58,6 +62,8 @@
   - Code Signal(AST/Regex): `extractCodeSignalsWithEngine` (`hybrid` 기본, `ast`는 AST 실패 시 Regex fallback)
   - Code Signal 기반 후보 생성: `mode=code`로 `relation_candidates` 생성 (endpoint/topic/queue/db_table 포함, SPEC: `docs/spec/14-*`, `docs/spec/15-*`, `docs/spec/16-*`, `docs/spec/17-*`)
   - DB Signal: `extractDbSchemaSignals` (FK/implicit 후보 + schema evidence 연결)
+  - Cross-Signal Validation: `crossValidatePendingRelationCandidates` (boost/penalty, repo-scoped rerun, contradiction rule finalization)
+  - Config↔Code endpoint binding: `bindConfigToCodeEndpoints` (service→endpoint 후보 분해, stale metadata 정리)
   - 비동기 실행 오케스트레이션: `createInferenceRun` / `executeInferenceRun` / `listInferenceRuns` / `getInferenceRunDetail`
 - ✅ Domain 추론
   - Track A(Seed-based): `runSeedBasedInference`
@@ -82,7 +88,7 @@
 
 ### 2.1 추론 엔진 품질 고도화 (P4)
 
-- 📋 Inter-procedural AST, Cross-Signal Validation, LLM 부스터는 설계 완료 상태이며 P2 완료 이후의 다음 고도화 범위다.
+- ⚠️ Cross-Signal Validation은 구현 완료되었고, Inter-procedural AST / LLM 부스터 / 플러그인 시스템은 다음 고도화 범위로 남아 있다.
 
 ### 2.2 실행 오케스트레이션 Phase 2+
 
@@ -105,6 +111,7 @@
 |------|------|------|
 | 4-1. Inter-procedural AST 분석 | `docs/spec/18-inter-procedural-ast-spec.md` | 📋 Draft |
 | 4-2. Cross-Signal Validation | `docs/spec/19-cross-signal-validation-spec.md` | ✅ Implemented |
+| 4-2a. Approval Mapping / Cross-validation UI 정합성 | `docs/spec/29-approval-mapping-ui-consistency-spec.md` | ✅ Implemented |
 | 4-3. LLM 추론 부스터 | `docs/spec/20-llm-inference-boost-spec.md` | 📋 Draft |
 | 4-4. 프레임워크 플러그인 시스템 | `docs/spec/21-framework-plugin-system-spec.md` | 📋 Draft |
 | 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/22-realtime-rollup-spec.md` | 📋 Draft |
@@ -129,12 +136,18 @@
 
 - `POST /api/scan`
 - `POST /api/inference/run`
+- `GET /api/inference/runs`
+- `POST /api/inference/runs`
+- `GET /api/inference/runs/:id`
 - `GET /api/inference/candidates`
 - `PATCH /api/inference/candidates/:id`
+- `GET /api/inference/candidates/:id/endpoints`
+- `POST /api/inference/candidates/:id/map-endpoints`
 - `GET /api/inference/domain-candidates`
 - `PATCH /api/inference/domain-candidates/:id`
 - `POST /api/inference/domain-run`
 - `POST /api/inference/llm-filter`
+- `POST /api/inference/smart`
 - `GET /api/inference/profiles/default`
 - `PUT /api/inference/profiles/default`
 - `POST /api/query`

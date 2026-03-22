@@ -103,10 +103,15 @@ done
 > CLI로 실제 프로젝트 디렉토리를 스캔하면 확인 가능합니다.
 
 ```bash
-# 실제 레포 디렉토리 스캔 (예시)
-pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts scan \
+# 실제 레포 디렉토리를 워크스페이스에 등록
+pnpm --filter @archi-navi/cli exec tsx src/index.ts scan \
   --workspace "$WS" \
   --path /path/to/your/spring-boot-project
+
+# config 추론 실행
+curl -s -X POST "$BASE/api/inference/run" \
+  -H "Content-Type: application/json" \
+  -d "{\"workspaceId\":\"$WS\",\"modes\":[\"config\"],\"useServiceMetadataPaths\":true}" | jq
 
 # relation_candidates 확인
 curl -s "$BASE/api/inference/candidates?workspaceId=$WS&status=PENDING" | jq '.[0:5]'
@@ -122,19 +127,27 @@ curl -s "$BASE/api/inference/candidates?workspaceId=$WS&status=PENDING" | jq '.[
 **동작:** Java/Kotlin/TypeScript/Python 파일에서 @GetMapping, kafkaTemplate.send, RestTemplate 등 패턴 추출
 
 ```bash
-# 실제 소스 디렉토리에서 코드 신호 추출 (CLI 필요)
-pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts scan \
+# 실제 소스 디렉토리를 워크스페이스에 등록
+pnpm --filter @archi-navi/cli exec tsx src/index.ts scan \
   --workspace "$WS" \
-  --path /path/to/your/project \
-  --lang java
+  --path /path/to/your/project
+
+# code 추론 실행
+curl -s -X POST "$BASE/api/inference/run" \
+  -H "Content-Type: application/json" \
+  -d "{\"workspaceId\":\"$WS\",\"modes\":[\"code\"],\"useServiceMetadataPaths\":true,\"codeEngine\":\"hybrid\"}" | jq
 ```
 
 **유닛 테스트로 검증 (소스 없이):**
 
 ```bash
-pnpm --filter @archi-navi/inference test:unit -- \
-  --reporter=verbose \
-  --testPathPattern="codeSignalExtractor|javaKotlin|typeScript|python"
+pnpm --filter @archi-navi/inference exec vitest run \
+  src/__tests__/code/codeSignalExtractor.test.ts \
+  src/__tests__/code/hybridCodeSignalExtractor.test.ts \
+  src/__tests__/code/ast/extractAstCodeSignals.test.ts \
+  src/__tests__/code/scanners/javaKotlin.test.ts \
+  src/__tests__/code/scanners/typeScript.test.ts \
+  src/__tests__/code/scanners/python.test.ts
 ```
 
 **기대 결과:** `code_artifacts`, `code_call_edges`, `evidences` 테이블에 신호 저장 (52개+ 테스트 통과)
@@ -149,7 +162,7 @@ pnpm --filter @archi-navi/inference test:unit -- \
 ### 추론 실행
 
 ```bash
-pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts infer \
+pnpm --filter @archi-navi/cli exec tsx src/index.ts infer \
   --workspace "$WS" \
   --track a
 ```
@@ -211,7 +224,7 @@ curl -s -X PATCH "$BASE/api/inference/domain-candidates/$FIRST_ID" \
 **동작:** 서비스 간 call/db/msg 관계를 가중 그래프로 구성 → Louvain 커뮤니티 탐지
 
 ```bash
-pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts infer \
+pnpm --filter @archi-navi/cli exec tsx src/index.ts infer \
   --workspace "$WS" \
   --track b \
   --min-cluster-size 2 \
@@ -272,10 +285,10 @@ curl -s "$BASE/api/objects?workspaceId=$WS&objectType=domain" \
 # tree-sitter 빌드 (최초 1회)
 cd packages/inference && pnpm rebuild
 
-# AST 기반 스캔 실행 (Regex보다 정밀)
-pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts scan \
-  --workspace "$WS" \
-  --path /path/to/your/project
+# AST 기반 code 추론 실행 (Regex보다 정밀)
+curl -s -X POST "$BASE/api/inference/run" \
+  -H "Content-Type: application/json" \
+  -d "{\"workspaceId\":\"$WS\",\"modes\":[\"code\"],\"useServiceMetadataPaths\":true,\"codeEngine\":\"ast\"}" | jq
 ```
 
 ---
@@ -367,7 +380,7 @@ seed 데이터에 Kafka 토픽과 produce/consume 관계가 포함되어 있으�
 
 ```bash
 # Track A 실행
-pnpm --filter @archi-navi/cli exec ts-node bin/anavi.ts infer \
+pnpm --filter @archi-navi/cli exec tsx src/index.ts infer \
   --workspace "$WS" --track a
 
 # msg 신호 확인
@@ -410,17 +423,17 @@ curl -s "$BASE/api/inference/domain-candidates?workspaceId=$WS&status=PENDING" \
 pnpm --filter @archi-navi/inference test:unit
 
 # 기능별 테스트만 실행
-pnpm --filter @archi-navi/inference test:unit -- \
-  --testPathPattern="dbSchemaSignal"     # 1-3
+pnpm --filter @archi-navi/inference exec vitest run \
+  src/__tests__/db/dbSchemaSignal.test.ts             # 1-3
 
-pnpm --filter @archi-navi/inference test:unit -- \
-  --testPathPattern="approveDomainCandidate"  # 1-4
+pnpm --filter @archi-navi/inference exec vitest run \
+  src/__tests__/domain/approveDomainCandidate.test.ts # 1-4
 
-pnpm --filter @archi-navi/inference test:unit -- \
-  --testPathPattern="discovery"           # 1-5, 1-6
+pnpm --filter @archi-navi/inference exec vitest run \
+  src/__tests__/domain/discovery.test.ts             # 1-5, 1-6
 
-pnpm --filter @archi-navi/inference test:unit -- \
-  --testPathPattern="msgSignal"           # 2-5
+pnpm --filter @archi-navi/inference exec vitest run \
+  src/__tests__/domain/msgSignal.test.ts             # 2-5
 ```
 
 ---

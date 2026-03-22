@@ -77,9 +77,8 @@ MSA는 정적 문서보다 빠르게 변화합니다.
 ```
 archi-navi/
 ├── apps/
-│   └── web/                    # Next.js 16 앱 (UI + API Routes)
-│       ├── (dashboard)/        # Architecture View, Services, Approval, Chat
-│       └── api/                # REST API 라우트
+│   └── web/                    # Next.js 16 앱
+│       └── src/app/            # 대시보드 페이지 + API 라우트
 │
 └── packages/
     ├── core/                   # 쿼리 엔진 (BFS/DFS), Rollup, 그래프 인덱스
@@ -98,7 +97,7 @@ archi-navi/
 |------|------|
 | 프론트엔드 | Next.js 16 (App Router) + React 19 + TypeScript |
 | UI 라이브러리 | TailwindCSS 4 + shadcn/ui |
-| 그래프 시각화 | Cytoscape.js + D3 Force |
+| 그래프 시각화 | Cytoscape.js + 3d-force-graph + React Flow |
 | 상태 관리 | Zustand |
 | 데이터베이스 | PGlite (로컬) / PostgreSQL 17 (팀 배포) |
 | ORM | Drizzle ORM |
@@ -120,15 +119,15 @@ archi-navi/
 
 ```bash
 # 저장소 클론
-git clone https://github.com/your-org/archi-navi.git
-cd archi-navi
+git clone https://github.com/sh827kim/Archi.Navi.git
+cd Archi.Navi
 
 # 의존성 설치
 pnpm install
 
-# 환경변수 설정
-cp .env.example .env.local
-# .env.local 편집 — 최소한 AI_API_KEY 설정 필요
+# 필요 시 앱 환경변수 파일 생성
+mkdir -p apps/web
+# apps/web/.env.local 편집
 ```
 
 ### 환경변수
@@ -143,13 +142,19 @@ PGLITE_DATA_DIR=.archi-navi/data
 
 # AI 프로바이더: openai | anthropic | google
 AI_PROVIDER=openai
-AI_API_KEY=sk-your-api-key
-AI_MODEL=gpt-4.1
+OPENAI_API_KEY=sk-your-openai-key
+# ANTHROPIC_API_KEY=sk-ant-your-key
+# GOOGLE_GENERATIVE_AI_API_KEY=your-google-key
 
 # 앱
 NODE_ENV=development
 PORT=3000
 ```
+
+참고:
+- 모노레포 개발 환경에서는 `apps/web/.env.local`에 두는 구성이 맞습니다.
+- `AI_MODEL`은 설정 UI에서 선택되어 요청 헤더로 전달되므로 서버 필수 환경변수는 아닙니다.
+- 제공자/API 키/모델은 설정 화면에서도 저장해 사용할 수 있습니다.
 
 ### 개발 서버 실행
 
@@ -167,6 +172,8 @@ pnpm dev
 pnpm dev            # 개발 서버 실행 (Next.js + HMR)
 pnpm build          # 프로덕션 빌드
 pnpm test           # 전체 테스트 실행
+pnpm test:coverage  # 커버리지 기준 테스트 실행
+pnpm test:e2e       # Playwright E2E 테스트 실행
 pnpm lint           # ESLint 검사
 pnpm format         # Prettier 포맷팅
 pnpm db:generate    # 스키마에서 Drizzle 마이그레이션 생성
@@ -208,10 +215,8 @@ anavi up --port 3000
 # 웹 앱 실행 (모노레포 또는 설치된 @archi-navi/web 자동 탐색)
 anavi up --port 3000
 
-# 소스코드/레포 스캔 (서비스 등록)
+# 로컬 프로젝트 또는 워크스페이스 폴더를 스캔해 서비스 등록
 anavi scan --workspace <workspaceId> --path /path/to/project
-
-# (옵션) 워크스페이스 폴더 일괄 스캔
 anavi scan --workspace <workspaceId> --workspace-dir /path/to/workspace
 
 # 도메인 추론 실행 (Track A/B)
@@ -223,11 +228,12 @@ anavi rebuild-rollup --workspace <workspaceId>
 # 데이터 내보내기
 anavi export --workspace <workspaceId> --format json --output ./export.json
 
-# 현재 상태 스냅샷 저장
+# 스냅샷 저장 / 복원
 anavi snapshot save --output ./anavi-snapshot.db
+anavi snapshot restore --input ./anavi-snapshot.db
 ```
 
-관계 추론(후보 생성)은 Web API로 실행:
+관계 후보 추론(config/code/db)은 Web API로 실행합니다:
 
 ```bash
 curl -X POST http://localhost:3000/api/inference/run \
@@ -285,15 +291,15 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 
 ---
 
-## 구현 현황 (v1)
+## 구현 현황 (현재)
 
 | 항목 | 상태 |
 |------|------|
 | Architecture View (레이어드, Roll-up) | ✅ 완료 |
-| Object Mapping View (Roll-up + Roll-down) | ✅ 완료 |
+| Object Mapping View (Domain-first + 3D Roll-up / Roll-down) | ✅ 완료 |
 | Service List + CSV Export | ✅ 완료 |
 | Tag / Visibility 관리 | ✅ 완료 |
-| 승인 워크플로우 (일괄 승인/반려) | ✅ 완료 |
+| 승인 워크플로우 (일괄 승인/반려, endpoint 매핑, 교차 검증 배지/필터/정렬) | ✅ 완료 |
 | 멀티 워크스페이스 지원 | ✅ 완료 |
 | Rollup 엔진 (4단계: S2S, S2DB, S2Broker, D2D) | ✅ 완료 |
 | 쿼리 엔진 (BFS/DFS, 경로, 영향도, 사용 탐색) | ✅ 완료 |
@@ -301,8 +307,11 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 | 도메인 추론 Track B (Louvain Discovery) | ✅ 완료 |
 | AI Chat (스트리밍, 멀티 프로바이더) | ✅ 완료 |
 | DB 시그널 추출 (추론 정밀도 향상) | ✅ 완료 |
-| AST 플러그인 (Tree-sitter/WASM) | ⚠️ 부분 구현 (기본 파이프라인은 Regex 중심) |
+| Hybrid AST + Regex 코드 시그널 추출 | ✅ 완료 |
 | Evidence Assembler (AI Chat 연동) | ✅ 완료 |
+| 비동기 Inference Run (`/api/inference/runs`) | ✅ 완료 |
+| Cross-Signal Validation | ✅ 완료 |
+| LLM 추론 부스터 | 📋 계획 |
 
 ---
 
@@ -321,8 +330,8 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 | [docs/design/05-rollup-and-graph.md](./docs/design/05-rollup-and-graph.md) | Rollup 전략 및 그래프 성능 |
 | [docs/design/06-compound-view.md](./docs/design/06-compound-view.md) | Compound Dependency View 설계 |
 | [docs/01-development-guide.md](./docs/01-development-guide.md) | 개발 가이드 및 컨벤션 |
-| [docs/02-implementation-status.md](./docs/02-implementation-status.md) | v1 구현 현황 |
-| [docs/03-roadmap.md](./docs/03-roadmap.md) | v2+ 로드맵 |
+| [docs/02-implementation-status.md](./docs/02-implementation-status.md) | 현재 구현 현황 점검 |
+| [docs/03-roadmap.md](./docs/03-roadmap.md) | 현재 로드맵 |
 | [docs/spec/01-db-inference-index-unique-spec.md](./docs/spec/01-db-inference-index-unique-spec.md) | DB 추론 확장 스펙 (인덱스/유니크 패턴) |
 | [docs/spec/02-object-mapping-3d-renderer-spec.md](./docs/spec/02-object-mapping-3d-renderer-spec.md) | Object Mapping 3D 렌더러 전환 스펙 |
 | [docs/spec/03-compound-view-implementation-spec.md](./docs/spec/03-compound-view-implementation-spec.md) | Compound View 구현 스펙 |

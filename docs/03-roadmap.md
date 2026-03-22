@@ -1,6 +1,6 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22 | 최종 갱신: 2026-03-17
+> 작성일: 2026-02-22 | 최종 갱신: 2026-03-22
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
 > 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
@@ -18,7 +18,7 @@
 
 ---
 
-## 현재 상태 요약 (2026-03-17)
+## 현재 상태 요약 (2026-03-22)
 
 | 구간 | 상태 | 비고 |
 |------|------|------|
@@ -28,7 +28,7 @@
 | P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
 | P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | 📋 Draft | 추론 엔진 고도화 설계 완료, 구현 대기 |
+| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-2 Cross-Signal Validation 완료, 나머지 항목은 설계/구현 대기 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
