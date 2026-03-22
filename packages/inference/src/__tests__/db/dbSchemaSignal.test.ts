@@ -677,7 +677,7 @@ describe('extractDbSchemaSignals', () => {
         expect((candidates[0]!.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
     });
 
-    it('증분 db-only rerun에서 변경 테이블이 없어도 stale fk_reference 검증 상태를 원복해야 한다', async () => {
+    it('증분 db-only rerun에서 변경 테이블이 없으면 기존 fk_reference 검증 상태를 유지해야 한다', async () => {
         const ordersId = await createDbTable(db, 'orders', { columns: [], fk_constraints: [] });
         const orderItemsId = await createDbTable(db, 'order_items', {
             columns: [{ name: 'order_id', type: 'bigint' }],
@@ -714,8 +714,14 @@ describe('extractDbSchemaSignals', () => {
             .from(relationCandidates)
             .where(eq(relationCandidates.id, candidateId));
         expect(candidates).toHaveLength(1);
-        expect(candidates[0]!.confidence).toBeCloseTo(0.5);
-        expect((candidates[0]!.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+        expect(candidates[0]!.confidence).toBeCloseTo(0.8);
+        expect((candidates[0]!.metadata as Record<string, unknown>)['crossValidation']).toEqual({
+            validated: false,
+            supportingSources: ['db'],
+            originalConfidence: 0.5,
+            adjustedConfidence: 0.8,
+            contradictions: [{ ruleId: 'C4', type: 'ORPHAN_FK', penalty: 0.15 }],
+        });
     });
 
     it('FK + 컬럼패턴 혼합 시 FK 처리된 관계는 컬럼패턴에서 중복 생성하지 않아야 한다', async () => {

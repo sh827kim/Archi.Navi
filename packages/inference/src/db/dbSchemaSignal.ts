@@ -331,9 +331,6 @@ export async function extractDbSchemaSignals(
         return existing?.sha256 !== hash;
     });
 
-    const candidateRefreshTableIds = (tablesToProcess.length > 0 ? tablesToProcess : dbTables)
-        .map((table) => table.id);
-
     // 증분 모드에서만: 변경된 테이블의 기존 PENDING fk_reference 후보를 정리 후 재계산한다.
     if (incremental) {
         for (const table of tablesToProcess) {
@@ -349,6 +346,12 @@ export async function extractDbSchemaSignals(
                 );
         }
     }
+
+    if (tablesToProcess.length === 0) {
+        return { tableCount: dbTables.length, fkCandidateCount: 0, implicitFkCandidateCount: 0 };
+    }
+
+    const candidateRefreshTableIds = tablesToProcess.map((table) => table.id);
 
     const staleValidatedCandidates = await db
         .select({
@@ -377,10 +380,6 @@ export async function extractDbSchemaSignals(
                 metadata: nextMetadata,
             })
             .where(eq(relationCandidates.id, candidate.id));
-    }
-
-    if (tablesToProcess.length === 0) {
-        return { tableCount: dbTables.length, fkCandidateCount: 0, implicitFkCandidateCount: 0 };
     }
 
     let fkCandidateCount = 0;

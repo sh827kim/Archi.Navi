@@ -1503,6 +1503,7 @@ describe('crossValidatePendingRelationCandidates', () => {
       subjectObjectId: serviceId,
       objectId: topicId,
       relationType: 'produce',
+      metadata: { source: 'CODE' },
     });
 
     const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
@@ -1521,6 +1522,101 @@ describe('crossValidatePendingRelationCandidates', () => {
 
     expect(candidate?.confidence).toBeCloseTo(0.85);
     expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('metadata.source가 없어도 FILE evidence가 있는 approved produce/consume relation은 DEAD_TOPIC을 기록하지 않아야 한다', async () => {
+    const { candidateId, serviceId, topicId } = await seedTopicCandidate(db, { relationType: 'produce' });
+    await linkEvidence(db, candidateId, 'CONFIG');
+    await seedApprovedTopicRelation(db, {
+      subjectObjectId: serviceId,
+      objectId: topicId,
+      relationType: 'produce',
+      evidenceType: 'FILE',
+      filePath: '/repo-a/src/producer.ts',
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 1,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.85);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('config 기반 approved produce/consume relation은 DEAD_TOPIC 판정을 해소하지 않아야 한다', async () => {
+    const { candidateId, serviceId, topicId } = await seedTopicCandidate(db, { relationType: 'produce' });
+    await linkEvidence(db, candidateId, 'CONFIG');
+    await seedApprovedTopicRelation(db, {
+      subjectObjectId: serviceId,
+      objectId: topicId,
+      relationType: 'produce',
+      evidenceType: 'CONFIG',
+      metadata: { source: 'application_yml' },
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 1,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const crossValidation = (
+      (candidate?.metadata as Record<string, unknown>)['crossValidation']
+    ) as Record<string, unknown>;
+
+    expect(candidate?.confidence).toBeCloseTo(0.7);
+    expect(crossValidation['contradictions']).toEqual([
+      { ruleId: 'C3', type: 'DEAD_TOPIC', penalty: 0.15 },
+    ]);
+  });
+
+  it('provenance 없는 manual approved produce/consume relation은 DEAD_TOPIC 판정을 해소하지 않아야 한다', async () => {
+    const { candidateId, serviceId, topicId } = await seedTopicCandidate(db, { relationType: 'produce' });
+    await linkEvidence(db, candidateId, 'CONFIG');
+    await seedApprovedTopicRelation(db, {
+      subjectObjectId: serviceId,
+      objectId: topicId,
+      relationType: 'produce',
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 1,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const crossValidation = (
+      (candidate?.metadata as Record<string, unknown>)['crossValidation']
+    ) as Record<string, unknown>;
+
+    expect(candidate?.confidence).toBeCloseTo(0.7);
+    expect(crossValidation['contradictions']).toEqual([
+      { ruleId: 'C3', type: 'DEAD_TOPIC', penalty: 0.15 },
+    ]);
   });
 
   it('다른 repo root의 approved topic relation은 scoped DEAD_TOPIC 판정을 해소하지 않아야 한다', async () => {

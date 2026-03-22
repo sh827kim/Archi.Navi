@@ -120,6 +120,16 @@ function isCodeOrConfigEndpointEvidenceSource(source: string | null): boolean {
     || (source !== null && CONFIG_ENDPOINT_SOURCES.has(source));
 }
 
+function isCodeTopicUsageSource(
+  metadata: unknown,
+  evidenceType: string | null,
+): boolean {
+  const source = asString(asRecord(metadata)?.source);
+  return source === 'CODE'
+    || source === 'LLM_CODE'
+    || normalizeEvidenceType(evidenceType ?? '') === 'code';
+}
+
 async function clearStoredCrossValidationState(
   db: DbClient,
   candidates: Array<{
@@ -547,6 +557,8 @@ export async function crossValidatePendingRelationCandidates(
     ) {
       continue;
     }
+    if (!isCodeTopicUsageSource(approvedRelation.metadata, approvedRelation.evidenceType)) continue;
+
     codeTopicUsageKeys.add(
       buildRelationUsageKey(approvedRelation.subjectObjectId, approvedRelation.objectId),
     );
