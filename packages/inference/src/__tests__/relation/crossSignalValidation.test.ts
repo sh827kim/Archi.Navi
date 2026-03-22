@@ -610,16 +610,22 @@ describe('crossValidatePendingRelationCandidates', () => {
   });
 
   it('다중 소스 지지 후보의 confidence를 부스트하고 metadata를 기록해야 한다', async () => {
-    const { candidateId } = await seedBaseCandidate(db, 0.6);
+    const { candidateId, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
     await linkEvidence(db, candidateId, 'CONFIG');
     await linkEvidence(db, candidateId, 'FILE');
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    await seedEndpointCallCandidate(db, {
+      subjectObjectId: sourceServiceId,
+      endpointId,
+      source: 'CODE',
+    });
 
     const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
 
     expect(result).toMatchObject({
-      candidateCount: 1,
+      candidateCount: 2,
       validatedCount: 1,
-      skippedSingleSourceCount: 0,
+      skippedSingleSourceCount: 1,
     });
 
     const rows = await db
@@ -638,16 +644,22 @@ describe('crossValidatePendingRelationCandidates', () => {
   });
 
   it('LLM evidence 타입도 config/code 지원 소스로 인식해야 한다', async () => {
-    const { candidateId } = await seedBaseCandidate(db, 0.6);
+    const { candidateId, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
     await linkEvidence(db, candidateId, 'LLM_CONFIG');
     await linkEvidence(db, candidateId, 'LLM_CODE');
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    await seedEndpointCallCandidate(db, {
+      subjectObjectId: sourceServiceId,
+      endpointId,
+      source: 'LLM_CODE',
+    });
 
     const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
 
     expect(result).toMatchObject({
-      candidateCount: 1,
+      candidateCount: 2,
       validatedCount: 1,
-      skippedSingleSourceCount: 0,
+      skippedSingleSourceCount: 1,
     });
 
     const [candidate] = await db
@@ -738,10 +750,16 @@ describe('crossValidatePendingRelationCandidates', () => {
   });
 
   it('profile boostFactor 값을 사용해 multi-source boost를 계산해야 한다', async () => {
-    const { candidateId } = await seedBaseCandidate(db, 0.6);
+    const { candidateId, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
     await seedDefaultCrossValidationProfile(db, { boostFactor: 0.1 });
     await linkEvidence(db, candidateId, 'CONFIG');
     await linkEvidence(db, candidateId, 'FILE');
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    await seedEndpointCallCandidate(db, {
+      subjectObjectId: sourceServiceId,
+      endpointId,
+      source: 'CODE',
+    });
 
     await crossValidatePendingRelationCandidates(db, { workspaceId });
 
@@ -976,6 +994,36 @@ describe('crossValidatePendingRelationCandidates', () => {
     const candidate = rows[0]!;
     expect(candidate.confidence).toBe(0.6);
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('다중 소스 call 후보라도 endpoint 근거가 없으면 PHANTOM_CALL penalty를 기록해야 한다', async () => {
+    const { candidateId } = await seedBaseCandidate(db, 0.6);
+    await linkEvidence(db, candidateId, 'CONFIG');
+    await linkEvidence(db, candidateId, 'FILE');
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 1,
+      contradictionCount: 1,
+      skippedSingleSourceCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const crossValidation = (
+      (candidate?.metadata as Record<string, unknown>)['crossValidation']
+    ) as Record<string, unknown>;
+
+    expect(candidate?.confidence).toBeCloseTo(0.75);
+    expect(crossValidation['validated']).toBe(false);
+    expect(crossValidation['supportingSources']).toEqual(['config', 'code']);
+    expect(crossValidation['contradictions']).toEqual([
+      { ruleId: 'C2', type: 'PHANTOM_CALL', penalty: 0.15 },
+    ]);
   });
 
   it('LLM_CODE endpoint 후보도 PHANTOM_CALL 근거로 사용해야 한다', async () => {

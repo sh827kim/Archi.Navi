@@ -651,7 +651,6 @@ export async function crossValidatePendingRelationCandidates(
 
     const contradictions: CrossValidationContradiction[] = [];
     if (
-      supportingSources.length < 2 &&
       hasConfigSupport &&
       isReadWriteRelation &&
       isDatabaseTarget &&
@@ -664,7 +663,6 @@ export async function crossValidatePendingRelationCandidates(
       });
     }
     if (
-      supportingSources.length < 2 &&
       hasCodeSupport &&
       isCallRelation &&
       isServiceTarget &&
@@ -677,7 +675,6 @@ export async function crossValidatePendingRelationCandidates(
       });
     }
     if (
-      supportingSources.length < 2 &&
       hasConfigSupport &&
       isProduceConsumeRelation &&
       isTopicTarget &&
@@ -690,7 +687,6 @@ export async function crossValidatePendingRelationCandidates(
       });
     }
     if (
-      supportingSources.length < 2 &&
       hasDbSupport &&
       isFkReferenceRelation &&
       isDbTableSubject &&

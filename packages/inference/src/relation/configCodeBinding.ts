@@ -173,7 +173,8 @@ export async function bindConfigToCodeEndpoints(
             candidate.metadata,
             evidencePathsByCandidateId.get(candidate.id) ?? [],
             scopedRepoRoots,
-        ));
+        ))
+        .filter((candidate) => (configEvidenceIdsByCandidateId.get(candidate.id) ?? []).length > 0);
 
     let createdEndpointCandidateCount = 0;
     let skippedNoEndpointCount = 0;
