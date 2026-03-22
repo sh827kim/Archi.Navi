@@ -503,8 +503,19 @@ export async function crossValidatePendingRelationCandidates(
     .select({
       subjectObjectId: objectRelations.subjectObjectId,
       objectId: objectRelations.objectId,
+      metadata: objectRelations.metadata,
+      evidenceType: evidences.evidenceType,
+      filePath: evidences.filePath,
     })
     .from(objectRelations)
+    .leftJoin(
+      relationEvidences,
+      and(
+        eq(relationEvidences.workspaceId, objectRelations.workspaceId),
+        eq(relationEvidences.relationId, objectRelations.id),
+      ),
+    )
+    .leftJoin(evidences, eq(relationEvidences.evidenceId, evidences.id))
     .where(
       and(
         eq(objectRelations.workspaceId, input.workspaceId),
@@ -525,6 +536,17 @@ export async function crossValidatePendingRelationCandidates(
     );
   }
   for (const approvedRelation of approvedProduceConsumeRelations) {
+    if (
+      repoScopeEnabled
+      && !matchesRepoScope(
+        approvedRelation.metadata,
+        approvedRelation.evidenceType
+          ? [{ evidenceType: approvedRelation.evidenceType, filePath: approvedRelation.filePath }]
+          : [],
+      )
+    ) {
+      continue;
+    }
     codeTopicUsageKeys.add(
       buildRelationUsageKey(approvedRelation.subjectObjectId, approvedRelation.objectId),
     );

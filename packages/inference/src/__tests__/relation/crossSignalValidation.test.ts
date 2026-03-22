@@ -510,6 +510,51 @@ async function seedApprovedReadWriteRelation(
   return { relationId };
 }
 
+async function seedApprovedTopicRelation(
+  db: TestDb,
+  input: {
+    subjectObjectId: string;
+    objectId: string;
+    relationType?: 'produce' | 'consume';
+    evidenceType?: 'FILE' | 'LLM_CODE' | 'CONFIG';
+    filePath?: string;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  const relationId = generateId();
+
+  await db.insert(objectRelations).values({
+    id: relationId,
+    workspaceId,
+    relationType: input.relationType ?? 'produce',
+    subjectObjectId: input.subjectObjectId,
+    objectId: input.objectId,
+    confidence: 0.7,
+    status: 'APPROVED',
+    source: 'INFERRED',
+    metadata: input.metadata ?? {},
+  });
+
+  if (input.evidenceType) {
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: input.evidenceType,
+      filePath: input.filePath,
+      excerpt: `${input.evidenceType} evidence`,
+      metadata: {},
+    });
+    await db.insert(relationEvidences).values({
+      workspaceId,
+      relationId,
+      evidenceId,
+    });
+  }
+
+  return { relationId };
+}
+
 async function linkEvidence(
   db: TestDb,
   candidateId: string,
@@ -1454,16 +1499,10 @@ describe('crossValidatePendingRelationCandidates', () => {
   it('같은 서비스와 topic에 대한 approved produce/consume relation이 있으면 DEAD_TOPIC을 기록하지 않아야 한다', async () => {
     const { candidateId, serviceId, topicId } = await seedTopicCandidate(db, { relationType: 'produce' });
     await linkEvidence(db, candidateId, 'CONFIG');
-    await db.insert(objectRelations).values({
-      id: generateId(),
-      workspaceId,
-      relationType: 'produce',
+    await seedApprovedTopicRelation(db, {
       subjectObjectId: serviceId,
       objectId: topicId,
-      confidence: 1,
-      status: 'APPROVED',
-      source: 'MANUAL',
-      metadata: {},
+      relationType: 'produce',
     });
 
     const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
@@ -1482,6 +1521,58 @@ describe('crossValidatePendingRelationCandidates', () => {
 
     expect(candidate?.confidence).toBeCloseTo(0.85);
     expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('다른 repo root의 approved topic relation은 scoped DEAD_TOPIC 판정을 해소하지 않아야 한다', async () => {
+    const repoA = '/tmp/repo-a';
+    const repoB = '/tmp/repo-b';
+    const { candidateId, serviceId, topicId } = await seedTopicCandidate(db, { relationType: 'produce' });
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'CONFIG',
+      filePath: `${repoA}/application.yml`,
+      excerpt: 'spring.cloud.stream.bindings.output.destination=order.created',
+      metadata: {},
+    });
+    await db.insert(relationCandidateEvidences).values({
+      workspaceId,
+      candidateId,
+      evidenceId,
+    });
+    await seedApprovedTopicRelation(db, {
+      subjectObjectId: serviceId,
+      objectId: topicId,
+      relationType: 'produce',
+      evidenceType: 'FILE',
+      filePath: `${repoB}/src/producer.ts`,
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: [repoA],
+    });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 1,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const crossValidation = (
+      (candidate?.metadata as Record<string, unknown>)['crossValidation']
+    ) as Record<string, unknown>;
+
+    expect(candidate?.confidence).toBeCloseTo(0.7);
+    expect(crossValidation['contradictions']).toEqual([
+      { ruleId: 'C3', type: 'DEAD_TOPIC', penalty: 0.15 },
+    ]);
   });
 
   it('message_broker 대상 produce 후보는 DEAD_TOPIC 판정에서 제외해야 한다', async () => {

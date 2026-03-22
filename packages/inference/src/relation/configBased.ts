@@ -480,7 +480,7 @@ async function saveRelationCandidate(
         .update(relationCandidates)
         .set({
           confidence: pendingRawConfidence,
-          metadata: stripCrossValidationMetadata(pendingMetadata),
+          metadata: stripCrossValidationMetadata(metadata),
         })
         .where(eq(relationCandidates.id, pending.id));
     }
@@ -539,12 +539,25 @@ async function saveEvidence(
 interface ProcessContext {
   db: DbClient;
   workspaceId: string;
+  repoRoot: string;
   allServices: { id: string; name: string }[];
 }
 
 interface ProcessStats {
   candidateCount: number;
   objectCount: number;
+}
+
+function withConfigProvenance(
+  metadata: Record<string, unknown>,
+  repoRoot: string,
+  filePath: string,
+): Record<string, unknown> {
+  return {
+    ...metadata,
+    repoRoot,
+    specFile: filePath,
+  };
 }
 
 /**
@@ -557,7 +570,7 @@ async function processAppYmlSignal(
   ctx: ProcessContext,
   stats: ProcessStats,
 ): Promise<void> {
-  const { db, workspaceId, allServices } = ctx;
+  const { db, workspaceId, repoRoot, allServices } = ctx;
 
   // service 매칭 (spring.application.name 기준)
   let serviceId: string | null = null;
@@ -589,7 +602,11 @@ async function processAppYmlSignal(
           subjectObjectId: serviceId,
           objectId: dbResult.id,
           confidence: CONFIDENCE.DATASOURCE_RELATION,
-          metadata: { source: 'application_yml', configKey: 'spring.datasource.url' },
+          metadata: withConfigProvenance(
+            { source: 'application_yml', configKey: 'spring.datasource.url' },
+            repoRoot,
+            signal.filePath,
+          ),
         },
         evidenceId,
       );
@@ -604,7 +621,11 @@ async function processAppYmlSignal(
           subjectObjectId: serviceId,
           objectId: dbResult.id,
           confidence: CONFIDENCE.DATASOURCE_RELATION,
-          metadata: { source: 'application_yml', configKey: 'spring.datasource.url' },
+          metadata: withConfigProvenance(
+            { source: 'application_yml', configKey: 'spring.datasource.url' },
+            repoRoot,
+            signal.filePath,
+          ),
         },
         evidenceId,
       );
@@ -650,11 +671,15 @@ async function processAppYmlSignal(
             subjectObjectId: serviceId,
             objectId: topicResult.id,
             confidence: CONFIDENCE.KAFKA_CONSUME,
-            metadata: {
-              source: 'application_yml',
-              configKey: 'spring.kafka.consumer',
-              groupId: consumerGroupId,
-            },
+            metadata: withConfigProvenance(
+              {
+                source: 'application_yml',
+                configKey: 'spring.kafka.consumer',
+                groupId: consumerGroupId,
+              },
+              repoRoot,
+              signal.filePath,
+            ),
           },
           consumeEvidenceId,
         );
@@ -671,7 +696,11 @@ async function processAppYmlSignal(
             subjectObjectId: serviceId,
             objectId: brokerResult.id,
             confidence: CONFIDENCE.KAFKA_PRODUCE,
-            metadata: { source: 'application_yml', configKey: 'spring.kafka.producer' },
+            metadata: withConfigProvenance(
+              { source: 'application_yml', configKey: 'spring.kafka.producer' },
+              repoRoot,
+              signal.filePath,
+            ),
           },
           brokerEvidenceId,
         );
@@ -706,7 +735,11 @@ async function processAppYmlSignal(
           subjectObjectId: serviceId,
           objectId: targetServiceId,
           confidence: CONFIDENCE.ZUUL_ROUTE_CALL,
-          metadata: { source: 'application_yml', configKey: 'zuul.routes.serviceId' },
+          metadata: withConfigProvenance(
+            { source: 'application_yml', configKey: 'zuul.routes.serviceId' },
+            repoRoot,
+            signal.filePath,
+          ),
         },
         evidenceId,
       );
@@ -726,7 +759,7 @@ async function processDockerComposeSignal(
   ctx: ProcessContext,
   stats: ProcessStats,
 ): Promise<void> {
-  const { db, workspaceId, allServices } = ctx;
+  const { db, workspaceId, repoRoot, allServices } = ctx;
 
   // 서비스 이름 → Object ID 맵 구성 (docker-compose 서비스 이름 기준)
   const serviceIdMap = new Map<string, string>();
@@ -800,7 +833,11 @@ async function processDockerComposeSignal(
           subjectObjectId: subjectId,
           objectId,
           confidence: CONFIDENCE.DOCKER_DEPENDS_ON,
-          metadata: { source: 'docker_compose', configKey: 'depends_on' },
+          metadata: withConfigProvenance(
+            { source: 'docker_compose', configKey: 'depends_on' },
+            repoRoot,
+            signal.filePath,
+          ),
         },
         evidenceId,
       );
@@ -819,7 +856,7 @@ async function processK8sSignal(
   ctx: ProcessContext,
   stats: ProcessStats,
 ): Promise<void> {
-  const { db, workspaceId, allServices } = ctx;
+  const { db, workspaceId, repoRoot, allServices } = ctx;
 
   // K8s Deployment 이름으로 service 매칭
   let serviceId: string | null = null;
@@ -858,7 +895,11 @@ async function processK8sSignal(
         subjectObjectId: serviceId,
         objectId: dbResult.id,
         confidence: CONFIDENCE.K8S_DB_RELATION,
-        metadata: { source: 'k8s_manifest', envKey: 'DB_URL' },
+        metadata: withConfigProvenance(
+          { source: 'k8s_manifest', envKey: 'DB_URL' },
+          repoRoot,
+          signal.filePath,
+        ),
       },
       evidenceId,
     );
@@ -872,7 +913,11 @@ async function processK8sSignal(
         subjectObjectId: serviceId,
         objectId: dbResult.id,
         confidence: CONFIDENCE.K8S_DB_RELATION,
-        metadata: { source: 'k8s_manifest', envKey: 'DB_URL' },
+        metadata: withConfigProvenance(
+          { source: 'k8s_manifest', envKey: 'DB_URL' },
+          repoRoot,
+          signal.filePath,
+        ),
       },
       evidenceId,
     );
@@ -901,7 +946,11 @@ async function processK8sSignal(
         subjectObjectId: serviceId,
         objectId: brokerResult.id,
         confidence: CONFIDENCE.K8S_KAFKA_RELATION,
-        metadata: { source: 'k8s_manifest', envKey: 'KAFKA_BROKERS' },
+        metadata: withConfigProvenance(
+          { source: 'k8s_manifest', envKey: 'KAFKA_BROKERS' },
+          repoRoot,
+          signal.filePath,
+        ),
       },
       evidenceId,
     );
@@ -939,7 +988,7 @@ export async function inferRelationsFromConfig(
       ),
     );
 
-  const ctx: ProcessContext = { db, workspaceId, allServices };
+  const ctx: ProcessContext = { db, workspaceId, repoRoot, allServices };
   const stats: ProcessStats = { candidateCount: 0, objectCount: 0 };
   const serviceInventoryHash = hashServiceInventory(allServices);
 

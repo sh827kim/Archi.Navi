@@ -578,6 +578,73 @@ spring:
       expect(candidate?.confidence).toBeCloseTo(0.9);
       expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
     });
+
+    it('동일 raw confidence로 재사용되는 pending config 후보도 최신 provenance로 갱신해야 한다', async () => {
+      const { orderServiceId } = await createTestFixtures(db, workspaceId);
+
+      const dbObjectId = generateId();
+      await db.insert(objects).values({
+        id: dbObjectId,
+        workspaceId,
+        objectType: 'database',
+        category: 'STORAGE',
+        granularity: 'COMPOUND',
+        name: 'order_db',
+        urn: buildUrn(workspaceId, 'storage', 'database', 'db-host:order_db'),
+        path: `/${dbObjectId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      });
+
+      const candidateId = generateId();
+      await db.insert(relationCandidates).values({
+        id: candidateId,
+        workspaceId,
+        relationType: 'read',
+        subjectObjectId: orderServiceId,
+        objectId: dbObjectId,
+        confidence: 0.99,
+        status: 'PENDING',
+        metadata: {
+          source: 'old',
+          repoRoot: '/tmp/old-root',
+          specFile: '/tmp/old-root/application.yml',
+          crossValidation: {
+            validated: true,
+            supportingSources: ['config', 'code'],
+            originalConfidence: 0.9,
+            adjustedConfidence: 0.99,
+          },
+        },
+      });
+
+      const appPath = join(tempDir, 'application.yml');
+      writeFileSync(
+        appPath,
+        `
+spring:
+  application:
+    name: order-service
+  datasource:
+    url: jdbc:mysql://db-host:3306/order_db
+`,
+      );
+
+      await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      const [candidate] = await db
+        .select()
+        .from(relationCandidates)
+        .where(eq(relationCandidates.id, candidateId));
+      const metadata = candidate?.metadata as Record<string, unknown>;
+
+      expect(candidate?.confidence).toBeCloseTo(0.9);
+      expect(metadata['repoRoot']).toBe(tempDir);
+      expect(metadata['specFile']).toBe(appPath);
+      expect(metadata['source']).toBe('application_yml');
+      expect(metadata['crossValidation']).toBeUndefined();
+    });
   });
 
   // ─── docker-compose.yml 처리 ───────────────────────────────────────────────────
