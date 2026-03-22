@@ -104,7 +104,7 @@
 | 항목 | SPEC | 상태 |
 |------|------|------|
 | 4-1. Inter-procedural AST 분석 | `docs/spec/18-inter-procedural-ast-spec.md` | 📋 Draft |
-| 4-2. Cross-Signal Validation | `docs/spec/19-cross-signal-validation-spec.md` | 📋 Draft |
+| 4-2. Cross-Signal Validation | `docs/spec/19-cross-signal-validation-spec.md` | ✅ Implemented |
 | 4-3. LLM 추론 부스터 | `docs/spec/20-llm-inference-boost-spec.md` | 📋 Draft |
 | 4-4. 프레임워크 플러그인 시스템 | `docs/spec/21-framework-plugin-system-spec.md` | 📋 Draft |
 | 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/22-realtime-rollup-spec.md` | 📋 Draft |

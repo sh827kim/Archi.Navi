@@ -268,7 +268,7 @@
   - 기존 AST 분석의 confidence 추가 상향 (+0.05~0.1)
 - **의존:** 기존 2-1(AST hybrid) 완료 기반
 
-### 📋 4-2. Cross-Signal Validation (교차 검증)
+### ✅ 4-2. Cross-Signal Validation (교차 검증)
 - **SPEC:** `docs/spec/19-cross-signal-validation-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §3
 - **핵심:**

@@ -60,6 +60,16 @@ interface RelationCandidate {
   confidence: number;
   source: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  crossValidation?: {
+    validated: boolean;
+    supportCount: number;
+    supportingSources: string[];
+    contradictions?: Array<{
+      ruleId: string;
+      type: 'STALE_CONFIG' | 'PHANTOM_CALL' | 'DEAD_TOPIC' | 'ORPHAN_FK';
+      penalty: number;
+    }>;
+  };
 }
 
 interface EndpointInfo {
@@ -69,7 +79,12 @@ interface EndpointInfo {
   path: string;
 }
 
-function createCandidate(id: string, objectName: string, relationType = 'call'): RelationCandidate {
+function createCandidate(
+  id: string,
+  objectName: string,
+  relationType = 'call',
+  crossValidation?: RelationCandidate['crossValidation'],
+): RelationCandidate {
   return {
     id,
     subjectName: `caller-${id}`,
@@ -86,6 +101,7 @@ function createCandidate(id: string, objectName: string, relationType = 'call'):
     confidence: 0.8,
     source: 'INFERRED',
     status: 'PENDING',
+    ...(crossValidation ? { crossValidation } : {}),
   };
 }
 
@@ -231,5 +247,297 @@ describe('ApprovalList', () => {
     expect(screen.queryByRole('button', { name: /승인/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /세부 매핑/ }));
     await screen.findByText('/service-2/dependency');
+  });
+
+  it('교차 검증 배지를 후보별로 표시해야 한다', async () => {
+    const supported = createCandidate('cand-3', 'service-3', 'call', {
+      validated: true,
+      supportCount: 2,
+      supportingSources: ['config', 'code'],
+    });
+    const single = createCandidate('cand-4', 'service-4', 'call', {
+      validated: false,
+      supportCount: 1,
+      supportingSources: ['code'],
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([supported, single]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('service-3');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('2+ 소스 지지');
+    expect(cards[1]?.textContent).toContain('단일 소스');
+  });
+
+  it('STALE_CONFIG contradiction이 있으면 경고 배지를 함께 표시해야 한다', async () => {
+    const stale = createCandidate('cand-5', 'order-db', 'read', {
+      validated: false,
+      supportCount: 1,
+      supportingSources: ['config'],
+      contradictions: [{ ruleId: 'C1', type: 'STALE_CONFIG', penalty: 0.15 }],
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([stale]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('order-db');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('STALE_CONFIG 경고');
+    expect(cards[0]?.textContent).not.toContain('단일 소스');
+  });
+
+  it('다른 contradiction type도 대응되는 경고 배지를 우선 표시해야 한다', async () => {
+    const phantom = createCandidate('cand-6', 'payment-service', 'call', {
+      validated: false,
+      supportCount: 2,
+      supportingSources: ['config', 'code'],
+      contradictions: [{ ruleId: 'C2', type: 'PHANTOM_CALL', penalty: 0.15 }],
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([phantom]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('payment-service');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('PHANTOM_CALL 경고');
+    expect(cards[0]?.textContent).not.toContain('2+ 소스 지지');
+  });
+
+  it('DEAD_TOPIC contradiction도 대응되는 경고 배지를 표시해야 한다', async () => {
+    const deadTopic = createCandidate('cand-7', 'order.created', 'consume', {
+      validated: false,
+      supportCount: 1,
+      supportingSources: ['config'],
+      contradictions: [{ ruleId: 'C3', type: 'DEAD_TOPIC', penalty: 0.15 }],
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([deadTopic]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('order.created');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('DEAD_TOPIC 경고');
+    expect(cards[0]?.textContent).not.toContain('단일 소스');
+  });
+
+  it('ORPHAN_FK contradiction도 대응되는 경고 배지를 표시해야 한다', async () => {
+    const orphanFk = createCandidate('cand-8', 'orders', 'fk_reference', {
+      validated: false,
+      supportCount: 1,
+      supportingSources: ['db'],
+      contradictions: [{ ruleId: 'C4', type: 'ORPHAN_FK', penalty: 0.15 }],
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([orphanFk]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('orders');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('ORPHAN_FK 경고');
+    expect(cards[0]?.textContent).not.toContain('단일 소스');
+  });
+
+  it('교차 검증 필터로 경고 후보만 볼 수 있어야 한다', async () => {
+    const warning = createCandidate('cand-9', 'warning-service', 'call', {
+      validated: false,
+      supportCount: 1,
+      supportingSources: ['code'],
+      contradictions: [{ ruleId: 'C2', type: 'PHANTOM_CALL', penalty: 0.15 }],
+    });
+    const supported = createCandidate('cand-10', 'supported-service', 'call', {
+      validated: true,
+      supportCount: 2,
+      supportingSources: ['config', 'code'],
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([warning, supported]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('warning-service');
+    fireEvent.change(screen.getByLabelText('교차 검증 필터'), {
+      target: { value: 'warnings' },
+    });
+
+    expect(screen.getByText('warning-service')).toBeTruthy();
+    expect(screen.queryByText('supported-service')).toBeNull();
+  });
+
+  it('기본 정렬은 경고 후보를 다중 소스/단일 소스보다 우선 배치해야 한다', async () => {
+    const single = createCandidate('cand-11', 'single-service', 'call', {
+      validated: false,
+      supportCount: 1,
+      supportingSources: ['code'],
+    });
+    const warning = createCandidate('cand-12', 'warning-first', 'call', {
+      validated: false,
+      supportCount: 1,
+      supportingSources: ['code'],
+      contradictions: [{ ruleId: 'C2', type: 'PHANTOM_CALL', penalty: 0.15 }],
+    });
+    const supported = createCandidate('cand-13', 'supported-next', 'call', {
+      validated: true,
+      supportCount: 2,
+      supportingSources: ['config', 'code'],
+    });
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([single, supported, warning]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('warning-first');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('warning-first');
+    expect(cards[1]?.textContent).toContain('supported-next');
+    expect(cards[2]?.textContent).toContain('single-service');
+  });
+
+  it('신뢰도 낮은 순 정렬을 적용할 수 있어야 한다', async () => {
+    const high = { ...createCandidate('cand-14', 'high-confidence'), confidence: 0.9 };
+    const low = { ...createCandidate('cand-15', 'low-confidence'), confidence: 0.2 };
+    const mid = { ...createCandidate('cand-16', 'mid-confidence'), confidence: 0.5 };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([high, low, mid]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('high-confidence');
+    fireEvent.change(screen.getByLabelText('교차 검증 정렬'), {
+      target: { value: 'confidence-asc' },
+    });
+
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('low-confidence');
+    expect(cards[1]?.textContent).toContain('mid-confidence');
+    expect(cards[2]?.textContent).toContain('high-confidence');
+  });
+
+  it('mixed atomic/compound 목록에서도 교차 검증 정렬 우선순서를 유지해야 한다', async () => {
+    const atomicSingle = {
+      ...createCandidate('cand-17', 'GET /orders'),
+      objectGranularity: 'ATOMIC' as const,
+      objectParentName: 'order-service',
+      objectObjectType: 'api_endpoint',
+      confidence: 0.95,
+      crossValidation: {
+        validated: false,
+        supportCount: 1,
+        supportingSources: ['code'],
+      },
+    };
+    const compoundWarning = {
+      ...createCandidate('cand-18', 'billing-service'),
+      confidence: 0.4,
+      crossValidation: {
+        validated: false,
+        supportCount: 1,
+        supportingSources: ['config'],
+        contradictions: [{ ruleId: 'C2', type: 'PHANTOM_CALL' as const, penalty: 0.15 }],
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([atomicSingle, compoundWarning]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('GET /orders');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    expect(cards[0]?.textContent).toContain('billing-service');
+    expect(cards[1]?.textContent).toContain('GET /orders');
+  });
+
+  it('approval 목록은 페이지를 넘겨 전체 후보를 가져온 뒤 정렬/필터해야 한다', async () => {
+    const firstPage = Array.from({ length: 200 }, (_, index) =>
+      createCandidate(`cand-page-${index}`, `service-${index}`),
+    );
+    const secondPage = [
+      createCandidate('cand-last', 'late-warning', 'call', {
+        validated: false,
+        supportCount: 1,
+        supportingSources: ['code'],
+        contradictions: [{ ruleId: 'C2', type: 'PHANTOM_CALL', penalty: 0.15 }],
+      }),
+    ];
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = new URL(String(input), 'http://localhost');
+      if (url.pathname === '/api/inference/candidates') {
+        const offset = url.searchParams.get('offset');
+        if (offset === '0') return Promise.resolve(jsonResponse(firstPage));
+        if (offset === '200') return Promise.resolve(jsonResponse(secondPage));
+        throw new Error(`Unexpected offset: ${offset}`);
+      }
+      throw new Error(`Unexpected fetch: ${url.toString()}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('late-warning');
+    fireEvent.change(screen.getByLabelText('교차 검증 필터'), {
+      target: { value: 'warnings' },
+    });
+
+    expect(screen.getByText('late-warning')).toBeTruthy();
+    expect(screen.queryByText('service-0')).toBeNull();
   });
 });

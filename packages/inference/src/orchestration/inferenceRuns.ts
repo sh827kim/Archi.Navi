@@ -16,6 +16,11 @@ import {
 } from '../code/codeSignalEngine';
 import { extractDbSchemaSignals } from '../db/dbSchemaSignal';
 import { inferRelationsFromConfig } from '../relation/configBased';
+import {
+  bindConfigToCodeEndpoints,
+  type ConfigCodeBindingResult,
+} from '../relation/configCodeBinding';
+import { crossValidatePendingRelationCandidates } from '../relation/crossSignalValidation';
 import { inferRelationsFromCodeSignals } from '../relation/codeBased';
 
 export type InferenceMode = 'config' | 'code' | 'db';
@@ -30,6 +35,46 @@ function isInferenceMode(value: string): value is InferenceMode {
 
 function isInferenceSourceType(value: string): value is InferenceSourceType {
   return value === 'local' || value === 'githubRepo' || value === 'githubOrg';
+}
+
+function didAllSelectedModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedLocalSourceCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+  dbSucceeded: boolean;
+}): boolean {
+  const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+    modeSet: input.modeSet,
+    expectedLocalSourceCount: input.expectedLocalSourceCount,
+    successfulConfigRepoCount: input.successfulConfigRepoCount,
+    successfulCodeRelationRepoCount: input.successfulCodeRelationRepoCount,
+  });
+  const selectedDbModeSucceeded = !input.modeSet.has('db') || input.dbSucceeded;
+
+  return selectedConfigAndCodeModesSucceeded && selectedDbModeSucceeded;
+}
+
+function didSelectedConfigAndCodeModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedLocalSourceCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+}): boolean {
+  const allSelectedCodeRootsSucceeded =
+    !input.modeSet.has('code')
+    || (
+      input.expectedLocalSourceCount > 0
+      && input.successfulCodeRelationRepoCount === input.expectedLocalSourceCount
+    );
+  const allSelectedConfigRootsSucceeded =
+    !input.modeSet.has('config')
+    || (
+      input.expectedLocalSourceCount > 0
+      && input.successfulConfigRepoCount === input.expectedLocalSourceCount
+    );
+
+  return allSelectedCodeRootsSucceeded && allSelectedConfigRootsSucceeded;
 }
 
 function isLikelyRemotePath(pathValue: string): boolean {
@@ -756,6 +801,16 @@ export async function executeInferenceRun(
         fkCandidateCount: number;
         implicitFkCandidateCount: number;
       } = null;
+  let crossBindingResult: ConfigCodeBindingResult | null = null;
+  let successfulCodeRelationRepoCount = 0;
+  const successfulCodeRepoRoots: string[] = [];
+  let crossValidationResult:
+    | null
+    | {
+        candidateCount: number;
+        validatedCount: number;
+          skippedSingleSourceCount: number;
+        } = null;
 
   if ((modeSet.has('config') || modeSet.has('code')) && sourceResolution.localSources.length === 0) {
     errors.push({
@@ -882,6 +937,8 @@ export async function executeInferenceRun(
           repoRoot: localSource.repoRoot,
         });
         codeResult.candidateCount += codeCand.candidateCount;
+        successfulCodeRelationRepoCount += 1;
+        successfulCodeRepoRoots.push(localSource.repoRoot);
       } catch (error) {
         sourceHasError = true;
         errors.push({
@@ -923,12 +980,62 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
+  const allSelectedModesSucceeded = didAllSelectedModesSucceed({
+    modeSet,
+    expectedLocalSourceCount: sourceResolution.localSources.length,
+    successfulConfigRepoCount: configResult.repoCount,
+    successfulCodeRelationRepoCount,
+    dbSucceeded: dbResult !== null,
+  });
+  const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+    modeSet,
+    expectedLocalSourceCount: sourceResolution.localSources.length,
+    successfulConfigRepoCount: configResult.repoCount,
+    successfulCodeRelationRepoCount,
+  });
+
+  if (modeSet.has('config') && modeSet.has('code') && selectedConfigAndCodeModesSucceeded) {
+    try {
+      crossBindingResult = await bindConfigToCodeEndpoints(db, {
+        workspaceId: input.workspaceId,
+        repoRoots: successfulCodeRepoRoots,
+      });
+    } catch (error) {
+      warnings.push(
+        `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
+  if (modeSet.has('code') && modeSet.size >= 2 && allSelectedModesSucceeded) {
+    try {
+      crossValidationResult = await crossValidatePendingRelationCandidates(db, {
+        workspaceId: input.workspaceId,
+        repoRoots: successfulCodeRepoRoots,
+        includeSchemaCandidates: modeSet.has('db'),
+      });
+    } catch (error) {
+      warnings.push(
+        `cross-signal validation 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
   const dbCandidateCount =
     (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
+  const crossBindingCandidateCount = crossBindingResult?.createdEndpointCandidateCount ?? 0;
   const relationCandidatesCreated =
-    configResult.candidateCount + dbCandidateCount + codeResult.candidateCount;
+    configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
   const hasAnySuccess =
-    configResult.repoCount > 0 || codeResult.repoCount > 0 || dbResult !== null;
+    configResult.repoCount > 0 || successfulCodeRelationRepoCount > 0 || dbResult !== null;
 
   const finalStatus: InferenceRunStatus =
     !hasAnySuccess && errors.length > 0 ? 'FAILED' : 'SUCCEEDED';
@@ -937,10 +1044,12 @@ export async function executeInferenceRun(
     config: configResult,
     code: codeResult,
     db: dbResult,
+    crossBinding: crossBindingResult,
     summary: {
       relationCandidatesCreated,
       executionMode: Array.from(modeSet),
     },
+    crossValidation: crossValidationResult,
   };
 
   const finalizedRows = await db

@@ -49,6 +49,30 @@ function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function getRawCandidateConfidence(confidence: number, metadata: unknown): number {
+  const crossValidation = asRecord(asRecord(metadata)?.crossValidation);
+  const originalConfidence = crossValidation?.originalConfidence;
+  return typeof originalConfidence === 'number' && Number.isFinite(originalConfidence)
+    ? originalConfidence
+    : confidence;
+}
+
+function stripCrossValidationMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
+  if (!Object.prototype.hasOwnProperty.call(metadata, 'crossValidation')) {
+    return metadata;
+  }
+
+  const nextMetadata = { ...metadata };
+  delete nextMetadata.crossValidation;
+  return nextMetadata;
+}
+
 function clamp01(value: number): number {
   if (value < 0) return 0;
   if (value > 1) return 1;
@@ -465,6 +489,7 @@ async function saveRelationCandidate(
       id: relationCandidates.id,
       status: relationCandidates.status,
       confidence: relationCandidates.confidence,
+      metadata: relationCandidates.metadata,
     })
     .from(relationCandidates)
     .where(
@@ -482,10 +507,23 @@ async function saveRelationCandidate(
 
   const pending = existingCandidates.find((cand) => cand.status === 'PENDING');
   if (pending) {
-    if (confidence > (pending.confidence ?? 0)) {
+    const pendingRawConfidence = getRawCandidateConfidence(pending.confidence ?? 0, pending.metadata);
+    const pendingMetadata = asRecord(pending.metadata) ?? {};
+    if (confidence > pendingRawConfidence) {
       await db
         .update(relationCandidates)
-        .set({ confidence, metadata })
+        .set({
+          confidence,
+          metadata: stripCrossValidationMetadata(metadata),
+        })
+        .where(eq(relationCandidates.id, pending.id));
+    } else if (Object.prototype.hasOwnProperty.call(pendingMetadata, 'crossValidation')) {
+      await db
+        .update(relationCandidates)
+        .set({
+          confidence: pendingRawConfidence,
+          metadata: stripCrossValidationMetadata(metadata),
+        })
         .where(eq(relationCandidates.id, pending.id));
     }
     await db

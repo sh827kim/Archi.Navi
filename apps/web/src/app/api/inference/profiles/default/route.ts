@@ -3,11 +3,23 @@
  * - GET: 워크스페이스 기본 추론 프로필 조회 (없으면 생성)
  * - PUT: 워크스페이스 기본 추론 프로필 갱신
  */
-import { and, eq } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
 
 const DEFAULT_PROFILE_NAME = 'default';
+
+interface CrossValidationConfig {
+  enabled: boolean;
+  boostFactor: number;
+  penaltyFactor: number;
+}
+
+const DEFAULT_CROSS_VALIDATION_CONFIG: CrossValidationConfig = {
+  enabled: true,
+  boostFactor: 0.3,
+  penaltyFactor: 0.85,
+};
 
 interface ProfileResponse {
   id: string;
@@ -25,6 +37,7 @@ interface ProfileResponse {
   edgeWRw: number | null;
   edgeWMsg: number | null;
   enabledLayers: unknown;
+  crossValidation?: unknown;
 }
 
 interface UpdateProfileBody {
@@ -39,9 +52,29 @@ interface UpdateProfileBody {
   edgeWRw?: number;
   edgeWMsg?: number;
   enabledLayers?: string[];
+  crossValidation?: Partial<CrossValidationConfig>;
+}
+
+function asCrossValidationConfig(value: unknown): CrossValidationConfig {
+  const record = value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+  return {
+    enabled: typeof record['enabled'] === 'boolean'
+      ? record['enabled']
+      : DEFAULT_CROSS_VALIDATION_CONFIG.enabled,
+    boostFactor: isFiniteNumber(record['boostFactor'])
+      ? clamp(record['boostFactor'], 0, 1)
+      : DEFAULT_CROSS_VALIDATION_CONFIG.boostFactor,
+    penaltyFactor: isFiniteNumber(record['penaltyFactor'])
+      ? clamp(record['penaltyFactor'], 0, 1)
+      : DEFAULT_CROSS_VALIDATION_CONFIG.penaltyFactor,
+  };
 }
 
 function toPublicProfile(row: ProfileResponse) {
+  const crossValidation = asCrossValidationConfig(row.crossValidation);
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -60,6 +93,7 @@ function toPublicProfile(row: ProfileResponse) {
     enabledLayers: Array.isArray(row.enabledLayers)
       ? (row.enabledLayers as unknown[]).filter((v): v is string => typeof v === 'string')
       : ['call', 'db', 'msg', 'code'],
+    crossValidation,
   };
 }
 
@@ -75,7 +109,20 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
       ),
     )
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (!row) return null;
+
+  const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
+    select cross_validation
+    from domain_inference_profiles
+    where id = ${row.id}
+    limit 1
+  `);
+
+  return {
+    ...row,
+    crossValidation: crossValidation.rows[0]?.cross_validation,
+  };
 }
 
 async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | null> {
@@ -85,7 +132,20 @@ async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | 
     .from(domainInferenceProfiles)
     .where(eq(domainInferenceProfiles.workspaceId, workspaceId))
     .limit(1);
-  return rows[0] ?? null;
+  const row = rows[0] ?? null;
+  if (!row) return null;
+
+  const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
+    select cross_validation
+    from domain_inference_profiles
+    where id = ${row.id}
+    limit 1
+  `);
+
+  return {
+    ...row,
+    crossValidation: crossValidation.rows[0]?.cross_validation,
+  };
 }
 
 async function ensureDefaultProfile(workspaceId: string): Promise<ProfileResponse> {
@@ -187,6 +247,19 @@ export async function PUT(req: NextRequest) {
         : Array.isArray(current.enabledLayers)
           ? (current.enabledLayers as unknown[]).filter((v): v is string => typeof v === 'string')
           : ['call', 'db', 'msg', 'code'];
+    const crossValidationInput = body.crossValidation ?? {};
+    const currentCrossValidation = asCrossValidationConfig(current.crossValidation);
+    const crossValidation = {
+      enabled: typeof crossValidationInput.enabled === 'boolean'
+        ? crossValidationInput.enabled
+        : currentCrossValidation.enabled,
+      boostFactor: isFiniteNumber(crossValidationInput.boostFactor)
+        ? clamp(crossValidationInput.boostFactor, 0, 1)
+        : currentCrossValidation.boostFactor,
+      penaltyFactor: isFiniteNumber(crossValidationInput.penaltyFactor)
+        ? clamp(crossValidationInput.penaltyFactor, 0, 1)
+        : currentCrossValidation.penaltyFactor,
+    };
 
     await db.transaction(async (tx) => {
       await tx
@@ -211,6 +284,12 @@ export async function PUT(req: NextRequest) {
           updatedAt: new Date(),
         })
         .where(eq(domainInferenceProfiles.id, current.id));
+
+      await tx.execute(sql`
+        update domain_inference_profiles
+        set cross_validation = ${JSON.stringify(crossValidation)}::jsonb
+        where id = ${current.id}
+      `);
     });
 
     const updated = await ensureDefaultProfile(workspaceId);

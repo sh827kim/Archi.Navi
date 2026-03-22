@@ -14,6 +14,7 @@ import {
   inferRelationsFromConfig,
   inferRelationsFromCodeSignals,
   bindConfigToCodeEndpoints,
+  crossValidatePendingRelationCandidates,
   extractCodeSignalsWithEngine,
   extractDbSchemaSignals,
   normalizeCodeSignalEngine,
@@ -37,6 +38,46 @@ const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
 
 function isInferenceMode(value: string): value is InferenceMode {
   return value === 'config' || value === 'code' || value === 'db';
+}
+
+function didAllSelectedModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedRepoRootCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+  dbSucceeded: boolean;
+}): boolean {
+  const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+    modeSet: input.modeSet,
+    expectedRepoRootCount: input.expectedRepoRootCount,
+    successfulConfigRepoCount: input.successfulConfigRepoCount,
+    successfulCodeRelationRepoCount: input.successfulCodeRelationRepoCount,
+  });
+  const selectedDbModeSucceeded = !input.modeSet.has('db') || input.dbSucceeded;
+
+  return selectedConfigAndCodeModesSucceeded && selectedDbModeSucceeded;
+}
+
+function didSelectedConfigAndCodeModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedRepoRootCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+}): boolean {
+  const allSelectedCodeRootsSucceeded =
+    !input.modeSet.has('code')
+    || (
+      input.expectedRepoRootCount > 0
+      && input.successfulCodeRelationRepoCount === input.expectedRepoRootCount
+    );
+  const allSelectedConfigRootsSucceeded =
+    !input.modeSet.has('config')
+    || (
+      input.expectedRepoRootCount > 0
+      && input.successfulConfigRepoCount === input.expectedRepoRootCount
+    );
+
+  return allSelectedCodeRootsSucceeded && allSelectedConfigRootsSucceeded;
 }
 
 function isLikelyRemotePath(pathValue: string): boolean {
@@ -210,6 +251,16 @@ export async function POST(req: NextRequest) {
           fkCandidateCount: number;
           implicitFkCandidateCount: number;
         } = null;
+    let crossValidationResult:
+      | null
+      | {
+          candidateCount: number;
+          validatedCount: number;
+          skippedSingleSourceCount: number;
+        } = null;
+
+    let successfulCodeRelationRepoCount = 0;
+    const successfulCodeRepoRoots: string[] = [];
 
     if (modeSet.has('config')) {
       for (const repoRoot of usedRepoRoots) {
@@ -258,6 +309,8 @@ export async function POST(req: NextRequest) {
 
           const codeCand = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
           codeResult.candidateCount += codeCand.candidateCount;
+          successfulCodeRelationRepoCount += 1;
+          successfulCodeRepoRoots.push(repoRoot);
         } catch (error) {
           errors.push({
             mode: 'code',
@@ -268,17 +321,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // config+code 모두 실행된 경우 → 크로스 바인딩으로 COMPOUND→ATOMIC 후보 보강
     let crossBindingResult: ConfigCodeBindingResult | null = null;
-    if (modeSet.has('config') && modeSet.has('code')) {
-      try {
-        crossBindingResult = await bindConfigToCodeEndpoints(db, { workspaceId });
-      } catch (error) {
-        warnings.push(
-          `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
-        );
-      }
-    }
 
     if (modeSet.has('db')) {
       try {
@@ -288,6 +331,47 @@ export async function POST(req: NextRequest) {
           mode: 'db',
           message: error instanceof Error ? error.message : 'unknown error',
         });
+      }
+    }
+
+    const allSelectedModesSucceeded = didAllSelectedModesSucceed({
+      modeSet,
+      expectedRepoRootCount: usedRepoRoots.length,
+      successfulConfigRepoCount: configResult.repoCount,
+      successfulCodeRelationRepoCount,
+      dbSucceeded: dbResult !== null,
+    });
+    const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+      modeSet,
+      expectedRepoRootCount: usedRepoRoots.length,
+      successfulConfigRepoCount: configResult.repoCount,
+      successfulCodeRelationRepoCount,
+    });
+
+    if (modeSet.has('config') && modeSet.has('code') && selectedConfigAndCodeModesSucceeded) {
+      try {
+        crossBindingResult = await bindConfigToCodeEndpoints(db, {
+          workspaceId,
+          repoRoots: successfulCodeRepoRoots,
+        });
+      } catch (error) {
+        warnings.push(
+          `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
+    }
+
+    if (modeSet.has('code') && modeSet.size >= 2 && allSelectedModesSucceeded) {
+      try {
+        crossValidationResult = await crossValidatePendingRelationCandidates(db, {
+          workspaceId,
+          repoRoots: successfulCodeRepoRoots,
+          includeSchemaCandidates: modeSet.has('db'),
+        });
+      } catch (error) {
+        warnings.push(
+          `cross-signal validation 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
       }
     }
 
@@ -317,7 +401,7 @@ export async function POST(req: NextRequest) {
       configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
     const hasAnySuccess =
       configResult.repoCount > 0 ||
-      codeResult.repoCount > 0 ||
+      successfulCodeRelationRepoCount > 0 ||
       dbResult !== null;
 
     if (!hasAnySuccess && errors.length > 0) {
@@ -349,6 +433,7 @@ export async function POST(req: NextRequest) {
         code: codeResult,
         db: dbResult,
         crossBinding: crossBindingResult,
+        crossValidation: crossValidationResult,
       },
       summary: {
         relationCandidatesCreated,

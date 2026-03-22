@@ -6,5 +6,14 @@ export { inferRelationsFromConfig } from './configBased';
 export { inferRelationsFromCodeSignals } from './codeBased';
 export { bindConfigToCodeEndpoints } from './configCodeBinding';
 export type { ConfigCodeBindingResult } from './configCodeBinding';
+export { crossValidatePendingRelationCandidates } from './crossSignalValidation';
+export {
+  DEFAULT_CROSS_VALIDATION_CONFIG,
+} from './crossSignalValidation';
+export type {
+  CrossValidationConfig,
+  CrossValidationSource,
+  CrossValidationSummary,
+} from './crossSignalValidation';
 export { approveRelationCandidate } from './approveRelationCandidate';
 export type { ApproveRelationCandidateResult } from './approveRelationCandidate';

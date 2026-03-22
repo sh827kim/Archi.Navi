@@ -90,6 +90,9 @@ const LS = {
   INF_W_CODE: 'archi-navi:inference:w-code',
   INF_W_DB: 'archi-navi:inference:w-db',
   INF_W_MSG: 'archi-navi:inference:w-msg',
+  INF_CV_ENABLED: 'archi-navi:inference:cv-enabled',
+  INF_CV_BOOST: 'archi-navi:inference:cv-boost-factor',
+  INF_CV_PENALTY: 'archi-navi:inference:cv-penalty-factor',
   INF_CODE_ENGINE: 'archi-navi:inference:code-engine',
   ROLLUP_HUB: 'archi-navi:rollup:hub-threshold',
   ROLLUP_CLUSTER: 'archi-navi:rollup:min-cluster',
@@ -973,6 +976,15 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
   const [wCode, setWCode] = useState(() => readLocalStorageNumber(LS.INF_W_CODE, 0.5, parseFloat));
   const [wDb, setWDb] = useState(() => readLocalStorageNumber(LS.INF_W_DB, 0.3, parseFloat));
   const [wMsg, setWMsg] = useState(() => readLocalStorageNumber(LS.INF_W_MSG, 0.2, parseFloat));
+  const [crossValidationEnabled, setCrossValidationEnabled] = useState(() =>
+    readLocalStorage(LS.INF_CV_ENABLED, 'true') !== 'false',
+  );
+  const [crossValidationBoostFactor, setCrossValidationBoostFactor] = useState(() =>
+    readLocalStorageNumber(LS.INF_CV_BOOST, 0.3, parseFloat),
+  );
+  const [crossValidationPenaltyFactor, setCrossValidationPenaltyFactor] = useState(() =>
+    readLocalStorageNumber(LS.INF_CV_PENALTY, 0.85, parseFloat),
+  );
   const [hubThreshold, setHubThreshold] = useState(() =>
     readLocalStorageNumber(LS.ROLLUP_HUB, 50, (value) => parseInt(value, 10)),
   );
@@ -1009,6 +1021,11 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
           wDb: number;
           wMsg: number;
           minClusterSize: number;
+          crossValidation?: {
+            enabled: boolean;
+            boostFactor: number;
+            penaltyFactor: number;
+          };
         };
         if (cancelled) return;
         setProfileId(profile.id);
@@ -1016,6 +1033,9 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
         setWDb(clamp(profile.wDb, 0, 1));
         setWMsg(clamp(profile.wMsg, 0, 1));
         setMinCluster(clamp(profile.minClusterSize, 2, 50));
+        setCrossValidationEnabled(profile.crossValidation?.enabled ?? true);
+        setCrossValidationBoostFactor(clamp(profile.crossValidation?.boostFactor ?? 0.3, 0, 1));
+        setCrossValidationPenaltyFactor(clamp(profile.crossValidation?.penaltyFactor ?? 0.85, 0, 1));
       } catch {
         if (!cancelled) {
           toast.error('기본 추론 프로필 로드 실패 (로컬 설정으로 동작)');
@@ -1049,6 +1069,11 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
           wDb,
           wMsg,
           minClusterSize: minCluster,
+          crossValidation: {
+            enabled: crossValidationEnabled,
+            boostFactor: crossValidationBoostFactor,
+            penaltyFactor: crossValidationPenaltyFactor,
+          },
         }),
       });
       const payload = (await res.json()) as { id?: string; error?: string };
@@ -1058,6 +1083,9 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
       localStorage.setItem(LS.INF_W_CODE, wCode.toString());
       localStorage.setItem(LS.INF_W_DB, wDb.toString());
       localStorage.setItem(LS.INF_W_MSG, wMsg.toString());
+      localStorage.setItem(LS.INF_CV_ENABLED, String(crossValidationEnabled));
+      localStorage.setItem(LS.INF_CV_BOOST, crossValidationBoostFactor.toString());
+      localStorage.setItem(LS.INF_CV_PENALTY, crossValidationPenaltyFactor.toString());
       localStorage.setItem(LS.INF_CODE_ENGINE, codeEngine);
       localStorage.setItem(LS.ROLLUP_HUB, hubThreshold.toString());
       localStorage.setItem(LS.ROLLUP_CLUSTER, minCluster.toString());
@@ -1125,6 +1153,49 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
               <span className="ml-auto text-xs">합이 1.00이어야 합니다</span>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card">
+        <CardHeader>
+          <CardTitle>Cross-Signal Validation</CardTitle>
+          <CardDescription>교차 검증 활성화와 boost / penalty 계수를 조정합니다</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="flex items-center justify-between rounded-lg border border-border/60 px-4 py-3">
+            <div>
+              <div className="text-sm font-medium text-foreground">교차 검증 활성화</div>
+              <p className="text-xs text-muted-foreground">
+                비활성화하면 multi-source boost와 contradiction penalty를 적용하지 않습니다
+              </p>
+            </div>
+            <Switch
+              checked={crossValidationEnabled}
+              onCheckedChange={(checked) => {
+                setCrossValidationEnabled(checked);
+                setSaved(false);
+              }}
+            />
+          </div>
+          <WeightSlider
+            label="boostFactor"
+            value={crossValidationBoostFactor}
+            onChange={(v) => {
+              setCrossValidationBoostFactor(v);
+              setSaved(false);
+            }}
+          />
+          <WeightSlider
+            label="penaltyFactor"
+            value={crossValidationPenaltyFactor}
+            onChange={(v) => {
+              setCrossValidationPenaltyFactor(v);
+              setSaved(false);
+            }}
+          />
+          <p className="text-xs text-muted-foreground">
+            현재 단일 contradiction penalty: {(1 - crossValidationPenaltyFactor).toFixed(2)}
+          </p>
         </CardContent>
       </Card>
 
