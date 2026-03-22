@@ -475,6 +475,7 @@ async function seedApprovedReadWriteRelation(
     objectId: string;
     relationType?: 'read' | 'write';
     evidenceType?: 'FILE' | 'LLM_CODE' | 'CONFIG';
+    filePath?: string;
   },
 ) {
   const relationId = generateId();
@@ -497,6 +498,7 @@ async function seedApprovedReadWriteRelation(
       id: evidenceId,
       workspaceId,
       evidenceType: input.evidenceType,
+      filePath: input.filePath,
       excerpt: `${input.evidenceType} evidence`,
       metadata: {},
     });
@@ -559,12 +561,14 @@ async function linkEvidence(
   db: TestDb,
   candidateId: string,
   evidenceType: 'CONFIG' | 'FILE' | 'SCHEMA' | 'LLM_CONFIG' | 'LLM_CODE',
+  filePath?: string,
 ) {
   const evidenceId = generateId();
   await db.insert(evidences).values({
     id: evidenceId,
     workspaceId,
     evidenceType,
+    filePath,
     excerpt: `${evidenceType} evidence`,
     metadata: {},
   });
@@ -1535,36 +1539,157 @@ describe('crossValidatePendingRelationCandidates', () => {
     expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
-  it('repo-scoped validation에서도 db mode가 포함되면 SCHEMA 후보를 포함해야 한다', async () => {
-    const { candidateId } = await seedFkReferenceCandidate(db, 0.95);
+  it('repo-scoped db validation은 선택한 repo root에서 접근한 FK 후보를 포함해야 한다', async () => {
+    const repoA = '/tmp/repo-a';
+    const { candidateId, subjectTableId } = await seedFkReferenceCandidate(db, 0.95);
     await linkEvidence(db, candidateId, 'SCHEMA');
+    const { candidateId: accessCandidateId } = await seedCodeTableAccessCandidate(db, { tableId: subjectTableId });
+    await linkEvidence(db, accessCandidateId, 'FILE', `${repoA}/src/order-service.ts`);
 
     const result = await crossValidatePendingRelationCandidates(db, {
       workspaceId,
-      repoRoots: ['/tmp/repo-a'],
+      repoRoots: [repoA],
       includeSchemaCandidates: true,
     });
 
     expect(result).toMatchObject({
-      candidateCount: 1,
+      candidateCount: 2,
       validatedCount: 0,
-      skippedSingleSourceCount: 0,
-      contradictionCount: 1,
+      skippedSingleSourceCount: 2,
+      contradictionCount: 0,
     });
 
     const [candidate] = await db
       .select()
       .from(relationCandidates)
       .where(eq(relationCandidates.id, candidateId));
-    const crossValidation = (
-      (candidate?.metadata as Record<string, unknown>)['crossValidation']
-    ) as Record<string, unknown>;
 
-    expect(candidate?.confidence).toBeCloseTo(0.8);
-    expect(crossValidation['supportingSources']).toEqual(['db']);
-    expect(crossValidation['contradictions']).toEqual([
-      { ruleId: 'C4', type: 'ORPHAN_FK', penalty: 0.15 },
+    expect(candidate?.confidence).toBeCloseTo(0.95);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('repo-scoped db validation은 선택한 repo root에서 접근한 FK 후보만 포함해야 한다', async () => {
+    const repoA = '/tmp/repo-a';
+    const { candidateId: scopedFkCandidateId, subjectTableId } = await seedFkReferenceCandidate(db, 0.95);
+    await linkEvidence(db, scopedFkCandidateId, 'SCHEMA');
+    const { candidateId: accessCandidateId } = await seedCodeTableAccessCandidate(db, { tableId: subjectTableId });
+    await linkEvidence(db, accessCandidateId, 'FILE', `${repoA}/src/order-service.ts`);
+
+    const otherDatabaseId = generateId();
+    const otherSubjectTableId = generateId();
+    const otherObjectTableId = generateId();
+    const untouchedFkCandidateId = generateId();
+
+    await db.insert(objects).values([
+      {
+        id: otherDatabaseId,
+        workspaceId,
+        objectType: 'database',
+        category: 'DATA',
+        granularity: 'COMPOUND',
+        name: 'billing-db',
+        path: '/billing-db',
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: otherSubjectTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'DATA',
+        granularity: 'ATOMIC',
+        name: 'invoice_items',
+        path: '/invoice_items',
+        depth: 1,
+        parentId: otherDatabaseId,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: otherObjectTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'DATA',
+        granularity: 'ATOMIC',
+        name: 'invoices',
+        path: '/invoices',
+        depth: 1,
+        parentId: otherDatabaseId,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
     ]);
+    await db.insert(relationCandidates).values({
+      id: untouchedFkCandidateId,
+      workspaceId,
+      relationType: 'fk_reference',
+      subjectObjectId: otherSubjectTableId,
+      objectId: otherObjectTableId,
+      confidence: 0.91,
+      metadata: { source: 'fk_constraint' },
+      status: 'PENDING',
+    });
+    await linkEvidence(db, untouchedFkCandidateId, 'SCHEMA');
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: [repoA],
+      includeSchemaCandidates: true,
+    });
+
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      validatedCount: 0,
+      skippedSingleSourceCount: 2,
+      contradictionCount: 0,
+    });
+
+    const [untouchedCandidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, untouchedFkCandidateId));
+
+    expect(untouchedCandidate?.confidence).toBeCloseTo(0.91);
+    expect((untouchedCandidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('repo-scoped db validation은 approved read/write relation만 남아 있어도 FK 후보를 포함해야 한다', async () => {
+    const repoA = '/tmp/repo-a';
+    const { candidateId, subjectTableId } = await seedFkReferenceCandidate(db, 0.95);
+    await linkEvidence(db, candidateId, 'SCHEMA');
+    const { candidateId: readCandidateId, serviceId } = await seedCodeTableAccessCandidate(db, { tableId: subjectTableId });
+    await db.delete(relationCandidates).where(eq(relationCandidates.id, readCandidateId));
+    await seedApprovedReadWriteRelation(
+      db,
+      {
+        subjectObjectId: serviceId,
+        objectId: subjectTableId,
+        evidenceType: 'FILE',
+        filePath: `${repoA}/src/order-service.ts`,
+      },
+    );
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: [repoA],
+      includeSchemaCandidates: true,
+    });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 1,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.95);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
   it('repo-scoped rerun에서도 cross validation 비활성화는 workspace 전체 stale 상태를 지워야 한다', async () => {

@@ -547,6 +547,108 @@ describe('bindConfigToCodeEndpoints', () => {
     expect(endpointCandidates).toHaveLength(1);
   });
 
+  it('repo-scoped binding은 config provenance가 선택 repo에 있을 때만 부모 후보를 분해해야 한다', async () => {
+    const sourceServiceId = generateId();
+    const targetServiceId = generateId();
+    const endpointId = generateId();
+    const compoundCandidateId = generateId();
+    const configEvidenceId = generateId();
+    const codeEvidenceId = generateId();
+    const selectedRepoRoot = '/tmp/repo-a';
+    const staleConfigRepoRoot = '/tmp/repo-b';
+
+    await db.insert(objects).values([
+      {
+        id: sourceServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'gateway',
+        path: `/gateway/${sourceServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: targetServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'orders',
+        path: `/orders/${targetServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/orders',
+        parentId: targetServiceId,
+        path: `/orders/${targetServiceId}/${endpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/orders', repoRoot: staleConfigRepoRoot, source: 'CODE' },
+      },
+    ]);
+
+    await db.insert(relationCandidates).values({
+      id: compoundCandidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: targetServiceId,
+      confidence: 0.8,
+      metadata: { source: 'application_yml' },
+      status: 'PENDING',
+    });
+    await db.insert(evidences).values([
+      {
+        id: configEvidenceId,
+        workspaceId,
+        evidenceType: 'CONFIG',
+        filePath: `${staleConfigRepoRoot}/application.yml`,
+        excerpt: 'zuul.routes.order.serviceId=orders',
+        metadata: {},
+      },
+      {
+        id: codeEvidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `${selectedRepoRoot}/src/gateway.ts`,
+        excerpt: 'client.get(\"/orders\")',
+        metadata: {},
+      },
+    ]);
+    await db.insert(relationCandidateEvidences).values([
+      { workspaceId, candidateId: compoundCandidateId, evidenceId: configEvidenceId },
+      { workspaceId, candidateId: compoundCandidateId, evidenceId: codeEvidenceId },
+    ]);
+
+    const result = await bindConfigToCodeEndpoints(db, { workspaceId, repoRoots: [selectedRepoRoot] });
+
+    expect(result.compoundCandidateCount).toBe(0);
+    expect(result.createdEndpointCandidateCount).toBe(0);
+
+    const endpointCandidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.subjectObjectId, sourceServiceId),
+          eq(relationCandidates.objectId, endpointId),
+        ),
+      );
+
+    expect(endpointCandidates).toHaveLength(0);
+  });
+
   it('config evidence가 없는 code-only service 후보는 crossBound endpoint 후보를 생성하지 않아야 한다', async () => {
     const sourceServiceId = generateId();
     const targetServiceId = generateId();

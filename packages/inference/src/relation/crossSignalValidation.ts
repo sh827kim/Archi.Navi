@@ -284,12 +284,6 @@ export async function crossValidatePendingRelationCandidates(
     const record = asRecord(metadata) ?? {};
     if (isPathInRepoScope(asString(record.repoRoot))) return true;
     if (isPathInRepoScope(asString(record.specFile))) return true;
-    if (
-      input.includeSchemaCandidates === true
-      && evidenceRows.some((row) => row.evidenceType === 'SCHEMA')
-    ) {
-      return true;
-    }
     return evidenceRows.some((row) => isPathInRepoScope(row.filePath));
   };
 
@@ -314,7 +308,7 @@ export async function crossValidatePendingRelationCandidates(
     input.workspaceId,
     allCandidates.map((candidate) => candidate.id),
   );
-  const candidates = allCandidates.filter((candidate) =>
+  let candidates = allCandidates.filter((candidate) =>
     matchesRepoScope(candidate.metadata, evidenceScopeRowsByCandidateId.get(candidate.id) ?? []));
 
   const profileRows = await db
@@ -337,7 +331,8 @@ export async function crossValidatePendingRelationCandidates(
     };
   }
 
-  if (candidates.length === 0) {
+  const mayExpandSchemaCandidates = repoScopeEnabled && input.includeSchemaCandidates === true;
+  if (candidates.length === 0 && !mayExpandSchemaCandidates) {
     return {
       candidateCount: 0,
       validatedCount: 0,
@@ -346,21 +341,6 @@ export async function crossValidatePendingRelationCandidates(
       staleConfigCount: 0,
     };
   }
-
-  const candidateIds = candidates.map((candidate) => candidate.id);
-  const evidenceRows = await db
-    .select({
-      candidateId: relationCandidateEvidences.candidateId,
-      evidenceType: evidences.evidenceType,
-    })
-    .from(relationCandidateEvidences)
-    .innerJoin(evidences, eq(relationCandidateEvidences.evidenceId, evidences.id))
-    .where(
-      and(
-        eq(relationCandidateEvidences.workspaceId, input.workspaceId),
-        inArray(relationCandidateEvidences.candidateId, candidateIds),
-      ),
-    );
 
   const allObjects = await db
     .select({
@@ -638,6 +618,42 @@ export async function crossValidatePendingRelationCandidates(
       buildRelationUsageKey(approvedRelation.subjectObjectId, approvedRelation.objectId),
     );
   }
+
+  if (mayExpandSchemaCandidates) {
+    const existingCandidateIds = new Set(candidates.map((candidate) => candidate.id));
+    const scopedSchemaCandidates = allCandidates.filter((candidate) => {
+      if (existingCandidateIds.has(candidate.id)) return false;
+      if (candidate.relationType !== 'fk_reference') return false;
+      return codeTableAccessObjectIds.has(candidate.subjectObjectId)
+        || codeTableAccessObjectIds.has(candidate.objectId);
+    });
+    candidates = [...candidates, ...scopedSchemaCandidates];
+  }
+
+  if (candidates.length === 0) {
+    return {
+      candidateCount: 0,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 0,
+      staleConfigCount: 0,
+    };
+  }
+
+  const candidateIds = candidates.map((candidate) => candidate.id);
+  const evidenceRows = await db
+    .select({
+      candidateId: relationCandidateEvidences.candidateId,
+      evidenceType: evidences.evidenceType,
+    })
+    .from(relationCandidateEvidences)
+    .innerJoin(evidences, eq(relationCandidateEvidences.evidenceId, evidences.id))
+    .where(
+      and(
+        eq(relationCandidateEvidences.workspaceId, input.workspaceId),
+        inArray(relationCandidateEvidences.candidateId, candidateIds),
+      ),
+    );
 
   const sourcesByCandidateId = new Map<string, Set<CrossValidationSource>>();
   for (const row of evidenceRows) {

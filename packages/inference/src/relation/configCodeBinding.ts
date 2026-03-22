@@ -156,22 +156,21 @@ export async function bindConfigToCodeEndpoints(
             )
         : [];
     const configEvidenceIdsByCandidateId = new Map<string, string[]>();
-    const evidencePathsByCandidateId = new Map<string, string[]>();
+    const configEvidencePathsByCandidateId = new Map<string, string[]>();
     for (const row of evidenceRows) {
         if (isConfigEvidenceType(row.evidenceType)) {
             const evidenceIds = configEvidenceIdsByCandidateId.get(row.candidateId) ?? [];
             evidenceIds.push(row.evidenceId);
             configEvidenceIdsByCandidateId.set(row.candidateId, evidenceIds);
+            const evidencePaths = configEvidencePathsByCandidateId.get(row.candidateId) ?? [];
+            if (row.filePath) evidencePaths.push(row.filePath);
+            configEvidencePathsByCandidateId.set(row.candidateId, evidencePaths);
         }
-
-        const evidencePaths = evidencePathsByCandidateId.get(row.candidateId) ?? [];
-        if (row.filePath) evidencePaths.push(row.filePath);
-        evidencePathsByCandidateId.set(row.candidateId, evidencePaths);
     }
     const compoundCandidates = allCompoundCandidates.filter((candidate) =>
         matchesRepoScope(
             candidate.metadata,
-            evidencePathsByCandidateId.get(candidate.id) ?? [],
+            configEvidencePathsByCandidateId.get(candidate.id) ?? [],
             scopedRepoRoots,
         ))
         .filter((candidate) => (configEvidenceIdsByCandidateId.get(candidate.id) ?? []).length > 0);
