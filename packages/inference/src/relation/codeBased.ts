@@ -522,7 +522,7 @@ async function saveRelationCandidate(
         .update(relationCandidates)
         .set({
           confidence: pendingRawConfidence,
-          metadata: stripCrossValidationMetadata(pendingMetadata),
+          metadata: stripCrossValidationMetadata(metadata),
         })
         .where(eq(relationCandidates.id, pending.id));
     }

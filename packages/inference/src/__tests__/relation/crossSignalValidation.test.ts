@@ -1451,6 +1451,39 @@ describe('crossValidatePendingRelationCandidates', () => {
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
+  it('같은 서비스와 topic에 대한 approved produce/consume relation이 있으면 DEAD_TOPIC을 기록하지 않아야 한다', async () => {
+    const { candidateId, serviceId, topicId } = await seedTopicCandidate(db, { relationType: 'produce' });
+    await linkEvidence(db, candidateId, 'CONFIG');
+    await db.insert(objectRelations).values({
+      id: generateId(),
+      workspaceId,
+      relationType: 'produce',
+      subjectObjectId: serviceId,
+      objectId: topicId,
+      confidence: 1,
+      status: 'APPROVED',
+      source: 'MANUAL',
+      metadata: {},
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 1,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.85);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
   it('message_broker 대상 produce 후보는 DEAD_TOPIC 판정에서 제외해야 한다', async () => {
     const { candidateId } = await seedBrokerCandidate(db, { relationType: 'produce', confidence: 0.85 });
     await linkEvidence(db, candidateId, 'CONFIG');

@@ -499,12 +499,34 @@ export async function crossValidatePendingRelationCandidates(
   const scopedProduceConsumeCandidates = repoScopeEnabled
     ? relatedProduceConsumeCandidates.filter((candidate) => matchesRepoScope(candidate.metadata, []))
     : relatedProduceConsumeCandidates;
+  const approvedProduceConsumeRelations = await db
+    .select({
+      subjectObjectId: objectRelations.subjectObjectId,
+      objectId: objectRelations.objectId,
+    })
+    .from(objectRelations)
+    .where(
+      and(
+        eq(objectRelations.workspaceId, input.workspaceId),
+        eq(objectRelations.status, 'APPROVED'),
+        or(
+          eq(objectRelations.relationType, 'produce'),
+          eq(objectRelations.relationType, 'consume'),
+        ),
+      ),
+    );
   for (const relatedCandidate of scopedProduceConsumeCandidates) {
     const metadata = asRecord(relatedCandidate.metadata) ?? {};
-    if (asString(metadata.source) !== 'CODE') continue;
+    const source = asString(metadata.source);
+    if (source !== 'CODE' && source !== 'LLM_CODE') continue;
 
     codeTopicUsageKeys.add(
       buildRelationUsageKey(relatedCandidate.subjectObjectId, relatedCandidate.objectId),
+    );
+  }
+  for (const approvedRelation of approvedProduceConsumeRelations) {
+    codeTopicUsageKeys.add(
+      buildRelationUsageKey(approvedRelation.subjectObjectId, approvedRelation.objectId),
     );
   }
 
