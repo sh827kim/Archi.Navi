@@ -78,9 +78,8 @@ Evidence-backed AI Chat, and a graph that reflects reality.
 ```
 archi-navi/
 ├── apps/
-│   └── web/                    # Next.js 16 App (UI + API Routes)
-│       ├── (dashboard)/        # Architecture View, Services, Approval, Chat
-│       └── api/                # REST API Routes
+│   └── web/                    # Next.js 16 App
+│       └── src/app/            # Dashboard pages + API Routes
 │
 └── packages/
     ├── core/                   # Query Engine (BFS/DFS), Rollup, Graph Index
@@ -99,7 +98,7 @@ archi-navi/
 |-------|------------|
 | Frontend | Next.js 16 (App Router) + React 19 + TypeScript |
 | UI Library | TailwindCSS 4 + shadcn/ui |
-| Graph Visualization | Cytoscape.js + React Flow |
+| Graph Visualization | Cytoscape.js + 3d-force-graph + React Flow |
 | State Management | Zustand |
 | Database | PGlite (local) / PostgreSQL 17 (team deploy) |
 | ORM | Drizzle ORM |
@@ -121,15 +120,15 @@ archi-navi/
 
 ```bash
 # Clone the repository
-git clone https://github.com/your-org/archi-navi.git
-cd archi-navi
+git clone https://github.com/sh827kim/Archi.Navi.git
+cd Archi.Navi
 
 # Install dependencies
 pnpm install
 
-# Copy environment variables
-cp .env.example .env.local
-# Edit .env.local — set AI_API_KEY at minimum
+# Create app environment variables when needed
+mkdir -p apps/web
+# Edit apps/web/.env.local
 ```
 
 ### Environment Variables
@@ -144,13 +143,19 @@ PGLITE_DATA_DIR=.archi-navi/data
 
 # AI provider: openai | anthropic | google
 AI_PROVIDER=openai
-AI_API_KEY=sk-your-api-key
-AI_MODEL=gpt-4o
+OPENAI_API_KEY=sk-your-openai-key
+# ANTHROPIC_API_KEY=sk-ant-your-key
+# GOOGLE_GENERATIVE_AI_API_KEY=your-google-key
 
 # App
 NODE_ENV=development
 PORT=3000
 ```
+
+Notes:
+- Place the file at `apps/web/.env.local` when running the web app in this monorepo.
+- `AI_MODEL` is selected in the Settings UI and sent per request, so there is no required server-side `AI_MODEL` env.
+- You can also set provider, API key, and model from the Settings screen without committing them.
 
 ### Run Development Server
 
@@ -168,6 +173,8 @@ Open [http://localhost:3000](http://localhost:3000) in your browser.
 pnpm dev            # Start development server (Next.js + HMR)
 pnpm build          # Production build
 pnpm test           # Run all tests
+pnpm test:coverage  # Run coverage checks
+pnpm test:e2e       # Run Playwright E2E tests
 pnpm lint           # ESLint
 pnpm format         # Prettier formatting
 pnpm db:generate    # Generate Drizzle migrations from schema
@@ -209,23 +216,31 @@ anavi up --port 3000
 # Run web app (auto-detect monorepo or installed @archi-navi/web package)
 anavi up --port 3000
 
-# Scan source code and configuration files
-anavi scan --path /path/to/project --mode code
+# Register services by scanning a local project or workspace directory
+anavi scan --workspace <workspaceId> --path /path/to/project
+anavi scan --workspace <workspaceId> --workspace-dir /path/to/workspace
 
-# Run relation/domain inference
-anavi infer --workspace <workspaceId>
+# Run domain inference (Track A/B)
+anavi infer --workspace <workspaceId> --track all
 
 # Rebuild rollup graph
 anavi rebuild-rollup --workspace <workspaceId>
 
 # Export data
-anavi export --format json --output ./export.json
+anavi export --workspace <workspaceId> --format json --output ./export.json
 
-# Save a snapshot of the current state
-anavi snapshot
+# Save or restore a snapshot
+anavi snapshot save --output ./anavi-snapshot.db
+anavi snapshot restore --input ./anavi-snapshot.db
 ```
 
-Scan modes: `code` | `db` | `config` | `all`
+Relation candidate inference is executed through the web API:
+
+```bash
+curl -X POST http://localhost:3000/api/inference/run \
+  -H 'Content-Type: application/json' \
+  -d '{"workspaceId":"<workspaceId>","modes":["config","code","db"],"useServiceMetadataPaths":true}'
+```
 
 ### npm Publish (Maintainers)
 
@@ -277,24 +292,26 @@ Relations are stored at the atomic level; Roll-up views are derived via material
 
 ---
 
-## Implementation Status (v1)
+## Implementation Status (Current)
 
 | Area | Status |
 |------|--------|
 | Architecture View (layered, roll-up) | ✅ Complete |
-| Object Mapping View (roll-up + roll-down) | ✅ Complete |
+| Object Mapping View (domain-first + 3D roll-up / roll-down) | ✅ Complete |
 | Service List + CSV Export | ✅ Complete |
 | Tag / Visibility management | ✅ Complete |
-| Approval Workflow (bulk approve/reject) | ✅ Complete |
+| Approval Workflow (bulk approve/reject, endpoint mapping, cross-validation badges/filter/sort) | ✅ Complete |
 | Multi-workspace support | ✅ Complete |
 | Rollup Engine (4 levels: S2S, S2DB, S2Broker, D2D) | ✅ Complete |
 | Query Engine (BFS/DFS, path, impact, usage) | ✅ Complete |
 | Domain Inference Track A (Seed-based) | ✅ Complete |
 | Domain Inference Track B (Louvain Discovery) | ✅ Complete |
 | AI Chat (streaming, multi-provider) | ✅ Complete |
-| DB Signal extraction for inference | 🔜 v2 roadmap |
-| AST Plugin (Tree-sitter) | 🔜 v2 roadmap |
-| Evidence Assembler for AI Chat | 🔜 v2 roadmap |
+| Async Inference Runs (`/api/inference/runs`) | ✅ Complete |
+| Config / Code / DB relation inference | ✅ Complete |
+| Hybrid AST + Regex code signal extraction | ✅ Complete |
+| Cross-Signal Validation | ✅ Complete |
+| LLM inference booster | 📋 Planned |
 
 ---
 
@@ -313,8 +330,8 @@ Relations are stored at the atomic level; Roll-up views are derived via material
 | [docs/design/05-rollup-and-graph.md](./docs/design/05-rollup-and-graph.md) | Rollup strategy and graph performance |
 | [docs/design/06-compound-view.md](./docs/design/06-compound-view.md) | Compound dependency view design |
 | [docs/01-development-guide.md](./docs/01-development-guide.md) | Development guide and conventions |
-| [docs/02-implementation-status.md](./docs/02-implementation-status.md) | v1 implementation status |
-| [docs/03-roadmap.md](./docs/03-roadmap.md) | v2+ roadmap |
+| [docs/02-implementation-status.md](./docs/02-implementation-status.md) | Current implementation audit |
+| [docs/03-roadmap.md](./docs/03-roadmap.md) | Current roadmap |
 | [docs/spec/01-db-inference-index-unique-spec.md](./docs/spec/01-db-inference-index-unique-spec.md) | DB inference expansion spec (index/unique patterns) |
 | [docs/spec/02-object-mapping-3d-renderer-spec.md](./docs/spec/02-object-mapping-3d-renderer-spec.md) | Object Mapping 3D renderer transition spec |
 | [docs/spec/03-compound-view-implementation-spec.md](./docs/spec/03-compound-view-implementation-spec.md) | Compound View implementation spec |

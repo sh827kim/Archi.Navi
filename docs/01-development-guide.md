@@ -12,22 +12,22 @@
 | 도구 | 버전 | 설명 |
 |------|------|------|
 | **Node.js** | 22.x LTS | 런타임 |
-| **pnpm** | 9.x | 패키지 매니저 |
+| **pnpm** | 10.x | 패키지 매니저 |
 | **Git** | 2.x | 버전 관리 |
 
 ### 1.2 초기 설정
 
 ```bash
 # 저장소 클론
-git clone https://github.com/your-org/archi-navi.git
-cd archi-navi
+git clone https://github.com/sh827kim/Archi.Navi.git
+cd Archi.Navi
 
 # 의존성 설치
 pnpm install
 
 # 환경변수 설정
-cp .env.example .env.local
-# .env.local에 AI_API_KEY 등 설정
+# apps/web/.env.local 파일을 직접 생성
+# AI_PROVIDER + OPENAI_API_KEY(또는 다른 provider key) 설정
 
 # 개발 서버 실행
 pnpm dev
@@ -70,7 +70,7 @@ pnpm db:studio    # Drizzle Studio (DB 브라우저)
 | **라우팅** | App Router 기반 (page.tsx, layout.tsx) |
 | **컴포넌트** | 함수 컴포넌트 + 화살표 함수 |
 | **상태관리** | Zustand (글로벌), useState (로컬) |
-| **데이터 페칭** | Server Components 우선, 필요 시 SWR |
+| **데이터 페칭** | Server Components 우선, 필요 시 `fetch` 기반 클라이언트 요청 |
 | **스타일링** | TailwindCSS 유틸리티 클래스 |
 | **반응형** | 모바일 대응 필수 (Tailwind breakpoint) |
 | **컴포넌트 분리** | 재사용 가능한 단위로 분리 |
@@ -145,10 +145,10 @@ export const objects = pgTable('objects', {
 ```bash
 # 엔진 테스트
 cd packages/core
-pnpm test
+pnpm test:unit
 
 # 특정 모듈 테스트
-pnpm test -- --filter query-engine
+pnpm exec vitest run src/__tests__/query-engine
 ```
 
 ### 3.3 `packages/inference` — 추론 엔진 개발
@@ -156,7 +156,8 @@ pnpm test -- --filter query-engine
 ```bash
 # AST 플러그인 테스트 (Tree-sitter 필요)
 cd packages/inference
-pnpm test -- --filter ast
+pnpm test:unit
+pnpm exec vitest run src/__tests__/code/ast/extractAstCodeSignals.test.ts
 ```
 
 ### 3.4 `packages/cli` — CLI 개발
@@ -165,10 +166,10 @@ pnpm test -- --filter ast
 # CLI 로컬 테스트
 cd packages/cli
 pnpm build
-node dist/index.js scan --path /path/to/project
+node dist/bin/anavi.js scan --workspace <workspaceId> --path /path/to/project
 
 # 또는 tsx로 직접 실행
-npx tsx src/index.ts scan --path /path/to/project
+pnpm exec tsx src/index.ts scan --workspace <workspaceId> --path /path/to/project
 ```
 
 ---
@@ -320,7 +321,7 @@ test(core): Rollup 계산 단위 테스트 추가
 
 ## 7. 환경변수 관리
 
-### 7.1 `.env.example`
+### 7.1 환경변수 예시
 
 ```env
 # === DB ===
@@ -334,8 +335,9 @@ test(core): Rollup 계산 단위 테스트 추가
 # === AI ===
 # 프로바이더: openai | anthropic | google
 AI_PROVIDER=openai
-AI_API_KEY=sk-your-api-key
-AI_MODEL=gpt-4o
+OPENAI_API_KEY=sk-your-openai-key
+# ANTHROPIC_API_KEY=sk-ant-your-key
+# GOOGLE_GENERATIVE_AI_API_KEY=your-google-key
 
 # === App ===
 NODE_ENV=development
@@ -344,9 +346,11 @@ PORT=3000
 
 ### 7.2 주의사항
 
+- 모노레포 개발 시 앱 환경변수는 `apps/web/.env.local`에 두는 구성이 기준
 - `.env.local`은 `.gitignore`에 포함
 - API 키는 절대 커밋하지 않음
 - CI/CD에서는 환경변수 또는 시크릿 매니저 사용
+- 모델 선택은 Settings UI에서 저장되며 요청 헤더로 전달된다
 
 ---
 

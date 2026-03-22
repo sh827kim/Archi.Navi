@@ -84,28 +84,17 @@ Local-first를 기본 전제로, 개발자 로컬 환경에서 단일 프로세�
 archi-navi/
 ├── apps/
 │   └── web/                          # Next.js 16 앱 (프론트엔드 + API)
-│       ├── app/                      # App Router
-│       │   ├── (dashboard)/          # 메인 대시보드 레이아웃
-│       │   │   ├── architecture/     # Architecture View (Roll-up)
-│       │   │   ├── mapping/          # Object Mapping View
-│       │   │   ├── services/         # Service List + Export
-│       │   │   ├── approval/         # 추론 승인 관리
-│       │   │   ├── chat/             # AI Chat
-│       │   │   └── settings/         # 워크스페이스 설정
-│       │   ├── api/                  # API Routes
-│       │   │   ├── objects/          # Object CRUD
-│       │   │   ├── relations/        # Relation CRUD + 승인
-│       │   │   ├── rollups/          # Rollup 조회/재빌드
-│       │   │   ├── query/            # Query Engine API
-│       │   │   ├── inference/        # 추론 실행 API
-│       │   │   ├── domains/          # Domain 관리 API
-│       │   │   └── chat/             # AI Chat API (스트리밍)
-│       │   ├── layout.tsx
-│       │   └── page.tsx
-│       ├── components/               # 앱 전용 컴포넌트
-│       ├── hooks/                    # 커스텀 훅
-│       ├── stores/                   # Zustand 스토어
-│       └── lib/                      # 앱 전용 유틸리티
+│       ├── src/
+│       │   ├── app/                  # App Router
+│       │   │   ├── (dashboard)/      # 메인 대시보드 레이아웃
+│       │   │   ├── api/              # API Routes
+│       │   │   ├── layout.tsx
+│       │   │   └── page.tsx
+│       │   ├── components/           # 앱 전용 컴포넌트
+│       │   ├── contexts/             # 워크스페이스/전역 컨텍스트
+│       │   ├── lib/                  # 앱 전용 유틸리티
+│       │   └── stores/               # Zustand 스토어
+│       └── package.json
 │
 ├── packages/
 │   ├── core/                         # 핵심 엔진
@@ -137,8 +126,6 @@ archi-navi/
 │   │   ├── src/
 │   │   │   ├── commands/             # up, scan, infer, rebuild, export, snapshot
 │   │   │   └── index.ts              # CLI 엔트리포인트
-│   │   ├── bin/
-│   │   │   └── anavi.ts              # npx 실행 엔트리
 │   │   └── package.json
 │   │
 │   ├── shared/                       # 공유 타입/유틸리티
@@ -158,7 +145,7 @@ archi-navi/
 ├── pnpm-workspace.yaml               # pnpm 워크스페이스
 ├── package.json                      # 루트 package.json
 ├── tsconfig.base.json                # 공유 TypeScript 설정
-└── .env.example                      # 환경변수 예시
+└── apps/web/.env.local               # 앱 환경변수 (로컬 전용)
 ```
 
 ---
@@ -334,8 +321,9 @@ PGLITE_DATA_DIR=~/.archi-navi/data  # PGlite 데이터 디렉토리
 
 # AI
 AI_PROVIDER=openai                  # openai | anthropic | google
-AI_API_KEY=sk-...                   # AI 프로바이더 API 키
-AI_MODEL=gpt-4o                     # 사용할 모델
+OPENAI_API_KEY=sk-...               # OpenAI 사용 시
+# ANTHROPIC_API_KEY=sk-ant-...      # Anthropic 사용 시
+# GOOGLE_GENERATIVE_AI_API_KEY=...  # Google 사용 시
 
 # App
 NODE_ENV=development
