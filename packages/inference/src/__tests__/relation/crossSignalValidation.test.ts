@@ -1298,6 +1298,38 @@ describe('crossValidatePendingRelationCandidates', () => {
     });
   });
 
+  it('repo-scoped validation에서도 db mode가 포함되면 SCHEMA 후보를 포함해야 한다', async () => {
+    const { candidateId } = await seedFkReferenceCandidate(db, 0.95);
+    await linkEvidence(db, candidateId, 'SCHEMA');
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: ['/tmp/repo-a'],
+      includeSchemaCandidates: true,
+    });
+
+    expect(result).toMatchObject({
+      candidateCount: 1,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 1,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const crossValidation = (
+      (candidate?.metadata as Record<string, unknown>)['crossValidation']
+    ) as Record<string, unknown>;
+
+    expect(candidate?.confidence).toBeCloseTo(0.8);
+    expect(crossValidation['supportingSources']).toEqual(['db']);
+    expect(crossValidation['contradictions']).toEqual([
+      { ruleId: 'C4', type: 'ORPHAN_FK', penalty: 0.15 },
+    ]);
+  });
+
   it('config 기반 topic 후보에 code produce/consume 후보가 없으면 DEAD_TOPIC을 기록해야 한다', async () => {
     const { candidateId } = await seedTopicCandidate(db, { relationType: 'consume', confidence: 0.85 });
     await linkEvidence(db, candidateId, 'CONFIG');

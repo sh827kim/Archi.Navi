@@ -40,6 +40,46 @@ function isInferenceMode(value: string): value is InferenceMode {
   return value === 'config' || value === 'code' || value === 'db';
 }
 
+function didAllSelectedModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedRepoRootCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+  dbSucceeded: boolean;
+}): boolean {
+  const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+    modeSet: input.modeSet,
+    expectedRepoRootCount: input.expectedRepoRootCount,
+    successfulConfigRepoCount: input.successfulConfigRepoCount,
+    successfulCodeRelationRepoCount: input.successfulCodeRelationRepoCount,
+  });
+  const selectedDbModeSucceeded = !input.modeSet.has('db') || input.dbSucceeded;
+
+  return selectedConfigAndCodeModesSucceeded && selectedDbModeSucceeded;
+}
+
+function didSelectedConfigAndCodeModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedRepoRootCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+}): boolean {
+  const allSelectedCodeRootsSucceeded =
+    !input.modeSet.has('code')
+    || (
+      input.expectedRepoRootCount > 0
+      && input.successfulCodeRelationRepoCount === input.expectedRepoRootCount
+    );
+  const allSelectedConfigRootsSucceeded =
+    !input.modeSet.has('config')
+    || (
+      input.expectedRepoRootCount > 0
+      && input.successfulConfigRepoCount === input.expectedRepoRootCount
+    );
+
+  return allSelectedCodeRootsSucceeded && allSelectedConfigRootsSucceeded;
+}
+
 function isLikelyRemotePath(pathValue: string): boolean {
   return /^https?:\/\//i.test(pathValue) || /^git@/i.test(pathValue);
 }
@@ -281,24 +321,7 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // config+code 모두 실행된 경우 → 크로스 바인딩으로 COMPOUND→ATOMIC 후보 보강
     let crossBindingResult: ConfigCodeBindingResult | null = null;
-    const allSelectedCodeRootsSucceeded =
-      modeSet.has('code')
-      && usedRepoRoots.length > 0
-      && successfulCodeRelationRepoCount === usedRepoRoots.length;
-    if (modeSet.has('config') && allSelectedCodeRootsSucceeded) {
-      try {
-        crossBindingResult = await bindConfigToCodeEndpoints(db, {
-          workspaceId,
-          repoRoots: successfulCodeRepoRoots,
-        });
-      } catch (error) {
-        warnings.push(
-          `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
-        );
-      }
-    }
 
     if (modeSet.has('db')) {
       try {
@@ -311,11 +334,39 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    if (modeSet.has('code') && modeSet.size >= 2 && allSelectedCodeRootsSucceeded) {
+    const allSelectedModesSucceeded = didAllSelectedModesSucceed({
+      modeSet,
+      expectedRepoRootCount: usedRepoRoots.length,
+      successfulConfigRepoCount: configResult.repoCount,
+      successfulCodeRelationRepoCount,
+      dbSucceeded: dbResult !== null,
+    });
+    const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+      modeSet,
+      expectedRepoRootCount: usedRepoRoots.length,
+      successfulConfigRepoCount: configResult.repoCount,
+      successfulCodeRelationRepoCount,
+    });
+
+    if (modeSet.has('config') && modeSet.has('code') && selectedConfigAndCodeModesSucceeded) {
+      try {
+        crossBindingResult = await bindConfigToCodeEndpoints(db, {
+          workspaceId,
+          repoRoots: successfulCodeRepoRoots,
+        });
+      } catch (error) {
+        warnings.push(
+          `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
+    }
+
+    if (modeSet.has('code') && modeSet.size >= 2 && allSelectedModesSucceeded) {
       try {
         crossValidationResult = await crossValidatePendingRelationCandidates(db, {
           workspaceId,
           repoRoots: successfulCodeRepoRoots,
+          includeSchemaCandidates: modeSet.has('db'),
         });
       } catch (error) {
         warnings.push(

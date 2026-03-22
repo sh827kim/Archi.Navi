@@ -37,6 +37,46 @@ function isInferenceSourceType(value: string): value is InferenceSourceType {
   return value === 'local' || value === 'githubRepo' || value === 'githubOrg';
 }
 
+function didAllSelectedModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedLocalSourceCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+  dbSucceeded: boolean;
+}): boolean {
+  const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+    modeSet: input.modeSet,
+    expectedLocalSourceCount: input.expectedLocalSourceCount,
+    successfulConfigRepoCount: input.successfulConfigRepoCount,
+    successfulCodeRelationRepoCount: input.successfulCodeRelationRepoCount,
+  });
+  const selectedDbModeSucceeded = !input.modeSet.has('db') || input.dbSucceeded;
+
+  return selectedConfigAndCodeModesSucceeded && selectedDbModeSucceeded;
+}
+
+function didSelectedConfigAndCodeModesSucceed(input: {
+  modeSet: ReadonlySet<InferenceMode>;
+  expectedLocalSourceCount: number;
+  successfulConfigRepoCount: number;
+  successfulCodeRelationRepoCount: number;
+}): boolean {
+  const allSelectedCodeRootsSucceeded =
+    !input.modeSet.has('code')
+    || (
+      input.expectedLocalSourceCount > 0
+      && input.successfulCodeRelationRepoCount === input.expectedLocalSourceCount
+    );
+  const allSelectedConfigRootsSucceeded =
+    !input.modeSet.has('config')
+    || (
+      input.expectedLocalSourceCount > 0
+      && input.successfulConfigRepoCount === input.expectedLocalSourceCount
+    );
+
+  return allSelectedCodeRootsSucceeded && allSelectedConfigRootsSucceeded;
+}
+
 function isLikelyRemotePath(pathValue: string): boolean {
   return /^https?:\/\//i.test(pathValue) || /^git@/i.test(pathValue);
 }
@@ -922,28 +962,6 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  const allSelectedCodeRootsSucceeded =
-    modeSet.has('code')
-    && sourceResolution.localSources.length > 0
-    && successfulCodeRelationRepoCount === sourceResolution.localSources.length;
-
-  if (modeSet.has('config') && allSelectedCodeRootsSucceeded) {
-    try {
-      crossBindingResult = await bindConfigToCodeEndpoints(db, {
-        workspaceId: input.workspaceId,
-        repoRoots: successfulCodeRepoRoots,
-      });
-    } catch (error) {
-      warnings.push(
-        `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
-      );
-    }
-  }
-
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
-
   if (modeSet.has('db')) {
     try {
       dbResult = await extractDbSchemaSignals(db, {
@@ -962,11 +980,43 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  if (modeSet.has('code') && modeSet.size >= 2 && allSelectedCodeRootsSucceeded) {
+  const allSelectedModesSucceeded = didAllSelectedModesSucceed({
+    modeSet,
+    expectedLocalSourceCount: sourceResolution.localSources.length,
+    successfulConfigRepoCount: configResult.repoCount,
+    successfulCodeRelationRepoCount,
+    dbSucceeded: dbResult !== null,
+  });
+  const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
+    modeSet,
+    expectedLocalSourceCount: sourceResolution.localSources.length,
+    successfulConfigRepoCount: configResult.repoCount,
+    successfulCodeRelationRepoCount,
+  });
+
+  if (modeSet.has('config') && modeSet.has('code') && selectedConfigAndCodeModesSucceeded) {
+    try {
+      crossBindingResult = await bindConfigToCodeEndpoints(db, {
+        workspaceId: input.workspaceId,
+        repoRoots: successfulCodeRepoRoots,
+      });
+    } catch (error) {
+      warnings.push(
+        `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+      );
+    }
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
+  if (modeSet.has('code') && modeSet.size >= 2 && allSelectedModesSucceeded) {
     try {
       crossValidationResult = await crossValidatePendingRelationCandidates(db, {
         workspaceId: input.workspaceId,
         repoRoots: successfulCodeRepoRoots,
+        includeSchemaCandidates: modeSet.has('db'),
       });
     } catch (error) {
       warnings.push(

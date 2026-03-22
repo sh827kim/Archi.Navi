@@ -15,6 +15,7 @@ import {
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import * as codeSignalEngineModule from '@/code/codeSignalEngine';
+import * as dbSchemaSignalModule from '@/db/dbSchemaSignal';
 import * as codeBasedModule from '@/relation/codeBased';
 import * as configBasedModule from '@/relation/configBased';
 import * as configCodeBindingModule from '@/relation/configCodeBinding';
@@ -63,6 +64,14 @@ vi.mock('@/code/codeSignalEngine', async () => {
   return {
     ...actual,
     extractCodeSignalsWithEngine: vi.fn(actual.extractCodeSignalsWithEngine),
+  };
+});
+
+vi.mock('@/db/dbSchemaSignal', async () => {
+  const actual = await vi.importActual<typeof import('@/db/dbSchemaSignal')>('@/db/dbSchemaSignal');
+  return {
+    ...actual,
+    extractDbSchemaSignals: vi.fn(actual.extractDbSchemaSignals),
   };
 });
 
@@ -252,8 +261,36 @@ spring:
 
     expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
       db,
-      { workspaceId, repoRoots: [tempDir] },
+      { workspaceId, repoRoots: [tempDir], includeSchemaCandidates: true },
     );
+  });
+
+  it('config+code 실행에서 config 추론이 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+    vi.mocked(configBasedModule.inferRelationsFromConfig).mockRejectedValueOnce(
+      new Error('config failed'),
+    );
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config', 'code'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
   });
 
   it('code mode가 포함되어도 code pass가 실패하면 cross validation을 호출하지 않아야 한다', async () => {
@@ -380,7 +417,7 @@ zuul:
     );
     expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
       db,
-      { workspaceId, repoRoots: [tempDir] },
+      { workspaceId, repoRoots: [tempDir], includeSchemaCandidates: false },
     );
 
     const bindingCallOrder = vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints).mock.invocationCallOrder[0];
@@ -482,6 +519,65 @@ zuul:
     } finally {
       rmSync(secondDir, { recursive: true, force: true });
     }
+  });
+
+  it('code+db 실행에서 db 추론이 실패하면 cross validation을 호출하지 않아야 한다', async () => {
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    vi.mocked(dbSchemaSignalModule.extractDbSchemaSignals).mockRejectedValueOnce(
+      new Error('db failed'),
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['code', 'db'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
+  });
+
+  it('config+code+db 실행에서 db 추론이 실패해도 binding은 수행하고 cross validation은 건너뛰어야 한다', async () => {
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: order-service\n');
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
+    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    vi.mocked(dbSchemaSignalModule.extractDbSchemaSignals).mockRejectedValueOnce(
+      new Error('db failed'),
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config', 'code', 'db'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).toHaveBeenCalledWith(
+      db,
+      { workspaceId, repoRoots: [tempDir] },
+    );
+    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
   });
 
   it('code-only 실행에서 relation inference가 전부 실패하면 run이 FAILED로 완료되어야 한다', async () => {

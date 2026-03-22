@@ -176,7 +176,7 @@ function contradictionPenalty(config: CrossValidationConfig): number {
 
 export async function crossValidatePendingRelationCandidates(
   db: DbClient,
-  input: { workspaceId: string; repoRoots?: string[] },
+  input: { workspaceId: string; repoRoots?: string[]; includeSchemaCandidates?: boolean },
 ): Promise<CrossValidationSummary> {
   const scopedRepoRoots = Array.from(
     new Set(
@@ -193,13 +193,22 @@ export async function crossValidatePendingRelationCandidates(
       (repoRoot) => normalizedValue === repoRoot || normalizedValue.startsWith(`${repoRoot}/`),
     );
   };
-  const matchesRepoScope = (metadata: unknown, evidenceFilePaths: string[]): boolean => {
+  const matchesRepoScope = (
+    metadata: unknown,
+    evidenceRows: Array<{ evidenceType: string; filePath: string | null }>,
+  ): boolean => {
     if (!repoScopeEnabled) return true;
 
     const record = asRecord(metadata) ?? {};
     if (isPathInRepoScope(asString(record.repoRoot))) return true;
     if (isPathInRepoScope(asString(record.specFile))) return true;
-    return evidenceFilePaths.some((filePath) => isPathInRepoScope(filePath));
+    if (
+      input.includeSchemaCandidates === true
+      && evidenceRows.some((row) => row.evidenceType === 'SCHEMA')
+    ) {
+      return true;
+    }
+    return evidenceRows.some((row) => isPathInRepoScope(row.filePath));
   };
 
   const allCandidates = await db
@@ -222,6 +231,7 @@ export async function crossValidatePendingRelationCandidates(
     ? await db
       .select({
         candidateId: relationCandidateEvidences.candidateId,
+        evidenceType: evidences.evidenceType,
         filePath: evidences.filePath,
       })
       .from(relationCandidateEvidences)
@@ -236,14 +246,20 @@ export async function crossValidatePendingRelationCandidates(
         ),
       )
     : [];
-  const evidencePathsByCandidateId = new Map<string, string[]>();
+  const evidenceScopeRowsByCandidateId = new Map<
+    string,
+    Array<{ evidenceType: string; filePath: string | null }>
+  >();
   for (const row of candidateEvidencePathRows) {
-    const bucket = evidencePathsByCandidateId.get(row.candidateId) ?? [];
-    if (row.filePath) bucket.push(row.filePath);
-    evidencePathsByCandidateId.set(row.candidateId, bucket);
+    const bucket = evidenceScopeRowsByCandidateId.get(row.candidateId) ?? [];
+    bucket.push({
+      evidenceType: row.evidenceType,
+      filePath: row.filePath,
+    });
+    evidenceScopeRowsByCandidateId.set(row.candidateId, bucket);
   }
   const candidates = allCandidates.filter((candidate) =>
-    matchesRepoScope(candidate.metadata, evidencePathsByCandidateId.get(candidate.id) ?? []));
+    matchesRepoScope(candidate.metadata, evidenceScopeRowsByCandidateId.get(candidate.id) ?? []));
 
   const profileRows = await db
     .execute<{ cross_validation: unknown }>(sql`
@@ -404,7 +420,15 @@ export async function crossValidatePendingRelationCandidates(
     );
   }
   for (const approvedRelation of approvedReadWriteRelations) {
-    if (repoScopeEnabled && !matchesRepoScope(null, approvedRelation.filePath ? [approvedRelation.filePath] : [])) {
+    if (
+      repoScopeEnabled
+      && !matchesRepoScope(
+        null,
+        approvedRelation.filePath
+          ? [{ evidenceType: approvedRelation.evidenceType, filePath: approvedRelation.filePath }]
+          : [],
+      )
+    ) {
       continue;
     }
     if (normalizeEvidenceType(approvedRelation.evidenceType) !== 'code') continue;
@@ -436,7 +460,9 @@ export async function crossValidatePendingRelationCandidates(
       repoScopeEnabled
       && !matchesRepoScope(
         approvedRelation.metadata,
-        approvedRelation.filePath ? [approvedRelation.filePath] : [],
+        approvedRelation.filePath
+          ? [{ evidenceType: approvedRelation.evidenceType, filePath: approvedRelation.filePath }]
+          : [],
       )
     ) {
       continue;
