@@ -130,6 +130,43 @@ function isCodeTopicUsageSource(
     || normalizeEvidenceType(evidenceType ?? '') === 'code';
 }
 
+function hasEvidenceSource(
+  evidenceRows: Array<{ evidenceType: string; filePath: string | null }>,
+  source: CrossValidationSource,
+): boolean {
+  return evidenceRows.some((row) => normalizeEvidenceType(row.evidenceType) === source);
+}
+
+function hasCodeTableAccessSupport(
+  metadata: unknown,
+  evidenceRows: Array<{ evidenceType: string; filePath: string | null }>,
+): boolean {
+  const source = asString(asRecord(metadata)?.source);
+  return source === 'CODE'
+    || source === 'LLM_CODE'
+    || hasEvidenceSource(evidenceRows, 'code');
+}
+
+function hasEndpointCandidateSupport(
+  metadata: unknown,
+  evidenceRows: Array<{ evidenceType: string; filePath: string | null }>,
+): boolean {
+  const source = asString(asRecord(metadata)?.source);
+  return isCodeOrConfigEndpointEvidenceSource(source)
+    || hasEvidenceSource(evidenceRows, 'code')
+    || hasEvidenceSource(evidenceRows, 'config');
+}
+
+function hasCodeTopicUsageSupport(
+  metadata: unknown,
+  evidenceRows: Array<{ evidenceType: string; filePath: string | null }>,
+): boolean {
+  const source = asString(asRecord(metadata)?.source);
+  return source === 'CODE'
+    || source === 'LLM_CODE'
+    || hasEvidenceSource(evidenceRows, 'code');
+}
+
 async function clearStoredCrossValidationState(
   db: DbClient,
   candidates: Array<{
@@ -444,7 +481,8 @@ export async function crossValidatePendingRelationCandidates(
   const codeTopicUsageKeys = new Set<string>();
   for (const relatedCandidate of scopedReadWriteCandidates) {
     const metadata = asRecord(relatedCandidate.metadata) ?? {};
-    if (asString(metadata.source) !== 'CODE') continue;
+    const evidenceRows = relatedReadWriteEvidenceScopeRows.get(relatedCandidate.id) ?? [];
+    if (!hasCodeTableAccessSupport(metadata, evidenceRows)) continue;
 
     const targetObject = objectMap.get(relatedCandidate.objectId);
     if (!targetObject || targetObject.objectType !== 'db_table') continue;
@@ -485,8 +523,9 @@ export async function crossValidatePendingRelationCandidates(
     if (!targetObject || targetObject.objectType !== 'api_endpoint' || !targetObject.parentId) continue;
 
     const metadata = asRecord(relatedCandidate.metadata) ?? {};
+    const evidenceRows = relatedCallEvidenceScopeRows.get(relatedCandidate.id) ?? [];
     if (metadata.crossBound === true) continue;
-    if (!isCodeOrConfigEndpointEvidenceSource(asString(metadata.source))) continue;
+    if (!hasEndpointCandidateSupport(metadata, evidenceRows)) continue;
 
     endpointEvidenceKeys.add(
       buildRelationUsageKey(relatedCandidate.subjectObjectId, targetObject.parentId),
@@ -574,8 +613,8 @@ export async function crossValidatePendingRelationCandidates(
     );
   for (const relatedCandidate of scopedProduceConsumeCandidates) {
     const metadata = asRecord(relatedCandidate.metadata) ?? {};
-    const source = asString(metadata.source);
-    if (source !== 'CODE' && source !== 'LLM_CODE') continue;
+    const evidenceRows = relatedProduceConsumeEvidenceScopeRows.get(relatedCandidate.id) ?? [];
+    if (!hasCodeTopicUsageSupport(metadata, evidenceRows)) continue;
 
     codeTopicUsageKeys.add(
       buildRelationUsageKey(relatedCandidate.subjectObjectId, relatedCandidate.objectId),

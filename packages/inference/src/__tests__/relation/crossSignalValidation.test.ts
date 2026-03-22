@@ -902,6 +902,33 @@ describe('crossValidatePendingRelationCandidates', () => {
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
+  it('metadata.source가 config여도 FILE evidence가 있는 db_table 후보는 STALE_CONFIG 근거로 사용해야 한다', async () => {
+    const { candidateId, serviceId, databaseId } = await seedDatabaseCandidate(db, 0.9);
+    await linkEvidence(db, candidateId, 'CONFIG');
+    const { candidateId: codeCandidateId } = await seedCodeDbTableCandidate(db, { serviceId, databaseId });
+    await linkEvidence(db, codeCandidateId, 'FILE');
+    await db
+      .update(relationCandidates)
+      .set({ metadata: { source: 'application_yml' } })
+      .where(eq(relationCandidates.id, codeCandidateId));
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      contradictionCount: 0,
+      staleConfigCount: 0,
+      skippedSingleSourceCount: 2,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    expect(candidate?.confidence).toBeCloseTo(0.9);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
   it('config evidence만 있는 승인 db_table relation은 STALE_CONFIG 근거로 사용하지 않아야 한다', async () => {
     const { candidateId, serviceId, databaseId } = await seedDatabaseCandidate(db, 0.9);
     await linkEvidence(db, candidateId, 'CONFIG');
@@ -994,6 +1021,33 @@ describe('crossValidatePendingRelationCandidates', () => {
     const candidate = rows[0]!;
     expect(candidate.confidence).toBe(0.6);
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('metadata.source가 config여도 FILE evidence가 있는 endpoint 후보는 PHANTOM_CALL 근거로 사용해야 한다', async () => {
+    const { candidateId, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
+    await linkEvidence(db, candidateId, 'FILE');
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    const { candidateId: endpointCandidateId } = await seedEndpointCallCandidate(db, {
+      subjectObjectId: sourceServiceId,
+      endpointId,
+      source: 'application_yml',
+    });
+    await linkEvidence(db, endpointCandidateId, 'FILE');
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      contradictionCount: 0,
+      skippedSingleSourceCount: 2,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    expect(candidate?.confidence).toBeCloseTo(0.6);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
   it('다중 소스 call 후보라도 endpoint 근거가 없으면 PHANTOM_CALL penalty를 기록해야 한다', async () => {
@@ -1632,6 +1686,36 @@ describe('crossValidatePendingRelationCandidates', () => {
     const candidate = rows[0]!;
     expect(candidate.confidence).toBe(0.85);
     expect((candidate.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
+  it('metadata.source가 config여도 FILE evidence가 있는 topic 후보는 DEAD_TOPIC 근거로 사용해야 한다', async () => {
+    const { candidateId, serviceId, topicId } = await seedTopicCandidate(db, { relationType: 'produce' });
+    await linkEvidence(db, candidateId, 'CONFIG');
+    const { candidateId: codeCandidateId } = await seedCodeTopicCandidate(db, {
+      serviceId,
+      topicId,
+      relationType: 'produce',
+    });
+    await linkEvidence(db, codeCandidateId, 'FILE');
+    await db
+      .update(relationCandidates)
+      .set({ metadata: { source: 'application_yml', kind: 'produce' } })
+      .where(eq(relationCandidates.id, codeCandidateId));
+
+    const result = await crossValidatePendingRelationCandidates(db, { workspaceId });
+
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      contradictionCount: 0,
+      skippedSingleSourceCount: 2,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    expect(candidate?.confidence).toBeCloseTo(0.85);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
   });
 
   it('같은 서비스와 topic에 대한 approved produce/consume relation이 있으면 DEAD_TOPIC을 기록하지 않아야 한다', async () => {
