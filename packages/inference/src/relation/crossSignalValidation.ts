@@ -184,6 +184,41 @@ function contradictionPenalty(config: CrossValidationConfig): number {
   return Math.round(clamp(1 - config.penaltyFactor, 0, 0.99) * 10000) / 10000;
 }
 
+async function loadCandidateEvidenceScopeRows(
+  db: DbClient,
+  workspaceId: string,
+  candidateIds: string[],
+): Promise<Map<string, Array<{ evidenceType: string; filePath: string | null }>>> {
+  if (candidateIds.length === 0) return new Map();
+
+  const evidenceRows = await db
+    .select({
+      candidateId: relationCandidateEvidences.candidateId,
+      evidenceType: evidences.evidenceType,
+      filePath: evidences.filePath,
+    })
+    .from(relationCandidateEvidences)
+    .innerJoin(evidences, eq(relationCandidateEvidences.evidenceId, evidences.id))
+    .where(
+      and(
+        eq(relationCandidateEvidences.workspaceId, workspaceId),
+        inArray(relationCandidateEvidences.candidateId, candidateIds),
+      ),
+    );
+
+  const rowsByCandidateId = new Map<string, Array<{ evidenceType: string; filePath: string | null }>>();
+  for (const row of evidenceRows) {
+    const bucket = rowsByCandidateId.get(row.candidateId) ?? [];
+    bucket.push({
+      evidenceType: row.evidenceType,
+      filePath: row.filePath,
+    });
+    rowsByCandidateId.set(row.candidateId, bucket);
+  }
+
+  return rowsByCandidateId;
+}
+
 export async function crossValidatePendingRelationCandidates(
   db: DbClient,
   input: { workspaceId: string; repoRoots?: string[]; includeSchemaCandidates?: boolean },
@@ -237,37 +272,11 @@ export async function crossValidatePendingRelationCandidates(
         eq(relationCandidates.status, 'PENDING'),
       ),
     );
-  const candidateEvidencePathRows = allCandidates.length > 0
-    ? await db
-      .select({
-        candidateId: relationCandidateEvidences.candidateId,
-        evidenceType: evidences.evidenceType,
-        filePath: evidences.filePath,
-      })
-      .from(relationCandidateEvidences)
-      .innerJoin(evidences, eq(relationCandidateEvidences.evidenceId, evidences.id))
-      .where(
-        and(
-          eq(relationCandidateEvidences.workspaceId, input.workspaceId),
-          inArray(
-            relationCandidateEvidences.candidateId,
-            allCandidates.map((candidate) => candidate.id),
-          ),
-        ),
-      )
-    : [];
-  const evidenceScopeRowsByCandidateId = new Map<
-    string,
-    Array<{ evidenceType: string; filePath: string | null }>
-  >();
-  for (const row of candidateEvidencePathRows) {
-    const bucket = evidenceScopeRowsByCandidateId.get(row.candidateId) ?? [];
-    bucket.push({
-      evidenceType: row.evidenceType,
-      filePath: row.filePath,
-    });
-    evidenceScopeRowsByCandidateId.set(row.candidateId, bucket);
-  }
+  const evidenceScopeRowsByCandidateId = await loadCandidateEvidenceScopeRows(
+    db,
+    input.workspaceId,
+    allCandidates.map((candidate) => candidate.id),
+  );
   const candidates = allCandidates.filter((candidate) =>
     matchesRepoScope(candidate.metadata, evidenceScopeRowsByCandidateId.get(candidate.id) ?? []));
 
@@ -328,6 +337,7 @@ export async function crossValidatePendingRelationCandidates(
 
   const relatedReadWriteCandidates = await db
     .select({
+      id: relationCandidates.id,
       subjectObjectId: relationCandidates.subjectObjectId,
       objectId: relationCandidates.objectId,
       relationType: relationCandidates.relationType,
@@ -341,8 +351,16 @@ export async function crossValidatePendingRelationCandidates(
         or(eq(relationCandidates.relationType, 'read'), eq(relationCandidates.relationType, 'write')),
       ),
     );
+  const relatedReadWriteEvidenceScopeRows = await loadCandidateEvidenceScopeRows(
+    db,
+    input.workspaceId,
+    relatedReadWriteCandidates.map((candidate) => candidate.id),
+  );
   const scopedReadWriteCandidates = repoScopeEnabled
-    ? relatedReadWriteCandidates.filter((candidate) => matchesRepoScope(candidate.metadata, []))
+    ? relatedReadWriteCandidates.filter((candidate) => matchesRepoScope(
+      candidate.metadata,
+      relatedReadWriteEvidenceScopeRows.get(candidate.id) ?? [],
+    ))
     : relatedReadWriteCandidates;
   const approvedReadWriteRelations = await db
     .select({
@@ -370,6 +388,7 @@ export async function crossValidatePendingRelationCandidates(
     );
   const relatedCallCandidates = await db
     .select({
+      id: relationCandidates.id,
       subjectObjectId: relationCandidates.subjectObjectId,
       objectId: relationCandidates.objectId,
       metadata: relationCandidates.metadata,
@@ -382,8 +401,16 @@ export async function crossValidatePendingRelationCandidates(
         eq(relationCandidates.relationType, 'call'),
       ),
     );
+  const relatedCallEvidenceScopeRows = await loadCandidateEvidenceScopeRows(
+    db,
+    input.workspaceId,
+    relatedCallCandidates.map((candidate) => candidate.id),
+  );
   const scopedCallCandidates = repoScopeEnabled
-    ? relatedCallCandidates.filter((candidate) => matchesRepoScope(candidate.metadata, []))
+    ? relatedCallCandidates.filter((candidate) => matchesRepoScope(
+      candidate.metadata,
+      relatedCallEvidenceScopeRows.get(candidate.id) ?? [],
+    ))
     : relatedCallCandidates;
   const approvedCallRelations = await db
     .select({
@@ -491,6 +518,7 @@ export async function crossValidatePendingRelationCandidates(
 
   const relatedProduceConsumeCandidates = await db
     .select({
+      id: relationCandidates.id,
       subjectObjectId: relationCandidates.subjectObjectId,
       objectId: relationCandidates.objectId,
       metadata: relationCandidates.metadata,
@@ -506,8 +534,16 @@ export async function crossValidatePendingRelationCandidates(
         ),
       ),
     );
+  const relatedProduceConsumeEvidenceScopeRows = await loadCandidateEvidenceScopeRows(
+    db,
+    input.workspaceId,
+    relatedProduceConsumeCandidates.map((candidate) => candidate.id),
+  );
   const scopedProduceConsumeCandidates = repoScopeEnabled
-    ? relatedProduceConsumeCandidates.filter((candidate) => matchesRepoScope(candidate.metadata, []))
+    ? relatedProduceConsumeCandidates.filter((candidate) => matchesRepoScope(
+      candidate.metadata,
+      relatedProduceConsumeEvidenceScopeRows.get(candidate.id) ?? [],
+    ))
     : relatedProduceConsumeCandidates;
   const approvedProduceConsumeRelations = await db
     .select({

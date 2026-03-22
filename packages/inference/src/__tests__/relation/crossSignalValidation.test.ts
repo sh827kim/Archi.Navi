@@ -1343,6 +1343,96 @@ describe('crossValidatePendingRelationCandidates', () => {
     });
   });
 
+  it('support candidate의 evidence filePath가 현재 repo root면 scoped PHANTOM_CALL 근거로 사용해야 한다', async () => {
+    const repoA = '/tmp/repo-a';
+    const { sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.6);
+    const candidateId = generateId();
+    const evidenceId = generateId();
+    const endpointSupportEvidenceId = generateId();
+
+    await db.insert(relationCandidates).values({
+      id: candidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: targetServiceId,
+      confidence: 0.6,
+      status: 'PENDING',
+      metadata: {
+        source: 'CODE',
+        repoRoot: repoA,
+      },
+    });
+    await db.insert(evidences).values([
+      {
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `${repoA}/src/A.java`,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'call A',
+        metadata: {},
+      },
+      {
+        id: endpointSupportEvidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `${repoA}/src/endpoint.ts`,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'call endpoint',
+        metadata: {},
+      },
+    ]);
+    await db.insert(relationCandidateEvidences).values({
+      workspaceId,
+      candidateId,
+      evidenceId,
+    });
+
+    const { endpointId } = await seedEndpointObject(db, { serviceId: targetServiceId });
+    const endpointCandidateId = generateId();
+    await db.insert(relationCandidates).values({
+      id: endpointCandidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: endpointId,
+      confidence: 0.7,
+      status: 'PENDING',
+      metadata: {
+        source: 'CODE',
+        targetType: 'api_endpoint',
+        targetServiceId,
+      },
+    });
+    await db.insert(relationCandidateEvidences).values({
+      workspaceId,
+      candidateId: endpointCandidateId,
+      evidenceId: endpointSupportEvidenceId,
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: [repoA],
+    });
+
+    expect(result).toMatchObject({
+      candidateCount: 2,
+      skippedSingleSourceCount: 2,
+      contradictionCount: 0,
+    });
+
+    const [candidate] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+
+    expect(candidate?.confidence).toBeCloseTo(0.6);
+    expect((candidate?.metadata as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
   it('repo-scoped validation에서도 db mode가 포함되면 SCHEMA 후보를 포함해야 한다', async () => {
     const { candidateId } = await seedFkReferenceCandidate(db, 0.95);
     await linkEvidence(db, candidateId, 'SCHEMA');

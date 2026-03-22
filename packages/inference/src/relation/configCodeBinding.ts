@@ -195,11 +195,9 @@ export async function bindConfigToCodeEndpoints(
                     eq(objects.parentId, serviceId),
                 ),
             );
-        const scopedEndpoints = endpoints
-            .filter((endpoint) => matchesRepoScope(endpoint.metadata, [], scopedRepoRoots))
-            .map(({ id, name }) => ({ id, name }));
-        endpointCache.set(serviceId, scopedEndpoints);
-        return scopedEndpoints;
+        const normalizedEndpoints = endpoints.map(({ id, name }) => ({ id, name }));
+        endpointCache.set(serviceId, normalizedEndpoints);
+        return normalizedEndpoints;
     }
 
     for (const candidate of compoundCandidates) {

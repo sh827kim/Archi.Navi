@@ -439,4 +439,96 @@ describe('bindConfigToCodeEndpoints', () => {
       { evidenceId: llmConfigEvidenceId, evidenceType: 'LLM_CONFIG' },
     ]);
   });
+
+  it('repo-scoped binding에서도 다른 repo root 서비스의 endpoint 후보를 생성해야 한다', async () => {
+    const sourceServiceId = generateId();
+    const targetServiceId = generateId();
+    const endpointId = generateId();
+    const compoundCandidateId = generateId();
+    const configEvidenceId = generateId();
+    const callerRepoRoot = '/tmp/repo-a';
+    const calleeRepoRoot = '/tmp/repo-b';
+
+    await db.insert(objects).values([
+      {
+        id: sourceServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'gateway',
+        path: `/gateway/${sourceServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: targetServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'orders',
+        path: `/orders/${targetServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/orders',
+        parentId: targetServiceId,
+        path: `/orders/${targetServiceId}/${endpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/orders', repoRoot: calleeRepoRoot, source: 'CODE' },
+      },
+    ]);
+
+    await db.insert(relationCandidates).values({
+      id: compoundCandidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: targetServiceId,
+      confidence: 0.8,
+      metadata: { source: 'application_yml', repoRoot: callerRepoRoot },
+      status: 'PENDING',
+    });
+    await db.insert(evidences).values({
+      id: configEvidenceId,
+      workspaceId,
+      evidenceType: 'CONFIG',
+      filePath: `${callerRepoRoot}/application.yml`,
+      excerpt: 'zuul.routes.order.serviceId=orders',
+      metadata: {},
+    });
+    await db.insert(relationCandidateEvidences).values({
+      workspaceId,
+      candidateId: compoundCandidateId,
+      evidenceId: configEvidenceId,
+    });
+
+    const result = await bindConfigToCodeEndpoints(db, { workspaceId, repoRoots: [callerRepoRoot] });
+
+    expect(result.compoundCandidateCount).toBe(1);
+    expect(result.createdEndpointCandidateCount).toBe(1);
+
+    const endpointCandidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.subjectObjectId, sourceServiceId),
+          eq(relationCandidates.objectId, endpointId),
+        ),
+      );
+
+    expect(endpointCandidates).toHaveLength(1);
+  });
 });
