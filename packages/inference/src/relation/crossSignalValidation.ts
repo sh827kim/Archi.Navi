@@ -271,7 +271,7 @@ export async function crossValidatePendingRelationCandidates(
     `);
   const config = normalizeCrossValidationConfig(profileRows.rows[0]?.cross_validation);
   if (!config.enabled) {
-    await clearStoredCrossValidationState(db, candidates);
+    await clearStoredCrossValidationState(db, allCandidates);
     return {
       candidateCount: 0,
       validatedCount: 0,

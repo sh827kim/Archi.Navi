@@ -90,6 +90,10 @@ function matchesRepoScope(metadata: unknown, evidenceFilePaths: string[], repoRo
     return evidenceFilePaths.some((filePath) => isPathInRepoScope(filePath, repoRoots));
 }
 
+function isConfigEvidenceType(evidenceType: string): boolean {
+    return evidenceType === 'CONFIG' || evidenceType === 'LLM_CONFIG';
+}
+
 /**
  * config 후보(service→service)를 endpoint 레벨로 분해
  *
@@ -136,6 +140,7 @@ export async function bindConfigToCodeEndpoints(
             .select({
                 candidateId: relationCandidateEvidences.candidateId,
                 evidenceId: relationCandidateEvidences.evidenceId,
+                evidenceType: evidences.evidenceType,
                 filePath: evidences.filePath,
             })
             .from(relationCandidateEvidences)
@@ -150,12 +155,14 @@ export async function bindConfigToCodeEndpoints(
                 ),
             )
         : [];
-    const evidenceIdsByCandidateId = new Map<string, string[]>();
+    const configEvidenceIdsByCandidateId = new Map<string, string[]>();
     const evidencePathsByCandidateId = new Map<string, string[]>();
     for (const row of evidenceRows) {
-        const evidenceIds = evidenceIdsByCandidateId.get(row.candidateId) ?? [];
-        evidenceIds.push(row.evidenceId);
-        evidenceIdsByCandidateId.set(row.candidateId, evidenceIds);
+        if (isConfigEvidenceType(row.evidenceType)) {
+            const evidenceIds = configEvidenceIdsByCandidateId.get(row.candidateId) ?? [];
+            evidenceIds.push(row.evidenceId);
+            configEvidenceIdsByCandidateId.set(row.candidateId, evidenceIds);
+        }
 
         const evidencePaths = evidencePathsByCandidateId.get(row.candidateId) ?? [];
         if (row.filePath) evidencePaths.push(row.filePath);
@@ -205,7 +212,7 @@ export async function bindConfigToCodeEndpoints(
         }
 
         // 원본 후보의 evidence 조회
-        const evidenceIds = evidenceIdsByCandidateId.get(candidate.id) ?? [];
+        const evidenceIds = configEvidenceIdsByCandidateId.get(candidate.id) ?? [];
         const baseMeta = stripCrossValidationMetadata((candidate.metadata ?? {}) as Record<string, unknown>);
         const rawCandidateConfidence = getRawCandidateConfidence(candidate.confidence ?? 0.7, candidate.metadata);
 

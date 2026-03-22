@@ -1330,6 +1330,73 @@ describe('crossValidatePendingRelationCandidates', () => {
     ]);
   });
 
+  it('repo-scoped rerun에서도 cross validation 비활성화는 workspace 전체 stale 상태를 지워야 한다', async () => {
+    const repoA = '/tmp/repo-a';
+    const repoB = '/tmp/repo-b';
+    const { candidateId: candidateA, sourceServiceId, targetServiceId } = await seedBaseCandidate(db, 0.9);
+    const candidateB = generateId();
+
+    await seedDefaultCrossValidationProfile(db, { enabled: false });
+    await db
+      .update(relationCandidates)
+      .set({
+        metadata: {
+          source: 'CODE',
+          repoRoot: repoA,
+          crossValidation: {
+            validated: true,
+            supportingSources: ['config', 'code'],
+            originalConfidence: 0.6,
+            adjustedConfidence: 0.9,
+          },
+        },
+      })
+      .where(eq(relationCandidates.id, candidateA));
+    await db.insert(relationCandidates).values({
+      id: candidateB,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: targetServiceId,
+      confidence: 0.92,
+      status: 'PENDING',
+      metadata: {
+        source: 'CODE',
+        repoRoot: repoB,
+        crossValidation: {
+          validated: true,
+          supportingSources: ['config', 'code'],
+          originalConfidence: 0.62,
+          adjustedConfidence: 0.92,
+        },
+      },
+    });
+
+    const result = await crossValidatePendingRelationCandidates(db, {
+      workspaceId,
+      repoRoots: [repoA],
+    });
+
+    expect(result).toMatchObject({
+      candidateCount: 0,
+      validatedCount: 0,
+      skippedSingleSourceCount: 0,
+      contradictionCount: 0,
+    });
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(inArray(relationCandidates.id, [candidateA, candidateB]));
+    const updatedA = candidates.find((candidate) => candidate.id === candidateA);
+    const updatedB = candidates.find((candidate) => candidate.id === candidateB);
+
+    expect(updatedA?.confidence).toBeCloseTo(0.6);
+    expect(((updatedA?.metadata ?? {}) as Record<string, unknown>)['crossValidation']).toBeUndefined();
+    expect(updatedB?.confidence).toBeCloseTo(0.62);
+    expect(((updatedB?.metadata ?? {}) as Record<string, unknown>)['crossValidation']).toBeUndefined();
+  });
+
   it('config 기반 topic 후보에 code produce/consume 후보가 없으면 DEAD_TOPIC을 기록해야 한다', async () => {
     const { candidateId } = await seedTopicCandidate(db, { relationType: 'consume', confidence: 0.85 });
     await linkEvidence(db, candidateId, 'CONFIG');
