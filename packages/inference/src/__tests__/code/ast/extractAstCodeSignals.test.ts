@@ -101,6 +101,256 @@ public class OrderController {
         expect(edges.length).toBeGreaterThanOrEqual(2);
     });
 
+    it('interProcedural=false면 기존 AST 저장 결과를 유지해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'Client.java'),
+            `package com.example.order;
+interface PaymentClient {}
+class PaymentClientImpl implements PaymentClient {}
+@GetMapping("/api/orders")
+public class Client {
+    String r = restTemplate.getForObject("http://payment/pay", String.class);
+}`,
+        );
+
+        const baseline = await extractAstCodeSignals(db, { workspaceId, repoRoot: tempDir });
+        const forced = await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            forceRescan: true,
+            interProcedural: false,
+            maxCallChainDepth: 3,
+            resolveProperties: true,
+        });
+
+        expect(forced.fileCount).toBe(baseline.fileCount);
+        expect(forced.signalCount).toBe(baseline.signalCount);
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            '/api/orders',
+            'http://payment/pay',
+        ]);
+    });
+
+    it('interProcedural=true면 depth-1 내부 서비스 메서드 호출을 HTTP call로 확장해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'PaymentService.java'),
+            `package com.example.order;
+public class PaymentService {
+    void callPayment() {
+        restTemplate.getForObject("http://payment/pay", String.class);
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    private PaymentService paymentService;
+
+    void placeOrder() {
+        paymentService.callPayment();
+    }
+}`,
+        );
+
+        const result = await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 3,
+        });
+
+        const edges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(edges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            'http://payment/pay',
+            'http://payment/pay',
+        ]);
+    });
+
+    it('interProcedural=true면 same-class unqualified 호출도 depth-1 HTTP call로 확장해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    void placeOrder() {
+        callPayment();
+    }
+
+    void callPayment() {
+        restTemplate.getForObject("http://payment/pay", String.class);
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 3,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            'http://payment/pay',
+            'http://payment/pay',
+        ]);
+    });
+
+    it('interProcedural=true면 인터페이스의 단일 구현체 메서드 내부 HTTP call을 해석해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'PaymentGateway.java'),
+            `package com.example.order;
+public interface PaymentGateway {
+    void charge();
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'PaymentGatewayImpl.java'),
+            `package com.example.order;
+public class PaymentGatewayImpl implements PaymentGateway {
+    public void charge() {
+        restTemplate.getForObject("http://payment/pay", String.class);
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    private PaymentGateway paymentGateway;
+
+    void placeOrder() {
+        paymentGateway.charge();
+    }
+}`,
+        );
+
+        const result = await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 3,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            'http://payment/pay',
+            'http://payment/pay',
+        ]);
+    });
+
+    it('interProcedural=true면 Kotlin depth-1 내부 서비스 메서드 호출도 HTTP call로 확장해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'PaymentService.kt'),
+            `package com.example.order
+class PaymentService {
+    fun callPayment() {
+        restTemplate.getForObject("http://payment/pay", String::class.java)
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.kt'),
+            `package com.example.order
+class OrderService {
+    private val paymentService: PaymentService = PaymentService()
+
+    fun placeOrder() {
+        paymentService.callPayment()
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 3,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            'http://payment/pay',
+            'http://payment/pay',
+        ]);
+    });
+
+    it('interProcedural depth-1은 depth 2 이상 내부 호출 체인을 아직 확장하지 않아야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    void placeOrder() {
+        callPayment();
+    }
+
+    void callPayment() {
+        doHttp();
+    }
+
+    void doHttp() {
+        restTemplate.getForObject("http://payment/pay", String.class);
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 3,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            'http://payment/pay',
+        ]);
+    });
+
     // ─── 변수 추적 통합 테스트 (Phase 2 핵심 차별점) ─────────────────────────
 
     it('Java에서 상수 URL을 추적하여 code_call_edges에 저장해야 한다', async () => {

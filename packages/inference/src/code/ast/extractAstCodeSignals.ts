@@ -19,6 +19,7 @@ import type { CodeSignalOptions, CodeSignalResult, FileScanResult, ScanFailureDe
 import { scanJavaKotlinAst } from './astJavaKotlin';
 import { scanTypeScriptAst } from './astTypeScript';
 import { scanPythonAst } from './astPython';
+import { buildProjectSymbolTable } from './symbolTable';
 import { AstRuntimeError } from './wasmParser';
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
@@ -237,6 +238,13 @@ export async function extractAstCodeSignals(
             ),
         );
 
+    const interProceduralSymbolTable = options.interProcedural === true
+        ? await buildProjectSymbolTable({
+            repoRoot,
+            ...(options.targetFilePaths ? { targetFilePaths: options.targetFilePaths } : {}),
+        })
+        : null;
+
     const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
     const scanFailures: ScanFailureDetail[] = [];
     const result: CodeSignalResult = {
@@ -301,7 +309,16 @@ export async function extractAstCodeSignals(
     }
 
     // 1. Java/Kotlin 파일 처리 (AST)
-    await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), scanJavaKotlinAst);
+    await processAll(
+        filterTargetFiles(findJavaKotlinFiles(repoRoot)),
+        (filePath, content) => scanJavaKotlinAst(
+            filePath,
+            content,
+            interProceduralSymbolTable
+                ? { interProcedural: { symbolTable: interProceduralSymbolTable } }
+                : undefined,
+        ),
+    );
 
     // 2. TypeScript/JavaScript 파일 처리 (AST)
     await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), scanTypeScriptAst);

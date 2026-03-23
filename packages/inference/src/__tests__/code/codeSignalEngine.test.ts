@@ -100,6 +100,28 @@ describe('codeSignalEngine', () => {
     );
   });
 
+  it('interProcedural 관련 옵션은 ast 모드에서 extractAstCodeSignals로 전달해야 한다', async () => {
+    vi.mocked(extractAstCodeSignals).mockResolvedValue(BASE_RESULT);
+
+    await extractCodeSignalsWithEngine(db, {
+      ...options,
+      codeEngine: 'ast',
+      interProcedural: true,
+      maxCallChainDepth: 3,
+      resolveProperties: true,
+    });
+
+    expect(extractAstCodeSignals).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        ...options,
+        interProcedural: true,
+        maxCallChainDepth: 3,
+        resolveProperties: true,
+      }),
+    );
+  });
+
   it('hybrid 모드면 AST+Regex 병합 추출기만 사용해야 한다', async () => {
     vi.mocked(extractHybridCodeSignals).mockResolvedValue(BASE_RESULT);
 
