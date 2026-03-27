@@ -21,6 +21,7 @@ import { scanTypeScriptAst } from './astTypeScript';
 import { scanPythonAst } from './astPython';
 import { buildProjectSymbolTable } from './symbolTable';
 import { AstRuntimeError } from './wasmParser';
+import { buildAstPropertyResolver } from './propertyResolver';
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
 
@@ -239,10 +240,14 @@ export async function extractAstCodeSignals(
             ),
         );
 
+    const propertyResolver = options.resolveProperties === true
+        ? buildAstPropertyResolver(repoRoot)
+        : null;
     const interProceduralSymbolTable = options.interProcedural === true
         ? await buildProjectSymbolTable({
             repoRoot,
             ...(options.targetFilePaths ? { targetFilePaths: options.targetFilePaths } : {}),
+            ...(propertyResolver ? { propertyResolver } : {}),
         })
         : null;
 
@@ -252,7 +257,7 @@ export async function extractAstCodeSignals(
         repoRoot,
         allServices,
         forceRescan,
-        disableShaSkip: options.interProcedural === true,
+        disableShaSkip: options.interProcedural === true || options.resolveProperties === true,
     };
     const scanFailures: ScanFailureDetail[] = [];
     const result: CodeSignalResult = {
@@ -322,9 +327,19 @@ export async function extractAstCodeSignals(
         (filePath, content) => scanJavaKotlinAst(
             filePath,
             content,
-            interProceduralSymbolTable
-                ? { interProcedural: { symbolTable: interProceduralSymbolTable } }
-                : undefined,
+            {
+                ...(interProceduralSymbolTable
+                    ? {
+                        interProcedural: {
+                            symbolTable: interProceduralSymbolTable,
+                            maxCallChainDepth: Math.max(1, options.maxCallChainDepth ?? 1),
+                        },
+                    }
+                    : {}),
+                ...(propertyResolver
+                    ? { propertyMap: propertyResolver.resolveForFile(filePath) }
+                    : {}),
+            },
         ),
     );
 

@@ -159,4 +159,29 @@ class Dependency`,
       'com.example.payment.PaymentGatewayImpl',
     ]);
   });
+
+  it('1000 파일 규모에서도 symbol table 구축이 30초 이내여야 한다', async () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const srcDir = join(repoRoot, 'src');
+    mkdirSync(srcDir, { recursive: true });
+
+    for (let index = 0; index < 1000; index += 1) {
+      writeFileSync(
+        join(srcDir, `Service${index}.java`),
+        `package com.example.bulk;
+public class Service${index} {
+  String ping() { return "ok"; }
+}`,
+      );
+    }
+
+    const startedAt = Date.now();
+    const table = await buildProjectSymbolTable({ repoRoot });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(table.symbolsByFqcn.size).toBe(1000);
+    expect(elapsedMs).toBeLessThan(30_000);
+  }, 40_000);
 });

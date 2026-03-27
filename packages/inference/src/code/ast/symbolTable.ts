@@ -3,6 +3,8 @@ import { extname, join } from 'path';
 import type { SyntaxNode } from 'web-tree-sitter';
 import { extractStringValue, findChildByType, findNodes, getChildren } from './astScanner';
 import { getWasmParser, type SupportedLanguage } from './wasmParser';
+import type { AstPropertyMap, AstPropertyResolver } from './propertyResolver';
+import { resolveValueExpression } from './propertyResolver';
 
 const SKIP_DIRS = new Set([
   'node_modules',
@@ -21,6 +23,7 @@ const IDENTIFIER_NODE_TYPES = new Set(['identifier', 'simple_identifier', 'type_
 const CALL_NODE_TYPES = ['method_invocation', 'call_expression'];
 const METHOD_DECLARATION_NODE_TYPES = ['method_declaration', 'function_declaration'];
 const FIELD_DECLARATION_NODE_TYPES = ['field_declaration', 'property_declaration'];
+const VALUE_ANNOTATION_REGEX = /@(?:field:)?Value\s*\(\s*"([^"]+)"\s*\)/;
 
 type AstProjectLanguage = SupportedLanguage | 'javascript';
 
@@ -41,11 +44,17 @@ export interface AstDirectHttpCall {
   metadata: Record<string, unknown>;
 }
 
+export interface AstMethodCallTarget {
+  typeName: string;
+  methodName: string;
+}
+
 export interface AstProjectSymbolTable {
   symbolsByFqcn: Map<string, AstTypeSymbol>;
   simpleNameIndex: Map<string, string[]>;
   implementationMap: Map<string, string[]>;
   methodCallsByType: Map<string, Map<string, AstDirectHttpCall[]>>;
+  methodCallTargetsByType: Map<string, Map<string, AstMethodCallTarget[]>>;
 }
 
 function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
@@ -120,9 +129,90 @@ function firstIdentifier(node: SyntaxNode): SyntaxNode | null {
   return firstNamedChild(node, ['identifier', 'type_identifier', 'simple_identifier']);
 }
 
+function normalizeTypeName(typeText: string): string {
+  return typeText
+    .replace(/<.*?>/g, '')
+    .replace(/\[\]/g, '')
+    .trim()
+    .split(/\s+/)
+    .pop() ?? typeText.trim();
+}
+
+function extractDeclaredTypeName(node: SyntaxNode): string | null {
+  const typeNode = findNodes(node, 'type_identifier')[0]
+    ?? findNodes(node, 'generic_type')[0]
+    ?? findNodes(node, 'scoped_type_identifier')[0]
+    ?? findNodes(node, 'user_type')[0];
+  if (!typeNode) return null;
+  return normalizeTypeName(typeNode.text);
+}
+
+function buildFieldTypeMap(typeNode: SyntaxNode): Map<string, string> {
+  const fieldTypeMap = new Map<string, string>();
+  const body = findChildByType(typeNode, 'class_body') ?? findChildByType(typeNode, 'interface_body');
+  if (!body) return fieldTypeMap;
+
+  const fieldDecls = getChildren(body).filter((child) => FIELD_DECLARATION_NODE_TYPES.includes(child.type));
+  for (const fieldDecl of fieldDecls) {
+    const typeName = extractDeclaredTypeName(fieldDecl);
+    if (!typeName) continue;
+
+    for (const declarator of [
+      ...findNodes(fieldDecl, 'variable_declarator'),
+      ...findNodes(fieldDecl, 'variable_declaration'),
+    ]) {
+      const nameNode = getChildren(declarator).find(isIdentifierNode);
+      if (nameNode) {
+        fieldTypeMap.set(nameNode.text, typeName);
+      }
+    }
+  }
+
+  return fieldTypeMap;
+}
+
+function buildMethodTypeMap(methodNode: SyntaxNode): Map<string, string> {
+  const typeMap = new Map<string, string>();
+
+  for (const parameter of [
+    ...findNodes(methodNode, 'formal_parameter'),
+    ...findNodes(methodNode, 'parameter'),
+  ]) {
+    const typeName = extractDeclaredTypeName(parameter);
+    const nameNode = findNodes(parameter, 'identifier')[0]
+      ?? findNodes(parameter, 'simple_identifier')[0];
+    if (typeName && nameNode) {
+      typeMap.set(nameNode.text, typeName);
+    }
+  }
+
+  for (const localDecl of [
+    ...findNodes(methodNode, 'local_variable_declaration'),
+    ...findNodes(methodNode, 'property_declaration'),
+  ]) {
+    const typeName = extractDeclaredTypeName(localDecl);
+    if (!typeName) continue;
+
+    for (const declarator of [
+      ...findNodes(localDecl, 'variable_declarator'),
+      ...findNodes(localDecl, 'variable_declaration'),
+    ]) {
+      const nameNode = getChildren(declarator).find(isIdentifierNode);
+      if (nameNode) {
+        typeMap.set(nameNode.text, typeName);
+      }
+    }
+  }
+
+  return typeMap;
+}
+
 function packageNameOfJavaLike(root: SyntaxNode): string | undefined {
   const packageNode = findNodes(root, 'package_declaration')[0];
-  if (!packageNode) return undefined;
+  if (!packageNode) {
+    const match = root.text.match(/^\s*package\s+([\w.]+)/m);
+    return match?.[1];
+  }
 
   const match = packageNode.text.match(/package\s+([\w.]+)/);
   return match?.[1];
@@ -279,8 +369,14 @@ function buildImplementationMap(table: AstProjectSymbolTable) {
   }
 }
 
-function buildStringVariableMap(root: SyntaxNode): Map<string, string> {
-  const map = new Map<string, string>();
+interface ResolvedStringVariableMap {
+  values: Map<string, string>;
+  propertyBackedVariables: Set<string>;
+}
+
+function buildStringVariableMap(root: SyntaxNode, propertyMap?: AstPropertyMap): ResolvedStringVariableMap {
+  const values = new Map<string, string>();
+  const propertyBackedVariables = new Set<string>();
   const declarations = [
     ...findNodes(root, 'local_variable_declaration'),
     ...findNodes(root, 'field_declaration'),
@@ -295,20 +391,49 @@ function buildStringVariableMap(root: SyntaxNode): Map<string, string> {
       const valueNode = getChildren(declarator).find((child) => child.type === 'string_literal');
       const value = valueNode ? extractStringValue(valueNode) : null;
       if (nameNode && value) {
-        map.set(nameNode.text, value);
+        values.set(nameNode.text, value);
       }
     }
   }
 
-  return map;
+  if (propertyMap) {
+    for (const declaration of declarations) {
+      const valueExpression = declaration.text.match(VALUE_ANNOTATION_REGEX)?.[1];
+      if (!valueExpression) continue;
+
+      const resolvedValue = resolveValueExpression(valueExpression, propertyMap);
+      if (!resolvedValue) continue;
+
+      const declarators = getChildren(declaration).filter((child) =>
+        child.type === 'variable_declarator' || child.type === 'variable_declaration');
+      for (const declarator of declarators) {
+        const nameNode = getChildren(declarator).find(isIdentifierNode);
+        if (nameNode) {
+          values.set(nameNode.text, resolvedValue);
+          propertyBackedVariables.add(nameNode.text);
+        }
+      }
+    }
+  }
+
+  return { values, propertyBackedVariables };
 }
 
-function resolveStringArg(argNode: SyntaxNode, valueMap: Map<string, string>): string | null {
+function resolveStringArg(
+  argNode: SyntaxNode,
+  valueMap: ResolvedStringVariableMap,
+): { value: string; resolvedVia: 'literal' | 'variable' | 'property' } | null {
   if (argNode.type === 'string_literal') {
-    return extractStringValue(argNode);
+    const value = extractStringValue(argNode);
+    return value ? { value, resolvedVia: 'literal' } : null;
   }
   if (argNode.type === 'identifier') {
-    return valueMap.get(argNode.text) ?? null;
+    const value = valueMap.values.get(argNode.text);
+    if (!value) return null;
+    return {
+      value,
+      resolvedVia: valueMap.propertyBackedVariables.has(argNode.text) ? 'property' : 'variable',
+    };
   }
   return null;
 }
@@ -331,6 +456,22 @@ interface ParsedMethodInvocation {
   receiverName: string | null;
   methodName: string;
   argList: SyntaxNode | null;
+}
+
+function isDirectClientInvocation(parsed: ParsedMethodInvocation): boolean {
+  if (/^(restTemplate|kafkaTemplate|rabbitTemplate|amqpTemplate)$/i.test(parsed.receiverName ?? '')) {
+    return true;
+  }
+  if (parsed.receiverName === 'RestClient' && parsed.methodName === 'create') {
+    return true;
+  }
+  if (
+    parsed.methodName === 'uri'
+    && /(webClient|restClient)/i.test(parsed.receiverName ?? '')
+  ) {
+    return true;
+  }
+  return false;
 }
 
 function parseMethodInvocation(node: SyntaxNode): ParsedMethodInvocation | null {
@@ -371,7 +512,7 @@ function parseMethodInvocation(node: SyntaxNode): ParsedMethodInvocation | null 
 
 function collectJavaMethodDirectHttpCalls(
   methodNode: SyntaxNode,
-  valueMap: Map<string, string>,
+  valueMap: ResolvedStringVariableMap,
 ): AstDirectHttpCall[] {
   const calls: AstDirectHttpCall[] = [];
   const methodInvocations = CALL_NODE_TYPES.flatMap((nodeType) => findNodes(methodNode, nodeType));
@@ -383,13 +524,19 @@ function collectJavaMethodDirectHttpCalls(
     const objectName = parsed.receiverName;
     const methodName = parsed.methodName;
     const firstArg = getFirstArg(parsed.argList);
-    const url = firstArg ? resolveStringArg(firstArg, valueMap) : null;
+    const resolvedArg = firstArg ? resolveStringArg(firstArg, valueMap) : null;
+    const url = resolvedArg?.value ?? null;
 
     if (/^restTemplate$/i.test(objectName) && url) {
       calls.push({
         symbol: url,
         confidence: 0.9,
-        metadata: { client: 'RestTemplate', method: methodName },
+        metadata: {
+          client: 'RestTemplate',
+          method: methodName,
+          resolvedUrl: url,
+          resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+        },
       });
       continue;
     }
@@ -398,7 +545,12 @@ function collectJavaMethodDirectHttpCalls(
       calls.push({
         symbol: url,
         confidence: 0.9,
-        metadata: { client: 'WebClient', method: methodName },
+        metadata: {
+          client: 'WebClient',
+          method: methodName,
+          resolvedUrl: url,
+          resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+        },
       });
       continue;
     }
@@ -407,7 +559,12 @@ function collectJavaMethodDirectHttpCalls(
       calls.push({
         symbol: url,
         confidence: 0.9,
-        metadata: { client: 'RestClient', method: methodName },
+        metadata: {
+          client: 'RestClient',
+          method: methodName,
+          resolvedUrl: url,
+          resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+        },
       });
       continue;
     }
@@ -416,7 +573,12 @@ function collectJavaMethodDirectHttpCalls(
       calls.push({
         symbol: url,
         confidence: 0.9,
-        metadata: { client: 'RestClient', method: 'create' },
+        metadata: {
+          client: 'RestClient',
+          method: 'create',
+          resolvedUrl: url,
+          resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+        },
       });
     }
   }
@@ -438,12 +600,89 @@ function registerMethodCalls(
   table.methodCallsByType.set(ownerFqcn, methodsForType);
 }
 
+function registerMethodCallTargets(
+  table: AstProjectSymbolTable,
+  ownerFqcn: string,
+  methodName: string,
+  targets: AstMethodCallTarget[],
+) {
+  if (targets.length === 0) return;
+
+  const methodsForType = table.methodCallTargetsByType.get(ownerFqcn) ?? new Map<string, AstMethodCallTarget[]>();
+  const existing = methodsForType.get(methodName) ?? [];
+  methodsForType.set(methodName, [...existing, ...targets]);
+  table.methodCallTargetsByType.set(ownerFqcn, methodsForType);
+}
+
+function javaLikeDeclarationKind(
+  declarationNode: SyntaxNode,
+  language: Extract<AstProjectLanguage, 'java' | 'kotlin'>,
+): 'class' | 'interface' {
+  if (declarationNode.type === 'interface_declaration') return 'interface';
+  if (language === 'kotlin' && declarationNode.text.trimStart().startsWith('interface ')) {
+    return 'interface';
+  }
+  return 'class';
+}
+
+function resolveInvocationTargetType(
+  table: AstProjectSymbolTable,
+  ownerFqcn: string,
+  parsed: ParsedMethodInvocation,
+  fieldTypeMap: Map<string, string>,
+  methodTypeMap: Map<string, string>,
+  packageName?: string,
+): string | null {
+  if (parsed.receiverName === null) return ownerFqcn;
+
+  const rawTypeName = methodTypeMap.get(parsed.receiverName) ?? fieldTypeMap.get(parsed.receiverName);
+  if (!rawTypeName) return null;
+
+  return resolveTypeReference(table, rawTypeName, packageName);
+}
+
+function collectJavaMethodCallTargets(
+  table: AstProjectSymbolTable,
+  methodNode: SyntaxNode,
+  ownerFqcn: string,
+  fieldTypeMap: Map<string, string>,
+  methodTypeMap: Map<string, string>,
+  packageName?: string,
+): AstMethodCallTarget[] {
+  const targets: AstMethodCallTarget[] = [];
+  const methodInvocations = CALL_NODE_TYPES.flatMap((nodeType) => findNodes(methodNode, nodeType));
+
+  for (const invocation of methodInvocations) {
+    const parsed = parseMethodInvocation(invocation);
+    if (!parsed || isDirectClientInvocation(parsed)) continue;
+
+    const targetTypeName = resolveInvocationTargetType(
+      table,
+      ownerFqcn,
+      parsed,
+      fieldTypeMap,
+      methodTypeMap,
+      packageName,
+    );
+    if (!targetTypeName) continue;
+
+    targets.push({
+      typeName: targetTypeName,
+      methodName: parsed.methodName,
+    });
+  }
+
+  return targets;
+}
+
 function collectJavaLikeMethodCalls(
   table: AstProjectSymbolTable,
   root: SyntaxNode,
+  language: Extract<AstProjectLanguage, 'java' | 'kotlin'>,
+  propertyMap?: AstPropertyMap,
 ) {
   const packageName = packageNameOfJavaLike(root);
-  const valueMap = buildStringVariableMap(root);
+  const valueMap = buildStringVariableMap(root, propertyMap);
   const declarationNodes = [
     ...findNodes(root, 'class_declaration'),
     ...findNodes(root, 'interface_declaration'),
@@ -454,21 +693,37 @@ function collectJavaLikeMethodCalls(
     if (!ownerNameNode) continue;
 
     const ownerFqcn = buildFqcn(ownerNameNode.text, packageName);
+    const kind = javaLikeDeclarationKind(declarationNode, language);
     const body = findChildByType(
       declarationNode,
-      declarationNode.type === 'interface_declaration' ? 'interface_body' : 'class_body',
-    );
+      kind === 'interface' ? 'interface_body' : 'class_body',
+    ) ?? findChildByType(declarationNode, 'class_body');
     if (!body) continue;
 
+    const fieldTypeMap = buildFieldTypeMap(declarationNode);
     const methodNodes = getChildren(body).filter((child) => METHOD_DECLARATION_NODE_TYPES.includes(child.type));
     for (const methodNode of methodNodes) {
       const methodNameNode = extractJavaLikeMethodNameNode(methodNode);
       if (!methodNameNode) continue;
+      const methodTypeMap = buildMethodTypeMap(methodNode);
       registerMethodCalls(
         table,
         ownerFqcn,
         methodNameNode.text,
         collectJavaMethodDirectHttpCalls(methodNode, valueMap),
+      );
+      registerMethodCallTargets(
+        table,
+        ownerFqcn,
+        methodNameNode.text,
+        collectJavaMethodCallTargets(
+          table,
+          methodNode,
+          ownerFqcn,
+          fieldTypeMap,
+          methodTypeMap,
+          packageName,
+        ),
       );
     }
   }
@@ -493,7 +748,7 @@ function collectJavaLikeSymbols(
     const nameNode = firstIdentifier(node);
     if (!nameNode) return [];
 
-    const kind = node.type === 'interface_declaration' ? 'interface' : 'class';
+    const kind = javaLikeDeclarationKind(node, language);
     const inheritance = parseJavaLikeInheritance(kind, node.text);
 
     return [{
@@ -574,6 +829,7 @@ function collectSymbolsFromTree(
 export async function buildProjectSymbolTable(input: {
   repoRoot: string;
   targetFilePaths?: string[];
+  propertyResolver?: AstPropertyResolver;
 }): Promise<AstProjectSymbolTable> {
   const targetFiles = normalizeTargetFiles(input.targetFilePaths);
   const filePaths = findAstCandidateFiles(input.repoRoot).filter((filePath) =>
@@ -584,7 +840,13 @@ export async function buildProjectSymbolTable(input: {
     simpleNameIndex: new Map(),
     implementationMap: new Map(),
     methodCallsByType: new Map(),
+    methodCallTargetsByType: new Map(),
   };
+  const parsedFiles: Array<{
+    filePath: string;
+    language: AstProjectLanguage;
+    root: SyntaxNode;
+  }> = [];
 
   for (const filePath of filePaths) {
     const language = detectLanguage(filePath);
@@ -600,12 +862,10 @@ export async function buildProjectSymbolTable(input: {
     try {
       const parser = await getWasmParser(parserLanguageOf(language));
       const tree = parser.parse(content);
+      parsedFiles.push({ filePath, language, root: tree.rootNode });
       const symbols = collectSymbolsFromTree(tree.rootNode, filePath, language);
       for (const symbol of symbols) {
         registerSymbol(table, symbol);
-      }
-      if (language === 'java' || language === 'kotlin') {
-        collectJavaLikeMethodCalls(table, tree.rootNode);
       }
     } catch {
       continue;
@@ -613,6 +873,15 @@ export async function buildProjectSymbolTable(input: {
   }
 
   buildImplementationMap(table);
+  for (const parsedFile of parsedFiles) {
+    if (parsedFile.language !== 'java' && parsedFile.language !== 'kotlin') continue;
+    collectJavaLikeMethodCalls(
+      table,
+      parsedFile.root,
+      parsedFile.language,
+      input.propertyResolver?.resolveForFile(parsedFile.filePath),
+    );
+  }
   return table;
 }
 
@@ -652,4 +921,176 @@ export function resolveJavaDepthOneCallTargets(
   if (implementations.length !== 1) return [];
 
   return table.methodCallsByType.get(implementations[0]!)?.get(input.methodName) ?? [];
+}
+
+export interface AstResolvedJavaCallTarget extends AstDirectHttpCall {
+  callChainDepth: number;
+}
+
+function toResolvedJavaCallTarget(
+  call: AstDirectHttpCall,
+  options: {
+    callChainDepth: number;
+    interfaceImpl?: string;
+    ambiguous?: boolean;
+    confidencePenalty?: number;
+  },
+): AstResolvedJavaCallTarget {
+  const baseConfidence = call.confidence * Math.pow(0.9, options.callChainDepth);
+  const adjustedConfidence = Math.max(
+    0.1,
+    Math.min(0.99, baseConfidence - (options.confidencePenalty ?? 0)),
+  );
+  const metadata: Record<string, unknown> = {
+    ...call.metadata,
+    resolvedUrl: call.symbol,
+    resolvedVia: call.metadata['resolvedVia'] ?? 'call_chain',
+    callChainDepth: options.callChainDepth,
+  };
+  if (options.interfaceImpl !== undefined) {
+    metadata['interfaceImpl'] = options.interfaceImpl;
+  }
+  if (options.ambiguous !== undefined) {
+    metadata['ambiguous'] = options.ambiguous;
+  }
+  return {
+    symbol: call.symbol,
+    confidence: adjustedConfidence,
+    metadata,
+    callChainDepth: options.callChainDepth,
+  };
+}
+
+export function resolveJavaCallTargets(
+  table: AstProjectSymbolTable,
+  input: { typeName: string; methodName: string; packageName?: string; maxDepth: number },
+): AstResolvedJavaCallTarget[] {
+  const maxDepth = Math.max(1, input.maxDepth);
+  const initialTypeName = resolveTypeReference(table, input.typeName, input.packageName);
+  const stack: Array<{
+    typeName: string;
+    methodName: string;
+    depth: number;
+    interfaceImpl?: string;
+    ambiguous?: boolean;
+    confidencePenalty?: number;
+  }> = [{
+    typeName: initialTypeName,
+    methodName: input.methodName,
+    depth: 1,
+  }];
+  const visited = new Set<string>();
+  const results: AstResolvedJavaCallTarget[] = [];
+
+  while (stack.length > 0) {
+    const current = stack.pop()!;
+    const visitKey = `${current.typeName}::${current.methodName}::${current.depth}`;
+    if (visited.has(visitKey)) continue;
+    visited.add(visitKey);
+
+    const currentSymbol = table.symbolsByFqcn.get(current.typeName);
+    if (currentSymbol?.kind === 'interface') {
+      const implementations = table.implementationMap.get(current.typeName) ?? [];
+      if (implementations.length === 0) continue;
+
+      if (implementations.length === 1) {
+        const implementation = table.symbolsByFqcn.get(implementations[0]!);
+        const nextState: typeof current = {
+          typeName: implementations[0]!,
+          methodName: current.methodName,
+          depth: current.depth,
+          interfaceImpl: implementation?.name ?? implementations[0]!,
+          ambiguous: false,
+        };
+        if (current.confidencePenalty !== undefined) {
+          nextState.confidencePenalty = current.confidencePenalty;
+        }
+        stack.push(nextState);
+        continue;
+      }
+
+      for (const implementationName of implementations) {
+        const implementation = table.symbolsByFqcn.get(implementationName);
+        stack.push({
+          typeName: implementationName,
+          methodName: current.methodName,
+          depth: current.depth,
+          interfaceImpl: implementation?.name ?? implementationName,
+          ambiguous: true,
+          confidencePenalty: (current.confidencePenalty ?? 0) + 0.1,
+        });
+      }
+      continue;
+    }
+
+    const directCalls = table.methodCallsByType.get(current.typeName)?.get(current.methodName) ?? [];
+    for (const directCall of directCalls) {
+      results.push(toResolvedJavaCallTarget(directCall, {
+        callChainDepth: current.depth,
+        ...(current.interfaceImpl !== undefined ? { interfaceImpl: current.interfaceImpl } : {}),
+        ...(current.ambiguous !== undefined ? { ambiguous: current.ambiguous } : {}),
+        ...(current.confidencePenalty !== undefined ? { confidencePenalty: current.confidencePenalty } : {}),
+      }));
+    }
+
+    if (current.depth >= maxDepth) continue;
+
+    const nestedCalls = table.methodCallTargetsByType.get(current.typeName)?.get(current.methodName) ?? [];
+    for (const nestedCall of nestedCalls) {
+      const nestedTypeName = resolveTypeReference(table, nestedCall.typeName);
+      const nestedSymbol = table.symbolsByFqcn.get(nestedTypeName);
+
+      if (nestedSymbol?.kind === 'interface') {
+        const implementations = table.implementationMap.get(nestedTypeName) ?? [];
+        if (implementations.length === 0) continue;
+
+        if (implementations.length === 1) {
+          const implementation = table.symbolsByFqcn.get(implementations[0]!);
+          const nextState: typeof current = {
+            typeName: implementations[0]!,
+            methodName: nestedCall.methodName,
+            depth: current.depth + 1,
+            interfaceImpl: implementation?.name ?? implementations[0]!,
+            ambiguous: false,
+          };
+          if (current.confidencePenalty !== undefined) {
+            nextState.confidencePenalty = current.confidencePenalty;
+          }
+          stack.push(nextState);
+          continue;
+        }
+
+        for (const implementationName of implementations) {
+          const implementation = table.symbolsByFqcn.get(implementationName);
+          stack.push({
+            typeName: implementationName,
+            methodName: nestedCall.methodName,
+            depth: current.depth + 1,
+            interfaceImpl: implementation?.name ?? implementationName,
+            ambiguous: true,
+            confidencePenalty: (current.confidencePenalty ?? 0) + 0.1,
+          });
+        }
+        continue;
+      }
+
+      const nextState: typeof current = {
+        typeName: nestedTypeName,
+        methodName: nestedCall.methodName,
+        depth: current.depth + 1,
+      };
+      if (current.interfaceImpl !== undefined) {
+        nextState.interfaceImpl = current.interfaceImpl;
+      }
+      if (current.ambiguous !== undefined) {
+        nextState.ambiguous = current.ambiguous;
+      }
+      if (current.confidencePenalty !== undefined) {
+        nextState.confidencePenalty = current.confidencePenalty;
+      }
+      stack.push(nextState);
+    }
+  }
+
+  return results;
 }

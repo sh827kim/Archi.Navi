@@ -1,6 +1,6 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22 | 최종 갱신: 2026-03-22
+> 작성일: 2026-02-22 | 최종 갱신: 2026-03-27
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
 > 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
@@ -18,7 +18,7 @@
 
 ---
 
-## 현재 상태 요약 (2026-03-22)
+## 현재 상태 요약 (2026-03-27)
 
 | 구간 | 상태 | 비고 |
 |------|------|------|
@@ -28,7 +28,7 @@
 | P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
 | P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-2 Cross-Signal Validation 완료, 나머지 항목은 설계/구현 대기 |
+| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation 완료. 4-3~4-6은 설계/구현 대기 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
@@ -255,7 +255,7 @@
 > **설계 문서**: `docs/design/07-inference-engine-advanced.md`
 > **우선순위**: P2 완료 기반 위에서 가장 먼저 착수할 고도화 영역 — 추론 품질이 전체 시스템 가치를 결정
 
-### 📋 4-1. Inter-procedural AST 분석 (기존 2-1 확장)
+### ✅ 4-1. Inter-procedural AST 분석 (기존 2-1 확장)
 - **SPEC:** `docs/spec/18-inter-procedural-ast-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §2
 - **핵심:**
@@ -263,6 +263,17 @@
   - Call Chain Resolution — 메서드 호출 체인 추적 (최대 depth 3)
   - Spring 프로퍼티 전파 (`@Value` → application.yml 연결 → URL 확정)
   - 인터페이스 → 구현체 매핑 (FeignClient 등)
+- **현재 구현 범위 (2026-03-27 점검):**
+  - `interProcedural`, `maxCallChainDepth`, `resolveProperties` 요청 옵션/API 전달 경로 반영
+  - 프로젝트 단위 Symbol Table / Implementation Map 구축
+  - Java/Kotlin AST 경로에서 depth 2~3 call chain 해석 + `maxCallChainDepth` 적용
+  - `@Value`/`application*.yml` 기반 property 전파 및 `resolvedUrl`/`resolvedVia` metadata 반영
+  - 단일/다중 구현체 interface 호출 해석, `interfaceImpl`/`ambiguous` metadata 및 confidence penalty 반영
+  - FeignClient depth-chain 시나리오 및 Symbol Table 성능 검증 테스트 반영
+- **후속 범위:**
+  - TypeScript/Python inter-procedural 해석
+  - multi-module symbol table 연결
+  - symbol table 디스크 캐싱
 - **기대 효과:**
   - 현재 미감지 패턴 (간접 호출, 프로퍼티 주입 URL) 커버
   - 기존 AST 분석의 confidence 추가 상향 (+0.05~0.1)

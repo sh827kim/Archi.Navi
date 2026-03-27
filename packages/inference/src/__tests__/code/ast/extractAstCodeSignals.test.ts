@@ -263,6 +263,7 @@ public class OrderService {
         expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
             'http://payment/pay',
             'http://payment/pay',
+            'http://payment/pay',
         ]);
     });
 
@@ -359,7 +360,7 @@ class OrderService {
         ]);
     });
 
-    it('interProcedural depth-1은 depth 2 이상 내부 호출 체인을 아직 확장하지 않아야 한다', async () => {
+    it('maxCallChainDepth=2면 depth-2 helper까지는 추적하고 depth-3 전파는 중단해야 한다', async () => {
         await createFixtures(db);
 
         const srcDir = join(tempDir, 'src');
@@ -368,6 +369,10 @@ class OrderService {
             join(srcDir, 'OrderService.java'),
             `package com.example.order;
 public class OrderService {
+    void entryPoint() {
+        placeOrder();
+    }
+
     void placeOrder() {
         callPayment();
     }
@@ -386,7 +391,7 @@ public class OrderService {
             workspaceId,
             repoRoot: tempDir,
             interProcedural: true,
-            maxCallChainDepth: 3,
+            maxCallChainDepth: 2,
         });
 
         const savedEdges = await db
@@ -395,7 +400,363 @@ public class OrderService {
             .where(eq(codeCallEdges.workspaceId, workspaceId));
         expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
             'http://payment/pay',
+            'http://payment/pay',
+            'http://payment/pay',
         ]);
+    });
+
+    it('resolveProperties=true면 @Value 필드에 주입된 application.yml 값을 HTTP call URL로 해석해야 한다', async () => {
+        await createFixtures(db);
+
+        const serviceDir = join(tempDir, 'order-service');
+        const srcDir = join(serviceDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(serviceDir, 'application.yml'),
+            `payment:
+  url: http://payment/property-pay
+`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+import org.springframework.beans.factory.annotation.Value;
+public class OrderService {
+    @Value("\${payment.url}")
+    private String paymentUrl;
+
+    void placeOrder() {
+        restTemplate.getForObject(paymentUrl, String.class);
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            resolveProperties: true,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol)).toContain('http://payment/property-pay');
+    });
+
+    it('resolveProperties=true면 application-{profile}.yml 값이 기본 application.yml 값을 덮어써야 한다', async () => {
+        await createFixtures(db);
+
+        const serviceDir = join(tempDir, 'order-service');
+        const srcDir = join(serviceDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(serviceDir, 'application.yml'),
+            `payment:
+  url: http://payment/base
+`,
+        );
+        writeFileSync(
+            join(serviceDir, 'application-prod.yml'),
+            `payment:
+  url: http://payment/profile
+`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+import org.springframework.beans.factory.annotation.Value;
+public class OrderService {
+    @Value("\${payment.url}")
+    private String paymentUrl;
+
+    void placeOrder() {
+        restTemplate.getForObject(paymentUrl, String.class);
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            resolveProperties: true,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol)).toContain('http://payment/profile');
+    });
+
+    it('resolveProperties=false면 @Value 필드는 기존처럼 미해결 상태로 남아야 한다', async () => {
+        await createFixtures(db);
+
+        const serviceDir = join(tempDir, 'order-service');
+        const srcDir = join(serviceDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(serviceDir, 'application.yml'),
+            `payment:
+  url: http://payment/property-pay
+`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+import org.springframework.beans.factory.annotation.Value;
+public class OrderService {
+    @Value("\${payment.url}")
+    private String paymentUrl;
+
+    void placeOrder() {
+        restTemplate.getForObject(paymentUrl, String.class);
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            resolveProperties: false,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol)).not.toContain('http://payment/property-pay');
+    });
+
+    it('interProcedural + resolveProperties=true면 helper 메서드 내부 @Value 기반 HTTP call도 depth-1으로 확장해야 한다', async () => {
+        await createFixtures(db);
+
+        const serviceDir = join(tempDir, 'order-service');
+        const srcDir = join(serviceDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(serviceDir, 'application.yml'),
+            `payment:
+  url: http://payment/property-pay
+`,
+        );
+        writeFileSync(
+            join(srcDir, 'PaymentService.java'),
+            `package com.example.order;
+import org.springframework.beans.factory.annotation.Value;
+public class PaymentService {
+    @Value("\${payment.url}")
+    private String paymentUrl;
+
+    void callPayment() {
+        restTemplate.getForObject(paymentUrl, String.class);
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    private PaymentService paymentService;
+
+    void placeOrder() {
+        paymentService.callPayment();
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 3,
+            resolveProperties: true,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            'http://payment/property-pay',
+            'http://payment/property-pay',
+        ]);
+    });
+
+    it('interProcedural call evidence에는 interfaceImpl, resolvedUrl, ambiguous metadata가 저장되어야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'PaymentGateway.java'),
+            `package com.example.order;
+public interface PaymentGateway {
+    void charge();
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'PaymentGatewayImpl.java'),
+            `package com.example.order;
+public class PaymentGatewayImpl implements PaymentGateway {
+    public void charge() {
+        restTemplate.getForObject("http://payment/pay", String.class);
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    private PaymentGateway paymentGateway;
+
+    void placeOrder() {
+        paymentGateway.charge();
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 1,
+        });
+
+        const savedEvidences = await db
+            .select()
+            .from(evidences)
+            .where(and(eq(evidences.workspaceId, workspaceId), eq(evidences.filePath, join(srcDir, 'OrderService.java'))));
+        const propagatedEvidence = savedEvidences.find((row) =>
+            (row.metadata as Record<string, unknown>)['interfaceImpl'] === 'PaymentGatewayImpl');
+
+        expect(propagatedEvidence).toBeDefined();
+        expect((propagatedEvidence?.metadata as Record<string, unknown>)['resolvedUrl']).toBe('http://payment/pay');
+        expect((propagatedEvidence?.metadata as Record<string, unknown>)['ambiguous']).toBe(false);
+    });
+
+    it('다중 구현체면 ambiguous metadata와 구현체별 propagated call을 남겨야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'PaymentGateway.java'),
+            `package com.example.order;
+public interface PaymentGateway {
+    void charge();
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'PrimaryGateway.java'),
+            `package com.example.order;
+public class PrimaryGateway implements PaymentGateway {
+    public void charge() {
+        restTemplate.getForObject("http://payment/primary", String.class);
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'BackupGateway.java'),
+            `package com.example.order;
+public class BackupGateway implements PaymentGateway {
+    public void charge() {
+        restTemplate.getForObject("http://payment/backup", String.class);
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    private PaymentGateway paymentGateway;
+
+    void placeOrder() {
+        paymentGateway.charge();
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 1,
+        });
+
+        const savedEvidences = await db
+            .select()
+            .from(evidences)
+            .where(and(eq(evidences.workspaceId, workspaceId), eq(evidences.filePath, join(srcDir, 'OrderService.java'))));
+
+        const propagated = savedEvidences.filter((row) =>
+            (row.metadata as Record<string, unknown>)['ambiguous'] === true);
+
+        expect(propagated).toHaveLength(2);
+        expect(propagated.map((row) => (row.metadata as Record<string, unknown>)['interfaceImpl']).sort()).toEqual([
+            'BackupGateway',
+            'PrimaryGateway',
+        ]);
+    });
+
+    it('depth-2 chain에서 FeignClient 호출도 최종 URL까지 해석해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'PaymentClient.java'),
+            `package com.example.order;
+import org.springframework.cloud.openfeign.FeignClient;
+import org.springframework.web.bind.annotation.GetMapping;
+@FeignClient(name = "payment")
+public interface PaymentClient {
+    @GetMapping("/api/charge")
+    String charge();
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'PaymentGateway.java'),
+            `package com.example.order;
+public interface PaymentGateway {
+    void charge();
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'PaymentGatewayImpl.java'),
+            `package com.example.order;
+public class PaymentGatewayImpl implements PaymentGateway {
+    private PaymentClient paymentClient;
+
+    public void charge() {
+        paymentClient.charge();
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    private PaymentGateway paymentGateway;
+
+    void placeOrder() {
+        paymentGateway.charge();
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 2,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol)).toContain('http://payment/api/charge');
     });
 
     // ─── 변수 추적 통합 테스트 (Phase 2 핵심 차별점) ─────────────────────────
