@@ -144,6 +144,37 @@ function splitTypeList(value: string): string[] {
     .map((part) => part.replace(/[():]/g, '').trim());
 }
 
+function parseKotlinInheritance(header: string): string[] {
+  let parenDepth = 0;
+  let angleDepth = 0;
+
+  for (let index = 0; index < header.length; index += 1) {
+    const char = header[index];
+
+    if (char === '(') {
+      parenDepth += 1;
+      continue;
+    }
+    if (char === ')') {
+      parenDepth = Math.max(0, parenDepth - 1);
+      continue;
+    }
+    if (char === '<') {
+      angleDepth += 1;
+      continue;
+    }
+    if (char === '>') {
+      angleDepth = Math.max(0, angleDepth - 1);
+      continue;
+    }
+    if (char === ':' && parenDepth === 0 && angleDepth === 0) {
+      return splitTypeList(header.slice(index + 1));
+    }
+  }
+
+  return [];
+}
+
 function parseJavaLikeInheritance(
   kind: 'class' | 'interface',
   declarationText: string,
@@ -159,9 +190,7 @@ function parseJavaLikeInheritance(
     };
   }
 
-  const kotlinInheritance = header.includes(':')
-    ? splitTypeList(header.split(':').slice(1).join(':'))
-    : [];
+  const kotlinInheritance = parseKotlinInheritance(header);
 
   return {
     extendsTypes: splitTypeList(extendsMatch?.[1] ?? ''),
