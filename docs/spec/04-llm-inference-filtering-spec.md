@@ -1,6 +1,7 @@
 # Archi.Navi — LLM 추론 후보 필터링
 
 작성일: 2026-02-22
+상태: Implemented
 문서 버전: v1.0
 
 ---

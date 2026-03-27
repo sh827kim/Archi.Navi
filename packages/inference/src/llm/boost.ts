@@ -10,6 +10,7 @@ import {
   relationCandidates,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { asRecord } from '../utils/metadata';
 
 export interface LlmBoostSuggestion {
   targetServiceName: string;
@@ -44,12 +45,6 @@ export interface LlmBoostResult {
 export type GenerateBoostSuggestionFn = (
   context: LlmBoostContext,
 ) => Promise<LlmBoostSuggestion | null>;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 function clampBoostConfidence(value: number | undefined): number {
   if (typeof value !== 'number' || !Number.isFinite(value)) return 0.6;

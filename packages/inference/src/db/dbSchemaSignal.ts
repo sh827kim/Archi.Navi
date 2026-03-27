@@ -17,6 +17,11 @@ import {
     evidences,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import {
+    asRecord,
+    getRawCandidateConfidence,
+    stripCrossValidationMetadata,
+} from '../utils/metadata';
 
 // ─── 타입 정의 ────────────────────────────────────────────────────────────────
 
@@ -230,31 +235,6 @@ function hashDbTableSchema(
     return createHash('sha256').update(stableStringify(payload)).digest('hex');
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : null;
-}
-
-function restoreRawConfidence(metadata: unknown, fallbackConfidence: number): number {
-    const crossValidation = asRecord(asRecord(metadata)?.crossValidation);
-    const originalConfidence = crossValidation?.originalConfidence;
-    return typeof originalConfidence === 'number' && Number.isFinite(originalConfidence)
-        ? originalConfidence
-        : fallbackConfidence;
-}
-
-function stripCrossValidationMetadata(metadata: unknown): Record<string, unknown> {
-    const record = asRecord(metadata) ?? {};
-    if (!Object.prototype.hasOwnProperty.call(record, 'crossValidation')) {
-        return record;
-    }
-
-    const nextMetadata = { ...record };
-    delete nextMetadata.crossValidation;
-    return nextMetadata;
-}
-
 function dbSchemaArtifactPath(tableId: string): string {
     return `db-table://${tableId}`;
 }
@@ -376,7 +356,7 @@ export async function extractDbSchemaSignals(
         await db
             .update(relationCandidates)
             .set({
-                confidence: restoreRawConfidence(candidate.metadata, candidate.confidence),
+                confidence: getRawCandidateConfidence(candidate.confidence, candidate.metadata),
                 metadata: nextMetadata,
             })
             .where(eq(relationCandidates.id, candidate.id));

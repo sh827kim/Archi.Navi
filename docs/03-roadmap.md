@@ -104,7 +104,7 @@
 
 ### ✅ 2-1. AST Plugin (Tree-sitter) — Phase 2 (완료)
 - **파일:** `packages/inference/src/code/ast/` (신규)
-- **SPEC:** `docs/spec/11-ast-default-code-signal-spec.md`
+- **SPEC:** `docs/spec/10-ast-default-code-signal-spec.md`
 - **언어:** Java/Kotlin, TypeScript/JavaScript, Python
 - **구현 완료:**
   - AST 분석 모듈/파서 구현
@@ -148,7 +148,7 @@
   - `msgScore` 계산값을 Seed-based 도메인 추론에 실제 반영
 
 ### ✅ 2-6. Inference 운영 오케스트레이션 고도화 (완료)
-- **SPEC:** `docs/spec/13-inference-run-orchestration-spec.md`
+- **SPEC:** `docs/spec/12-inference-run-orchestration-spec.md`
 - **구현 완료:**
   - 비동기 실행 API: `POST/GET /api/inference/runs`, `GET /api/inference/runs/:id`
   - 실행 상태 저장 테이블: `inference_runs`, `inference_run_sources`, `inference_run_events`
@@ -162,10 +162,10 @@
 
 ### ✅ 2-7. Compound → Atomic 후보 추론 고도화 (완료)
 - **SPEC:**
-  - `docs/spec/14-code-based-relation-candidate-spec.md`
-  - `docs/spec/15-compound-to-atomic-inference-spec.md`
-  - `docs/spec/16-rabbitmq-queue-code-signal-spec.md` (RabbitMQ 우선)
-  - `docs/spec/17-db-table-code-signal-spec.md` (db_table은 database 소속 필수)
+  - `docs/spec/13-code-based-relation-candidate-spec.md`
+  - `docs/spec/14-compound-to-atomic-inference-spec.md`
+  - `docs/spec/15-rabbitmq-queue-code-signal-spec.md` (RabbitMQ 우선)
+  - `docs/spec/16-db-table-code-signal-spec.md` (db_table은 database 소속 필수)
 - **목표:** 설정 파일이 없더라도 `mode=code`만으로 Atomic 생성 및 `relation_candidates` 생성이 가능해야 한다.
 - **구현 완료:**
   - `expose` 기반 `api_endpoint` Atomic upsert
@@ -182,7 +182,7 @@
 ## P3: 대규모 그래프 성능 + 추론 고도화 (v2.2) ✅
 
 ### ✅ 3-1. 증분 리빌드 (완료)
-- **SPEC:** `docs/spec/06-incremental-rollup-rebuild-spec.md`
+- **SPEC:** `docs/spec/05-incremental-rollup-rebuild-spec.md`
 - **파일:** `packages/core/src/rollup/builder.ts`, `apps/web/src/lib/rollup-change-events.ts`
 - **구현 완료:**
   - `incrementalRebuild` 기반 영향 범위(level/affected service) 계산 + in-place 갱신
@@ -195,7 +195,7 @@
   - 증분 대상이 없거나 ACTIVE generation이 없으면 안전 fallback 처리
 
 ### ✅ 3-2. Hub 처리 UI (완료)
-- **SPEC:** `docs/spec/07-hub-node-management-spec.md`
+- **SPEC:** `docs/spec/06-hub-node-management-spec.md`
 - **기준:** `object_graph_stats.inDegree >= threshold` (기본 50, 설정에서 조정 가능)
 - **구현 완료:**
   - Mapping 그래프 우상단 `Hub 접기/펼치기` 토글
@@ -203,7 +203,7 @@
   - `/api/rollups` 응답에 `graphStats` 포함하여 UI 판정에 활용
 
 ### ✅ 3-3. 프로그레시브 렌더링 (완료)
-- **SPEC:** `docs/spec/08-progressive-rendering-spec.md`
+- **SPEC:** `docs/spec/07-progressive-rendering-spec.md`
 - **파일:** `apps/web/src/components/mapping/rollup-graph.tsx`
 - **구현 완료:**
   - 2000+ 엣지에서 `requestAnimationFrame` 기반 점진 렌더링 자동 활성화
@@ -211,7 +211,7 @@
   - 소규모 그래프는 기존 즉시 렌더링 경로 유지
 
 ### ✅ 3-4. Domain-first 내비게이션 (완료)
-- **SPEC:** `docs/spec/09-domain-first-navigation-spec.md`
+- **SPEC:** `docs/spec/08-domain-first-navigation-spec.md`
 - **구현 완료:**
   - 기본 진입 레벨을 `DOMAIN_TO_DOMAIN`으로 전환 (도메인 데이터 없으면 `SERVICE_TO_SERVICE` fallback)
   - `DOMAIN_TO_DOMAIN`에서 도메인 클릭 시 `SERVICE_TO_SERVICE` 자동 전환
@@ -220,7 +220,7 @@
   - `object_domain_affinities` 기반 도메인별 서비스 필터링 적용
 
 ### ✅ 3-5. 증분 추론 (완료)
-- **SPEC:** `docs/spec/10-incremental-inference-spec.md`
+- **SPEC:** `docs/spec/09-incremental-inference-spec.md`
 - **구현 완료:**
   - Config 추론 경로(`inferRelationsFromConfig`)에 SHA256 기반 파일 변경 감지 적용
   - 변경 없는 설정 파일은 파싱/추론을 건너뛰고 기존 결과를 유지
@@ -256,7 +256,7 @@
 > **우선순위**: P2 완료 기반 위에서 가장 먼저 착수할 고도화 영역 — 추론 품질이 전체 시스템 가치를 결정
 
 ### ✅ 4-1. Inter-procedural AST 분석 (기존 2-1 확장)
-- **SPEC:** `docs/spec/18-inter-procedural-ast-spec.md`
+- **SPEC:** `docs/spec/17-inter-procedural-ast-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §2
 - **핵심:**
   - Multi-file Symbol Table 구축 (클래스/인터페이스/메서드 계보)
@@ -280,7 +280,7 @@
 - **의존:** 기존 2-1(AST hybrid) 완료 기반
 
 ### ✅ 4-2. Cross-Signal Validation (교차 검증)
-- **SPEC:** `docs/spec/19-cross-signal-validation-spec.md`
+- **SPEC:** `docs/spec/18-cross-signal-validation-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §3
 - **핵심:**
   - config + code + db 시그널 간 교차 검증
@@ -293,7 +293,7 @@
 - **의존:** 추론 실행 시 2+ 모드 동시 실행
 
 ### ✅ 4-3. LLM 추론 부스터 (기존 LLM 필터 확장)
-- **SPEC:** `docs/spec/20-llm-inference-boost-spec.md`
+- **SPEC:** `docs/spec/19-llm-inference-boost-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §4
 - **기존 참조:** `docs/spec/04-llm-inference-filtering-spec.md` (post-filter, 구현 완료)
 - **핵심:**
@@ -317,7 +317,7 @@
   - LLM 미설정/실패 시 기존 추론 결과 유지(graceful degradation)
 
 ### 📋 4-4. 프레임워크 플러그인 시스템
-- **SPEC:** `docs/spec/21-framework-plugin-system-spec.md`
+- **SPEC:** `docs/spec/20-framework-plugin-system-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §5
 - **핵심:**
   - FrameworkPlugin 인터페이스 (regexPatterns, astExtractor, configParsers, detector)
@@ -329,7 +329,7 @@
   - 오픈소스 커뮤니티 기여 진입 장벽 대폭 감소
 
 ### 📋 4-5. Delta Rollup + 실시간 그래프 갱신
-- **SPEC:** `docs/spec/22-realtime-rollup-spec.md`
+- **SPEC:** `docs/spec/21-realtime-rollup-spec.md`
 - **핵심:**
   - 관계 승인/삭제 시 해당 rollup 엣지만 delta update (full rebuild 없이)
   - WebSocket으로 프론트엔드에 그래프 변경 push
@@ -339,7 +339,7 @@
   - 실시간 시각적 피드백
 
 ### 📋 4-6. 추론 피드백 루프
-- **SPEC:** `docs/spec/23-inference-feedback-loop-spec.md`
+- **SPEC:** `docs/spec/22-inference-feedback-loop-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §6
 - **핵심:**
   - 승인/거절 패턴을 시그널 유형별로 집계
@@ -357,7 +357,7 @@
 > **설계 문서**: `docs/design/08-developer-productivity.md`
 
 ### 📋 5-1. Change Impact Preview (변경 영향도 미리보기)
-- **SPEC:** `docs/spec/24-change-impact-preview-spec.md`
+- **SPEC:** `docs/spec/23-change-impact-preview-spec.md`
 - **설계:** `docs/design/08-developer-productivity.md` §2
 - **핵심:**
   - `git diff` → 변경 파일 → code_artifacts 매핑 → 영향받는 서비스/API/토픽 식별
@@ -366,7 +366,7 @@
 - **기대 효과:** PR 리뷰 시 변경 영향도 즉시 파악
 
 ### 📋 5-2. Architecture Drift Detection (드리프트 감지)
-- **SPEC:** `docs/spec/25-architecture-drift-detection-spec.md`
+- **SPEC:** `docs/spec/24-architecture-drift-detection-spec.md`
 - **설계:** `docs/design/08-developer-productivity.md` §3
 - **핵심:**
   - rollup generation 간 diff → 새 의존성/소멸/순환 의존 감지
@@ -375,7 +375,7 @@
 - **기대 효과:** 아키텍처 변화를 능동적으로 감지
 
 ### 📋 5-3. Personal Architecture Journal (개인 아키텍처 저널)
-- **SPEC:** `docs/spec/26-personal-architecture-journal-spec.md`
+- **SPEC:** `docs/spec/25-personal-architecture-journal-spec.md`
 - **설계:** `docs/design/08-developer-productivity.md` §5
 - **핵심:**
   - 서비스/관계에 개인 메모/태그 연결 (warning, tip, todo, context, decision)
@@ -384,7 +384,7 @@
 - **기대 효과:** 암묵지 체계화 → 온보딩 자료 자동 축적
 
 ### 📋 5-4. API Contract Diff (API 계약 변경 감지)
-- **SPEC:** `docs/spec/27-api-contract-diff-spec.md`
+- **SPEC:** `docs/spec/26-api-contract-diff-spec.md`
 - **설계:** `docs/design/08-developer-productivity.md` §6
 - **핵심:**
   - expose 시그널 버전별 비교 → 엔드포인트 추가/삭제/변경 감지
@@ -392,7 +392,7 @@
 - **기대 효과:** API 호환성 파괴 사전 감지
 
 ### 📋 5-5. Architecture Health Score (아키텍처 건강도)
-- **SPEC:** `docs/spec/28-architecture-health-score-spec.md`
+- **SPEC:** `docs/spec/27-architecture-health-score-spec.md`
 - **설계:** `docs/design/08-developer-productivity.md` §4
 - **핵심:**
   - 6개 지표 (결합도, 도메인 순수도, 순환 의존, Hub 집중도, Evidence 커버리지, Approval 비율)
@@ -446,27 +446,27 @@ P2 완료 기반                   P4 고도화 (★ 최우선)
 | DB 시그널 | `docs/design/03-inference-engine.md` §5 DB 스키마 신호 추출 |
 | Domain 승인 API | `docs/design/03-inference-engine.md` §8.2 Domain 승인 |
 | Discovery 멀티 레이어 | `docs/design/03-inference-engine.md` §4.2 |
-| 증분 리빌드(3-1) | `docs/spec/06-incremental-rollup-rebuild-spec.md` |
-| Hub 처리(3-2) | `docs/spec/07-hub-node-management-spec.md` |
-| 프로그레시브 렌더링(3-3) | `docs/spec/08-progressive-rendering-spec.md` |
-| Domain-first(3-4) | `docs/spec/09-domain-first-navigation-spec.md` |
-| 증분 추론(3-5) | `docs/spec/10-incremental-inference-spec.md` |
-| AST 기본 경로 전환(2-1 Phase 1) | `docs/spec/11-ast-default-code-signal-spec.md` |
-| AST+Regex 하이브리드 모드(2-1 확장) | `docs/spec/12-ast-regex-hybrid-code-signal-spec.md` |
+| 증분 리빌드(3-1) | `docs/spec/05-incremental-rollup-rebuild-spec.md` |
+| Hub 처리(3-2) | `docs/spec/06-hub-node-management-spec.md` |
+| 프로그레시브 렌더링(3-3) | `docs/spec/07-progressive-rendering-spec.md` |
+| Domain-first(3-4) | `docs/spec/08-domain-first-navigation-spec.md` |
+| 증분 추론(3-5) | `docs/spec/09-incremental-inference-spec.md` |
+| AST 기본 경로 전환(2-1 Phase 1) | `docs/spec/10-ast-default-code-signal-spec.md` |
+| AST+Regex 하이브리드 모드(2-1 확장) | `docs/spec/11-ast-regex-hybrid-code-signal-spec.md` |
 | DOMAIN_SUMMARY | `docs/design/04-query-engine.md` §4 DOMAIN_SUMMARY |
 | DB 추론 확장(3-6) | `docs/spec/01-db-inference-index-unique-spec.md` |
 | 3D 렌더러 전환(3-7) | `docs/spec/02-object-mapping-3d-renderer-spec.md` |
 | Domain-first | `docs/design/05-rollup-and-graph.md` §6 Navigation Strategy |
-| **Inter-procedural AST(4-1)** | `docs/spec/18-inter-procedural-ast-spec.md` |
-| **Cross-Signal Validation(4-2)** | `docs/spec/19-cross-signal-validation-spec.md` |
-| **LLM 추론 부스터(4-3)** | `docs/spec/20-llm-inference-boost-spec.md` |
-| **플러그인 시스템(4-4)** | `docs/spec/21-framework-plugin-system-spec.md` |
-| **Delta Rollup(4-5)** | `docs/spec/22-realtime-rollup-spec.md` |
-| **피드백 루프(4-6)** | `docs/spec/23-inference-feedback-loop-spec.md` |
-| **Change Impact(5-1)** | `docs/spec/24-change-impact-preview-spec.md` |
-| **Drift Detection(5-2)** | `docs/spec/25-architecture-drift-detection-spec.md` |
-| **Journal(5-3)** | `docs/spec/26-personal-architecture-journal-spec.md` |
-| **API Contract Diff(5-4)** | `docs/spec/27-api-contract-diff-spec.md` |
-| **Health Score(5-5)** | `docs/spec/28-architecture-health-score-spec.md` |
+| **Inter-procedural AST(4-1)** | `docs/spec/17-inter-procedural-ast-spec.md` |
+| **Cross-Signal Validation(4-2)** | `docs/spec/18-cross-signal-validation-spec.md` |
+| **LLM 추론 부스터(4-3)** | `docs/spec/19-llm-inference-boost-spec.md` |
+| **플러그인 시스템(4-4)** | `docs/spec/20-framework-plugin-system-spec.md` |
+| **Delta Rollup(4-5)** | `docs/spec/21-realtime-rollup-spec.md` |
+| **피드백 루프(4-6)** | `docs/spec/22-inference-feedback-loop-spec.md` |
+| **Change Impact(5-1)** | `docs/spec/23-change-impact-preview-spec.md` |
+| **Drift Detection(5-2)** | `docs/spec/24-architecture-drift-detection-spec.md` |
+| **Journal(5-3)** | `docs/spec/25-personal-architecture-journal-spec.md` |
+| **API Contract Diff(5-4)** | `docs/spec/26-api-contract-diff-spec.md` |
+| **Health Score(5-5)** | `docs/spec/27-architecture-health-score-spec.md` |
 | **추론 엔진 고도화(P4 전체)** | `docs/design/07-inference-engine-advanced.md` |
 | **생산성 기능(P5 전체)** | `docs/design/08-developer-productivity.md` |

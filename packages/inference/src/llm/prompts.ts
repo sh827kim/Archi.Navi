@@ -3,16 +3,10 @@
  * 설계 참조: docs/09-llm-inference-filtering.md §4
  */
 import type { CandidateContext } from './types';
+import { truncateOptionalText } from './textUtils';
 
 /** Evidence excerpt 최대 길이 */
 const MAX_EXCERPT_LENGTH = 500;
-
-/** Evidence excerpt를 최대 길이로 truncate */
-function truncateExcerpt(excerpt: string | null): string {
-  if (!excerpt) return '(내용 없음)';
-  if (excerpt.length <= MAX_EXCERPT_LENGTH) return excerpt;
-  return excerpt.slice(0, MAX_EXCERPT_LENGTH) + '...';
-}
 
 /**
  * Relation 후보 검증 프롬프트 생성
@@ -31,7 +25,7 @@ export function buildRelationAssessmentPrompt(context: CandidateContext): string
         const location = e.filePath
           ? `${e.filePath}:${e.lineStart ?? '?'}-${e.lineEnd ?? '?'}`
           : '(경로 없음)';
-        const excerpt = truncateExcerpt(e.excerpt);
+        const excerpt = truncateOptionalText(e.excerpt, MAX_EXCERPT_LENGTH, '(내용 없음)', '...');
         return `- [${e.evidenceType}] ${location}\n  "${excerpt}"`;
       })
       .join('\n');
@@ -77,7 +71,13 @@ export function buildRelationExplanationPrompt(contexts: CandidateContext[]): st
         const location = evidence.filePath
           ? `${evidence.filePath}:${evidence.lineStart ?? '?'}-${evidence.lineEnd ?? '?'}`
           : '(경로 없음)';
-        return `- [${evidence.evidenceType}] ${location}\n  "${truncateExcerpt(evidence.excerpt)}"`;
+        const excerpt = truncateOptionalText(
+          evidence.excerpt,
+          MAX_EXCERPT_LENGTH,
+          '(내용 없음)',
+          '...',
+        );
+        return `- [${evidence.evidenceType}] ${location}\n  "${excerpt}"`;
       }).join('\n');
 
     return `### Candidate ${context.candidateId}

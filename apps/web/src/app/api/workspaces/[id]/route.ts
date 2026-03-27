@@ -5,6 +5,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, workspaces } from '@archi-navi/db';
 import { eq } from 'drizzle-orm';
+import { normalizeWorkspaceName } from '@/lib/workspace-name';
 
 export async function PATCH(
   req: NextRequest,
@@ -13,16 +14,21 @@ export async function PATCH(
   try {
     const { id } = await params;
     const body = (await req.json()) as { name?: string };
-
-    if (!body.name?.trim()) {
-      return NextResponse.json({ error: 'name is required' }, { status: 400 });
+    const normalized = normalizeWorkspaceName(body.name);
+    if ('error' in normalized) {
+      return NextResponse.json({ error: normalized.error }, { status: 400 });
     }
 
     const db = await getDb();
-    await db
+    const updated = await db
       .update(workspaces)
-      .set({ name: body.name.trim(), updatedAt: new Date() })
-      .where(eq(workspaces.id, id));
+      .set({ name: normalized.name, updatedAt: new Date() })
+      .where(eq(workspaces.id, id))
+      .returning({ id: workspaces.id });
+
+    if (updated.length === 0) {
+      return NextResponse.json({ error: 'workspace not found' }, { status: 404 });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {
@@ -39,7 +45,14 @@ export async function DELETE(
     const { id } = await params;
 
     const db = await getDb();
-    await db.delete(workspaces).where(eq(workspaces.id, id));
+    const deleted = await db
+      .delete(workspaces)
+      .where(eq(workspaces.id, id))
+      .returning({ id: workspaces.id });
+
+    if (deleted.length === 0) {
+      return NextResponse.json({ error: 'workspace not found' }, { status: 404 });
+    }
 
     return NextResponse.json({ ok: true });
   } catch (error) {

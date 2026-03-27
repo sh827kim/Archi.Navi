@@ -1,6 +1,7 @@
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { domainDiscoveryMemberships, objects } from '@archi-navi/db';
+import { asRecord } from '../utils/metadata';
 
 export interface DomainLabelSuggestion {
   ko: string;
@@ -30,12 +31,6 @@ export interface DomainLabelResult {
 export type GenerateDomainLabelFn = (
   context: DomainLabelContext,
 ) => Promise<DomainLabelSuggestion | null>;
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
 
 function asLabelCandidates(value: unknown): Array<{ text: string; score: number }> {
   if (!Array.isArray(value)) return [];

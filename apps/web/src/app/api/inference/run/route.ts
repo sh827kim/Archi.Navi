@@ -51,6 +51,8 @@ interface RunInferenceRequest {
   };
 }
 
+type RepoRootSource = 'provided' | 'serviceMetadata';
+
 const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
 
 function isInferenceMode(value: string): value is InferenceMode {
@@ -191,13 +193,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const mergedRoots = [...providedRoots, ...discoveredFromServices];
+    const mergedRoots = [
+      ...providedRoots.map((repoRoot) => ({ repoRoot, source: 'provided' as const })),
+      ...discoveredFromServices.map((repoRoot) => ({ repoRoot, source: 'serviceMetadata' as const })),
+    ];
     const usedRepoRoots: string[] = [];
     const skippedNonLocalRoots: string[] = [];
     const skippedMissingRoots: string[] = [];
     const skippedDisallowedRoots: string[] = [];
 
-    for (const repoRoot of mergedRoots) {
+    for (const { repoRoot, source } of mergedRoots) {
       if (isLikelyRemotePath(repoRoot)) {
         if (!skippedNonLocalRoots.includes(repoRoot)) skippedNonLocalRoots.push(repoRoot);
         continue;
@@ -209,7 +214,8 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      if (!isPathWithinAllowedRoots(normalized, allowedInferenceRoots)) {
+      const shouldEnforceAllowedRoots = source === 'provided';
+      if (shouldEnforceAllowedRoots && !isPathWithinAllowedRoots(normalized, allowedInferenceRoots)) {
         if (!skippedDisallowedRoots.includes(normalized)) skippedDisallowedRoots.push(normalized);
         continue;
       }

@@ -16,11 +16,12 @@ import {
   evidences,
   objectRelations,
   objects,
-  relationCandidateEvidences,
   relationCandidates,
 } from '@archi-navi/db';
 import { buildUrn, generateId } from '@archi-navi/shared';
 import { and, eq, or } from 'drizzle-orm';
+import { saveRelationCandidate } from './candidateStore';
+import { asRecord } from './utils';
 
 export interface CodeCandidateInferenceOptions {
   workspaceId: string;
@@ -47,30 +48,6 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function getRawCandidateConfidence(confidence: number, metadata: unknown): number {
-  const crossValidation = asRecord(asRecord(metadata)?.crossValidation);
-  const originalConfidence = crossValidation?.originalConfidence;
-  return typeof originalConfidence === 'number' && Number.isFinite(originalConfidence)
-    ? originalConfidence
-    : confidence;
-}
-
-function stripCrossValidationMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-  if (!Object.prototype.hasOwnProperty.call(metadata, 'crossValidation')) {
-    return metadata;
-  }
-
-  const nextMetadata = { ...metadata };
-  delete nextMetadata.crossValidation;
-  return nextMetadata;
 }
 
 function clamp01(value: number): number {
@@ -453,99 +430,6 @@ async function upsertDbTable(
   });
 
   return { id, isNew: true };
-}
-
-async function saveRelationCandidate(
-  db: DbClient,
-  params: {
-    workspaceId: string;
-    relationType: string;
-    subjectObjectId: string;
-    objectId: string;
-    confidence: number;
-    metadata: Record<string, unknown>;
-  },
-  evidenceId: string,
-): Promise<{ created: boolean }> {
-  const { workspaceId, relationType, subjectObjectId, objectId, confidence, metadata } = params;
-
-  const manualRelation = await db
-    .select({ id: objectRelations.id })
-    .from(objectRelations)
-    .where(
-      and(
-        eq(objectRelations.workspaceId, workspaceId),
-        eq(objectRelations.relationType, relationType),
-        eq(objectRelations.subjectObjectId, subjectObjectId),
-        eq(objectRelations.objectId, objectId),
-        eq(objectRelations.source, 'MANUAL'),
-      ),
-    )
-    .limit(1);
-  if (manualRelation.length > 0) return { created: false };
-
-  const existingCandidates = await db
-    .select({
-      id: relationCandidates.id,
-      status: relationCandidates.status,
-      confidence: relationCandidates.confidence,
-      metadata: relationCandidates.metadata,
-    })
-    .from(relationCandidates)
-    .where(
-      and(
-        eq(relationCandidates.workspaceId, workspaceId),
-        eq(relationCandidates.relationType, relationType),
-        eq(relationCandidates.subjectObjectId, subjectObjectId),
-        eq(relationCandidates.objectId, objectId),
-        or(eq(relationCandidates.status, 'PENDING'), eq(relationCandidates.status, 'APPROVED')),
-      ),
-    );
-
-  const approved = existingCandidates.find((cand) => cand.status === 'APPROVED');
-  if (approved) return { created: false };
-
-  const pending = existingCandidates.find((cand) => cand.status === 'PENDING');
-  if (pending) {
-    const pendingRawConfidence = getRawCandidateConfidence(pending.confidence ?? 0, pending.metadata);
-    const pendingMetadata = asRecord(pending.metadata) ?? {};
-    if (confidence > pendingRawConfidence) {
-      await db
-        .update(relationCandidates)
-        .set({
-          confidence,
-          metadata: stripCrossValidationMetadata(metadata),
-        })
-        .where(eq(relationCandidates.id, pending.id));
-    } else if (Object.prototype.hasOwnProperty.call(pendingMetadata, 'crossValidation')) {
-      await db
-        .update(relationCandidates)
-        .set({
-          confidence: pendingRawConfidence,
-          metadata: stripCrossValidationMetadata(metadata),
-        })
-        .where(eq(relationCandidates.id, pending.id));
-    }
-    await db
-      .insert(relationCandidateEvidences)
-      .values({ workspaceId, candidateId: pending.id, evidenceId })
-      .onConflictDoNothing();
-    return { created: false };
-  }
-
-  const candidateId = generateId();
-  await db.insert(relationCandidates).values({
-    id: candidateId,
-    workspaceId,
-    relationType,
-    subjectObjectId,
-    objectId,
-    confidence,
-    metadata,
-    status: 'PENDING',
-  });
-  await db.insert(relationCandidateEvidences).values({ workspaceId, candidateId, evidenceId });
-  return { created: true };
 }
 
 export async function inferRelationsFromCodeSignals(

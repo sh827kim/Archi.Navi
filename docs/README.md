@@ -8,13 +8,14 @@
 |------|------|-----------|-----------|
 | Design | `docs/design` | 아키텍처, 데이터 모델, 알고리즘, 데이터 흐름 | 기능별 수용 기준(acceptance criteria) |
 | SPEC | `docs/spec` | 기능 요구사항, API/입출력 계약, 수용 기준 | 제품 전체 아키텍처 설명 |
+| Checklist | `docs/checklists` | 구현 진행 체크, 검증 체크, 이행 확인 | 기능 요구사항 원문 |
 | Guide/Ops | `docs` 루트 | 개요, 개발/검증/배포 가이드, 구현 현황, 로드맵 | 기능 상세 계약 |
 
 ## 작성 규칙
 
 1. 신규 기능은 먼저 `docs/spec/*-spec.md`로 요구사항과 수용 기준을 정의한다.
 2. 구조/알고리즘 변경이 있으면 `docs/design/*.md`에 반영한다.
-3. SPEC 구현 진행 체크는 `docs/spec/*-spec-checklist.md` 형식으로 작성한다.
+3. SPEC 구현 진행 체크는 `docs/checklists/*-checklist.md` 형식으로 작성한다.
 4. 루트 문서에는 기능 계약을 중복 작성하지 않고 링크만 제공한다.
 
 ## 현재 구성
@@ -36,38 +37,41 @@
 - [02-object-mapping-3d-renderer-spec.md](./spec/02-object-mapping-3d-renderer-spec.md)
 - [03-compound-view-implementation-spec.md](./spec/03-compound-view-implementation-spec.md)
 - [04-llm-inference-filtering-spec.md](./spec/04-llm-inference-filtering-spec.md)
-- [05-llm-inference-filtering-spec-checklist.md](./spec/05-llm-inference-filtering-spec-checklist.md)
-- [06-incremental-rollup-rebuild-spec.md](./spec/06-incremental-rollup-rebuild-spec.md)
-- [07-hub-node-management-spec.md](./spec/07-hub-node-management-spec.md)
-- [08-progressive-rendering-spec.md](./spec/08-progressive-rendering-spec.md)
-- [09-domain-first-navigation-spec.md](./spec/09-domain-first-navigation-spec.md)
-- [10-incremental-inference-spec.md](./spec/10-incremental-inference-spec.md)
-- [11-ast-default-code-signal-spec.md](./spec/11-ast-default-code-signal-spec.md)
-- [12-ast-regex-hybrid-code-signal-spec.md](./spec/12-ast-regex-hybrid-code-signal-spec.md)
-- [13-inference-run-orchestration-spec.md](./spec/13-inference-run-orchestration-spec.md)
-- [14-code-based-relation-candidate-spec.md](./spec/14-code-based-relation-candidate-spec.md)
-- [15-compound-to-atomic-inference-spec.md](./spec/15-compound-to-atomic-inference-spec.md)
-- [16-rabbitmq-queue-code-signal-spec.md](./spec/16-rabbitmq-queue-code-signal-spec.md)
-- [17-db-table-code-signal-spec.md](./spec/17-db-table-code-signal-spec.md)
-- [18-inter-procedural-ast-spec.md](./spec/18-inter-procedural-ast-spec.md)
-- [19-cross-signal-validation-spec.md](./spec/19-cross-signal-validation-spec.md)
-- [20-llm-inference-boost-spec.md](./spec/20-llm-inference-boost-spec.md)
-- [21-framework-plugin-system-spec.md](./spec/21-framework-plugin-system-spec.md)
-- [22-realtime-rollup-spec.md](./spec/22-realtime-rollup-spec.md)
-- [23-inference-feedback-loop-spec.md](./spec/23-inference-feedback-loop-spec.md)
-- [24-change-impact-preview-spec.md](./spec/24-change-impact-preview-spec.md)
-- [25-architecture-drift-detection-spec.md](./spec/25-architecture-drift-detection-spec.md)
-- [26-personal-architecture-journal-spec.md](./spec/26-personal-architecture-journal-spec.md)
-- [27-api-contract-diff-spec.md](./spec/27-api-contract-diff-spec.md)
-- [28-architecture-health-score-spec.md](./spec/28-architecture-health-score-spec.md)
-- [29-approval-mapping-ui-consistency-spec.md](./spec/29-approval-mapping-ui-consistency-spec.md)
-- [30-cross-signal-validation-phase1-spec.md](./spec/30-cross-signal-validation-phase1-spec.md)
-- [31-cross-signal-validation-stale-config-phase2a-spec.md](./spec/31-cross-signal-validation-stale-config-phase2a-spec.md)
-- [32-cross-signal-validation-common-contract-spec.md](./spec/32-cross-signal-validation-common-contract-spec.md)
-- [33-cross-signal-validation-phantom-call-spec.md](./spec/33-cross-signal-validation-phantom-call-spec.md)
-- [34-cross-signal-validation-dead-topic-spec.md](./spec/34-cross-signal-validation-dead-topic-spec.md)
-- [35-cross-signal-validation-orphan-fk-spec.md](./spec/35-cross-signal-validation-orphan-fk-spec.md)
-- [36-cross-signal-validation-finalization-spec.md](./spec/36-cross-signal-validation-finalization-spec.md)
+- [05-incremental-rollup-rebuild-spec.md](./spec/05-incremental-rollup-rebuild-spec.md)
+- [06-hub-node-management-spec.md](./spec/06-hub-node-management-spec.md)
+- [07-progressive-rendering-spec.md](./spec/07-progressive-rendering-spec.md)
+- [08-domain-first-navigation-spec.md](./spec/08-domain-first-navigation-spec.md)
+- [09-incremental-inference-spec.md](./spec/09-incremental-inference-spec.md)
+- [10-ast-default-code-signal-spec.md](./spec/10-ast-default-code-signal-spec.md)
+- [11-ast-regex-hybrid-code-signal-spec.md](./spec/11-ast-regex-hybrid-code-signal-spec.md)
+- [12-inference-run-orchestration-spec.md](./spec/12-inference-run-orchestration-spec.md)
+- [13-code-based-relation-candidate-spec.md](./spec/13-code-based-relation-candidate-spec.md)
+- [14-compound-to-atomic-inference-spec.md](./spec/14-compound-to-atomic-inference-spec.md)
+- [15-rabbitmq-queue-code-signal-spec.md](./spec/15-rabbitmq-queue-code-signal-spec.md)
+- [16-db-table-code-signal-spec.md](./spec/16-db-table-code-signal-spec.md)
+- [17-inter-procedural-ast-spec.md](./spec/17-inter-procedural-ast-spec.md)
+- [18-cross-signal-validation-spec.md](./spec/18-cross-signal-validation-spec.md)
+- [19-llm-inference-boost-spec.md](./spec/19-llm-inference-boost-spec.md)
+- [20-framework-plugin-system-spec.md](./spec/20-framework-plugin-system-spec.md)
+- [21-realtime-rollup-spec.md](./spec/21-realtime-rollup-spec.md)
+- [22-inference-feedback-loop-spec.md](./spec/22-inference-feedback-loop-spec.md)
+- [23-change-impact-preview-spec.md](./spec/23-change-impact-preview-spec.md)
+- [24-architecture-drift-detection-spec.md](./spec/24-architecture-drift-detection-spec.md)
+- [25-personal-architecture-journal-spec.md](./spec/25-personal-architecture-journal-spec.md)
+- [26-api-contract-diff-spec.md](./spec/26-api-contract-diff-spec.md)
+- [27-architecture-health-score-spec.md](./spec/27-architecture-health-score-spec.md)
+- [28-approval-mapping-ui-consistency-spec.md](./spec/28-approval-mapping-ui-consistency-spec.md)
+- [29-cross-signal-validation-phase1-spec.md](./spec/29-cross-signal-validation-phase1-spec.md)
+- [30-cross-signal-validation-stale-config-phase2a-spec.md](./spec/30-cross-signal-validation-stale-config-phase2a-spec.md)
+- [31-cross-signal-validation-common-contract-spec.md](./spec/31-cross-signal-validation-common-contract-spec.md)
+- [32-cross-signal-validation-phantom-call-spec.md](./spec/32-cross-signal-validation-phantom-call-spec.md)
+- [33-cross-signal-validation-dead-topic-spec.md](./spec/33-cross-signal-validation-dead-topic-spec.md)
+- [34-cross-signal-validation-orphan-fk-spec.md](./spec/34-cross-signal-validation-orphan-fk-spec.md)
+- [35-cross-signal-validation-finalization-spec.md](./spec/35-cross-signal-validation-finalization-spec.md)
+
+### Checklist (`docs/checklists`)
+- [README.md](./checklists/README.md)
+- [05-llm-inference-filtering-implementation-checklist.md](./checklists/05-llm-inference-filtering-implementation-checklist.md)
 
 ### Guide/Ops (`docs` 루트)
 - [00-overview.md](./00-overview.md)

@@ -1,7 +1,7 @@
 # Compound View Implementation SPEC
 
 - 작성일: 2026-03-02
-- 상태: Draft (Phase A/B + 잔여 항목 대부분 구현 완료)
+- 상태: Implemented
 - 연계 문서: `../design/06-compound-view.md`, `../design/05-rollup-and-graph.md`
 
 ## 1. 목적
