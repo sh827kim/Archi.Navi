@@ -158,6 +158,55 @@ describe('POST /api/inference/run', () => {
     );
   });
 
+  it('codeOptions가 주어지면 code 추출기에 interProcedural 옵션을 전달해야 한다', async () => {
+    getDbMock.mockResolvedValue({});
+    normalizeCodeSignalEngineMock.mockReturnValueOnce('ast');
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'ast',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock.mockResolvedValue({
+      candidateCount: 1,
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['code'],
+          repoRoots: [process.cwd()],
+          useServiceMetadataPaths: false,
+          codeEngine: 'ast',
+          codeOptions: {
+            interProcedural: true,
+            maxCallChainDepth: 3,
+            resolveProperties: true,
+          },
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        repoRoot: process.cwd(),
+        codeEngine: 'ast',
+        interProcedural: true,
+        maxCallChainDepth: 3,
+        resolveProperties: true,
+      }),
+    );
+  });
+
   it('config+code 실행에서 config 추론이 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
     getDbMock.mockResolvedValue({});
     inferRelationsFromConfigMock.mockRejectedValue(new Error('config failed'));

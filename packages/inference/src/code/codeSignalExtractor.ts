@@ -66,6 +66,12 @@ export interface CodeSignalOptions {
     forceRescan?: boolean;
     /** 지정 시 해당 파일 경로들만 추출 대상으로 제한 */
     targetFilePaths?: string[];
+    /** Inter-procedural AST 준비 활성화 여부 */
+    interProcedural?: boolean;
+    /** Call chain 최대 추적 깊이 */
+    maxCallChainDepth?: number;
+    /** 설정 파일/프로퍼티 전파 활성화 여부 */
+    resolveProperties?: boolean;
 }
 
 /** extractCodeSignals 반환 결과 */

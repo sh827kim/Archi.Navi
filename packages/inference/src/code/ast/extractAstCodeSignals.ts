@@ -19,6 +19,7 @@ import type { CodeSignalOptions, CodeSignalResult, FileScanResult, ScanFailureDe
 import { scanJavaKotlinAst } from './astJavaKotlin';
 import { scanTypeScriptAst } from './astTypeScript';
 import { scanPythonAst } from './astPython';
+import { buildProjectSymbolTable } from './symbolTable';
 import { AstRuntimeError } from './wasmParser';
 
 // ─── 파일 탐색 ────────────────────────────────────────────────────────────────
@@ -114,6 +115,7 @@ interface ProcessFileContext {
     repoRoot: string;
     allServices: { id: string; name: string }[];
     forceRescan: boolean;
+    disableShaSkip: boolean;
 }
 
 interface ProcessFileResult {
@@ -127,7 +129,7 @@ async function processFile(
     scanResult: FileScanResult,
     ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
-    const { db, workspaceId, repoRoot, allServices, forceRescan } = ctx;
+    const { db, workspaceId, repoRoot, allServices, forceRescan, disableShaSkip } = ctx;
 
     const existing = await db
         .select({ id: codeArtifacts.id, sha256: codeArtifacts.sha256 })
@@ -143,7 +145,7 @@ async function processFile(
     const existingArtifact = existing[0];
 
     // SHA256 동일 → 스킵
-    if (!forceRescan && existingArtifact?.sha256 === scanResult.sha256) {
+    if (!forceRescan && !disableShaSkip && existingArtifact?.sha256 === scanResult.sha256) {
         return { skipped: true, isNew: false, signalCount: 0 };
     }
 
@@ -237,7 +239,21 @@ export async function extractAstCodeSignals(
             ),
         );
 
-    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
+    const interProceduralSymbolTable = options.interProcedural === true
+        ? await buildProjectSymbolTable({
+            repoRoot,
+            ...(options.targetFilePaths ? { targetFilePaths: options.targetFilePaths } : {}),
+        })
+        : null;
+
+    const ctx: ProcessFileContext = {
+        db,
+        workspaceId,
+        repoRoot,
+        allServices,
+        forceRescan,
+        disableShaSkip: options.interProcedural === true,
+    };
     const scanFailures: ScanFailureDetail[] = [];
     const result: CodeSignalResult = {
         fileCount: 0,
@@ -301,7 +317,16 @@ export async function extractAstCodeSignals(
     }
 
     // 1. Java/Kotlin 파일 처리 (AST)
-    await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), scanJavaKotlinAst);
+    await processAll(
+        filterTargetFiles(findJavaKotlinFiles(repoRoot)),
+        (filePath, content) => scanJavaKotlinAst(
+            filePath,
+            content,
+            interProceduralSymbolTable
+                ? { interProcedural: { symbolTable: interProceduralSymbolTable } }
+                : undefined,
+        ),
+    );
 
     // 2. TypeScript/JavaScript 파일 처리 (AST)
     await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), scanTypeScriptAst);

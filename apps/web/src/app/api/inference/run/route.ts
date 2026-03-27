@@ -32,6 +32,11 @@ interface RunInferenceRequest {
   useServiceMetadataPaths?: boolean;
   incremental?: boolean;
   codeEngine?: string;
+  codeOptions?: {
+    interProcedural?: boolean;
+    maxCallChainDepth?: number;
+    resolveProperties?: boolean;
+  };
 }
 
 const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
@@ -289,6 +294,15 @@ export async function POST(req: NextRequest) {
             workspaceId,
             repoRoot,
             codeEngine,
+            ...(body.codeOptions?.interProcedural === true
+              ? { interProcedural: true }
+              : {}),
+            ...(typeof body.codeOptions?.maxCallChainDepth === 'number'
+              ? { maxCallChainDepth: body.codeOptions.maxCallChainDepth }
+              : {}),
+            ...(typeof body.codeOptions?.resolveProperties === 'boolean'
+              ? { resolveProperties: body.codeOptions.resolveProperties }
+              : {}),
           });
           codeResult.repoCount += 1;
           codeResult.fileCount += result.fileCount;

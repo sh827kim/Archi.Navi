@@ -27,6 +27,19 @@ import {
 } from './astScanner';
 import { getWasmParser } from './wasmParser';
 import type { SupportedLanguage } from './wasmParser';
+import type { AstProjectSymbolTable } from './symbolTable';
+import { resolveJavaDepthOneCallTargets } from './symbolTable';
+
+interface ScanJavaKotlinAstOptions {
+    interProcedural?: {
+        symbolTable: AstProjectSymbolTable;
+    };
+}
+
+const IDENTIFIER_NODE_TYPES = new Set(['identifier', 'simple_identifier', 'type_identifier']);
+const CALL_NODE_TYPES = ['method_invocation', 'call_expression'];
+const METHOD_DECLARATION_NODE_TYPES = ['method_declaration', 'function_declaration'];
+const FIELD_DECLARATION_NODE_TYPES = ['field_declaration', 'property_declaration'];
 
 // ─── 변수 추적 (Data-Flow) ─────────────────────────────────────────────────────
 
@@ -89,16 +102,181 @@ function resolveStringArg(argNode: SyntaxNode, varMap: VariableMap): string | nu
  */
 function getFirstArg(argList: SyntaxNode): SyntaxNode | null {
     return (
-        getChildren(argList).find(
-            (c) => c.type !== '(' && c.type !== ')' && c.type !== ',' && c.type !== ' ',
-        ) ?? null
+        getArgs(argList)[0] ?? null
+    );
+}
+
+function unwrapArgumentNode(argNode: SyntaxNode): SyntaxNode {
+    if (argNode.type !== 'value_argument') return argNode;
+    return (
+        getChildren(argNode).find(
+            (child) => child.type !== '(' && child.type !== ')' && child.type !== ',' && child.type !== ' ',
+        ) ?? argNode
     );
 }
 
 function getArgs(argList: SyntaxNode): SyntaxNode[] {
     return getChildren(argList).filter(
         (c) => c.type !== '(' && c.type !== ')' && c.type !== ',' && c.type !== ' ',
-    );
+    ).map(unwrapArgumentNode);
+}
+
+function isIdentifierNode(node: SyntaxNode): boolean {
+    return IDENTIFIER_NODE_TYPES.has(node.type);
+}
+
+function findIdentifierChildren(node: SyntaxNode): SyntaxNode[] {
+    return getChildren(node).filter(isIdentifierNode);
+}
+
+function normalizeTypeName(typeText: string): string {
+    return typeText
+        .replace(/<.*?>/g, '')
+        .replace(/\[\]/g, '')
+        .trim()
+        .split(/\s+/)
+        .pop() ?? typeText.trim();
+}
+
+function extractDeclaredTypeName(node: SyntaxNode): string | null {
+    const typeNode = findNodes(node, 'type_identifier')[0]
+        ?? findNodes(node, 'generic_type')[0]
+        ?? findNodes(node, 'scoped_type_identifier')[0]
+        ?? findNodes(node, 'user_type')[0];
+    if (!typeNode) return null;
+    return normalizeTypeName(typeNode.text);
+}
+
+function buildFieldTypeMap(typeNode: SyntaxNode): Map<string, string> {
+    const fieldTypeMap = new Map<string, string>();
+    const body = findChildByType(typeNode, 'class_body') ?? findChildByType(typeNode, 'interface_body');
+    if (!body) return fieldTypeMap;
+
+    const fieldDecls = getChildren(body).filter((child) => FIELD_DECLARATION_NODE_TYPES.includes(child.type));
+    for (const fieldDecl of fieldDecls) {
+        const typeName = extractDeclaredTypeName(fieldDecl);
+        if (!typeName) continue;
+
+        for (const declarator of [
+            ...findNodes(fieldDecl, 'variable_declarator'),
+            ...findNodes(fieldDecl, 'variable_declaration'),
+        ]) {
+            const nameNode = getChildren(declarator).find(isIdentifierNode);
+            if (nameNode) {
+                fieldTypeMap.set(nameNode.text, typeName);
+            }
+        }
+    }
+
+    return fieldTypeMap;
+}
+
+function buildMethodTypeMap(methodNode: SyntaxNode): Map<string, string> {
+    const typeMap = new Map<string, string>();
+
+    for (const parameter of [
+        ...findNodes(methodNode, 'formal_parameter'),
+        ...findNodes(methodNode, 'parameter'),
+    ]) {
+        const typeName = extractDeclaredTypeName(parameter);
+        const nameNode = findNodes(parameter, 'identifier')[0]
+            ?? findNodes(parameter, 'simple_identifier')[0];
+        if (typeName && nameNode) {
+            typeMap.set(nameNode.text, typeName);
+        }
+    }
+
+    for (const localDecl of [
+        ...findNodes(methodNode, 'local_variable_declaration'),
+        ...findNodes(methodNode, 'property_declaration'),
+    ]) {
+        const typeName = extractDeclaredTypeName(localDecl);
+        if (!typeName) continue;
+
+        for (const declarator of [
+            ...findNodes(localDecl, 'variable_declarator'),
+            ...findNodes(localDecl, 'variable_declaration'),
+        ]) {
+            const nameNode = getChildren(declarator).find(isIdentifierNode);
+            if (nameNode) {
+                typeMap.set(nameNode.text, typeName);
+            }
+        }
+    }
+
+    return typeMap;
+}
+
+function extractMethodName(methodNode: SyntaxNode): string | null {
+    return getChildren(methodNode).find(isIdentifierNode)?.text ?? null;
+}
+
+function extractTypeName(typeNode: SyntaxNode): string | null {
+    return getChildren(typeNode).find(isIdentifierNode)?.text ?? null;
+}
+
+interface ParsedMethodInvocation {
+    receiverName: string | null;
+    methodName: string;
+}
+
+function parseMethodInvocation(node: SyntaxNode): ParsedMethodInvocation | null {
+    const children = getChildren(node);
+    const argList = findChildByType(node, 'argument_list') ?? findChildByType(node, 'value_arguments');
+    if (!argList) return null;
+
+    const objectNode = children[0];
+    if (!objectNode) return null;
+    const methodNameNode = children.find((child, index) => index > 0 && isIdentifierNode(child));
+    if (methodNameNode) {
+        return {
+            receiverName: objectNode.text,
+            methodName: methodNameNode.text,
+        };
+    }
+
+    if (node.type === 'call_expression') {
+        if (objectNode.type === 'navigation_expression') {
+            const identifierNodes = findIdentifierChildren(objectNode);
+            if (identifierNodes.length >= 2) {
+                return {
+                    receiverName: identifierNodes[0]?.text ?? null,
+                    methodName: identifierNodes.at(-1)?.text ?? '',
+                };
+            }
+        }
+
+        const callableNode = children.find(isIdentifierNode);
+        if (callableNode) {
+            return {
+                receiverName: null,
+                methodName: callableNode.text,
+            };
+        }
+    }
+
+    const identifierNode = children.find(isIdentifierNode);
+    if (!identifierNode) return null;
+    return {
+        receiverName: null,
+        methodName: identifierNode.text,
+    };
+}
+
+function isDirectClientInvocation(parsed: ParsedMethodInvocation): boolean {
+    if (/^(restTemplate|kafkaTemplate|rabbitTemplate|amqpTemplate)$/i.test(parsed.receiverName ?? '')) {
+        return true;
+    }
+    if (parsed.receiverName === 'RestClient' && parsed.methodName === 'create') {
+        return true;
+    }
+    if (
+        parsed.methodName === 'uri'
+        && /(webClient|restClient)/i.test(parsed.receiverName ?? '')
+    ) {
+        return true;
+    }
+    return false;
 }
 
 // ─── 어노테이션 분석 ───────────────────────────────────────────────────────────
@@ -327,26 +505,20 @@ function processSpringMappingAnnotations(
 
 // ─── 메서드 호출 처리 ───────────────────────────────────────────────────────────
 
-/* c8 ignore start */
 function processMethodInvocations(
     root: SyntaxNode,
     varMap: VariableMap,
     signals: ExtractedSignal[],
 ): void {
-    const methodInvocations = findNodes(root, 'method_invocation');
+    const methodInvocations = CALL_NODE_TYPES.flatMap((nodeType) => findNodes(root, nodeType));
 
     for (const mi of methodInvocations) {
-        const children = getChildren(mi);
-        // 구조: [identifier|member_access, ., identifier, argument_list]
-        // 또는 [object, ., method, argument_list]
-        const objectNode = children[0];
-        const methodNameNode = children.find((c, i) => i > 0 && c.type === 'identifier');
-        const argList = findChildByType(mi, 'argument_list');
+        const parsed = parseMethodInvocation(mi);
+        const argList = findChildByType(mi, 'argument_list') ?? findChildByType(mi, 'value_arguments');
+        if (!parsed || !parsed.receiverName || !argList) continue;
 
-        if (!objectNode || !methodNameNode || !argList) continue;
-
-        const objectName = objectNode.text;
-        const methodName = methodNameNode.text;
+        const objectName = parsed.receiverName;
+        const methodName = parsed.methodName;
 
         // restTemplate.*(url, ...) 처리
         if (/^restTemplate$/i.test(objectName)) {
@@ -371,7 +543,7 @@ function processMethodInvocations(
 
         // W-7.4: webClient 체인 감지 — 전체 텍스트에서 webClient 포함 여부로 판단
         // (objectNode.text.split('.')[0]은 체인이 깊어지면 부정확)
-        if (methodName === 'uri' && /webClient/i.test(objectNode.text)) {
+        if (methodName === 'uri' && /webClient/i.test(objectName)) {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
                 const url = resolveStringArg(firstArg, varMap);
@@ -392,7 +564,7 @@ function processMethodInvocations(
         }
 
         // restClient 체인 감지 — 동일 패턴 적용
-        if (methodName === 'uri' && /restClient/i.test(objectNode.text)) {
+        if (methodName === 'uri' && /restClient/i.test(objectName)) {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
                 const url = resolveStringArg(firstArg, varMap);
@@ -485,10 +657,49 @@ function processMethodInvocations(
                 }
             }
         }
+
         /* c8 ignore stop */
     }
 }
 /* c8 ignore stop */
+
+async function resolveInterProceduralCallSignals(
+    input: {
+        invocationNode: SyntaxNode;
+        currentTypeName: string;
+        packageName?: string;
+        fieldTypeMap: Map<string, string>;
+        methodTypeMap: Map<string, string>;
+        symbolTable: AstProjectSymbolTable;
+    },
+): Promise<ExtractedSignal[]> {
+    const parsed = parseMethodInvocation(input.invocationNode);
+    if (!parsed || isDirectClientInvocation(parsed)) return [];
+
+    const targetTypeName = parsed.receiverName === null
+        ? input.currentTypeName
+        : (
+            input.methodTypeMap.get(parsed.receiverName)
+            ?? input.fieldTypeMap.get(parsed.receiverName)
+        );
+    if (!targetTypeName) return [];
+
+    const resolvedCalls = resolveJavaDepthOneCallTargets(input.symbolTable, {
+        typeName: targetTypeName,
+        methodName: parsed.methodName,
+        ...(input.packageName ? { packageName: input.packageName } : {}),
+    }).map((call) => makeSignal({
+        kind: 'call',
+        symbol: call.symbol,
+        lineStart: input.invocationNode.startPosition.row + 1,
+        lineEnd: input.invocationNode.endPosition.row + 1,
+        excerpt: input.invocationNode.text.split('\n')[0] || input.invocationNode.text,
+        confidence: call.confidence,
+        metadata: call.metadata,
+    }));
+
+    return resolvedCalls;
+}
 
 // ─── FeignClient 인터페이스 메서드별 call 시그널 ──────────────────────────────
 
@@ -703,6 +914,46 @@ function extractPackageName(root: SyntaxNode): string | undefined {
     return nameNode?.text;
 }
 
+async function processInterProceduralMethodInvocations(
+    root: SyntaxNode,
+    packageName: string | undefined,
+    symbolTable: AstProjectSymbolTable,
+    signals: ExtractedSignal[],
+): Promise<void> {
+    const typeNodes = findNodes(root, 'class_declaration');
+
+    for (const typeNode of typeNodes) {
+        const currentTypeName = extractTypeName(typeNode);
+        if (!currentTypeName) continue;
+
+        const fieldTypeMap = buildFieldTypeMap(typeNode);
+        const body = findChildByType(typeNode, 'class_body');
+        if (!body) continue;
+
+        const methods = getChildren(body).filter((child) => METHOD_DECLARATION_NODE_TYPES.includes(child.type));
+
+        for (const methodNode of methods) {
+            const currentMethodName = extractMethodName(methodNode);
+            if (!currentMethodName) continue;
+
+            const methodTypeMap = buildMethodTypeMap(methodNode);
+            const invocations = CALL_NODE_TYPES.flatMap((nodeType) => findNodes(methodNode, nodeType));
+
+            for (const invocation of invocations) {
+                const resolvedSignals = await resolveInterProceduralCallSignals({
+                    invocationNode: invocation,
+                    currentTypeName,
+                    fieldTypeMap,
+                    methodTypeMap,
+                    symbolTable,
+                    ...(packageName ? { packageName } : {}),
+                });
+                signals.push(...resolvedSignals);
+            }
+        }
+    }
+}
+
 // ─── 공개 스캐너 함수 ────────────────────────────────────────────────────────
 
 /**
@@ -713,7 +964,11 @@ function extractPackageName(root: SyntaxNode): string | undefined {
  * @param filePath - 파일 절대 경로
  * @param content - 파일 내용
  */
-export async function scanJavaKotlinAst(filePath: string, content: string): Promise<FileScanResult> {
+export async function scanJavaKotlinAst(
+    filePath: string,
+    content: string,
+    options?: ScanJavaKotlinAstOptions,
+): Promise<FileScanResult> {
     const sha256 = createHash('sha256').update(content).digest('hex');
     const isKotlin = filePath.endsWith('.kt') || filePath.endsWith('.kts');
     const language = isKotlin ? 'kotlin' : 'java';
@@ -731,6 +986,14 @@ export async function scanJavaKotlinAst(filePath: string, content: string): Prom
     processSpringMappingAnnotations(root, signals);
     processFeignClientInterfaces(root, signals);
     processMethodInvocations(root, varMap, signals);
+    if (options?.interProcedural?.symbolTable) {
+        await processInterProceduralMethodInvocations(
+            root,
+            packageName,
+            options.interProcedural.symbolTable,
+            signals,
+        );
+    }
 
     const result: FileScanResult = packageName
         ? { language, sha256, packageName, signals }

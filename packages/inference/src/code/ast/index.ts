@@ -5,6 +5,12 @@
  * 설계 참조: docs/03-inference-engine.md §6.2 Phase 2
  */
 export { extractAstCodeSignals } from './extractAstCodeSignals';
+export {
+  buildProjectSymbolTable,
+  getImplementationsForInterface,
+  getSingleImplementationForInterface,
+  getTypeSymbol,
+} from './symbolTable';
 export { scanJavaKotlinAst } from './astJavaKotlin';
 export { scanTypeScriptAst } from './astTypeScript';
 export { scanPythonAst } from './astPython';

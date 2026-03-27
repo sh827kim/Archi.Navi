@@ -188,6 +188,13 @@ export async function extractCodeSignalsWithEngine(
     repoRoot: options.repoRoot,
     ...(options.forceRescan === true ? { forceRescan: true } : {}),
     ...(options.targetFilePaths ? { targetFilePaths: options.targetFilePaths } : {}),
+    ...(options.interProcedural === true ? { interProcedural: true } : {}),
+    ...(typeof options.maxCallChainDepth === 'number'
+      ? { maxCallChainDepth: options.maxCallChainDepth }
+      : {}),
+    ...(typeof options.resolveProperties === 'boolean'
+      ? { resolveProperties: options.resolveProperties }
+      : {}),
   };
 
   if (engineRequested === 'regex') {
