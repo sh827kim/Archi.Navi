@@ -13,10 +13,12 @@ import { z } from 'zod';
 import { getDb } from '@archi-navi/db';
 import {
   filterCandidates,
-  buildRelationAssessmentPrompt,
+  generateCandidateExplanations,
   type GenerateAssessmentFn,
+  type GenerateExplanationFn,
   type CandidateContext,
   type LlmAssessment,
+  type LlmExplanation,
 } from '@archi-navi/inference';
 
 /** Zod 스키마: LLM 응답 구조 */
@@ -25,6 +27,13 @@ const assessmentSchema = z.object({
   confidenceAdjustment: z.number().min(-0.3).max(0.2),
   reasoning: z.string(),
   reviewPriority: z.enum(['HIGH', 'MEDIUM', 'LOW']),
+});
+
+const explanationSchema = z.object({
+  explanations: z.array(z.object({
+    candidateId: z.string(),
+    summary: z.string(),
+  })),
 });
 
 /** AI 제공자 선택 (헤더 오버라이드 → 환경변수 fallback) */
@@ -85,13 +94,77 @@ function createGenerateFn(
   };
 }
 
+function createGenerateExplanationFn(
+  aiModel: LanguageModel,
+  modelName: string,
+): GenerateExplanationFn {
+  return async (prompt: string): Promise<Record<string, LlmExplanation>> => {
+    const result = await generateObject({
+      model: aiModel,
+      schema: explanationSchema,
+      prompt,
+      temperature: 0.2,
+    });
+
+    const explainedAt = new Date().toISOString();
+    return Object.fromEntries(
+      result.object.explanations.map((item) => [
+        item.candidateId,
+        {
+          summary: item.summary,
+          model: modelName,
+          explainedAt,
+        },
+      ]),
+    );
+  };
+}
+
 export async function POST(req: Request) {
   try {
     const body = (await req.json()) as {
       workspaceId?: string;
       candidateIds?: string[];
       batchSize?: number;
+      generateExplanations?: boolean;
+      maxCalls?: number;
     };
+
+    const workspaceId = body.workspaceId;
+    if (!workspaceId) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'BAD_REQUEST',
+            message: 'workspaceId is required',
+          },
+        },
+        { status: 400 },
+      );
+    }
+
+    const isExplanationRequest = Object.prototype.hasOwnProperty.call(
+      body,
+      'generateExplanations',
+    );
+
+    const db = await getDb();
+
+    if (isExplanationRequest && body.generateExplanations === false) {
+      const result = await generateCandidateExplanations(
+        db,
+        async () => ({}),
+        {
+          workspaceId,
+          ...(body.candidateIds ? { candidateIds: body.candidateIds } : {}),
+          generateExplanations: false,
+          ...(typeof body.maxCalls === 'number' ? { maxCalls: body.maxCalls } : {}),
+        },
+      );
+
+      return NextResponse.json({ success: true, data: result });
+    }
 
     // LLM 제공자 확인
     const modelInfo = getModel(req);
@@ -109,22 +182,22 @@ export async function POST(req: Request) {
       );
     }
 
-    const db = await getDb();
-    const generateFn = createGenerateFn(modelInfo.model, modelInfo.modelName);
-    const workspaceId = body.workspaceId;
-    if (!workspaceId) {
-      return NextResponse.json(
+    if (isExplanationRequest) {
+      const result = await generateCandidateExplanations(
+        db,
+        createGenerateExplanationFn(modelInfo.model, modelInfo.modelName),
         {
-          success: false,
-          error: {
-            code: 'BAD_REQUEST',
-            message: 'workspaceId is required',
-          },
+          workspaceId,
+          ...(body.candidateIds ? { candidateIds: body.candidateIds } : {}),
+          generateExplanations: body.generateExplanations === true,
+          ...(typeof body.maxCalls === 'number' ? { maxCalls: body.maxCalls } : {}),
         },
-        { status: 400 },
       );
+
+      return NextResponse.json({ success: true, data: result });
     }
 
+    const generateFn = createGenerateFn(modelInfo.model, modelInfo.modelName);
     const result = await filterCandidates(db, generateFn, {
       workspaceId,
       ...(body.candidateIds ? { candidateIds: body.candidateIds } : {}),

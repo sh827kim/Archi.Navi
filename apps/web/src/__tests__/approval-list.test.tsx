@@ -60,6 +60,9 @@ interface RelationCandidate {
   confidence: number;
   source: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  llmExplanation?: {
+    summary: string;
+  };
   crossValidation?: {
     validated: boolean;
     supportCount: number;
@@ -84,6 +87,7 @@ function createCandidate(
   objectName: string,
   relationType = 'call',
   crossValidation?: RelationCandidate['crossValidation'],
+  llmExplanation?: RelationCandidate['llmExplanation'],
 ): RelationCandidate {
   return {
     id,
@@ -101,6 +105,7 @@ function createCandidate(
     confidence: 0.8,
     source: 'INFERRED',
     status: 'PENDING',
+    ...(llmExplanation ? { llmExplanation } : {}),
     ...(crossValidation ? { crossValidation } : {}),
   };
 }
@@ -539,5 +544,28 @@ describe('ApprovalList', () => {
 
     expect(screen.getByText('late-warning')).toBeTruthy();
     expect(screen.queryByText('service-0')).toBeNull();
+  });
+
+  it('LLM 설명이 있으면 후보 카드에 표시해야 한다', async () => {
+    const candidate = createCandidate(
+      'cand-llm',
+      'service-llm',
+      'call',
+      undefined,
+      { summary: 'caller-cand-llm 이 service-llm API 를 호출합니다.' },
+    );
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([candidate]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('service-llm');
+    expect(screen.getByText('caller-cand-llm 이 service-llm API 를 호출합니다.')).toBeTruthy();
   });
 });

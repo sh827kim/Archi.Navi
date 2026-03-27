@@ -28,7 +28,7 @@
 | P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
 | P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation 완료. 4-3~4-6은 설계/구현 대기 |
+| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation 완료. 4-3은 4-3A(관계 설명 자동 생성)까지 구현, 4-3B~4-6은 후속 범위 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
@@ -292,7 +292,7 @@
   - stale config/phantom call 등 노이즈 후보 사전 경고
 - **의존:** 추론 실행 시 2+ 모드 동시 실행
 
-### 📋 4-3. LLM 추론 부스터 (기존 LLM 필터 확장)
+### ⚠️ 4-3. LLM 추론 부스터 (기존 LLM 필터 확장)
 - **SPEC:** `docs/spec/20-llm-inference-boost-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §4
 - **기존 참조:** `docs/spec/04-llm-inference-filtering-spec.md` (post-filter, 구현 완료)
@@ -305,6 +305,12 @@
   - Regex/AST 미감지 패턴 5~10% 추가 발견
   - 승인 판단 시간 단축 (설명 제공)
   - 도메인 이름 품질 향상
+- **현재 구현 범위 (4-3A):**
+  - `POST /api/inference/llm-filter` 에 `generateExplanations` / `maxCalls` 경로 추가
+  - 같은 `subjectObjectId` 기준 설명 배치 그룹화
+  - `relation_candidates.metadata.llmExplanation` 저장 및 `/api/inference/candidates` 노출
+  - Approval 목록 카드에 LLM 설명 표시
+  - `code intent analysis`, `llmLabel` 은 아직 미구현
 
 ### 📋 4-4. 프레임워크 플러그인 시스템
 - **SPEC:** `docs/spec/21-framework-plugin-system-spec.md`

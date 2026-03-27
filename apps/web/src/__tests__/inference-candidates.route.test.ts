@@ -76,7 +76,14 @@ describe('GET /api/inference/candidates', () => {
         relationType: 'call',
         confidence: 0.82,
         status: 'PENDING',
-        metadata: { source: 'CODE' },
+        metadata: {
+          source: 'CODE',
+          llmExplanation: {
+            summary: 'order-service 가 payment-service 를 호출합니다.',
+            model: 'mock-model',
+            explainedAt: '2026-03-27T00:00:00Z',
+          },
+        },
       },
     ];
     const allObjects = [
@@ -146,6 +153,9 @@ describe('GET /api/inference/candidates', () => {
           supportCount: 2,
           supportingSources: ['config', 'code'],
           contradictions: [],
+        }),
+        llmExplanation: expect.objectContaining({
+          summary: 'order-service 가 payment-service 를 호출합니다.',
         }),
       }),
     ]));

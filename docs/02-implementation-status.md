@@ -15,7 +15,7 @@
 | Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
-| 추론 엔진 고도화 (P4) | ⚠️ | Cross-Signal Validation 완료, Inter-procedural AST도 SPEC 18 기준 구현 완료. 4-3~4-6은 후속 고도화 범위 |
+| 추론 엔진 고도화 (P4) | ⚠️ | Cross-Signal Validation 완료, Inter-procedural AST도 SPEC 18 기준 구현 완료. 4-3은 4-3A(관계 설명 자동 생성)까지 구현, 4-3B~4-6은 후속 고도화 범위 |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -112,7 +112,7 @@
 | 4-1. Inter-procedural AST 분석 | `docs/spec/18-inter-procedural-ast-spec.md` | ✅ Implemented |
 | 4-2. Cross-Signal Validation | `docs/spec/19-cross-signal-validation-spec.md` | ✅ Implemented |
 | 4-2a. Approval Mapping / Cross-validation UI 정합성 | `docs/spec/29-approval-mapping-ui-consistency-spec.md` | ✅ Implemented |
-| 4-3. LLM 추론 부스터 | `docs/spec/20-llm-inference-boost-spec.md` | 📋 Draft |
+| 4-3. LLM 추론 부스터 | `docs/spec/20-llm-inference-boost-spec.md` | ⚠️ Partial (4-3A 구현) |
 | 4-4. 프레임워크 플러그인 시스템 | `docs/spec/21-framework-plugin-system-spec.md` | 📋 Draft |
 | 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/22-realtime-rollup-spec.md` | 📋 Draft |
 | 4-6. 추론 피드백 루프 | `docs/spec/23-inference-feedback-loop-spec.md` | 📋 Draft |

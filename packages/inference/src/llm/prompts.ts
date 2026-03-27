@@ -63,3 +63,44 @@ ${evidenceSection}
   "reviewPriority": "HIGH" | "MEDIUM" | "LOW"
 }`;
 }
+
+export function buildRelationExplanationPrompt(contexts: CandidateContext[]): string {
+  if (contexts.length === 0) {
+    return '설명할 관계 후보가 없습니다.';
+  }
+
+  const subjectName = contexts[0]?.subjectName ?? 'unknown-subject';
+  const candidateSection = contexts.map((context) => {
+    const evidenceSection = context.evidences.length === 0
+      ? '- (근거 없음)'
+      : context.evidences.map((evidence) => {
+        const location = evidence.filePath
+          ? `${evidence.filePath}:${evidence.lineStart ?? '?'}-${evidence.lineEnd ?? '?'}`
+          : '(경로 없음)';
+        return `- [${evidence.evidenceType}] ${location}\n  "${truncateExcerpt(evidence.excerpt)}"`;
+      }).join('\n');
+
+    return `### Candidate ${context.candidateId}
+- Relation: ${context.relationType}
+- Object: ${context.objectName}
+- Confidence: ${context.confidence}
+- Evidence:
+${evidenceSection}`;
+  }).join('\n\n');
+
+  return `당신은 마이크로서비스 아키텍처 분석 전문가입니다.
+아래는 동일한 Subject 서비스(${subjectName})에서 추론된 관계 후보들입니다.
+각 후보에 대해 승인 판단에 도움이 되는 설명을 한국어 1~2문장으로 작성하세요.
+
+${candidateSection}
+
+응답 형식(JSON):
+{
+  "explanations": [
+    {
+      "candidateId": "<candidate id>",
+      "summary": "<왜 이 관계가 존재하는지 설명>"
+    }
+  ]
+}`;
+}

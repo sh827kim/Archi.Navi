@@ -37,12 +37,22 @@ interface RelationCandidate {
   confidence: number;
   source: string;
   status: 'PENDING' | 'APPROVED' | 'REJECTED';
+  llmExplanation?: {
+    summary: string;
+    model?: string;
+    explainedAt?: string;
+  };
   crossValidation?: {
     validated: boolean;
     supportCount: number;
     supportingSources: string[];
     contradictions?: CrossValidationContradiction[];
   };
+}
+
+function getLlmExplanationSummary(candidate: RelationCandidate): string | null {
+  const summary = candidate.llmExplanation?.summary;
+  return typeof summary === 'string' && summary.trim().length > 0 ? summary.trim() : null;
 }
 
 /** 엔드포인트 (세부 매핑용) */
@@ -478,6 +488,7 @@ export function ApprovalList() {
             const badge = getCrossValidationBadge(cand);
             const compoundCandidate = isCompoundToCompound(cand);
             const showCompoundHeader = compoundCandidate && index === firstCompoundIndex;
+            const llmExplanation = getLlmExplanationSummary(cand);
 
             return (
               <div key={cand.id}>
@@ -493,18 +504,25 @@ export function ApprovalList() {
                   <div
                     data-testid="approval-candidate-card"
                     data-candidate-id={cand.id}
-                    className="flex items-center justify-between rounded-xl p-4 transition-all glass-card border border-dashed border-muted-foreground/30"
+                    className="flex items-start justify-between rounded-xl p-4 transition-all glass-card border border-dashed border-muted-foreground/30"
                   >
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <span className="font-medium text-foreground">{cand.subjectName}</span>
-                      <Badge variant="outline">{cand.relationType}</Badge>
-                      {contradictionBadge && <Badge variant={contradictionBadge.variant}>{contradictionBadge.label}</Badge>}
-                      {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
-                      <span className="font-medium text-foreground">{cand.objectName}</span>
-                      <Badge variant="secondary" className="text-xs">서비스 레벨</Badge>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className="font-medium text-foreground">{cand.subjectName}</span>
+                        <Badge variant="outline">{cand.relationType}</Badge>
+                        {contradictionBadge && <Badge variant={contradictionBadge.variant}>{contradictionBadge.label}</Badge>}
+                        {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
+                        <span className="font-medium text-foreground">{cand.objectName}</span>
+                        <Badge variant="secondary" className="text-xs">서비스 레벨</Badge>
+                      </div>
+                      {llmExplanation && (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {llmExplanation}
+                        </p>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-4">
+                    <div className="ml-4 flex items-center gap-4">
                       <div className="text-right">
                         <div className="text-xs text-muted-foreground">신뢰도</div>
                         <div className="text-sm font-medium text-foreground">
@@ -537,27 +555,34 @@ export function ApprovalList() {
                   <div
                     data-testid="approval-candidate-card"
                     data-candidate-id={cand.id}
-                    className="flex items-center justify-between rounded-xl p-4 transition-all glass-card"
+                    className="flex items-start justify-between rounded-xl p-4 transition-all glass-card"
                   >
-                    <div className="flex items-center gap-3 flex-wrap">
-                      <ObjectLabel
-                        name={cand.subjectName}
-                        granularity={cand.subjectGranularity}
-                        parentName={cand.subjectParentName}
-                        objectType={cand.subjectObjectType}
-                      />
-                      <Badge variant="outline">{cand.relationType}</Badge>
-                      {contradictionBadge && <Badge variant={contradictionBadge.variant}>{contradictionBadge.label}</Badge>}
-                      {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
-                      <ObjectLabel
-                        name={cand.objectName}
-                        granularity={cand.objectGranularity}
-                        parentName={cand.objectParentName}
-                        objectType={cand.objectObjectType}
-                      />
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <ObjectLabel
+                          name={cand.subjectName}
+                          granularity={cand.subjectGranularity}
+                          parentName={cand.subjectParentName}
+                          objectType={cand.subjectObjectType}
+                        />
+                        <Badge variant="outline">{cand.relationType}</Badge>
+                        {contradictionBadge && <Badge variant={contradictionBadge.variant}>{contradictionBadge.label}</Badge>}
+                        {badge && <Badge variant={badge.variant}>{badge.label}</Badge>}
+                        <ObjectLabel
+                          name={cand.objectName}
+                          granularity={cand.objectGranularity}
+                          parentName={cand.objectParentName}
+                          objectType={cand.objectObjectType}
+                        />
+                      </div>
+                      {llmExplanation && (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {llmExplanation}
+                        </p>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-4">
+                    <div className="ml-4 flex items-center gap-4">
                       <div className="text-right">
                         <div className="text-xs text-muted-foreground">신뢰도</div>
                         <div className="text-sm font-medium text-foreground">

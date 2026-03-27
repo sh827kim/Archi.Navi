@@ -24,6 +24,13 @@ export interface LlmAssessment {
   assessedAt: string;
 }
 
+/** 관계 후보 설명 생성 결과 */
+export interface LlmExplanation {
+  summary: string;
+  model: string;
+  explainedAt: string;
+}
+
 /** Evidence 요약 (LLM 컨텍스트용) */
 export interface EvidenceSummary {
   filePath: string | null;
@@ -36,7 +43,9 @@ export interface EvidenceSummary {
 /** 후보 + Evidence 컨텍스트 (LLM에 전달) */
 export interface CandidateContext {
   candidateId: string;
+  subjectObjectId: string;
   subjectName: string;
+  objectId: string;
   objectName: string;
   relationType: string;
   confidence: number;
@@ -50,6 +59,11 @@ export type GenerateAssessmentFn = (
   context: CandidateContext,
 ) => Promise<LlmAssessment>;
 
+export type GenerateExplanationFn = (
+  prompt: string,
+  contexts: CandidateContext[],
+) => Promise<Record<string, LlmExplanation>>;
+
 /** 필터 실행 요청 */
 export interface LlmFilterRequest {
   workspaceId: string;
@@ -57,6 +71,11 @@ export interface LlmFilterRequest {
   candidateIds?: string[];
   /** 배치 크기 (기본 10) */
   batchSize?: number;
+}
+
+export interface LlmExplanationRequest extends LlmFilterRequest {
+  generateExplanations?: boolean;
+  maxCalls?: number;
 }
 
 /** 필터 실행 결과 */
@@ -67,6 +86,14 @@ export interface LlmFilterResult {
     uncertain: number;
     likelyFalsePositive: number;
   };
+  durationMs: number;
+}
+
+export interface LlmExplanationResult {
+  processedCandidateCount: number;
+  generatedCount: number;
+  skippedCount: number;
+  callCount: number;
   durationMs: number;
 }
 
