@@ -433,7 +433,7 @@ function collectJavaLikeMethodCalls(
 
     const methodNodes = getChildren(body).filter((child) => METHOD_DECLARATION_NODE_TYPES.includes(child.type));
     for (const methodNode of methodNodes) {
-      const methodNameNode = getChildren(methodNode).find(isIdentifierNode);
+      const methodNameNode = extractJavaLikeMethodNameNode(methodNode);
       if (!methodNameNode) continue;
       registerMethodCalls(
         table,
@@ -443,6 +443,10 @@ function collectJavaLikeMethodCalls(
       );
     }
   }
+}
+
+function extractJavaLikeMethodNameNode(methodNode: SyntaxNode): SyntaxNode | null {
+  return getChildren(methodNode).find((child) => child.type === 'identifier' || child.type === 'simple_identifier') ?? null;
 }
 
 function collectJavaLikeSymbols(

@@ -103,4 +103,27 @@ public class PaymentClientImpl implements PaymentClient {
     expect(table.symbolsByFqcn.has('IncludedContract')).toBe(true);
     expect(table.symbolsByFqcn.has('ExcludedContract')).toBe(false);
   });
+
+  it('Java 메서드 반환 타입이 클래스여도 실제 메서드명으로 호출 매핑해야 한다', async () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const srcDir = join(repoRoot, 'src');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(
+      join(srcDir, 'PaymentClient.java'),
+      `package com.example.payment;
+public class PaymentClient {
+  public ResponseEntity charge() {
+    return webClient.get().uri("/charge");
+  }
+}`,
+    );
+
+    const table = await buildProjectSymbolTable({ repoRoot });
+    const calls = table.methodCallsByType.get('com.example.payment.PaymentClient')?.get('charge') ?? [];
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.symbol).toBe('/charge');
+  });
 });
