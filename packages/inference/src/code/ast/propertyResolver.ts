@@ -115,15 +115,19 @@ function parsePropertyFile(filePath: string): AstPropertyMap {
     return new Map();
   }
 
-  let parsed: unknown;
+  const parsedDocuments: unknown[] = [];
   try {
-    parsed = yaml.load(content);
+    yaml.loadAll(content, (document) => {
+      parsedDocuments.push(document);
+    });
   } catch {
     return new Map();
   }
 
   const properties: AstPropertyMap = new Map();
-  flattenYamlObject(parsed, '', properties);
+  for (const parsedDocument of parsedDocuments) {
+    flattenYamlObject(parsedDocument, '', properties);
+  }
   return properties;
 }
 
