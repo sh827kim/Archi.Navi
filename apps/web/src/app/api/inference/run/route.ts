@@ -17,11 +17,17 @@ import {
   crossValidatePendingRelationCandidates,
   extractCodeSignalsWithEngine,
   extractDbSchemaSignals,
+  generateBoostCandidates,
   normalizeCodeSignalEngine,
   type CodeSignalEngine,
   type CodeSignalEngineUsed,
   type ConfigCodeBindingResult,
 } from '@archi-navi/inference';
+import {
+  createGenerateBoostSuggestionFn,
+  getInferenceModel,
+  resolveMaxCalls,
+} from '@/lib/inference-llm';
 
 type InferenceMode = 'config' | 'code' | 'db';
 
@@ -36,6 +42,12 @@ interface RunInferenceRequest {
     interProcedural?: boolean;
     maxCallChainDepth?: number;
     resolveProperties?: boolean;
+  };
+  llmBoost?: {
+    enabled?: boolean;
+    codeIntentAnalysis?: boolean;
+    generateExplanations?: boolean;
+    maxCalls?: number;
   };
 }
 
@@ -249,6 +261,32 @@ export async function POST(req: NextRequest) {
       fallbackRepoRoots: [] as string[],
       scanFailures: [] as Array<{ filePath: string; reason: string; language: string }>,
     };
+    const llmBoostRequest = {
+      enabled: body.llmBoost?.enabled === true,
+      codeIntentAnalysis: body.llmBoost?.codeIntentAnalysis !== false,
+      generateExplanations: body.llmBoost?.generateExplanations === true,
+      requestedMaxCalls:
+        typeof body.llmBoost?.maxCalls === 'number' ? body.llmBoost.maxCalls : null,
+    };
+    let llmBoostResult: {
+      request: typeof llmBoostRequest;
+      modelConfigured: boolean;
+      effectiveMaxCalls: number | null;
+      skippedReason: string | null;
+      codeIntentAnalysis: null | {
+        scannedCount: number;
+        generatedCount: number;
+        skippedCount: number;
+        callCount: number;
+        errorCount: number;
+      };
+    } = {
+      request: llmBoostRequest,
+      modelConfigured: false,
+      effectiveMaxCalls: null,
+      skippedReason: null,
+      codeIntentAnalysis: null,
+    };
     let dbResult:
       | null
       | {
@@ -335,6 +373,50 @@ export async function POST(req: NextRequest) {
       }
     }
 
+    if (!llmBoostRequest.enabled) {
+      llmBoostResult.skippedReason = 'DISABLED';
+    } else if (!modeSet.has('code')) {
+      llmBoostResult.skippedReason = 'CODE_MODE_NOT_SELECTED';
+    } else if (!llmBoostRequest.codeIntentAnalysis) {
+      llmBoostResult.skippedReason = 'CODE_INTENT_ANALYSIS_DISABLED';
+    } else if (successfulCodeRepoRoots.length === 0) {
+      llmBoostResult.skippedReason = 'NO_SUCCESSFUL_CODE_ROOTS';
+    } else {
+      llmBoostResult.effectiveMaxCalls = resolveMaxCalls(body.llmBoost?.maxCalls);
+
+      if (llmBoostResult.effectiveMaxCalls === 0) {
+        llmBoostResult.skippedReason = 'MAX_CALLS_EXHAUSTED';
+      } else {
+        const modelInfo = getInferenceModel(req);
+
+        if (!modelInfo) {
+          llmBoostResult.skippedReason = 'LLM_NOT_CONFIGURED';
+          warnings.push(
+            'LLM 부스터(code intent analysis)를 건너뜁니다: AI 제공자 설정이 없습니다.',
+          );
+        } else {
+          llmBoostResult.modelConfigured = true;
+
+          try {
+            llmBoostResult.codeIntentAnalysis = await generateBoostCandidates(
+              db,
+              createGenerateBoostSuggestionFn(modelInfo.model, modelInfo.modelName),
+              {
+                workspaceId,
+                repoRoots: successfulCodeRepoRoots,
+                maxCalls: llmBoostResult.effectiveMaxCalls,
+              },
+            );
+          } catch (error) {
+            llmBoostResult.skippedReason = 'FAILED';
+            warnings.push(
+              `LLM 부스터(code intent analysis) 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+            );
+          }
+        }
+      }
+    }
+
     let crossBindingResult: ConfigCodeBindingResult | null = null;
 
     if (modeSet.has('db')) {
@@ -410,9 +492,14 @@ export async function POST(req: NextRequest) {
     const dbCandidateCount =
       (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
     const crossBindingCandidateCount = crossBindingResult?.createdEndpointCandidateCount ?? 0;
+    const llmBoostCandidateCount = llmBoostResult.codeIntentAnalysis?.generatedCount ?? 0;
 
     const relationCandidatesCreated =
-      configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
+      configResult.candidateCount
+      + dbCandidateCount
+      + codeResult.candidateCount
+      + crossBindingCandidateCount
+      + llmBoostCandidateCount;
     const hasAnySuccess =
       configResult.repoCount > 0 ||
       successfulCodeRelationRepoCount > 0 ||
@@ -445,6 +532,7 @@ export async function POST(req: NextRequest) {
       results: {
         config: configResult,
         code: codeResult,
+        llmBoost: llmBoostResult,
         db: dbResult,
         crossBinding: crossBindingResult,
         crossValidation: crossValidationResult,

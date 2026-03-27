@@ -6,10 +6,20 @@
 import { and, eq } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
-import { runDiscovery, runSeedBasedInference } from '@archi-navi/inference';
+import {
+  generateDomainLabels,
+  runDiscovery,
+  runSeedBasedInference,
+  type DomainLabelResult,
+} from '@archi-navi/inference';
 import { getActiveGeneration, rebuildRollups } from '@archi-navi/core';
+import { createGenerateDomainLabelFn, getInferenceModel } from '@/lib/inference-llm';
 
 type DomainTrack = 'a' | 'b' | 'all';
+
+interface DomainRunLlmLabelBody {
+  enabled?: boolean;
+}
 
 interface DomainRunBody {
   workspaceId?: string;
@@ -18,6 +28,28 @@ interface DomainRunBody {
   generationVersion?: number;
   minClusterSize?: number;
   resolution?: number;
+  llmLabel?: DomainRunLlmLabelBody;
+}
+
+interface DomainRunLlmLabelResult extends DomainLabelResult {
+  requested: boolean;
+  applied: boolean;
+  reason?: 'not_configured' | 'error';
+}
+
+function createEmptyDomainLabelResult(
+  overrides: Partial<DomainRunLlmLabelResult> = {},
+): DomainRunLlmLabelResult {
+  return {
+    requested: true,
+    applied: false,
+    processedCount: 0,
+    labeledCount: 0,
+    skippedCount: 0,
+    callCount: 0,
+    errorCount: 0,
+    ...overrides,
+  };
 }
 
 function normalizeTrack(value: unknown): DomainTrack {
@@ -75,6 +107,7 @@ export async function POST(req: NextRequest) {
         runId: string;
         clusterCount: number;
         generationVersion: number;
+        llmLabel?: DomainRunLlmLabelResult;
       },
     };
 
@@ -106,6 +139,36 @@ export async function POST(req: NextRequest) {
         ...discoveryResult,
         generationVersion,
       };
+
+      if (body.llmLabel?.enabled === true) {
+        const modelInfo = getInferenceModel(req);
+        if (!modelInfo) {
+          result.discovery.llmLabel = createEmptyDomainLabelResult({
+            reason: 'not_configured',
+          });
+        } else {
+          try {
+            const llmLabelResult = await generateDomainLabels(
+              db,
+              createGenerateDomainLabelFn(modelInfo.model, modelInfo.modelName),
+              {
+                workspaceId,
+                runId: discoveryResult.runId,
+              },
+            );
+            result.discovery.llmLabel = {
+              requested: true,
+              applied: true,
+              ...llmLabelResult,
+            };
+          } catch (error) {
+            console.error('[POST /api/inference/domain-run] llmLabel', error);
+            result.discovery.llmLabel = createEmptyDomainLabelResult({
+              reason: 'error',
+            });
+          }
+        }
+      }
     }
 
     return NextResponse.json({ ok: true, result });
