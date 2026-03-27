@@ -219,6 +219,53 @@ public class OrderService {
         ]);
     });
 
+    it('interProcedural=true면 locally called helper 메서드도 depth-1 호출 해석 대상이어야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'PaymentService.java'),
+            `package com.example.order;
+public class PaymentService {
+    void callPayment() {
+        restTemplate.getForObject("http://payment/pay", String.class);
+    }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'OrderService.java'),
+            `package com.example.order;
+public class OrderService {
+    private PaymentService paymentService;
+
+    void placeOrder() {
+        invokePayment();
+    }
+
+    void invokePayment() {
+        paymentService.callPayment();
+    }
+}`,
+        );
+
+        await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+            maxCallChainDepth: 3,
+        });
+
+        const savedEdges = await db
+            .select()
+            .from(codeCallEdges)
+            .where(eq(codeCallEdges.workspaceId, workspaceId));
+        expect(savedEdges.map((edge) => edge.calleeSymbol).sort()).toEqual([
+            'http://payment/pay',
+            'http://payment/pay',
+        ]);
+    });
+
     it('interProcedural=true면 인터페이스의 단일 구현체 메서드 내부 HTTP call을 해석해야 한다', async () => {
         await createFixtures(db);
 

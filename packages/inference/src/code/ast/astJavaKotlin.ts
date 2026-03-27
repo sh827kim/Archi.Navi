@@ -931,20 +931,10 @@ async function processInterProceduralMethodInvocations(
         if (!body) continue;
 
         const methods = getChildren(body).filter((child) => METHOD_DECLARATION_NODE_TYPES.includes(child.type));
-        const locallyCalledMethodNames = new Set<string>();
-        for (const methodNode of methods) {
-            for (const invocation of CALL_NODE_TYPES.flatMap((nodeType) => findNodes(methodNode, nodeType))) {
-                const parsed = parseMethodInvocation(invocation);
-                if (parsed?.receiverName === null) {
-                    locallyCalledMethodNames.add(parsed.methodName);
-                }
-            }
-        }
 
         for (const methodNode of methods) {
             const currentMethodName = extractMethodName(methodNode);
             if (!currentMethodName) continue;
-            if (locallyCalledMethodNames.has(currentMethodName)) continue;
 
             const methodTypeMap = buildMethodTypeMap(methodNode);
             const invocations = CALL_NODE_TYPES.flatMap((nodeType) => findNodes(methodNode, nodeType));
