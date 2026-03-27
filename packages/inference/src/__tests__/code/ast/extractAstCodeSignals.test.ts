@@ -543,6 +543,54 @@ public class OrderController {}`,
         expect(second.signalCount).toBe(0);
     });
 
+
+    it('interProcedural=true이면 SHA256 미변경 파일도 재처리해야 한다', async () => {
+        await createFixtures(db);
+
+        const srcDir = join(tempDir, 'src');
+        mkdirSync(srcDir, { recursive: true });
+        writeFileSync(
+            join(srcDir, 'OrderController.java'),
+            `@Service
+public class OrderController {
+  private final PaymentService paymentService;
+
+  public OrderController(PaymentService paymentService) {
+    this.paymentService = paymentService;
+  }
+
+  public void placeOrder() {
+    paymentService.callPayment();
+  }
+}`,
+        );
+        writeFileSync(
+            join(srcDir, 'PaymentService.java'),
+            `@Service
+public class PaymentService {
+  public String callPayment() {
+    return restTemplate.getForObject("http://payment-service/pay", String.class);
+  }
+}`,
+        );
+
+        const first = await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+        });
+        expect(first.skippedCount).toBe(0);
+
+        const second = await extractAstCodeSignals(db, {
+            workspaceId,
+            repoRoot: tempDir,
+            interProcedural: true,
+        });
+
+        expect(second.fileCount).toBeGreaterThanOrEqual(2);
+        expect(second.skippedCount).toBe(0);
+    });
+
     it('SHA256 변경 시 기존 code_call_edges를 삭제하고 재생성해야 한다', async () => {
         await createFixtures(db);
 

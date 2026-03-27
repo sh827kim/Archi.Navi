@@ -115,6 +115,7 @@ interface ProcessFileContext {
     repoRoot: string;
     allServices: { id: string; name: string }[];
     forceRescan: boolean;
+    disableShaSkip: boolean;
 }
 
 interface ProcessFileResult {
@@ -128,7 +129,7 @@ async function processFile(
     scanResult: FileScanResult,
     ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
-    const { db, workspaceId, repoRoot, allServices, forceRescan } = ctx;
+    const { db, workspaceId, repoRoot, allServices, forceRescan, disableShaSkip } = ctx;
 
     const existing = await db
         .select({ id: codeArtifacts.id, sha256: codeArtifacts.sha256 })
@@ -144,7 +145,7 @@ async function processFile(
     const existingArtifact = existing[0];
 
     // SHA256 동일 → 스킵
-    if (!forceRescan && existingArtifact?.sha256 === scanResult.sha256) {
+    if (!forceRescan && !disableShaSkip && existingArtifact?.sha256 === scanResult.sha256) {
         return { skipped: true, isNew: false, signalCount: 0 };
     }
 
@@ -245,7 +246,14 @@ export async function extractAstCodeSignals(
         })
         : null;
 
-    const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
+    const ctx: ProcessFileContext = {
+        db,
+        workspaceId,
+        repoRoot,
+        allServices,
+        forceRescan,
+        disableShaSkip: options.interProcedural === true,
+    };
     const scanFailures: ScanFailureDetail[] = [];
     const result: CodeSignalResult = {
         fileCount: 0,
