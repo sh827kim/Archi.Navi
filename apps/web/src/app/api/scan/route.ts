@@ -190,7 +190,13 @@ export async function registerProjects(
     const existing = await db
       .select({ id: objects.id, metadata: objects.metadata })
       .from(objects)
-      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.name, proj.name)))
+      .where(
+        and(
+          eq(objects.workspaceId, workspaceId),
+          eq(objects.objectType, 'service'),
+          eq(objects.name, proj.name),
+        ),
+      )
       .limit(1);
 
     if (existing.length > 0) {
