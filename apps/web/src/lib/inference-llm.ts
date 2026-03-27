@@ -32,12 +32,15 @@ const explanationSchema = z.object({
   })),
 });
 
-const boostSuggestionSchema = z.object({
-  targetServiceName: z.string(),
-  relationType: z.enum(['call', 'depend_on', 'read', 'write', 'produce', 'consume']),
-  confidence: z.number().min(0.5).max(0.7).optional(),
-  reasoning: z.string(),
-});
+const boostSuggestionSchema = z.union([
+  z.object({
+    targetServiceName: z.string(),
+    relationType: z.enum(['call', 'depend_on', 'read', 'write', 'produce', 'consume']),
+    confidence: z.number().min(0.5).max(0.7).optional(),
+    reasoning: z.string(),
+  }),
+  z.null(),
+]);
 
 const domainLabelSchema = z.object({
   ko: z.string(),
@@ -164,6 +167,8 @@ export function createGenerateBoostSuggestionFn(
       prompt,
       temperature: 0.1,
     });
+
+    if (!result.object) return null;
 
     const confidence = result.object.confidence;
     return {
