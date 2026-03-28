@@ -1,23 +1,11 @@
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { extname, join } from 'path';
+import { readFileSync } from 'fs';
+import { extname } from 'path';
 import type { SyntaxNode } from 'web-tree-sitter';
 import { extractStringValue, findChildByType, findNodes, getChildren } from './astScanner';
 import { getWasmParser, type SupportedLanguage } from './wasmParser';
 import type { AstPropertyMap, AstPropertyResolver } from './propertyResolver';
 import { resolveValueExpression } from './propertyResolver';
-
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  '.next',
-  'target',
-  '__pycache__',
-  '.gradle',
-  'out',
-  'coverage',
-]);
+import { findFiles } from '../../utils/fileDiscovery';
 
 const IDENTIFIER_NODE_TYPES = new Set(['identifier', 'simple_identifier', 'type_identifier']);
 const CALL_NODE_TYPES = ['method_invocation', 'call_expression'];
@@ -55,39 +43,6 @@ export interface AstProjectSymbolTable {
   implementationMap: Map<string, string[]>;
   methodCallsByType: Map<string, Map<string, AstDirectHttpCall[]>>;
   methodCallTargetsByType: Map<string, Map<string, AstMethodCallTarget[]>>;
-}
-
-function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
-  const results: string[] = [];
-
-  function walk(current: string) {
-    let entries: string[];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (SKIP_DIRS.has(entry)) continue;
-      const fullPath = join(current, entry);
-      let stat;
-      try {
-        stat = statSync(fullPath);
-      } catch {
-        continue;
-      }
-
-      if (stat.isDirectory()) {
-        walk(fullPath);
-      } else if (stat.isFile() && predicate(fullPath)) {
-        results.push(fullPath);
-      }
-    }
-  }
-
-  walk(dir);
-  return results;
 }
 
 function findAstCandidateFiles(repoRoot: string): string[] {

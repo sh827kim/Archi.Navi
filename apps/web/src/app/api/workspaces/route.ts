@@ -6,6 +6,13 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, workspaces } from '@archi-navi/db';
 import { asc } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
+import { normalizeWorkspaceName } from '@/lib/workspace-name';
+
+export const dynamic = 'force-dynamic';
+
+const NO_STORE_HEADERS = {
+  'Cache-Control': 'no-store',
+} as const;
 
 export async function GET() {
   try {
@@ -19,7 +26,7 @@ export async function GET() {
       .from(workspaces)
       .orderBy(asc(workspaces.createdAt));
 
-    return NextResponse.json(rows);
+    return NextResponse.json(rows, { headers: NO_STORE_HEADERS });
   } catch (error) {
     console.error('[GET /api/workspaces]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
@@ -29,9 +36,9 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const body = (await req.json()) as { name: string };
-
-    if (!body.name?.trim()) {
-      return NextResponse.json({ error: 'name is required' }, { status: 400 });
+    const normalized = normalizeWorkspaceName(body.name);
+    if ('error' in normalized) {
+      return NextResponse.json({ error: normalized.error }, { status: 400 });
     }
 
     const id = generateId();
@@ -39,10 +46,10 @@ export async function POST(req: NextRequest) {
 
     await db.insert(workspaces).values({
       id,
-      name: body.name.trim(),
+      name: normalized.name,
     });
 
-    return NextResponse.json({ id, name: body.name.trim() }, { status: 201 });
+    return NextResponse.json({ id, name: normalized.name }, { status: 201 });
   } catch (error) {
     console.error('[POST /api/workspaces]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

@@ -2,6 +2,9 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+import { mkdtempSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const {
   getDbMock,
@@ -65,6 +68,7 @@ import { POST } from '@/app/api/inference/run/route';
 describe('POST /api/inference/run', () => {
   afterEach(() => {
     vi.clearAllMocks();
+    vi.unstubAllEnvs();
   });
 
   it('llmBoost.codeIntentAnalysis가 활성화되면 code 추론 이후 LLM boost 후보 생성을 호출해야 한다', async () => {
@@ -697,6 +701,53 @@ describe('POST /api/inference/run', () => {
       { workspaceId: 'ws-1', repoRoots: [process.cwd()] },
     );
     expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
+  });
+
+  it('service.metadata.scanPath 에서 발견한 경로도 allowed root 검증을 적용해야 한다', async () => {
+    const externalRepoRoot = mkdtempSync(join(tmpdir(), 'archi-navi-external-repo-'));
+    vi.stubEnv('ARCHI_NAVI_ALLOWED_INFERENCE_ROOTS', process.cwd());
+    getDbMock.mockResolvedValue({
+      select: () => ({
+        from: () => ({
+          where: async () => [{ metadata: { scanPath: externalRepoRoot } }],
+        }),
+      }),
+    });
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock.mockResolvedValue({
+      candidateCount: 1,
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['code'],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(400);
+    expect(extractCodeSignalsWithEngineMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toEqual(
+      expect.objectContaining({
+        error: expect.stringContaining('config/code 추론을 실행할 로컬 repoRoot가 없습니다'),
+        repoRoots: expect.objectContaining({
+          used: [],
+          skippedDisallowed: [externalRepoRoot],
+        }),
+      }),
+    );
   });
 
   it('code-only 실행에서 relation inference가 전부 실패하면 500을 반환해야 한다', async () => {

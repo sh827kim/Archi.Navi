@@ -51,6 +51,8 @@ interface RunInferenceRequest {
   };
 }
 
+type RepoRootSource = 'provided' | 'serviceMetadata';
+
 const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
 
 function isInferenceMode(value: string): value is InferenceMode {
@@ -191,13 +193,16 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    const mergedRoots = [...providedRoots, ...discoveredFromServices];
+    const mergedRoots = [
+      ...providedRoots.map((repoRoot) => ({ repoRoot, source: 'provided' as const })),
+      ...discoveredFromServices.map((repoRoot) => ({ repoRoot, source: 'serviceMetadata' as const })),
+    ];
     const usedRepoRoots: string[] = [];
     const skippedNonLocalRoots: string[] = [];
     const skippedMissingRoots: string[] = [];
     const skippedDisallowedRoots: string[] = [];
 
-    for (const repoRoot of mergedRoots) {
+    for (const { repoRoot } of mergedRoots) {
       if (isLikelyRemotePath(repoRoot)) {
         if (!skippedNonLocalRoots.includes(repoRoot)) skippedNonLocalRoots.push(repoRoot);
         continue;

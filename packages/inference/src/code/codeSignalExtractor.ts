@@ -5,8 +5,7 @@
  *
  * 설계 참조: docs/03-inference-engine.md §6.1 Phase 1 Regex 기반 패턴 매칭
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, extname } from 'path';
+import { readFileSync } from 'fs';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
@@ -14,6 +13,12 @@ import { generateId } from '@archi-navi/shared';
 import { scanJavaKotlin, scanMyBatisXml } from './scanners/javaKotlin';
 import { scanTypeScript } from './scanners/typeScript';
 import { scanPython } from './scanners/python';
+import {
+  findJavaKotlinFiles,
+  findMyBatisXmlFiles,
+  findPythonFiles,
+  findTypeScriptFiles,
+} from '../utils/fileDiscovery';
 
 // ─── 공유 타입 ────────────────────────────────────────────────────────────────
 
@@ -90,82 +95,6 @@ export interface CodeSignalResult {
     scanErrorFilePaths?: string[];
     /** 파일별 스캔 실패 상세 정보 (파일 경로, 사유, 언어) */
     scanFailures?: ScanFailureDetail[];
-}
-
-// ─── 파일 탐색 ────────────────────────────────────────────────────────────────
-
-const SKIP_DIRS = new Set([
-    'node_modules', '.git', 'dist', 'build', '.next',
-    'target', '__pycache__', '.gradle', 'out', 'coverage',
-]);
-
-/** 디렉토리를 재귀 탐색하여 조건에 맞는 파일 목록 반환 */
-function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
-    const results: string[] = [];
-
-    function walk(current: string) {
-        let entries: string[];
-        try {
-            entries = readdirSync(current);
-        } catch {
-            return;
-        }
-
-        for (const entry of entries) {
-            if (SKIP_DIRS.has(entry)) continue;
-            const fullPath = join(current, entry);
-            let stat;
-            try {
-                stat = statSync(fullPath);
-            } catch {
-                continue;
-            }
-
-            if (stat.isDirectory()) {
-                walk(fullPath);
-            } else if (stat.isFile() && predicate(fullPath)) {
-                results.push(fullPath);
-            }
-        }
-    }
-
-    walk(dir);
-    return results;
-}
-
-/** Java/Kotlin 소스 파일 탐색 */
-function findJavaKotlinFiles(repoRoot: string): string[] {
-    return findFiles(repoRoot, (p) => {
-        const ext = extname(p).toLowerCase();
-        return ext === '.java' || ext === '.kt';
-    });
-}
-
-/** MyBatis XML mapper 파일 탐색 (내용 기반 필터링) */
-function findMyBatisXmlFiles(repoRoot: string): string[] {
-    return findFiles(repoRoot, (p) => {
-        if (extname(p).toLowerCase() !== '.xml') return false;
-        try {
-            // 파일 앞부분만 읽어 MyBatis mapper 여부 확인
-            const head = readFileSync(p, 'utf-8').slice(0, 2000);
-            return head.includes('<mapper ') || head.includes('<mapper\n');
-        } catch {
-            return false;
-        }
-    });
-}
-
-/** TypeScript/JavaScript 소스 파일 탐색 */
-function findTypeScriptFiles(repoRoot: string): string[] {
-    return findFiles(repoRoot, (p) => {
-        const ext = extname(p).toLowerCase();
-        return ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx';
-    });
-}
-
-/** Python 소스 파일 탐색 */
-function findPythonFiles(repoRoot: string): string[] {
-    return findFiles(repoRoot, (p) => extname(p).toLowerCase() === '.py');
 }
 
 // ─── 서비스 매칭 (ownerObjectId 휴리스틱) ────────────────────────────────────

@@ -175,7 +175,7 @@ function createTempDir(prefix: string): string {
 }
 
 /* ─── Object 등록 ─── */
-async function registerProjects(
+export async function registerProjects(
   workspaceId: string,
   projects: DiscoveredProject[],
   dryRun: boolean,
@@ -188,12 +188,34 @@ async function registerProjects(
 
   for (const proj of projects) {
     const existing = await db
-      .select({ id: objects.id })
+      .select({ id: objects.id, metadata: objects.metadata })
       .from(objects)
-      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.name, proj.name)))
+      .where(
+        and(
+          eq(objects.workspaceId, workspaceId),
+          eq(objects.objectType, 'service'),
+          eq(objects.name, proj.name),
+        ),
+      )
       .limit(1);
 
-    if (existing.length > 0) { skipped++; continue; }
+    if (existing.length > 0) {
+      const current = existing[0]!;
+      const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+      await db
+        .update(objects)
+        .set({
+          metadata: {
+            ...metadata,
+            scanPath: proj.path,
+            language: proj.language,
+            markerFile: proj.markerFile,
+          },
+        })
+        .where(eq(objects.id, current.id));
+      skipped++;
+      continue;
+    }
 
     const id = generateId();
     await db.insert(objects).values({

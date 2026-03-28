@@ -1,19 +1,7 @@
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { dirname, extname, join } from 'path';
+import { readFileSync } from 'fs';
+import { dirname, extname } from 'path';
 import yaml from 'js-yaml';
-
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  '.next',
-  'target',
-  '__pycache__',
-  '.gradle',
-  'out',
-  'coverage',
-]);
+import { findFiles } from '../../utils/fileDiscovery';
 
 const PROPERTY_FILE_PATTERN = /^(?:application|bootstrap)(?:-[^.]+)?\.ya?ml$/i;
 
@@ -33,40 +21,6 @@ export interface AstPropertyResolver {
 
 function normalizePath(filePath: string): string {
   return filePath.replace(/\\/g, '/');
-}
-
-function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
-  const results: string[] = [];
-
-  function walk(current: string) {
-    let entries: string[];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (SKIP_DIRS.has(entry)) continue;
-      const fullPath = join(current, entry);
-
-      let stat;
-      try {
-        stat = statSync(fullPath);
-      } catch {
-        continue;
-      }
-
-      if (stat.isDirectory()) {
-        walk(fullPath);
-      } else if (stat.isFile() && predicate(fullPath)) {
-        results.push(fullPath);
-      }
-    }
-  }
-
-  walk(dir);
-  return results;
 }
 
 function findPropertyFiles(repoRoot: string): string[] {

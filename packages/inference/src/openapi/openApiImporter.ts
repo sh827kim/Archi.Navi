@@ -3,14 +3,15 @@
  * 리포지토리에서 OpenAPI/Swagger 스펙 파일을 탐색하고
  * 각 엔드포인트를 api_endpoint 객체로 DB에 upsert
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, basename, relative, sep } from 'path';
+import { readFileSync } from 'fs';
+import { basename, relative, sep } from 'path';
 import { eq, and } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { objects } from '@archi-navi/db';
 import { generateId, buildUrn } from '@archi-navi/shared';
 import { parseOpenApiSpec } from './openApiParser';
 import type { ParsedSpec, ParsedEndpoint } from './openApiParser';
+import { findFiles } from '../utils/fileDiscovery';
 
 // ─── 타입 정의 ─────────────────────────────────────────────────────────────────
 
@@ -34,49 +35,6 @@ export interface OpenApiImportResult {
 
 /** api_endpoint 선언 스펙의 신뢰도 */
 const OPENAPI_CONFIDENCE = 0.98;
-
-// 탐색 제외 디렉토리
-const SKIP_DIRS = new Set([
-    'node_modules', '.git', 'dist', 'build', '.next', 'target',
-]);
-
-// ─── 파일 탐색 ─────────────────────────────────────────────────────────────────
-
-/**
- * 재귀적으로 디렉토리를 탐색하여 조건에 맞는 파일 경로 수집
- */
-function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
-    const results: string[] = [];
-
-    function walk(current: string) {
-        let entries: string[];
-        try {
-            entries = readdirSync(current);
-        } catch {
-            return;
-        }
-
-        for (const entry of entries) {
-            if (SKIP_DIRS.has(entry)) continue;
-            const fullPath = join(current, entry);
-            let stat;
-            try {
-                stat = statSync(fullPath);
-            } catch {
-                continue;
-            }
-
-            if (stat.isDirectory()) {
-                walk(fullPath);
-            } else if (stat.isFile() && predicate(fullPath)) {
-                results.push(fullPath);
-            }
-        }
-    }
-
-    walk(dir);
-    return results;
-}
 
 /** OpenAPI/Swagger 스펙 파일명 패턴 */
 const SPEC_FILE_NAMES = new Set([

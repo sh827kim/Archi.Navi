@@ -26,7 +26,7 @@ import {
 } from '../utils/github-helper';
 
 /** 발견된 프로젝트를 service Object로 DB에 등록 */
-async function registerProjects(
+export async function registerProjects(
   workspaceId: string,
   projects: DiscoveredProject[],
   dryRun: boolean,
@@ -42,12 +42,31 @@ async function registerProjects(
   for (const proj of projects) {
     // 이름 중복 체크
     const existing = await db
-      .select({ id: objects.id })
+      .select({ id: objects.id, metadata: objects.metadata })
       .from(objects)
-      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.name, proj.name)))
+      .where(
+        and(
+          eq(objects.workspaceId, workspaceId),
+          eq(objects.objectType, 'service'),
+          eq(objects.name, proj.name),
+        ),
+      )
       .limit(1);
 
     if (existing.length > 0) {
+      const current = existing[0]!;
+      const metadata = (current.metadata ?? {}) as Record<string, unknown>;
+      await db
+        .update(objects)
+        .set({
+          metadata: {
+            ...metadata,
+            scanPath: proj.path,
+            language: proj.language,
+            markerFile: proj.markerFile,
+          },
+        })
+        .where(eq(objects.id, current.id));
       skipped++;
       continue;
     }

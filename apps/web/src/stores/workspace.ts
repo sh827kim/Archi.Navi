@@ -81,7 +81,7 @@ export const useWorkspaceStore = create<WorkspaceState>()(
       /* ── 서버에서 목록 fetch ── */
       refreshWorkspaces: async () => {
         try {
-          const res = await fetch('/api/workspaces');
+          const res = await fetch('/api/workspaces', { cache: 'no-store' });
           if (!res.ok) return;
 
           const data = (await res.json()) as WorkspaceItem[];

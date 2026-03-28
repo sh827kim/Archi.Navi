@@ -1,7 +1,7 @@
 # Object Mapping 3D Renderer SPEC (Roadmap 3-7)
 
 - 작성일: 2026-03-02
-- 상태: Draft (구현 기준)
+- 상태: Implemented
 - 대상: `apps/web/src/components/mapping/rollup-graph.tsx`
 
 ## 1. 목적
