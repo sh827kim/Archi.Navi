@@ -305,6 +305,12 @@ describe('inference profile default route', () => {
 
     expect(response.status).toBe(200);
     expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
+    const relationQuery = transactionExecuteMock.mock.calls[1]?.[0] as { strings: string[] };
+    const domainQuery = transactionExecuteMock.mock.calls[2]?.[0] as { strings: string[] };
+    expect(relationQuery.strings.join('')).toContain('set feedback_config = ');
+    expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');
+    expect(domainQuery.strings.join('')).toContain('set domain_feedback_config = ');
+    expect(domainQuery.strings.join('')).not.toContain('domain_feedback_adjustments =');
 
     const payload = await response.json();
     expect(payload.relationFeedbackConfig).toEqual({
@@ -597,6 +603,7 @@ describe('inference profile default route', () => {
     const domainQuery = transactionExecuteMock.mock.calls[2]?.[0] as { strings: string[] };
     expect(relationQuery.strings.join('')).toContain('feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('domain_feedback_config');
+    expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');
     expect(domainQuery.strings.join('')).toContain('domain_feedback_config');
 
     const payload = await response.json();

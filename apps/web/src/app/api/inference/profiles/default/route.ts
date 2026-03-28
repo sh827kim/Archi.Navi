@@ -568,9 +568,6 @@ export async function PUT(req: NextRequest) {
             ? clamp(relationFeedbackConfigInput.maxAdjustment, 0, 1)
             : currentRelationFeedbackConfig.maxAdjustment,
         };
-    const relationFeedbackAdjustments = resetRelationFeedback
-      ? {}
-      : asFeedbackAdjustments(current.feedbackAdjustments, relationFeedbackConfig);
     const currentDomainFeedbackConfig = asFeedbackConfig(current.domainFeedbackConfig);
     const domainFeedbackConfigInput = body.domainFeedbackConfig ?? {};
     const domainFeedbackConfig = resetDomainFeedback
@@ -586,9 +583,6 @@ export async function PUT(req: NextRequest) {
             ? clamp(domainFeedbackConfigInput.maxAdjustment, 0, 1)
             : currentDomainFeedbackConfig.maxAdjustment,
         };
-    const domainFeedbackAdjustments = resetDomainFeedback
-      ? {}
-      : asFeedbackAdjustments(current.domainFeedbackAdjustments, domainFeedbackConfig);
     await db.transaction(async (tx) => {
       await tx
         .update(domainInferenceProfiles)
@@ -620,12 +614,20 @@ export async function PUT(req: NextRequest) {
       `);
 
       try {
-        await tx.execute(sql`
-          update domain_inference_profiles
-          set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb,
-              feedback_adjustments = ${JSON.stringify(relationFeedbackAdjustments)}::jsonb
-          where id = ${current.id}
-        `);
+        if (resetRelationFeedback) {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb,
+                feedback_adjustments = '{}'::jsonb
+            where id = ${current.id}
+          `);
+        } else {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb
+            where id = ${current.id}
+          `);
+        }
       } catch (error) {
         if (!isMissingColumnError(error, ['feedback_config', 'feedback_adjustments'])) {
           throw error;
@@ -633,12 +635,20 @@ export async function PUT(req: NextRequest) {
       }
 
       try {
-        await tx.execute(sql`
-          update domain_inference_profiles
-          set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb,
-              domain_feedback_adjustments = ${JSON.stringify(domainFeedbackAdjustments)}::jsonb
-          where id = ${current.id}
-        `);
+        if (resetDomainFeedback) {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb,
+                domain_feedback_adjustments = '{}'::jsonb
+            where id = ${current.id}
+          `);
+        } else {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb
+            where id = ${current.id}
+          `);
+        }
       } catch (error) {
         if (!isMissingColumnError(error, ['domain_feedback_config', 'domain_feedback_adjustments'])) {
           throw error;
