@@ -5,6 +5,7 @@
  * 어떤 서비스의 어떤 엔드포인트를 호출하는지 추출한다.
  * HTTP 클라이언트 사용 파일만 프리필터링해 전달하므로 토큰 효율적.
  */
+import { truncateText } from './textUtils';
 
 // ── 상수 ──────────────────────────────────────────────
 
@@ -55,12 +56,6 @@ export interface CallExtractionResult {
 
 // ── 유틸 ──────────────────────────────────────────────
 
-/** 긴 소스 내용을 최대 길이로 자름 */
-export function truncateSource(content: string, maxLength: number = MAX_SOURCE_CONTENT_LENGTH): string {
-    if (content.length <= maxLength) return content;
-    return content.slice(0, maxLength) + '\n// ...(truncated)';
-}
-
 /**
  * 소스 파일 목록을 전체 길이 제한 내에서 프롬프트용 텍스트로 변환
  * 총 길이가 MAX_TOTAL_SOURCE_LENGTH를 초과하면 뒤쪽 파일을 생략
@@ -71,7 +66,7 @@ function formatSourceFiles(files: Array<{ path: string; content: string }>): str
 
     for (let i = 0; i < files.length; i++) {
         const file = files[i]!;
-        const truncated = truncateSource(file.content);
+        const truncated = truncateText(file.content, MAX_SOURCE_CONTENT_LENGTH, '\n// ...(truncated)');
         const block = `### 파일 ${i + 1}: ${file.path}\n\`\`\`\n${truncated}\n\`\`\``;
 
         if (totalLength + block.length > MAX_TOTAL_SOURCE_LENGTH && blocks.length > 0) {

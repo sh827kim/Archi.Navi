@@ -5,6 +5,7 @@
  * LLM에게 보내 어떤 외부 서비스를 호출/의존하는지 추출한다.
  * 기존 regex 파서가 놓치는 커스텀 키, 동적 URL 조합 등도 LLM이 포착 가능.
  */
+import { truncateText } from './textUtils';
 
 // ── 상수 ──────────────────────────────────────────────
 
@@ -47,17 +48,11 @@ export interface ConfigAnalysisResult {
 
 // ── 유틸 ──────────────────────────────────────────────
 
-/** 긴 config 내용을 최대 길이로 자름 */
-export function truncateContent(content: string, maxLength: number = MAX_CONFIG_CONTENT_LENGTH): string {
-    if (content.length <= maxLength) return content;
-    return content.slice(0, maxLength) + '\n...(truncated)';
-}
-
 /** config 파일 목록을 프롬프트용 텍스트 블록으로 변환 */
 function formatConfigFiles(files: Array<{ path: string; content: string }>): string {
     return files
         .map((f, i) => {
-            const truncated = truncateContent(f.content);
+            const truncated = truncateText(f.content, MAX_CONFIG_CONTENT_LENGTH, '\n...(truncated)');
             return `### 파일 ${i + 1}: ${f.path}\n\`\`\`\n${truncated}\n\`\`\``;
         })
         .join('\n\n');

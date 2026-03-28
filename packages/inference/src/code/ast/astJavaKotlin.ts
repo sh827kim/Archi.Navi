@@ -28,18 +28,28 @@ import {
 import { getWasmParser } from './wasmParser';
 import type { SupportedLanguage } from './wasmParser';
 import type { AstProjectSymbolTable } from './symbolTable';
-import { resolveJavaDepthOneCallTargets } from './symbolTable';
+import { resolveJavaCallTargets } from './symbolTable';
+import type { AstPropertyMap } from './propertyResolver';
+import { resolveValueExpression } from './propertyResolver';
 
 interface ScanJavaKotlinAstOptions {
     interProcedural?: {
         symbolTable: AstProjectSymbolTable;
+        maxCallChainDepth: number;
     };
+    propertyMap?: AstPropertyMap;
 }
 
 const IDENTIFIER_NODE_TYPES = new Set(['identifier', 'simple_identifier', 'type_identifier']);
 const CALL_NODE_TYPES = ['method_invocation', 'call_expression'];
 const METHOD_DECLARATION_NODE_TYPES = ['method_declaration', 'function_declaration'];
 const FIELD_DECLARATION_NODE_TYPES = ['field_declaration', 'property_declaration'];
+const VALUE_ANNOTATION_REGEX = /@(?:field:)?Value\s*\(\s*"([^"]+)"\s*\)/;
+
+interface ResolvedVariableMap {
+    values: VariableMap;
+    propertyBackedVariables: Set<string>;
+}
 
 // ─── 변수 추적 (Data-Flow) ─────────────────────────────────────────────────────
 
@@ -47,13 +57,15 @@ const FIELD_DECLARATION_NODE_TYPES = ['field_declaration', 'property_declaration
  * AST에서 문자열 변수 선언 맵 구축
  * String URL = "..." 또는 private static final String URL = "..." 형태 추적
  */
-function buildVariableMap(root: SyntaxNode): VariableMap {
-    const map: VariableMap = new Map();
+function buildVariableMap(root: SyntaxNode, propertyMap?: AstPropertyMap): ResolvedVariableMap {
+    const values: VariableMap = new Map();
+    const propertyBackedVariables = new Set<string>();
 
     // local_variable_declaration과 field_declaration 모두 처리
     const varDecls = [
         ...findNodes(root, 'local_variable_declaration'),
         ...findNodes(root, 'field_declaration'),
+        ...findNodes(root, 'property_declaration'),
     ];
 
     for (const decl of varDecls) {
@@ -74,12 +86,38 @@ function buildVariableMap(root: SyntaxNode): VariableMap {
         if (nameNode && valueNode) {
             const strValue = extractStringValue(valueNode);
             if (strValue !== null) {
-                map.set(nameNode.text, strValue);
+                values.set(nameNode.text, strValue);
             }
         }
     }
 
-    return map;
+    if (propertyMap) {
+        const propertyDecls = [
+            ...findNodes(root, 'field_declaration'),
+            ...findNodes(root, 'property_declaration'),
+        ];
+
+        for (const decl of propertyDecls) {
+            const valueExpression = decl.text.match(VALUE_ANNOTATION_REGEX)?.[1];
+            if (!valueExpression) continue;
+
+            const resolvedValue = resolveValueExpression(valueExpression, propertyMap);
+            if (!resolvedValue) continue;
+
+            for (const declarator of [
+                ...findNodes(decl, 'variable_declarator'),
+                ...findNodes(decl, 'variable_declaration'),
+            ]) {
+                const nameNode = getChildren(declarator).find(isIdentifierNode);
+                if (nameNode) {
+                    values.set(nameNode.text, resolvedValue);
+                    propertyBackedVariables.add(nameNode.text);
+                }
+            }
+        }
+    }
+
+    return { values, propertyBackedVariables };
 }
 
 /**
@@ -87,12 +125,21 @@ function buildVariableMap(root: SyntaxNode): VariableMap {
  * - string_literal: 직접 값 반환
  * - identifier: 변수 맵에서 조회
  */
-function resolveStringArg(argNode: SyntaxNode, varMap: VariableMap): string | null {
+function resolveStringArg(
+    argNode: SyntaxNode,
+    varMap: ResolvedVariableMap,
+): { value: string; resolvedVia: 'literal' | 'variable' | 'property' } | null {
     if (argNode.type === 'string_literal') {
-        return extractStringValue(argNode);
+        const value = extractStringValue(argNode);
+        return value ? { value, resolvedVia: 'literal' } : null;
     }
     if (argNode.type === 'identifier') {
-        return varMap.get(argNode.text) ?? null;
+        const value = varMap.values.get(argNode.text);
+        if (!value) return null;
+        return {
+            value,
+            resolvedVia: varMap.propertyBackedVariables.has(argNode.text) ? 'property' : 'variable',
+        };
     }
     return null;
 }
@@ -507,7 +554,7 @@ function processSpringMappingAnnotations(
 
 function processMethodInvocations(
     root: SyntaxNode,
-    varMap: VariableMap,
+    varMap: ResolvedVariableMap,
     signals: ExtractedSignal[],
 ): void {
     const methodInvocations = CALL_NODE_TYPES.flatMap((nodeType) => findNodes(root, nodeType));
@@ -524,7 +571,8 @@ function processMethodInvocations(
         if (/^restTemplate$/i.test(objectName)) {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
-                const url = resolveStringArg(firstArg, varMap);
+                const resolvedArg = resolveStringArg(firstArg, varMap);
+                const url = resolvedArg?.value;
                 if (url) {
                     signals.push(
                         makeSignal({
@@ -534,7 +582,12 @@ function processMethodInvocations(
                             lineEnd: mi.endPosition.row + 1,
                             excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9 (변수 추적 포함)
-                            metadata: { client: 'RestTemplate', method: methodName },
+                            metadata: {
+                                client: 'RestTemplate',
+                                method: methodName,
+                                resolvedUrl: url,
+                                resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+                            },
                         }),
                     );
                 }
@@ -546,7 +599,8 @@ function processMethodInvocations(
         if (methodName === 'uri' && /webClient/i.test(objectName)) {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
-                const url = resolveStringArg(firstArg, varMap);
+                const resolvedArg = resolveStringArg(firstArg, varMap);
+                const url = resolvedArg?.value;
                 if (url) {
                     signals.push(
                         makeSignal({
@@ -556,7 +610,12 @@ function processMethodInvocations(
                             lineEnd: mi.endPosition.row + 1,
                             excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
-                            metadata: { client: 'WebClient', method: methodName },
+                            metadata: {
+                                client: 'WebClient',
+                                method: methodName,
+                                resolvedUrl: url,
+                                resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+                            },
                         }),
                     );
                 }
@@ -567,7 +626,8 @@ function processMethodInvocations(
         if (methodName === 'uri' && /restClient/i.test(objectName)) {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
-                const url = resolveStringArg(firstArg, varMap);
+                const resolvedArg = resolveStringArg(firstArg, varMap);
+                const url = resolvedArg?.value;
                 if (url) {
                     signals.push(
                         makeSignal({
@@ -577,7 +637,12 @@ function processMethodInvocations(
                             lineEnd: mi.endPosition.row + 1,
                             excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9
-                            metadata: { client: 'RestClient', method: methodName },
+                            metadata: {
+                                client: 'RestClient',
+                                method: methodName,
+                                resolvedUrl: url,
+                                resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+                            },
                         }),
                     );
                 }
@@ -588,7 +653,8 @@ function processMethodInvocations(
         if (objectName === 'RestClient' && methodName === 'create') {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
-                const url = resolveStringArg(firstArg, varMap);
+                const resolvedArg = resolveStringArg(firstArg, varMap);
+                const url = resolvedArg?.value;
                 if (url) {
                     signals.push(
                         makeSignal({
@@ -598,7 +664,12 @@ function processMethodInvocations(
                             lineEnd: mi.endPosition.row + 1,
                             excerpt: mi.text.split('\n')[0] || mi.text,
                             confidence: 0.9,
-                            metadata: { client: 'RestClient', method: 'create' },
+                            metadata: {
+                                client: 'RestClient',
+                                method: 'create',
+                                resolvedUrl: url,
+                                resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+                            },
                         }),
                     );
                 }
@@ -611,7 +682,7 @@ function processMethodInvocations(
         if (/^kafkaTemplate$/i.test(objectName) && methodName === 'send') {
             const firstArg = getFirstArg(argList);
             if (firstArg) {
-                const topic = resolveStringArg(firstArg, varMap);
+                const topic = resolveStringArg(firstArg, varMap)?.value;
                 if (topic) {
                     signals.push(
                         makeSignal({
@@ -637,7 +708,7 @@ function processMethodInvocations(
             // convertAndSend(exchange, routingKey, payload) / send(exchange, routingKey, message)
             // 형태는 queue 목적지로 단정할 수 없어 보수적으로 스킵한다.
             if (args.length === 2) {
-                const queueName = resolveStringArg(args[0]!, varMap);
+                const queueName = resolveStringArg(args[0]!, varMap)?.value;
                 if (queueName) {
                     signals.push(
                         makeSignal({
@@ -671,6 +742,7 @@ async function resolveInterProceduralCallSignals(
         fieldTypeMap: Map<string, string>;
         methodTypeMap: Map<string, string>;
         symbolTable: AstProjectSymbolTable;
+        maxCallChainDepth: number;
     },
 ): Promise<ExtractedSignal[]> {
     const parsed = parseMethodInvocation(input.invocationNode);
@@ -684,9 +756,10 @@ async function resolveInterProceduralCallSignals(
         );
     if (!targetTypeName) return [];
 
-    const resolvedCalls = resolveJavaDepthOneCallTargets(input.symbolTable, {
+    const resolvedCalls = resolveJavaCallTargets(input.symbolTable, {
         typeName: targetTypeName,
         methodName: parsed.methodName,
+        maxDepth: input.maxCallChainDepth,
         ...(input.packageName ? { packageName: input.packageName } : {}),
     }).map((call) => makeSignal({
         kind: 'call',
@@ -918,6 +991,7 @@ async function processInterProceduralMethodInvocations(
     root: SyntaxNode,
     packageName: string | undefined,
     symbolTable: AstProjectSymbolTable,
+    maxCallChainDepth: number,
     signals: ExtractedSignal[],
 ): Promise<void> {
     const typeNodes = findNodes(root, 'class_declaration');
@@ -946,6 +1020,7 @@ async function processInterProceduralMethodInvocations(
                     fieldTypeMap,
                     methodTypeMap,
                     symbolTable,
+                    maxCallChainDepth,
                     ...(packageName ? { packageName } : {}),
                 });
                 signals.push(...resolvedSignals);
@@ -980,7 +1055,7 @@ export async function scanJavaKotlinAst(
     const root = tree.rootNode;
 
     const packageName = extractPackageName(root);
-    const varMap = buildVariableMap(root);
+    const varMap = buildVariableMap(root, options?.propertyMap);
     const signals: ExtractedSignal[] = [];
 
     processSpringMappingAnnotations(root, signals);
@@ -991,6 +1066,7 @@ export async function scanJavaKotlinAst(
             root,
             packageName,
             options.interProcedural.symbolTable,
+            options.interProcedural.maxCallChainDepth,
             signals,
         );
     }

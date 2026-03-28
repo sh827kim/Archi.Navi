@@ -1,5 +1,4 @@
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { extname, join } from 'path';
+import { readFileSync } from 'fs';
 import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
@@ -17,82 +16,12 @@ import { scanJavaKotlinAst } from './ast/astJavaKotlin';
 import { scanTypeScriptAst } from './ast/astTypeScript';
 import { scanPythonAst } from './ast/astPython';
 import { mergeHybridSignals } from './hybridSignalMerge';
-
-const SKIP_DIRS = new Set([
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  '.next',
-  'target',
-  '__pycache__',
-  '.gradle',
-  'out',
-  'coverage',
-]);
-
-function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
-  const results: string[] = [];
-
-  function walk(current: string) {
-    let entries: string[];
-    try {
-      entries = readdirSync(current);
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (SKIP_DIRS.has(entry)) continue;
-      const fullPath = join(current, entry);
-      let stat;
-      try {
-        stat = statSync(fullPath);
-      } catch {
-        continue;
-      }
-
-      if (stat.isDirectory()) {
-        walk(fullPath);
-      } else if (stat.isFile() && predicate(fullPath)) {
-        results.push(fullPath);
-      }
-    }
-  }
-
-  walk(dir);
-  return results;
-}
-
-function findJavaKotlinFiles(repoRoot: string): string[] {
-  return findFiles(repoRoot, (p) => {
-    const ext = extname(p).toLowerCase();
-    return ext === '.java' || ext === '.kt';
-  });
-}
-
-function findTypeScriptFiles(repoRoot: string): string[] {
-  return findFiles(repoRoot, (p) => {
-    const ext = extname(p).toLowerCase();
-    return ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx';
-  });
-}
-
-function findPythonFiles(repoRoot: string): string[] {
-  return findFiles(repoRoot, (p) => extname(p).toLowerCase() === '.py');
-}
-
-function findMyBatisXmlFiles(repoRoot: string): string[] {
-  return findFiles(repoRoot, (p) => {
-    if (extname(p).toLowerCase() !== '.xml') return false;
-    try {
-      const head = readFileSync(p, 'utf-8').slice(0, 2000);
-      return head.includes('<mapper ') || head.includes('<mapper\n');
-    } catch {
-      return false;
-    }
-  });
-}
+import {
+  findJavaKotlinFiles,
+  findMyBatisXmlFiles,
+  findPythonFiles,
+  findTypeScriptFiles,
+} from '../utils/fileDiscovery';
 
 function findOwnerServiceByPath(
   filePath: string,

@@ -5,12 +5,12 @@
  *
  * 설계 참조: docs/03-inference-engine.md §7 Config 파싱 전략, §2.3.3
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, extname } from 'path';
+import { readFileSync } from 'fs';
+import { extname } from 'path';
 import { createHash } from 'crypto';
-import { eq, and, or, inArray } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
-import { objects, relationCandidates, objectRelations, evidences, relationCandidateEvidences, codeArtifacts } from '@archi-navi/db';
+import { objects, evidences, codeArtifacts } from '@archi-navi/db';
 import { generateId, buildUrn } from '@archi-navi/shared';
 import { parseApplicationYml } from './parsers/applicationYml';
 import { parseDockerCompose } from './parsers/dockerCompose';
@@ -18,6 +18,8 @@ import { parseK8sManifest } from './parsers/k8sManifest';
 import type { AppYmlSignal } from './parsers/applicationYml';
 import type { DockerComposeSignal } from './parsers/dockerCompose';
 import type { K8sSignal } from './parsers/k8sManifest';
+import { saveRelationCandidate } from './candidateStore';
+import { findFiles } from '../utils/fileDiscovery';
 
 // Confidence 상수 (설계 문서 §2.3.3)
 const CONFIDENCE = {
@@ -56,46 +58,6 @@ export interface ConfigInferenceResult {
 }
 
 // ─── 파일 탐색 유틸리티 ───────────────────────────────────────────────────────
-
-/**
- * 특정 디렉토리에서 파일 패턴에 맞는 파일들을 재귀 탐색
- * node_modules, .git, dist, build 등 제외
- */
-function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
-  const SKIP_DIRS = new Set(['node_modules', '.git', 'dist', 'build', '.next', 'target']);
-  const results: string[] = [];
-
-  function walk(current: string) {
-    let entries: string[];
-    /* c8 ignore start */
-    try {
-      entries = readdirSync(current);
-    } catch {
-      return;
-    }
-
-    for (const entry of entries) {
-      if (SKIP_DIRS.has(entry)) continue;
-      const fullPath = join(current, entry);
-      let stat;
-    try {
-      stat = statSync(fullPath);
-    } catch {
-      continue;
-    }
-    /* c8 ignore stop */
-
-      if (stat.isDirectory()) {
-        walk(fullPath);
-      } else if (stat.isFile() && predicate(fullPath)) {
-        results.push(fullPath);
-      }
-    }
-  }
-
-  walk(dir);
-  return results;
-}
 
 /** application*.yml 파일 탐색 */
 function findApplicationYmls(repoRoot: string): string[] {
@@ -365,154 +327,6 @@ async function findServiceByName(
   if (normalizedMatch) return normalizedMatch.id;
 
   return null;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function getRawCandidateConfidence(confidence: number, metadata: unknown): number {
-  const crossValidation = asRecord(asRecord(metadata)?.crossValidation);
-  const originalConfidence = crossValidation?.originalConfidence;
-  return typeof originalConfidence === 'number' && Number.isFinite(originalConfidence)
-    ? originalConfidence
-    : confidence;
-}
-
-function stripCrossValidationMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-  if (!Object.prototype.hasOwnProperty.call(metadata, 'crossValidation')) {
-    return metadata;
-  }
-
-  const nextMetadata = { ...metadata };
-  delete nextMetadata.crossValidation;
-  return nextMetadata;
-}
-
-// ─── relation_candidate 저장 ───────────────────────────────────────────────────
-
-/**
- * relation_candidate 저장 (중복 처리 포함)
- * 설계 문서 §2.5 규칙 적용:
- *   MANUAL 관계 존재      → 무시 (수동 오버라이드 우선)
- *   APPROVED 후보 존재    → 무시
- *   PENDING 후보 존재     → 더 높은 confidence면 업데이트 + evidence 추가
- *   REJECTED 후보만 존재  → 신규 후보 생성 (REJECTED는 조회에서 제외되므로 자동 처리)
- *   없음                  → 신규 생성 (status='PENDING')
- */
-async function saveRelationCandidate(
-  db: DbClient,
-  params: {
-    workspaceId: string;
-    relationType: string;
-    subjectObjectId: string;
-    objectId: string;
-    confidence: number;
-    metadata: Record<string, unknown>;
-  },
-  evidenceId: string,
-): Promise<{ created: boolean }> {
-  const { workspaceId, relationType, subjectObjectId, objectId, confidence, metadata } = params;
-
-  // MANUAL 관계 존재 여부 확인 (수동 오버라이드 우선)
-  const manualRelation = await db
-    .select({ id: objectRelations.id })
-    .from(objectRelations)
-    .where(
-      and(
-        eq(objectRelations.workspaceId, workspaceId),
-        eq(objectRelations.relationType, relationType),
-        eq(objectRelations.subjectObjectId, subjectObjectId),
-        eq(objectRelations.objectId, objectId),
-        eq(objectRelations.source, 'MANUAL'),
-      ),
-    )
-    .limit(1);
-
-  if (manualRelation.length > 0) {
-    // 수동 관계 존재 → 무시
-    return { created: false };
-  }
-
-  // APPROVED 또는 PENDING 후보 조회
-  const existingCandidates = await db
-    .select({
-      id: relationCandidates.id,
-      status: relationCandidates.status,
-      confidence: relationCandidates.confidence,
-      metadata: relationCandidates.metadata,
-    })
-    .from(relationCandidates)
-    .where(
-      and(
-        eq(relationCandidates.workspaceId, workspaceId),
-        eq(relationCandidates.relationType, relationType),
-        eq(relationCandidates.subjectObjectId, subjectObjectId),
-        eq(relationCandidates.objectId, objectId),
-        or(
-          eq(relationCandidates.status, 'PENDING'),
-          eq(relationCandidates.status, 'APPROVED'),
-        ),
-      ),
-    );
-
-  // APPROVED 후보 있으면 무시
-  const approved = existingCandidates.find((c) => c.status === 'APPROVED');
-  if (approved) return { created: false };
-
-  // PENDING 후보가 있고 새 confidence가 더 높으면 업데이트
-  const pending = existingCandidates.find((c) => c.status === 'PENDING');
-  if (pending) {
-    const pendingRawConfidence = getRawCandidateConfidence(pending.confidence ?? 0, pending.metadata);
-    const pendingMetadata = asRecord(pending.metadata) ?? {};
-    if (confidence > pendingRawConfidence) {
-      await db
-        .update(relationCandidates)
-        .set({
-          confidence,
-          metadata: stripCrossValidationMetadata(metadata),
-        })
-        .where(eq(relationCandidates.id, pending.id));
-    } else if (Object.prototype.hasOwnProperty.call(pendingMetadata, 'crossValidation')) {
-      await db
-        .update(relationCandidates)
-        .set({
-          confidence: pendingRawConfidence,
-          metadata: stripCrossValidationMetadata(metadata),
-        })
-        .where(eq(relationCandidates.id, pending.id));
-    }
-    // evidence 연결 추가
-    await db.insert(relationCandidateEvidences).values({
-      workspaceId,
-      candidateId: pending.id,
-      evidenceId,
-    }).onConflictDoNothing();
-    return { created: false };
-  }
-
-  // 신규 생성
-  const candidateId = generateId();
-  await db.insert(relationCandidates).values({
-    id: candidateId,
-    workspaceId,
-    relationType,
-    subjectObjectId,
-    objectId,
-    confidence,
-    metadata,
-    status: 'PENDING',
-  });
-
-  await db.insert(relationCandidateEvidences).values({
-    workspaceId,
-    candidateId,
-    evidenceId,
-  });
-
-  return { created: true };
 }
 
 /** evidence 저장 및 ID 반환 */

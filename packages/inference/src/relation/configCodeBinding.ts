@@ -19,6 +19,11 @@ import {
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import { and, eq, inArray, or } from 'drizzle-orm';
+import {
+    asRecord,
+    getRawCandidateConfidence,
+    stripCrossValidationMetadata,
+} from './utils';
 
 export interface ConfigCodeBindingOptions {
     workspaceId: string;
@@ -32,30 +37,6 @@ export interface ConfigCodeBindingResult {
     createdEndpointCandidateCount: number;
     /** 타겟 서비스 하위 endpoint가 없어 스킵된 수 */
     skippedNoEndpointCount: number;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-    return value !== null && typeof value === 'object' && !Array.isArray(value)
-        ? value as Record<string, unknown>
-        : null;
-}
-
-function asFiniteNumber(value: unknown): number | null {
-    return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
-
-function getRawCandidateConfidence(confidence: number, metadata: unknown): number {
-    return asFiniteNumber(asRecord(asRecord(metadata)?.crossValidation)?.originalConfidence) ?? confidence;
-}
-
-function stripCrossValidationMetadata(metadata: Record<string, unknown>): Record<string, unknown> {
-    if (!Object.prototype.hasOwnProperty.call(metadata, 'crossValidation')) {
-        return metadata;
-    }
-
-    const nextMetadata = { ...metadata };
-    delete nextMetadata.crossValidation;
-    return nextMetadata;
 }
 
 function normalizeRepoRoots(repoRoots?: string[]): string[] {

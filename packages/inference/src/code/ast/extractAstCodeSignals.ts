@@ -9,8 +9,7 @@
  *  - confidence +0.1~0.2 상향
  *  - 파싱 실패 시 graceful fallback (빈 결과 반환)
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
-import { join, extname } from 'path';
+import { readFileSync } from 'fs';
 import { and, eq } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
@@ -21,64 +20,12 @@ import { scanTypeScriptAst } from './astTypeScript';
 import { scanPythonAst } from './astPython';
 import { buildProjectSymbolTable } from './symbolTable';
 import { AstRuntimeError } from './wasmParser';
-
-// ─── 파일 탐색 ────────────────────────────────────────────────────────────────
-
-const SKIP_DIRS = new Set([
-    'node_modules', '.git', 'dist', 'build', '.next',
-    'target', '__pycache__', '.gradle', 'out', 'coverage',
-]);
-
-function findFiles(dir: string, predicate: (path: string) => boolean): string[] {
-    const results: string[] = [];
-
-    function walk(current: string) {
-        let entries: string[];
-        try {
-            entries = readdirSync(current);
-        } catch {
-            return;
-        }
-
-        for (const entry of entries) {
-            if (SKIP_DIRS.has(entry)) continue;
-            const fullPath = join(current, entry);
-            let stat;
-            try {
-                stat = statSync(fullPath);
-            } catch {
-                continue;
-            }
-
-            if (stat.isDirectory()) {
-                walk(fullPath);
-            } else if (stat.isFile() && predicate(fullPath)) {
-                results.push(fullPath);
-            }
-        }
-    }
-
-    walk(dir);
-    return results;
-}
-
-function findJavaKotlinFiles(repoRoot: string): string[] {
-    return findFiles(repoRoot, (p) => {
-        const ext = extname(p).toLowerCase();
-        return ext === '.java' || ext === '.kt';
-    });
-}
-
-function findTypeScriptFiles(repoRoot: string): string[] {
-    return findFiles(repoRoot, (p) => {
-        const ext = extname(p).toLowerCase();
-        return ext === '.ts' || ext === '.tsx' || ext === '.js' || ext === '.jsx';
-    });
-}
-
-function findPythonFiles(repoRoot: string): string[] {
-    return findFiles(repoRoot, (p) => extname(p).toLowerCase() === '.py');
-}
+import { buildAstPropertyResolver } from './propertyResolver';
+import {
+  findJavaKotlinFiles,
+  findPythonFiles,
+  findTypeScriptFiles,
+} from '../../utils/fileDiscovery';
 
 // ─── 서비스 매칭 ──────────────────────────────────────────────────────────────
 
@@ -239,10 +186,14 @@ export async function extractAstCodeSignals(
             ),
         );
 
+    const propertyResolver = options.resolveProperties === true
+        ? buildAstPropertyResolver(repoRoot)
+        : null;
     const interProceduralSymbolTable = options.interProcedural === true
         ? await buildProjectSymbolTable({
             repoRoot,
             ...(options.targetFilePaths ? { targetFilePaths: options.targetFilePaths } : {}),
+            ...(propertyResolver ? { propertyResolver } : {}),
         })
         : null;
 
@@ -252,7 +203,7 @@ export async function extractAstCodeSignals(
         repoRoot,
         allServices,
         forceRescan,
-        disableShaSkip: options.interProcedural === true,
+        disableShaSkip: options.interProcedural === true || options.resolveProperties === true,
     };
     const scanFailures: ScanFailureDetail[] = [];
     const result: CodeSignalResult = {
@@ -322,9 +273,19 @@ export async function extractAstCodeSignals(
         (filePath, content) => scanJavaKotlinAst(
             filePath,
             content,
-            interProceduralSymbolTable
-                ? { interProcedural: { symbolTable: interProceduralSymbolTable } }
-                : undefined,
+            {
+                ...(interProceduralSymbolTable
+                    ? {
+                        interProcedural: {
+                            symbolTable: interProceduralSymbolTable,
+                            maxCallChainDepth: Math.max(1, options.maxCallChainDepth ?? 1),
+                        },
+                    }
+                    : {}),
+                ...(propertyResolver
+                    ? { propertyMap: propertyResolver.resolveForFile(filePath) }
+                    : {}),
+            },
         ),
     );
 

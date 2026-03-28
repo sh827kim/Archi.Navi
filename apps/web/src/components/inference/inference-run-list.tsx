@@ -110,6 +110,11 @@ export function InferenceRunList() {
 
   const loadRuns = useCallback(async () => {
     setLoading(true);
+    if (!workspaceId) {
+      setRuns([]);
+      setLoading(false);
+      return;
+    }
     try {
       const items = await listDashboardInferenceRuns({ workspaceId, limit: 30 });
       setRuns(items);
@@ -125,6 +130,7 @@ export function InferenceRunList() {
   }, [loadRuns]);
 
   const handleAction = async (runId: string, action: 'cancel' | 'retry') => {
+    if (!workspaceId) return;
     setActionRunId(runId);
     try {
       const data = await mutateDashboardInferenceRun({

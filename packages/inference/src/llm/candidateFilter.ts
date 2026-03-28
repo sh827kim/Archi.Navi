@@ -13,12 +13,17 @@ import {
 } from '@archi-navi/db';
 import type {
   GenerateAssessmentFn,
+  GenerateExplanationFn,
   LlmFilterRequest,
   LlmFilterResult,
+  LlmExplanation,
+  LlmExplanationRequest,
+  LlmExplanationResult,
   CandidateContext,
   EvidenceSummary,
 } from './types';
 import { processBatch } from './batchProcessor';
+import { buildRelationExplanationPrompt } from './prompts';
 
 /**
  * PENDING 후보를 로딩 (이미 llmAssessment가 있는 것은 제외)
@@ -27,6 +32,9 @@ async function loadPendingCandidates(
   db: DbClient,
   workspaceId: string,
   candidateIds?: string[],
+  opts: {
+    excludeMetadataKeys?: string[];
+  } = {},
 ) {
   let query = db
     .select()
@@ -48,8 +56,9 @@ async function loadPendingCandidates(
 
   // 이미 llmAssessment가 있는 후보 제외
   filtered = filtered.filter((r) => {
-    const meta = r.metadata as Record<string, unknown>;
-    return !meta?.llmAssessment;
+    const meta = (r.metadata ?? {}) as Record<string, unknown>;
+    const excludeMetadataKeys = opts.excludeMetadataKeys ?? ['llmAssessment'];
+    return excludeMetadataKeys.every((key) => !meta[key]);
   });
 
   return filtered;
@@ -141,6 +150,66 @@ async function saveAssessment(
     .where(eq(relationCandidates.id, candidateId));
 }
 
+async function saveExplanation(
+  db: DbClient,
+  candidateId: string,
+  explanation: LlmExplanation,
+  existingMetadata: Record<string, unknown>,
+) {
+  const updatedMeta = {
+    ...existingMetadata,
+    llmExplanation: explanation,
+  };
+
+  await db
+    .update(relationCandidates)
+    .set({ metadata: updatedMeta })
+    .where(eq(relationCandidates.id, candidateId));
+}
+
+async function buildCandidateContexts(
+  db: DbClient,
+  workspaceId: string,
+  candidates: Array<{
+    id: string;
+    subjectObjectId: string;
+    objectId: string;
+    relationType: string;
+    confidence: number;
+    metadata: unknown;
+  }>,
+): Promise<CandidateContext[]> {
+  const nameMap = await buildObjectNameMap(db, workspaceId);
+  const candidateIdList = candidates.map((candidate) => candidate.id);
+  const evidenceMap = await loadEvidencesForCandidates(db, workspaceId, candidateIdList);
+
+  return candidates.map((candidate) => ({
+    candidateId: candidate.id,
+    subjectObjectId: candidate.subjectObjectId,
+    subjectName: nameMap.get(candidate.subjectObjectId) ?? candidate.subjectObjectId,
+    objectId: candidate.objectId,
+    objectName: nameMap.get(candidate.objectId) ?? candidate.objectId,
+    relationType: candidate.relationType,
+    confidence: candidate.confidence,
+    evidences: evidenceMap.get(candidate.id) ?? [],
+    metadata: (candidate.metadata ?? {}) as Record<string, unknown>,
+  }));
+}
+
+export function groupCandidateContextsBySubject(
+  contexts: CandidateContext[],
+): CandidateContext[][] {
+  const grouped = new Map<string, CandidateContext[]>();
+
+  for (const context of contexts) {
+    const group = grouped.get(context.subjectObjectId) ?? [];
+    group.push(context);
+    grouped.set(context.subjectObjectId, group);
+  }
+
+  return [...grouped.values()];
+}
+
 /**
  * LLM 추론 후보 필터링 메인 함수
  * @param db 데이터베이스 클라이언트
@@ -156,7 +225,9 @@ export async function filterCandidates(
   const { workspaceId, candidateIds, batchSize = 10 } = request;
 
   // 1. PENDING 후보 로딩 (이미 평가된 것 제외)
-  const candidates = await loadPendingCandidates(db, workspaceId, candidateIds);
+  const candidates = await loadPendingCandidates(db, workspaceId, candidateIds, {
+    excludeMetadataKeys: ['llmAssessment'],
+  });
 
   if (candidates.length === 0) {
     return {
@@ -166,28 +237,13 @@ export async function filterCandidates(
     };
   }
 
-  // 2. Object 이름 매핑
-  const nameMap = await buildObjectNameMap(db, workspaceId);
+  // 2. CandidateContext 조립
+  const contexts = await buildCandidateContexts(db, workspaceId, candidates);
 
-  // 3. Evidence 매핑
-  const candidateIdList = candidates.map((c) => c.id);
-  const evidenceMap = await loadEvidencesForCandidates(db, workspaceId, candidateIdList);
-
-  // 4. CandidateContext 조립
-  const contexts: CandidateContext[] = candidates.map((c) => ({
-    candidateId: c.id,
-    subjectName: nameMap.get(c.subjectObjectId) ?? c.subjectObjectId,
-    objectName: nameMap.get(c.objectId) ?? c.objectId,
-    relationType: c.relationType,
-    confidence: c.confidence,
-    evidences: evidenceMap.get(c.id) ?? [],
-    metadata: c.metadata as Record<string, unknown>,
-  }));
-
-  // 5. 배치 처리
+  // 3. 배치 처리
   const batchResults = await processBatch(contexts, generateFn, batchSize);
 
-  // 6. 결과 저장 + stats 집계
+  // 4. 결과 저장 + stats 집계
   const stats = { likelyValid: 0, uncertain: 0, likelyFalsePositive: 0 };
   let processedCount = 0;
 
@@ -223,6 +279,85 @@ export async function filterCandidates(
   return {
     processedCount,
     stats,
+    durationMs: Date.now() - startTime,
+  };
+}
+
+export async function generateCandidateExplanations(
+  db: DbClient,
+  generateFn: GenerateExplanationFn,
+  request: LlmExplanationRequest,
+): Promise<LlmExplanationResult> {
+  const startTime = Date.now();
+  const { workspaceId, candidateIds, generateExplanations = false } = request;
+  const maxCalls = Math.max(0, request.maxCalls ?? 50);
+
+  if (!generateExplanations) {
+    return {
+      processedCandidateCount: 0,
+      generatedCount: 0,
+      skippedCount: 0,
+      callCount: 0,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  const candidates = await loadPendingCandidates(db, workspaceId, candidateIds, {
+    excludeMetadataKeys: ['llmExplanation'],
+  });
+
+  if (candidates.length === 0) {
+    return {
+      processedCandidateCount: 0,
+      generatedCount: 0,
+      skippedCount: 0,
+      callCount: 0,
+      durationMs: Date.now() - startTime,
+    };
+  }
+
+  const contexts = await buildCandidateContexts(db, workspaceId, candidates);
+  const groups = groupCandidateContextsBySubject(contexts);
+  let generatedCount = 0;
+  let skippedCount = 0;
+  let callCount = 0;
+
+  for (const group of groups) {
+    if (callCount >= maxCalls) {
+      skippedCount += group.length;
+      continue;
+    }
+
+    try {
+      callCount += 1;
+      const explanations = await generateFn(buildRelationExplanationPrompt(group), group);
+
+      for (const context of group) {
+        const explanation = explanations[context.candidateId];
+        if (!explanation) continue;
+
+        const candidate = candidates.find((item) => item.id === context.candidateId);
+        if (!candidate) continue;
+
+        await saveExplanation(
+          db,
+          context.candidateId,
+          explanation,
+          (candidate.metadata ?? {}) as Record<string, unknown>,
+        );
+        generatedCount += 1;
+      }
+    } catch {
+      // graceful degradation: 저장 없이 다음 그룹 진행
+      continue;
+    }
+  }
+
+  return {
+    processedCandidateCount: candidates.length,
+    generatedCount,
+    skippedCount,
+    callCount,
     durationMs: Date.now() - startTime,
   };
 }

@@ -3,7 +3,7 @@
  * PGlite 인메모리 DB + mock LLM으로 검증
  * 설계 참조: docs/09-llm-inference-filtering.md §4, §6
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { join } from 'path';
 import { createPgliteClient } from '@archi-navi/db';
 import { migrate } from 'drizzle-orm/pglite/migrator';
@@ -16,10 +16,16 @@ import {
 } from '@archi-navi/db';
 import { eq } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
-import { filterCandidates } from '@/llm/candidateFilter';
+import {
+  filterCandidates,
+  generateCandidateExplanations,
+  groupCandidateContextsBySubject,
+} from '@/llm/candidateFilter';
 import type {
   LlmAssessment,
+  LlmExplanation,
   GenerateAssessmentFn,
+  GenerateExplanationFn,
   CandidateContext,
 } from '@/llm/types';
 
@@ -146,6 +152,19 @@ function mockLlmByIndex(verdicts: Array<LlmAssessment['verdict']>): GenerateAsse
       assessedAt: new Date().toISOString(),
     };
   };
+}
+
+function mockExplanationByCandidateId(): GenerateExplanationFn {
+  return async (_prompt, contexts): Promise<Record<string, LlmExplanation>> => Object.fromEntries(
+    contexts.map((context) => [
+      context.candidateId,
+      {
+        summary: `${context.subjectName} 가 ${context.objectName} 를 ${context.relationType} 합니다.`,
+        model: 'mock-model',
+        explainedAt: new Date().toISOString(),
+      },
+    ]),
+  );
 }
 
 describe('filterCandidates', () => {
@@ -396,5 +415,166 @@ describe('filterCandidates', () => {
     expect(result.processedCount).toBe(1);
     expect(captured?.subjectName).toBe(unknownSubjectId);
     expect(captured?.objectName).toBe(unknownObjectId);
+  });
+
+  it('C3: 같은 subjectObjectId 기준으로 설명 배치를 그룹화해야 한다', () => {
+    const grouped = groupCandidateContextsBySubject([
+      {
+        candidateId: 'cand-1',
+        subjectObjectId: 'svc-a',
+        subjectName: 'svc-a',
+        objectId: 'obj-1',
+        objectName: 'obj-1',
+        relationType: 'call',
+        confidence: 0.8,
+        evidences: [],
+        metadata: {},
+      },
+      {
+        candidateId: 'cand-2',
+        subjectObjectId: 'svc-a',
+        subjectName: 'svc-a',
+        objectId: 'obj-2',
+        objectName: 'obj-2',
+        relationType: 'call',
+        confidence: 0.7,
+        evidences: [],
+        metadata: {},
+      },
+      {
+        candidateId: 'cand-3',
+        subjectObjectId: 'svc-b',
+        subjectName: 'svc-b',
+        objectId: 'obj-3',
+        objectName: 'obj-3',
+        relationType: 'publish',
+        confidence: 0.6,
+        evidences: [],
+        metadata: {},
+      },
+    ]);
+
+    expect(grouped).toHaveLength(2);
+    expect(grouped[0]?.map((item) => item.candidateId)).toEqual(['cand-1', 'cand-2']);
+    expect(grouped[1]?.map((item) => item.candidateId)).toEqual(['cand-3']);
+  });
+
+  it('C2: 생성된 설명을 metadata.llmExplanation 에 저장해야 한다', async () => {
+    const subjectId = await createService(db, 'order-service');
+    const objectId = await createService(db, 'payment-service');
+    const candidateId = await createCandidate(db, subjectId, objectId);
+    await createEvidence(db, candidateId, 'restTemplate.get("/api/pay")');
+
+    const result = await generateCandidateExplanations(db, mockExplanationByCandidateId(), {
+      workspaceId,
+      candidateIds: [candidateId],
+      generateExplanations: true,
+    });
+
+    expect(result.processedCandidateCount).toBe(1);
+    expect(result.generatedCount).toBe(1);
+    expect(result.callCount).toBe(1);
+
+    const [updated] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, candidateId));
+    const meta = updated?.metadata as Record<string, unknown>;
+    expect(meta?.llmExplanation).toBeDefined();
+    expect((meta.llmExplanation as LlmExplanation).summary).toContain('payment-service');
+  });
+
+  it('C4: maxCalls 초과 시 남은 후보는 skip 해야 한다', async () => {
+    const subjectA = await createService(db, 'subject-a');
+    const subjectB = await createService(db, 'subject-b');
+    const objectA = await createService(db, 'target-a');
+    const objectB = await createService(db, 'target-b');
+    const candidateA = await createCandidate(db, subjectA, objectA);
+    const candidateB = await createCandidate(db, subjectB, objectB);
+
+    const result = await generateCandidateExplanations(db, mockExplanationByCandidateId(), {
+      workspaceId,
+      candidateIds: [candidateA, candidateB],
+      generateExplanations: true,
+      maxCalls: 1,
+    });
+
+    expect(result.processedCandidateCount).toBe(2);
+    expect(result.generatedCount).toBe(1);
+    expect(result.skippedCount).toBe(1);
+    expect(result.callCount).toBe(1);
+
+    const updatedRows = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    const explainedCount = updatedRows.filter((row) => {
+      const meta = row.metadata as Record<string, unknown> | null;
+      return Boolean(meta?.llmExplanation);
+    }).length;
+    expect(explainedCount).toBe(1);
+  });
+
+  it('C5: generateExplanations=false 면 LLM 호출이 없어야 한다', async () => {
+    const subjectId = await createService(db, 'subject-no-call');
+    const objectId = await createService(db, 'object-no-call');
+    await createCandidate(db, subjectId, objectId);
+
+    const generateFn = vi.fn(async () => ({}));
+    const result = await generateCandidateExplanations(db, generateFn, {
+      workspaceId,
+      generateExplanations: false,
+    });
+
+    expect(result.generatedCount).toBe(0);
+    expect(result.callCount).toBe(0);
+    expect(generateFn).not.toHaveBeenCalled();
+  });
+
+  it('C6: LLM 실패 시 기존 metadata 는 유지하고 계속 진행해야 한다', async () => {
+    const subjectA = await createService(db, 'subject-fail');
+    const subjectB = await createService(db, 'subject-pass');
+    const objectA = await createService(db, 'object-fail');
+    const objectB = await createService(db, 'object-pass');
+    const candidateA = await createCandidate(db, subjectA, objectA, {
+      metadata: { source: 'code_signal', keep: 'before' },
+    });
+    const candidateB = await createCandidate(db, subjectB, objectB, {
+      metadata: { source: 'code_signal', keep: 'before' },
+    });
+
+    const generateFn: GenerateExplanationFn = async (_prompt, contexts) => {
+      if (contexts[0]?.subjectObjectId === subjectA) {
+        throw new Error('mock failure');
+      }
+      return {
+        [candidateB]: {
+          summary: '정상 설명',
+          model: 'mock-model',
+          explainedAt: new Date().toISOString(),
+        },
+      };
+    };
+
+    const result = await generateCandidateExplanations(db, generateFn, {
+      workspaceId,
+      candidateIds: [candidateA, candidateB],
+      generateExplanations: true,
+      maxCalls: 5,
+    });
+
+    expect(result.generatedCount).toBe(1);
+    expect(result.callCount).toBe(2);
+
+    const rows = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    const failedCandidate = rows.find((row) => row.id === candidateA);
+    const passedCandidate = rows.find((row) => row.id === candidateB);
+
+    expect((failedCandidate?.metadata as Record<string, unknown>)?.keep).toBe('before');
+    expect((failedCandidate?.metadata as Record<string, unknown>)?.llmExplanation).toBeUndefined();
+    expect((passedCandidate?.metadata as Record<string, unknown>)?.llmExplanation).toBeDefined();
   });
 });

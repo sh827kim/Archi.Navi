@@ -223,8 +223,14 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
       .select({ id: relationCandidates.id, status: relationCandidates.status })
       .from(relationCandidates)
       .where(eq(relationCandidates.workspaceId, workspaceId));
-    expect(approvedCandidates.find((row) => row.id === candidateId)?.status).toBe('APPROVED');
-    expect(approvedCandidates.find((row) => row.id === existingEndpointCandidateId)?.status).toBe('APPROVED');
+    expect(
+      approvedCandidates.find((row: { id: string; status: string }) => row.id === candidateId)?.status,
+    ).toBe('APPROVED');
+    expect(
+      approvedCandidates.find(
+        (row: { id: string; status: string }) => row.id === existingEndpointCandidateId,
+      )?.status,
+    ).toBe('APPROVED');
 
     const relations = await dbHolder.db!
       .select()

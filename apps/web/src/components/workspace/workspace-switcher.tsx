@@ -65,13 +65,14 @@ export function WorkspaceSwitcher() {
           {/* 현재 워크스페이스 표시 버튼 */}
           <button
             className={cn(
-              'flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left',
+              'flex min-w-0 w-full items-center gap-2 rounded-lg px-3 py-2 text-left',
               'hover:bg-muted/50 transition-colors',
               'text-sm font-medium text-foreground',
             )}
+            title={workspaceName ?? '워크스페이스 선택'}
           >
             <FolderOpen className="h-4 w-4 shrink-0 text-primary" />
-            <span className="flex-1 truncate">{workspaceName ?? '워크스페이스 선택'}</span>
+            <span className="min-w-0 flex-1 truncate">{workspaceName ?? '워크스페이스 선택'}</span>
             <ChevronDown
               className={cn(
                 'h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform duration-200',
@@ -81,7 +82,7 @@ export function WorkspaceSwitcher() {
           </button>
         </PopoverTrigger>
 
-        <PopoverContent align="start" className="w-64 p-2">
+        <PopoverContent align="start" className="w-64 max-w-[calc(100vw-2rem)] p-2">
           {/* 워크스페이스 목록 */}
           <div className="space-y-0.5 mb-2">
             <p className="px-2 py-1 text-xs text-muted-foreground font-medium uppercase tracking-wider">
@@ -93,30 +94,36 @@ export function WorkspaceSwitcher() {
               </div>
             ) : (
               workspaces.map((ws) => (
-                <div key={ws.id} className="flex items-center gap-1">
+                <div key={ws.id} className="flex min-w-0 items-center gap-1">
                   <button
                     onClick={() => {
                       setWorkspace(ws.id);
                       setOpen(false);
                     }}
                     className={cn(
-                      'flex flex-1 items-center gap-2 rounded-lg px-2 py-1.5 text-sm transition-colors text-left',
+                      'flex min-w-0 flex-1 items-center gap-2 overflow-hidden rounded-lg px-2 py-1.5 text-sm transition-colors text-left',
                       ws.id === workspaceId
                         ? 'bg-primary/15 text-primary'
                         : 'text-foreground hover:bg-muted/50',
                     )}
+                    title={ws.name}
                   >
                     {ws.id === workspaceId && (
                       <Check className="h-3.5 w-3.5 shrink-0" />
                     )}
-                    <span className={cn('truncate', ws.id !== workspaceId && 'pl-5')}>
+                    <span
+                      className={cn(
+                        'min-w-0 flex-1 truncate',
+                        ws.id !== workspaceId && 'pl-5',
+                      )}
+                    >
                       {ws.name}
                     </span>
                   </button>
 
                   <button
                     onClick={() => setDeleteTarget({ id: ws.id, name: ws.name })}
-                    className="rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
+                    className="shrink-0 rounded p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors"
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </button>

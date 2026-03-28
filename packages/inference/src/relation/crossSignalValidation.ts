@@ -8,6 +8,7 @@ import {
   relationCandidates,
   relationEvidences,
 } from '@archi-navi/db';
+import { asFiniteNumber, asRecord } from './utils';
 
 export type CrossValidationSource = 'config' | 'code' | 'db';
 export type CrossValidationRuleId = 'C1' | 'C2' | 'C3' | 'C4';
@@ -57,16 +58,6 @@ export const DEFAULT_CROSS_VALIDATION_CONFIG: CrossValidationConfig = {
 };
 const SOURCE_ORDER: CrossValidationSource[] = ['config', 'code', 'db'];
 const CONFIG_ENDPOINT_SOURCES = new Set(['application_yml', 'docker_compose', 'k8s_manifest']);
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
-}
-
-function asFiniteNumber(value: unknown): number | null {
-  return typeof value === 'number' && Number.isFinite(value) ? value : null;
-}
 
 function normalizeEvidenceType(type: string): CrossValidationSource | null {
   if (type === 'CONFIG') return 'config';

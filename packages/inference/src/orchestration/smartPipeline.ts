@@ -8,7 +8,7 @@
  * Phase 2에서 consumer로 판정된 서비스에 대해서만 Phase 3을 실행하여
  * LLM 비용을 최소화한다.
  */
-import { readFileSync, readdirSync, statSync } from 'fs';
+import { readFileSync, statSync } from 'fs';
 import { join, extname, relative, basename } from 'path';
 import { eq, and, or } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
@@ -22,6 +22,7 @@ import {
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import { importOpenApiSpecs, type OpenApiImportResult } from '../openapi/openApiImporter';
+import { findFiles } from '../utils/fileDiscovery';
 import {
     buildConfigAnalysisPrompt,
     type ConfigAnalysisContext,
@@ -79,11 +80,6 @@ export interface SmartPipelineResult {
 
 // ── 파일 탐색 유틸 ──────────────────────────────────
 
-const SKIP_DIRS = new Set([
-    'node_modules', '.git', 'dist', 'build', '.next', 'target',
-    '__pycache__', '.gradle', 'out', 'coverage', '.cache',
-]);
-
 /** config 파일 확장자 */
 const CONFIG_EXTENSIONS = new Set(['.yml', '.yaml', '.properties', '.env', '.json']);
 
@@ -114,25 +110,6 @@ const DEFAULT_FILTER_KEYWORDS = [
     'exchange(', '.uri(', '.get(', '.post(',
     'HttpInterface', 'GetExchange', 'PostExchange',
 ];
-
-/** 재귀 파일 탐색 */
-function findFilesRecursive(dir: string, predicate: (path: string) => boolean): string[] {
-    const results: string[] = [];
-    function walk(current: string) {
-        let entries: string[];
-        try { entries = readdirSync(current); } catch { return; }
-        for (const entry of entries) {
-            if (SKIP_DIRS.has(entry)) continue;
-            const fullPath = join(current, entry);
-            let stat;
-            try { stat = statSync(fullPath); } catch { continue; }
-            if (stat.isDirectory()) walk(fullPath);
-            else if (stat.isFile() && predicate(fullPath)) results.push(fullPath);
-        }
-    }
-    walk(dir);
-    return results;
-}
 
 /** 파일 내용 읽기 (실패 시 null) */
 function readFileSafe(filePath: string): string | null {
@@ -277,7 +254,7 @@ async function phase2ConfigAnalysis(
             // 모노레포 구조에서 서비스명 폴더가 없으면 root 자체가 서비스일 수 있음
             if (!configDir && options.repoRoots.length === 1) {
                 // 단일 repoRoot인 경우 해당 root의 config 파일 확인
-                const rootConfigs = findFilesRecursive(options.repoRoots[0]!, isConfigFile);
+                const rootConfigs = findFiles(options.repoRoots[0]!, isConfigFile);
                 if (rootConfigs.length > 0 && allServices.length <= 3) {
                     // 서비스가 3개 이하면 root 자체를 해당 서비스로 간주
                     configDir = options.repoRoots[0]!;
@@ -288,7 +265,7 @@ async function phase2ConfigAnalysis(
         if (!configDir) continue;
 
         // config 파일 수집
-        const configFiles = findFilesRecursive(configDir, isConfigFile);
+        const configFiles = findFiles(configDir, isConfigFile);
         if (configFiles.length === 0) continue;
 
         const configContents = configFiles
@@ -474,7 +451,7 @@ async function phase3CallExtraction(
         if (!sourceDir) continue;
 
         // 소스 파일 수집 + HTTP client 키워드 프리필터
-        const allSourceFiles = findFilesRecursive(sourceDir, (fp) => {
+        const allSourceFiles = findFiles(sourceDir, (fp) => {
             return SOURCE_EXTENSIONS.has(extname(fp).toLowerCase());
         });
 

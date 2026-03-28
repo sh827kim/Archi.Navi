@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { buildProjectSymbolTable, getImplementationsForInterface } from '@/code/ast/symbolTable';
+import {
+  buildProjectSymbolTable,
+  getImplementationsForInterface,
+  resolveJavaCallTargets,
+  type AstProjectSymbolTable,
+} from '@/code/ast/symbolTable';
 
 function createTempRepoRoot() {
   const repoRoot = join(tmpdir(), `archi-navi-symbol-table-${Date.now()}-${Math.random()}`);
@@ -157,6 +162,140 @@ class Dependency`,
 
     expect(implementations.map((symbol) => symbol.fqcn)).toEqual([
       'com.example.payment.PaymentGatewayImpl',
+    ]);
+  });
+
+  it('1000 파일 규모에서도 symbol table 구축이 30초 이내여야 한다', async () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const srcDir = join(repoRoot, 'src');
+    mkdirSync(srcDir, { recursive: true });
+
+    for (let index = 0; index < 1000; index += 1) {
+      writeFileSync(
+        join(srcDir, `Service${index}.java`),
+        `package com.example.bulk;
+public class Service${index} {
+  String ping() { return "ok"; }
+}`,
+      );
+    }
+
+    const startedAt = Date.now();
+    const table = await buildProjectSymbolTable({ repoRoot });
+    const elapsedMs = Date.now() - startedAt;
+
+    expect(table.symbolsByFqcn.size).toBe(1000);
+    expect(elapsedMs).toBeLessThan(30_000);
+  }, 40_000);
+
+  it('인터페이스 다중 분기에서 동일 helper로 수렴해도 분기별 call evidence를 유지해야 한다', () => {
+    const table: AstProjectSymbolTable = {
+      symbolsByFqcn: new Map([
+        [
+          'com.example.Client',
+          {
+            kind: 'interface',
+            name: 'Client',
+            fqcn: 'com.example.Client',
+            filePath: '',
+            language: 'java',
+            extendsTypes: [],
+            implementsTypes: [],
+          },
+        ],
+        [
+          'com.example.ClientA',
+          {
+            kind: 'class',
+            name: 'ClientA',
+            fqcn: 'com.example.ClientA',
+            filePath: '',
+            language: 'java',
+            extendsTypes: [],
+            implementsTypes: ['com.example.Client'],
+          },
+        ],
+        [
+          'com.example.ClientB',
+          {
+            kind: 'class',
+            name: 'ClientB',
+            fqcn: 'com.example.ClientB',
+            filePath: '',
+            language: 'java',
+            extendsTypes: [],
+            implementsTypes: ['com.example.Client'],
+          },
+        ],
+        [
+          'com.example.Helper',
+          {
+            kind: 'class',
+            name: 'Helper',
+            fqcn: 'com.example.Helper',
+            filePath: '',
+            language: 'java',
+            extendsTypes: [],
+            implementsTypes: [],
+          },
+        ],
+      ]),
+      simpleNameIndex: new Map([
+        ['Client', ['com.example.Client']],
+        ['ClientA', ['com.example.ClientA']],
+        ['ClientB', ['com.example.ClientB']],
+        ['Helper', ['com.example.Helper']],
+      ]),
+      implementationMap: new Map([
+        ['com.example.Client', ['com.example.ClientA', 'com.example.ClientB']],
+      ]),
+      methodCallsByType: new Map([
+        [
+          'com.example.Helper',
+          new Map([
+            [
+              'send',
+              [{ symbol: '/payments', confidence: 0.9, metadata: {} }],
+            ],
+          ]),
+        ],
+      ]),
+      methodCallTargetsByType: new Map([
+        [
+          'com.example.ClientA',
+          new Map([
+            ['call', [{ typeName: 'com.example.Helper', methodName: 'send' }]],
+          ]),
+        ],
+        [
+          'com.example.ClientB',
+          new Map([
+            ['call', [{ typeName: 'com.example.Helper', methodName: 'send' }]],
+          ]),
+        ],
+      ]),
+    };
+
+    const resolved = resolveJavaCallTargets(table, {
+      typeName: 'com.example.Client',
+      methodName: 'call',
+      maxDepth: 2,
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(
+      resolved
+        .map((call) => ({
+          symbol: call.symbol,
+          interfaceImpl: call.metadata['interfaceImpl'],
+          ambiguous: call.metadata['ambiguous'],
+        }))
+        .sort((left, right) => String(left.interfaceImpl).localeCompare(String(right.interfaceImpl))),
+    ).toEqual([
+      { symbol: '/payments', interfaceImpl: 'ClientA', ambiguous: true },
+      { symbol: '/payments', interfaceImpl: 'ClientB', ambiguous: true },
     ]);
   });
 });

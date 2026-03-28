@@ -185,6 +185,10 @@ export async function GET(req: NextRequest) {
     const result = candidates.map((c: typeof candidates[0]) => {
       const meta = c.metadata as Record<string, unknown> | null;
       const llmAssessment = meta?.llmAssessment ?? null;
+      const llmExplanation =
+        meta?.llmExplanation !== null && typeof meta?.llmExplanation === 'object'
+          ? meta.llmExplanation
+          : null;
       const source = typeof meta?.source === 'string' ? meta.source : null;
       const metadataCrossValidation =
         meta?.crossValidation !== null && typeof meta?.crossValidation === 'object'
@@ -220,6 +224,7 @@ export async function GET(req: NextRequest) {
         crossValidation,
         ...(source ? { source } : {}),
         ...(llmAssessment ? { llmAssessment } : {}),
+        ...(llmExplanation ? { llmExplanation } : {}),
       };
     });
 

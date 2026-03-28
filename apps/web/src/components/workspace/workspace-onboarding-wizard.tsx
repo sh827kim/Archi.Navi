@@ -20,6 +20,7 @@ import {
   Switch,
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { normalizeWorkspaceName, WORKSPACE_NAME_MAX_LENGTH } from '@/lib/workspace-name';
 
 type Step = 0 | 1 | 2 | 3 | 4;
 type ScanMode = 'local' | 'workspace-dir' | 'github-repo' | 'github-org';
@@ -95,19 +96,27 @@ export function WorkspaceOnboardingWizard() {
   };
 
   const createWorkspace = async (): Promise<string> => {
-    const name = workspaceName.trim();
-    if (!name) {
-      throw new Error('워크스페이스 제목을 입력하세요.');
+    const normalized = normalizeWorkspaceName(workspaceName);
+    if ('error' in normalized) {
+      if (normalized.error === 'name is required') {
+        throw new Error('워크스페이스 제목을 입력하세요.');
+      }
+
+      throw new Error(`워크스페이스 이름은 ${WORKSPACE_NAME_MAX_LENGTH}자 이하로 입력하세요.`);
     }
 
     const res = await fetch('/api/workspaces', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name: normalized.name }),
     });
 
     if (!res.ok) {
-      throw new Error('워크스페이스 생성에 실패했습니다.');
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      if (err.error === `name must be at most ${WORKSPACE_NAME_MAX_LENGTH} characters`) {
+        throw new Error(`워크스페이스 이름은 ${WORKSPACE_NAME_MAX_LENGTH}자 이하로 입력하세요.`);
+      }
+      throw new Error(err.error ?? '워크스페이스 생성에 실패했습니다.');
     }
 
     const created = (await res.json()) as { id: string; name: string };
@@ -374,7 +383,11 @@ export function WorkspaceOnboardingWizard() {
                   onChange={(e) => setWorkspaceName(e.target.value)}
                   placeholder="예: 쇼핑몰 플랫폼"
                   disabled={pending}
+                  maxLength={WORKSPACE_NAME_MAX_LENGTH}
                 />
+                <p className="text-xs text-muted-foreground">
+                  {workspaceName.length}/{WORKSPACE_NAME_MAX_LENGTH}
+                </p>
               </div>
             )}
 

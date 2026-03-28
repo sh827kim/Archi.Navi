@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-22
+> 최종 점검일: 2026-03-27
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -15,7 +15,7 @@
 | Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
-| 추론 엔진 고도화 (P4) | ⚠️ | Cross-Signal Validation 완료, 나머지 고도화 항목은 설계/구현 대기 |
+| 추론 엔진 고도화 (P4) | ✅ | Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터(코드 의도 분석/관계 설명/도메인 라벨) 구현 완료. 4-4~4-6은 후속 고도화 범위 |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -60,7 +60,7 @@
 - ✅ Relation 추론(구현 존재)
   - Config 기반: `inferRelationsFromConfig`
   - Code Signal(AST/Regex): `extractCodeSignalsWithEngine` (`hybrid` 기본, `ast`는 AST 실패 시 Regex fallback)
-  - Code Signal 기반 후보 생성: `mode=code`로 `relation_candidates` 생성 (endpoint/topic/queue/db_table 포함, SPEC: `docs/spec/14-*`, `docs/spec/15-*`, `docs/spec/16-*`, `docs/spec/17-*`)
+  - Code Signal 기반 후보 생성: `mode=code`로 `relation_candidates` 생성 (endpoint/topic/queue/db_table 포함, SPEC: `docs/spec/13-*`, `docs/spec/14-*`, `docs/spec/15-*`, `docs/spec/16-*`)
   - DB Signal: `extractDbSchemaSignals` (FK/implicit 후보 + schema evidence 연결)
   - Cross-Signal Validation: `crossValidatePendingRelationCandidates` (boost/penalty, repo-scoped rerun, contradiction rule finalization)
   - Config↔Code endpoint binding: `bindConfigToCodeEndpoints` (service→endpoint 후보 분해, stale metadata 정리)
@@ -88,11 +88,11 @@
 
 ### 2.1 추론 엔진 품질 고도화 (P4)
 
-- ⚠️ Cross-Signal Validation은 구현 완료되었고, Inter-procedural AST / LLM 부스터 / 플러그인 시스템은 다음 고도화 범위로 남아 있다.
+- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터는 구현 완료되었고, 플러그인 시스템 / 실시간 갱신 / 피드백 루프가 다음 고도화 범위로 남아 있다.
 
 ### 2.2 실행 오케스트레이션 Phase 2+
 
-- 📋 `cancel/retry`, 큐/워커 분리, 운영 대시보드는 `docs/spec/13-inference-run-orchestration-spec.md`의 후속 범위로 남아 있다.
+- 📋 `cancel/retry`, 큐/워커 분리, 운영 대시보드는 `docs/spec/12-inference-run-orchestration-spec.md`의 후속 범위로 남아 있다.
 
 ### 2.3 도메인 추론 운영 UX
 
@@ -102,30 +102,30 @@
 
 ## 3) 설계 완료 / 구현 대기 (P4, P5)
 
-> 아래 항목들은 설계 문서(Design + SPEC)가 완료되어 구현 대기 중인 항목이다.
+> 아래 항목들은 설계 문서(Design + SPEC)가 완료되었고, 일부는 구현까지 완료되었다.
 > 상세는 `docs/03-roadmap.md` P4/P5 섹션 및 각 SPEC 문서 참조.
 
 ### 3.1 P4: 추론 엔진 고도화 (v3.0) — ★ 최우선
 
 | 항목 | SPEC | 상태 |
 |------|------|------|
-| 4-1. Inter-procedural AST 분석 | `docs/spec/18-inter-procedural-ast-spec.md` | 📋 Draft |
-| 4-2. Cross-Signal Validation | `docs/spec/19-cross-signal-validation-spec.md` | ✅ Implemented |
-| 4-2a. Approval Mapping / Cross-validation UI 정합성 | `docs/spec/29-approval-mapping-ui-consistency-spec.md` | ✅ Implemented |
-| 4-3. LLM 추론 부스터 | `docs/spec/20-llm-inference-boost-spec.md` | 📋 Draft |
-| 4-4. 프레임워크 플러그인 시스템 | `docs/spec/21-framework-plugin-system-spec.md` | 📋 Draft |
-| 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/22-realtime-rollup-spec.md` | 📋 Draft |
-| 4-6. 추론 피드백 루프 | `docs/spec/23-inference-feedback-loop-spec.md` | 📋 Draft |
+| 4-1. Inter-procedural AST 분석 | `docs/spec/17-inter-procedural-ast-spec.md` | ✅ Implemented |
+| 4-2. Cross-Signal Validation | `docs/spec/18-cross-signal-validation-spec.md` | ✅ Implemented |
+| 4-2a. Approval Mapping / Cross-validation UI 정합성 | `docs/spec/28-approval-mapping-ui-consistency-spec.md` | ✅ Implemented |
+| 4-3. LLM 추론 부스터 | `docs/spec/19-llm-inference-boost-spec.md` | ✅ Implemented |
+| 4-4. 프레임워크 플러그인 시스템 | `docs/spec/20-framework-plugin-system-spec.md` | 📋 Draft |
+| 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/21-realtime-rollup-spec.md` | 📋 Draft |
+| 4-6. 추론 피드백 루프 | `docs/spec/22-inference-feedback-loop-spec.md` | 📋 Draft |
 
 ### 3.2 P5: 개발자 생산성 기능 (v3.1+)
 
 | 항목 | SPEC | 상태 |
 |------|------|------|
-| 5-1. Change Impact Preview | `docs/spec/24-change-impact-preview-spec.md` | 📋 Draft |
-| 5-2. Architecture Drift Detection | `docs/spec/25-architecture-drift-detection-spec.md` | 📋 Draft |
-| 5-3. Personal Architecture Journal | `docs/spec/26-personal-architecture-journal-spec.md` | 📋 Draft |
-| 5-4. API Contract Diff | `docs/spec/27-api-contract-diff-spec.md` | 📋 Draft |
-| 5-5. Architecture Health Score | `docs/spec/28-architecture-health-score-spec.md` | 📋 Draft |
+| 5-1. Change Impact Preview | `docs/spec/23-change-impact-preview-spec.md` | 📋 Draft |
+| 5-2. Architecture Drift Detection | `docs/spec/24-architecture-drift-detection-spec.md` | 📋 Draft |
+| 5-3. Personal Architecture Journal | `docs/spec/25-personal-architecture-journal-spec.md` | 📋 Draft |
+| 5-4. API Contract Diff | `docs/spec/26-api-contract-diff-spec.md` | 📋 Draft |
+| 5-5. Architecture Health Score | `docs/spec/27-architecture-health-score-spec.md` | 📋 Draft |
 | 5-6. 구조적 개선 (서비스 레이어/커버리지/공유/Watcher) | `docs/design/08-developer-productivity.md` §7 | 📋 Draft |
 
 ---
