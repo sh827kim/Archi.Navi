@@ -9,6 +9,7 @@ import { domainCandidates, domainInferenceProfiles, objects } from '@archi-navi/
 import { normalizeAffinity, calculatePurity, getPrimaryDomain, getSecondaryDomains, generateId } from '@archi-navi/shared';
 import { computeDbScores } from '../db/dbSchemaSignal';
 import { computeMsgScores } from './msgSignal';
+import { applyDomainFeedbackToSeedCandidate } from './feedbackLoop';
 
 interface SeedInferenceOptions {
   workspaceId: string;
@@ -109,6 +110,12 @@ export async function runSeedBasedInference(
     const purity = calculatePurity(affinity);
     const primaryDomainId = getPrimaryDomain(affinity);
     const secondaryDomainIds = getSecondaryDomains(affinity, weights.secondaryThreshold);
+    const feedbackAdjusted = await applyDomainFeedbackToSeedCandidate(db, {
+      workspaceId,
+      primaryDomainId,
+      purity,
+      track: 'TRACK_A',
+    });
 
     // domain_candidates에 저장 (signals에 db + msg 신호 포함)
     await db.insert(domainCandidates).values({
@@ -116,10 +123,15 @@ export async function runSeedBasedInference(
       workspaceId,
       objectId: service.id,
       affinityMap: affinity,
-      purity,
+      purity: feedbackAdjusted.purity,
       primaryDomainId: primaryDomainId ?? undefined,
       secondaryDomainIds,
-      signals: { code: rawScores, db: dbScoreMap, msg: msgScoreMap },
+      signals: {
+        code: rawScores,
+        db: dbScoreMap,
+        msg: msgScoreMap,
+        ...(feedbackAdjusted.feedback ? { feedback: feedbackAdjusted.feedback } : {}),
+      },
       status: 'PENDING',
     });
 

@@ -3,7 +3,7 @@
  * - GET: 워크스페이스 기본 추론 프로필 조회 (없으면 생성)
  * - PUT: 워크스페이스 기본 추론 프로필 갱신
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
 
@@ -43,6 +43,16 @@ interface FeedbackSummary {
   totalSamples: number;
 }
 
+interface FeedbackEntry {
+  key: string;
+  approved: number;
+  rejected: number;
+  total: number;
+  approvalRate: number;
+  adjustment: number;
+  eligible: boolean;
+}
+
 const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
   enabled: true,
   minSamples: 10,
@@ -68,6 +78,26 @@ interface ProfileResponse {
   crossValidation?: unknown;
   feedbackConfig?: unknown;
   feedbackAdjustments?: unknown;
+  domainFeedbackConfig?: unknown;
+  domainFeedbackAdjustments?: unknown;
+}
+
+interface ProfileBaseRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  kind: string;
+  is_default: boolean | null;
+  w_code: number | null;
+  w_db: number | null;
+  w_msg: number | null;
+  secondary_threshold: number | null;
+  min_cluster_size: number | null;
+  resolution: number | null;
+  edge_w_call: number | null;
+  edge_w_rw: number | null;
+  edge_w_msg: number | null;
+  enabled_layers: unknown;
 }
 
 interface UpdateProfileBody {
@@ -83,8 +113,23 @@ interface UpdateProfileBody {
   edgeWMsg?: number;
   enabledLayers?: string[];
   crossValidation?: Partial<CrossValidationConfig>;
-  feedbackConfig?: Partial<FeedbackConfig>;
-  resetAll?: boolean;
+  relationFeedbackConfig?: Partial<FeedbackConfig>;
+  domainFeedbackConfig?: Partial<FeedbackConfig>;
+  resetRelationFeedback?: boolean;
+  resetDomainFeedback?: boolean;
+}
+
+function isMissingColumnError(error: unknown, columns: string[]): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = Reflect.get(error, 'message');
+  if (typeof message !== 'string') return false;
+
+  const normalizedMessage = message.toLowerCase();
+  const hasRequestedColumn = columns.some((column) => normalizedMessage.includes(column.toLowerCase()));
+  if (!hasRequestedColumn) return false;
+
+  const code = Reflect.get(error, 'code');
+  return code === '42703' || normalizedMessage.includes('does not exist');
 }
 
 function asCrossValidationConfig(value: unknown): CrossValidationConfig {
@@ -180,10 +225,71 @@ function buildFeedbackSummary(
   };
 }
 
-function toPublicProfile(row: ProfileResponse) {
+function buildFeedbackEntries(
+  adjustments: Record<string, FeedbackStats>,
+  config: FeedbackConfig,
+): FeedbackEntry[] {
+  return Object.entries(adjustments)
+    .map(([key, entry]) => ({
+      key,
+      approved: entry.approved,
+      rejected: entry.rejected,
+      total: entry.total,
+      approvalRate: entry.approvalRate,
+      adjustment: entry.adjustment,
+      eligible: entry.total >= config.minSamples,
+    }))
+    .sort((left, right) => {
+      if (right.total !== left.total) return right.total - left.total;
+      const adjustmentDiff = Math.abs(right.adjustment) - Math.abs(left.adjustment);
+      if (adjustmentDiff !== 0) return adjustmentDiff;
+      return left.key.localeCompare(right.key);
+    });
+}
+
+function toProfileResponseRow(row: ProfileBaseRow): ProfileResponse {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    kind: row.kind,
+    isDefault: row.is_default,
+    wCode: row.w_code,
+    wDb: row.w_db,
+    wMsg: row.w_msg,
+    secondaryThreshold: row.secondary_threshold,
+    minClusterSize: row.min_cluster_size,
+    resolution: row.resolution,
+    edgeWCall: row.edge_w_call,
+    edgeWRw: row.edge_w_rw,
+    edgeWMsg: row.edge_w_msg,
+    enabledLayers: row.enabled_layers,
+  };
+}
+
+function toPublicProfile(
+  row: ProfileResponse,
+  options?: { includeFeedbackEntries?: boolean },
+) {
   const crossValidation = asCrossValidationConfig(row.crossValidation);
-  const feedbackConfig = asFeedbackConfig(row.feedbackConfig);
-  const feedbackAdjustments = asFeedbackAdjustments(row.feedbackAdjustments, feedbackConfig);
+  const relationFeedbackConfig = asFeedbackConfig(row.feedbackConfig);
+  const relationFeedbackAdjustments = asFeedbackAdjustments(
+    row.feedbackAdjustments,
+    relationFeedbackConfig,
+  );
+  const relationFeedbackSummary = buildFeedbackSummary(
+    relationFeedbackAdjustments,
+    relationFeedbackConfig,
+  );
+  const domainFeedbackConfig = asFeedbackConfig(row.domainFeedbackConfig);
+  const domainFeedbackAdjustments = asFeedbackAdjustments(
+    row.domainFeedbackAdjustments,
+    domainFeedbackConfig,
+  );
+  const domainFeedbackSummary = buildFeedbackSummary(
+    domainFeedbackAdjustments,
+    domainFeedbackConfig,
+  );
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -203,8 +309,22 @@ function toPublicProfile(row: ProfileResponse) {
       ? (row.enabledLayers as unknown[]).filter((v): v is string => typeof v === 'string')
       : ['call', 'db', 'msg', 'code'],
     crossValidation,
-    feedbackConfig,
-    feedbackSummary: buildFeedbackSummary(feedbackAdjustments, feedbackConfig),
+    relationFeedbackConfig,
+    relationFeedbackSummary,
+    domainFeedbackConfig,
+    domainFeedbackSummary,
+    ...(options?.includeFeedbackEntries
+      ? {
+          relationFeedbackEntries: buildFeedbackEntries(
+            relationFeedbackAdjustments,
+            relationFeedbackConfig,
+          ),
+          domainFeedbackEntries: buildFeedbackEntries(
+            domainFeedbackAdjustments,
+            domainFeedbackConfig,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -215,14 +335,23 @@ async function selectProfileJsonState(
   crossValidation: unknown;
   feedbackConfig: unknown;
   feedbackAdjustments: unknown;
+  domainFeedbackConfig: unknown;
+  domainFeedbackAdjustments: unknown;
 }> {
   try {
     const state = await db.execute<{
       cross_validation: unknown;
       feedback_config: unknown;
       feedback_adjustments: unknown;
+      domain_feedback_config: unknown;
+      domain_feedback_adjustments: unknown;
     }>(sql`
-      select cross_validation, feedback_config, feedback_adjustments
+      select
+        cross_validation,
+        feedback_config,
+        feedback_adjustments,
+        domain_feedback_config,
+        domain_feedback_adjustments
       from domain_inference_profiles
       where id = ${profileId}
       limit 1
@@ -232,8 +361,44 @@ async function selectProfileJsonState(
       crossValidation: state.rows[0]?.cross_validation,
       feedbackConfig: state.rows[0]?.feedback_config,
       feedbackAdjustments: state.rows[0]?.feedback_adjustments,
+      domainFeedbackConfig: state.rows[0]?.domain_feedback_config,
+      domainFeedbackAdjustments: state.rows[0]?.domain_feedback_adjustments,
     };
-  } catch {
+  } catch (error) {
+    if (!isMissingColumnError(error, ['domain_feedback_config', 'domain_feedback_adjustments'])) {
+      throw error;
+    }
+  }
+
+  try {
+    const relationState = await db.execute<{
+      cross_validation: unknown;
+      feedback_config: unknown;
+      feedback_adjustments: unknown;
+    }>(sql`
+      select
+        cross_validation,
+        feedback_config,
+        feedback_adjustments
+      from domain_inference_profiles
+      where id = ${profileId}
+      limit 1
+    `);
+
+    return {
+      crossValidation: relationState.rows[0]?.cross_validation,
+      feedbackConfig: relationState.rows[0]?.feedback_config,
+      feedbackAdjustments: relationState.rows[0]?.feedback_adjustments,
+      domainFeedbackConfig: undefined,
+      domainFeedbackAdjustments: undefined,
+    };
+  } catch (error) {
+    if (!isMissingColumnError(error, ['feedback_config', 'feedback_adjustments'])) {
+      throw error;
+    }
+  }
+
+  try {
     const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
       select cross_validation
       from domain_inference_profiles
@@ -245,23 +410,80 @@ async function selectProfileJsonState(
       crossValidation: crossValidation.rows[0]?.cross_validation,
       feedbackConfig: undefined,
       feedbackAdjustments: undefined,
+      domainFeedbackConfig: undefined,
+      domainFeedbackAdjustments: undefined,
+    };
+  } catch (error) {
+    if (!isMissingColumnError(error, ['cross_validation'])) {
+      throw error;
+    }
+    return {
+      crossValidation: undefined,
+      feedbackConfig: undefined,
+      feedbackAdjustments: undefined,
+      domainFeedbackConfig: undefined,
+      domainFeedbackAdjustments: undefined,
     };
   }
 }
 
+async function selectProfileBaseRow(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string,
+  options: { defaultOnly: boolean },
+): Promise<ProfileResponse | null> {
+  const baseRows = options.defaultOnly
+    ? await db.execute<ProfileBaseRow>(sql`
+      select
+        id,
+        workspace_id,
+        name,
+        kind,
+        is_default,
+        w_code,
+        w_db,
+        w_msg,
+        secondary_threshold,
+        min_cluster_size,
+        resolution,
+        edge_w_call,
+        edge_w_rw,
+        edge_w_msg,
+        enabled_layers
+      from domain_inference_profiles
+      where workspace_id = ${workspaceId}
+        and is_default = true
+      limit 1
+    `)
+    : await db.execute<ProfileBaseRow>(sql`
+      select
+        id,
+        workspace_id,
+        name,
+        kind,
+        is_default,
+        w_code,
+        w_db,
+        w_msg,
+        secondary_threshold,
+        min_cluster_size,
+        resolution,
+        edge_w_call,
+        edge_w_rw,
+        edge_w_msg,
+        enabled_layers
+      from domain_inference_profiles
+      where workspace_id = ${workspaceId}
+      limit 1
+    `);
+
+  const row = baseRows.rows[0];
+  return row ? toProfileResponseRow(row) : null;
+}
+
 async function selectDefaultProfile(workspaceId: string): Promise<ProfileResponse | null> {
   const db = await getDb();
-  const rows = await db
-    .select()
-    .from(domainInferenceProfiles)
-    .where(
-      and(
-        eq(domainInferenceProfiles.workspaceId, workspaceId),
-        eq(domainInferenceProfiles.isDefault, true),
-      ),
-    )
-    .limit(1);
-  const row = rows[0] ?? null;
+  const row = await selectProfileBaseRow(db, workspaceId, { defaultOnly: true });
   if (!row) return null;
 
   const state = await selectProfileJsonState(db, row.id);
@@ -271,17 +493,14 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
     crossValidation: state.crossValidation,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
+    domainFeedbackConfig: state.domainFeedbackConfig,
+    domainFeedbackAdjustments: state.domainFeedbackAdjustments,
   };
 }
 
 async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | null> {
   const db = await getDb();
-  const rows = await db
-    .select()
-    .from(domainInferenceProfiles)
-    .where(eq(domainInferenceProfiles.workspaceId, workspaceId))
-    .limit(1);
-  const row = rows[0] ?? null;
+  const row = await selectProfileBaseRow(db, workspaceId, { defaultOnly: false });
   if (!row) return null;
 
   const state = await selectProfileJsonState(db, row.id);
@@ -291,6 +510,8 @@ async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | 
     crossValidation: state.crossValidation,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
+    domainFeedbackConfig: state.domainFeedbackConfig,
+    domainFeedbackAdjustments: state.domainFeedbackAdjustments,
   };
 }
 
@@ -331,14 +552,19 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function shouldIncludeFeedbackEntries(req: NextRequest): boolean {
+  return req.nextUrl.searchParams.get('includeFeedbackEntries') === 'true';
+}
+
 export async function GET(req: NextRequest) {
   try {
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
     if (!workspaceId) {
       return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
     }
+    const includeFeedbackEntries = shouldIncludeFeedbackEntries(req);
     const profile = await ensureDefaultProfile(workspaceId);
-    return NextResponse.json(toPublicProfile(profile));
+    return NextResponse.json(toPublicProfile(profile, { includeFeedbackEntries }));
   } catch (error) {
     console.error('[GET /api/inference/profiles/default]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
@@ -347,6 +573,7 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
+    const includeFeedbackEntries = shouldIncludeFeedbackEntries(req);
     const body = (await req.json().catch(() => ({}))) as UpdateProfileBody;
     const workspaceId = body.workspaceId;
     if (!workspaceId) {
@@ -406,21 +633,37 @@ export async function PUT(req: NextRequest) {
         ? clamp(crossValidationInput.penaltyFactor, 0, 1)
         : currentCrossValidation.penaltyFactor,
     };
-    const resetAll = body.resetAll === true;
-    const currentFeedbackConfig = asFeedbackConfig(current.feedbackConfig);
-    const feedbackConfigInput = body.feedbackConfig ?? {};
-    const feedbackConfig = resetAll
+    const resetRelationFeedback = body.resetRelationFeedback === true;
+    const resetDomainFeedback = body.resetDomainFeedback === true;
+    const currentRelationFeedbackConfig = asFeedbackConfig(current.feedbackConfig);
+    const relationFeedbackConfigInput = body.relationFeedbackConfig ?? {};
+    const relationFeedbackConfig = resetRelationFeedback
       ? DEFAULT_FEEDBACK_CONFIG
       : {
-          enabled: typeof feedbackConfigInput.enabled === 'boolean'
-            ? feedbackConfigInput.enabled
-            : currentFeedbackConfig.enabled,
-          minSamples: isFiniteNumber(feedbackConfigInput.minSamples)
-            ? Math.round(clamp(feedbackConfigInput.minSamples, 1, 10_000))
-            : currentFeedbackConfig.minSamples,
-          maxAdjustment: isFiniteNumber(feedbackConfigInput.maxAdjustment)
-            ? clamp(feedbackConfigInput.maxAdjustment, 0, 1)
-            : currentFeedbackConfig.maxAdjustment,
+          enabled: typeof relationFeedbackConfigInput.enabled === 'boolean'
+            ? relationFeedbackConfigInput.enabled
+            : currentRelationFeedbackConfig.enabled,
+          minSamples: isFiniteNumber(relationFeedbackConfigInput.minSamples)
+            ? Math.round(clamp(relationFeedbackConfigInput.minSamples, 1, 10_000))
+            : currentRelationFeedbackConfig.minSamples,
+          maxAdjustment: isFiniteNumber(relationFeedbackConfigInput.maxAdjustment)
+            ? clamp(relationFeedbackConfigInput.maxAdjustment, 0, 1)
+            : currentRelationFeedbackConfig.maxAdjustment,
+        };
+    const currentDomainFeedbackConfig = asFeedbackConfig(current.domainFeedbackConfig);
+    const domainFeedbackConfigInput = body.domainFeedbackConfig ?? {};
+    const domainFeedbackConfig = resetDomainFeedback
+      ? DEFAULT_FEEDBACK_CONFIG
+      : {
+          enabled: typeof domainFeedbackConfigInput.enabled === 'boolean'
+            ? domainFeedbackConfigInput.enabled
+            : currentDomainFeedbackConfig.enabled,
+          minSamples: isFiniteNumber(domainFeedbackConfigInput.minSamples)
+            ? Math.round(clamp(domainFeedbackConfigInput.minSamples, 1, 10_000))
+            : currentDomainFeedbackConfig.minSamples,
+          maxAdjustment: isFiniteNumber(domainFeedbackConfigInput.maxAdjustment)
+            ? clamp(domainFeedbackConfigInput.maxAdjustment, 0, 1)
+            : currentDomainFeedbackConfig.maxAdjustment,
         };
     await db.transaction(async (tx) => {
       await tx
@@ -453,27 +696,50 @@ export async function PUT(req: NextRequest) {
       `);
 
       try {
-        if (resetAll) {
+        if (resetRelationFeedback) {
           await tx.execute(sql`
             update domain_inference_profiles
-            set feedback_config = ${JSON.stringify(feedbackConfig)}::jsonb,
+            set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb,
                 feedback_adjustments = '{}'::jsonb
             where id = ${current.id}
           `);
         } else {
           await tx.execute(sql`
             update domain_inference_profiles
-            set feedback_config = ${JSON.stringify(feedbackConfig)}::jsonb
+            set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb
             where id = ${current.id}
           `);
         }
-      } catch {
-        // feedback 컬럼 마이그레이션이 아직 적용되지 않은 환경에서는 no-op 처리한다.
+      } catch (error) {
+        if (!isMissingColumnError(error, ['feedback_config', 'feedback_adjustments'])) {
+          throw error;
+        }
+      }
+
+      try {
+        if (resetDomainFeedback) {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb,
+                domain_feedback_adjustments = '{}'::jsonb
+            where id = ${current.id}
+          `);
+        } else {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb
+            where id = ${current.id}
+          `);
+        }
+      } catch (error) {
+        if (!isMissingColumnError(error, ['domain_feedback_config', 'domain_feedback_adjustments'])) {
+          throw error;
+        }
       }
     });
 
     const updated = await ensureDefaultProfile(workspaceId);
-    return NextResponse.json(toPublicProfile(updated));
+    return NextResponse.json(toPublicProfile(updated, { includeFeedbackEntries }));
   } catch (error) {
     console.error('[PUT /api/inference/profiles/default]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

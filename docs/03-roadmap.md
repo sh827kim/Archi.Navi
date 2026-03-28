@@ -28,7 +28,7 @@
 | P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
 | P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | ✅ 완료 | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation, 4-3 LLM 추론 부스터, 4-4 프레임워크 플러그인 시스템, 4-5 Delta Rollup + 실시간 갱신, 4-6 relation-only feedback loop 구현 완료. domain candidate, approval hint, per-key detail table은 후속 범위 |
+| P4 (4-1 ~ 4-6) | ✅ 완료 | 4-1~4-6 구현 완료. 4-6은 relation/domain feedback public contract 분리, Track A domain feedback 집계/next-run-only 반영, Settings/API 분리 계약, code-origin relation feedback key specialization까지 반영 완료 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
@@ -349,18 +349,24 @@
 
 ### ✅ 4-6. 추론 피드백 루프
 - **SPEC:** `docs/spec/22-inference-feedback-loop-spec.md`
+- **후속 SPEC:** `docs/spec/36-relation-feedback-key-specialization-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §6
 - **구현 완료 범위:**
   - relation candidate 승인/거절을 `relationType:sourceFamily:signalKind` canonical key 기준으로 집계
-  - 누적 결과를 기존 후보에 소급하지 않고 다음 inference run부터만 base confidence 보정에 반영
-  - `domain_inference_profiles`의 `feedbackConfig`/`feedbackAdjustments` 저장, Settings summary, `reset-all` 액션 연결
-  - quick run과 queued run이 동일한 feedback 보정 규칙을 적용하도록 parity 테스트 반영
-- **후속 범위:**
-  - domain candidate 집계/보정
-  - Approval hint 노출
-  - per-key detail table
-- **남은 리스크:**
-  - feedback key 차원이 `relationType:sourceFamily:signalKind`로 고정되어 있어 framework/language별 세분화 보정은 후속 확장 범위다.
+  - 누적 결과를 기존 relation 후보에 소급하지 않고 다음 inference run부터만 base confidence 보정에 반영
+  - `GET/PUT /api/inference/profiles/default` public contract가 `relationFeedback*` / `domainFeedback*` 및 `resetRelationFeedback` / `resetDomainFeedback`로 분리됨
+  - Settings가 relation/domain summary, detail, reset 흐름을 분리해 노출함
+  - domain candidate 승인/거절이 Track A only domain feedback를 집계함
+  - domain key는 `TRACK_A:{primaryDomainId}:{purityBucket}`
+  - domain 보정은 승인 직후 소급 적용하지 않고 다음 Track A domain run부터만 반영
+  - `GET /api/inference/domain-candidates`가 Track A domain feedback metadata를 함께 노출함
+  - code-origin relation feedback가 `framework/language`를 안정적으로 가지면 `relationType:sourceFamily:signalKind:framework:language` specialized key를 사용함
+  - framework/language가 없으면 legacy v1 key로 fallback 하며, next-run apply lookup은 `v2 -> legacy v1` dual-read를 사용함
+  - `GET /api/inference/candidates` public contract가 3-segment/5-segment feedback key를 opaque string으로 모두 수용함
+  - generic alias `feedbackConfig` / `feedbackAdjustments` / `feedbackSummary` / `feedbackEntries` / `resetAll`은 public contract가 아님
+- **범위 제외 / 비주장:**
+  - Track B / domain discovery feedback 집계 및 적용
+  - queued/orchestrated parity claim
 
 ---
 
@@ -476,6 +482,7 @@ P2 완료 기반                   P4 고도화 (★ 최우선)
 | **플러그인 시스템(4-4)** | `docs/spec/20-framework-plugin-system-spec.md` |
 | **Delta Rollup(4-5)** | `docs/spec/21-realtime-rollup-spec.md` |
 | **피드백 루프(4-6)** | `docs/spec/22-inference-feedback-loop-spec.md` |
+| **피드백 키 세분화(4-6 후속)** | `docs/spec/36-relation-feedback-key-specialization-spec.md` |
 | **Change Impact(5-1)** | `docs/spec/23-change-impact-preview-spec.md` |
 | **Drift Detection(5-2)** | `docs/spec/24-architecture-drift-detection-spec.md` |
 | **Journal(5-3)** | `docs/spec/25-personal-architecture-journal-spec.md` |

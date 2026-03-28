@@ -50,6 +50,17 @@ function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
 }
 
+function extractCodeSpecializationMetadata(meta: EvidenceMeta): Record<string, string> {
+  const specialization: Record<string, string> = {};
+  const framework = asString(meta['framework']);
+  const language = asString(meta['language']);
+
+  if (framework) specialization.framework = framework;
+  if (language) specialization.language = language;
+
+  return specialization;
+}
+
 function clamp01(value: number): number {
   if (value < 0) return 0;
   if (value > 1) return 1;
@@ -565,6 +576,7 @@ export async function inferRelationsFromCodeSignals(
 
     const confidence = clamp01(asNumber(meta['confidence']) ?? 0.7);
     const calleeSymbol = row.calleeSymbol;
+    const specializationMetadata = extractCodeSpecializationMetadata(meta);
 
     if (kind === 'call') {
       // path-only(/api/...) 호출은 타겟 서비스를 알 수 없어 스킵
@@ -598,6 +610,7 @@ export async function inferRelationsFromCodeSignals(
                 objectId: endpointId,
                 confidence,
                 metadata: {
+                  ...specializationMetadata,
                   source: 'CODE',
                   kind,
                   calleeSymbol,
@@ -626,6 +639,7 @@ export async function inferRelationsFromCodeSignals(
           objectId: targetServiceId,
           confidence,
           metadata: {
+            ...specializationMetadata,
             source: 'CODE',
             kind,
             calleeSymbol,
@@ -666,6 +680,7 @@ export async function inferRelationsFromCodeSignals(
           objectId: upserted.id,
           confidence,
           metadata: {
+            ...specializationMetadata,
             source: 'CODE',
             kind,
             channelType: isQueue ? 'queue' : 'topic',
@@ -730,6 +745,7 @@ export async function inferRelationsFromCodeSignals(
           objectId: tableId,
           confidence,
           metadata: {
+            ...specializationMetadata,
             source: 'CODE',
             kind,
             table: normalized,

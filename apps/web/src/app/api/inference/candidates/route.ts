@@ -19,6 +19,60 @@ import {
   type CrossValidationContradiction,
 } from '@/lib/cross-validation';
 
+interface RelationFeedbackHint {
+  key: string;
+  applied: boolean;
+  sampleCount: number;
+  adjustment: number;
+  baseConfidence?: number;
+  adjustedConfidence?: number;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function asCanonicalFeedbackKey(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const segments = value.split(':');
+  return (segments.length === 3 || segments.length === 5)
+    && segments.every((segment) => segment.trim().length > 0)
+    ? value
+    : null;
+}
+
+function asRelationFeedbackHint(value: unknown): RelationFeedbackHint | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const key = asCanonicalFeedbackKey(record['key']);
+  if (!key) return null;
+
+  const hint: RelationFeedbackHint = {
+    key,
+    applied: typeof record['applied'] === 'boolean' ? record['applied'] : false,
+    sampleCount: isFiniteNumber(record['sampleCount'])
+      ? Math.max(0, Math.round(record['sampleCount']))
+      : 0,
+    adjustment: isFiniteNumber(record['adjustment']) ? record['adjustment'] : 0,
+  };
+
+  if (isFiniteNumber(record['baseConfidence'])) {
+    hint.baseConfidence = record['baseConfidence'];
+  }
+  if (isFiniteNumber(record['adjustedConfidence'])) {
+    hint.adjustedConfidence = record['adjustedConfidence'];
+  }
+
+  return hint;
+}
+
 function isCrossValidationRuleId(value: unknown): value is CrossValidationContradiction['ruleId'] {
   return typeof value === 'string'
     && CROSS_VALIDATION_RULE_IDS.includes(value as CrossValidationContradiction['ruleId']);
@@ -189,6 +243,7 @@ export async function GET(req: NextRequest) {
         meta?.llmExplanation !== null && typeof meta?.llmExplanation === 'object'
           ? meta.llmExplanation
           : null;
+      const feedback = asRelationFeedbackHint(meta?.feedback);
       const source = typeof meta?.source === 'string' ? meta.source : null;
       const metadataCrossValidation =
         meta?.crossValidation !== null && typeof meta?.crossValidation === 'object'
@@ -222,6 +277,7 @@ export async function GET(req: NextRequest) {
         confidence: c.confidence,
         status: c.status,
         crossValidation,
+        ...(feedback ? { feedback } : {}),
         ...(source ? { source } : {}),
         ...(llmAssessment ? { llmAssessment } : {}),
         ...(llmExplanation ? { llmExplanation } : {}),

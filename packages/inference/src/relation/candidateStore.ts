@@ -23,13 +23,37 @@ export interface SaveRelationCandidateParams {
   metadata: Record<string, unknown>;
 }
 
+function mergeSpecializedRelationMetadata(
+  nextMetadata: Record<string, unknown>,
+  currentMetadata: unknown,
+): Record<string, unknown> {
+  const merged = { ...stripCrossValidationMetadata(nextMetadata) };
+  const existing = asRecord(stripCrossValidationMetadata(currentMetadata)) ?? {};
+
+  if (!Object.prototype.hasOwnProperty.call(merged, 'framework') && existing.framework) {
+    merged.framework = existing.framework;
+  }
+  if (!Object.prototype.hasOwnProperty.call(merged, 'language') && existing.language) {
+    merged.language = existing.language;
+  }
+
+  return merged;
+}
+
+function hasSpecializationDelta(
+  currentMetadata: unknown,
+  nextMetadata: Record<string, unknown>,
+): boolean {
+  const current = asRecord(stripCrossValidationMetadata(currentMetadata)) ?? {};
+  return current.framework !== nextMetadata.framework || current.language !== nextMetadata.language;
+}
+
 export async function saveRelationCandidate(
   db: DbClient,
   params: SaveRelationCandidateParams,
   evidenceId: string,
 ): Promise<{ created: boolean }> {
   const { workspaceId, relationType, subjectObjectId, objectId, confidence, metadata } = params;
-  const adjustedParams = await applyFeedbackToRelationCandidateInput(db, params);
 
   const manualRelation = await db
     .select({ id: objectRelations.id })
@@ -71,9 +95,17 @@ export async function saveRelationCandidate(
   if (approved) return { created: false };
 
   const pending = existingCandidates.find((candidate) => candidate.status === 'PENDING');
+  const effectiveMetadata = pending
+    ? mergeSpecializedRelationMetadata(metadata, pending.metadata)
+    : metadata;
+  const adjustedParams = await applyFeedbackToRelationCandidateInput(db, {
+    ...params,
+    metadata: effectiveMetadata,
+  });
   if (pending) {
     const pendingBaseConfidence = getBaseCandidateConfidence(pending.confidence ?? 0, pending.metadata);
     const pendingMetadata = asRecord(pending.metadata) ?? {};
+    const specializationChanged = hasSpecializationDelta(pending.metadata, effectiveMetadata);
 
     if (confidence >= pendingBaseConfidence) {
       await db
@@ -81,6 +113,19 @@ export async function saveRelationCandidate(
         .set({
           confidence: adjustedParams.confidence,
           metadata: stripCrossValidationMetadata(adjustedParams.metadata),
+        })
+        .where(eq(relationCandidates.id, pending.id));
+    } else if (specializationChanged) {
+      const recomputedPending = await applyFeedbackToRelationCandidateInput(db, {
+        ...params,
+        confidence: pendingBaseConfidence,
+        metadata: effectiveMetadata,
+      });
+      await db
+        .update(relationCandidates)
+        .set({
+          confidence: recomputedPending.confidence,
+          metadata: stripCrossValidationMetadata(recomputedPending.metadata),
         })
         .where(eq(relationCandidates.id, pending.id));
     } else if (Object.prototype.hasOwnProperty.call(pendingMetadata, 'crossValidation')) {

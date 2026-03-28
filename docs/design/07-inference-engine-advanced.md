@@ -362,23 +362,29 @@ interface SignalPattern {
 
 ### 6.1 핵심 아이디어
 
-relation candidate 승인/거절 패턴을 feedback key 단위로 누적하고, 그 결과를 **다음 inference run의 base confidence 보정값**으로 사용한다.
+피드백 루프는 relation과 domain을 같은 저장소/초기화 경로로 섞지 않는다. 현재 relation feedback 구현 축은 유지하되, 이번 closure에서는 **domain feedback를 Track A 전용 계약으로 분리**하고, 그 결과를 **다음 domain run부터만** 반영하도록 고정한다.
 
 ### 6.2 피드백 수집
 
 ```
-승인/거절 이벤트
+relation approval/rejection
       ↓
-key = (relationType, sourceFamily, signalKind)
-value = { approved, rejected, total, approvalRate }
+relation key = (relationType, sourceFamily, signalKind)
       ↓
-domain_inference_profiles.feedbackAdjustments에 저장
+relationFeedbackAdjustments
+
+domain approval/rejection (Track A only)
+      ↓
+domain key = TRACK_A:{primaryDomainId}:{purityBucket}
+      ↓
+domainFeedbackAdjustments
 ```
 
-- 이번 closure 범위는 relation candidate only 이다.
-- domain candidate 집계/적용은 후속 범위다.
-- 프레임워크/언어 단위 세분화는 이번 key 계약에 포함하지 않는다.
-- 승인 직후 기존 후보를 다시 계산하지 않고, 다음 inference run부터 누적 결과를 사용한다.
+- relation feedback와 domain feedback는 `domain_inference_profiles`에서 별도 필드로 저장한다.
+- domain feedback 집계/적용 대상은 Track A domain candidate only 이다.
+- Track B / domain discovery는 feedback 집계 소스도, 적용 대상도 아니다.
+- 승인 직후 기존 결과를 다시 계산하지 않고, domain feedback는 다음 Track A domain run부터 누적 결과를 사용한다.
+- Settings 필수 범위는 relation/domain summary 및 reset 분리다. hint/detail table 확장은 선택 범위다.
 
 ### 6.3 신뢰도 자동 보정
 
@@ -391,15 +397,17 @@ function applyFeedbackAdjustment(base: number, feedback: FeedbackStats): number 
 ```
 
 **예시:**
-- `CALL:code:call` 승인율 90% → +0.06
-- `DEPENDS_ON:config:dependency_decl` 승인율 30% → -0.03
+- relation key `CALL:code:call` 승인율 90% → +0.06
+- domain key `TRACK_A:domain-order:HIGH` 승인율 30% → -0.03
 
 ### 6.4 적용 순서와 UI 범위
 
-- 순서는 `base confidence → feedback adjustment → cross-validation` 이다.
-- feedback은 base confidence 위에 적용되고, cross-validation은 그 다음 단계로 동작한다.
-- Settings 필수 범위는 `enabled`, `minSamples`, `maxAdjustment`, `summary`, `reset-all` 이다.
-- Approval hint와 per-key 상세 통계 테이블은 후속 범위다.
+- relation 경로에서는 기존처럼 `base confidence → feedback adjustment → cross-validation` 순서를 유지할 수 있다.
+- domain 경로에서는 Track A scoring 내부의 단일 단계에서만 domain feedback를 적용하고, 승인 직후 소급 반영은 금지한다.
+- Settings 필수 범위는 `relation summary + relation reset`, `domain summary + domain reset` 분리다.
+- Approval 필수 범위는 domain 후보 승인 경로에 feedback 집계를 연결하는 것까지다.
+- domain hint/detail table, Track B feedback은 후속 범위다.
+- code-origin relation feedback의 framework/language key 세분화는 `docs/spec/36-relation-feedback-key-specialization-spec.md`에서 후속 계약으로 분리되어 구현되었다.
 
 ---
 
@@ -417,9 +425,9 @@ function applyFeedbackAdjustment(base: number, feedback: FeedbackStats): number 
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬───────┘   │
 │       │             │            │               │          │
 │       ▼             ▼            ▼               ▼          │
-│  ② Feedback Adjustment                                      │
+│  ② Feedback Adjustment (relation/domain 분리)              │
 │  ┌──────────────────────────────────────────────────────┐   │
-│  │ base confidence + feedback adjustment                │   │
+│  │ relation/domain별 독립 feedback adjustment           │   │
 │  └───────────────────────┬──────────────────────────────┘   │
 │                          │                                  │
 │                          ▼                                  │
@@ -444,7 +452,8 @@ function applyFeedbackAdjustment(base: number, feedback: FeedbackStats): number 
 │  ⑥ Approval + Feedback Loop                                 │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ 승인 UI → 확정 → rollup rebuild                       │   │
-│  │       → 피드백 집계(다음 run부터 반영)                │   │
+│  │       → relation/domain 분리 집계                     │   │
+│  │       → 다음 run부터만 반영                           │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```

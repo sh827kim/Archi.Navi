@@ -19,9 +19,13 @@ export interface RelationFeedbackStats {
 
 export interface RelationFeedbackDescriptor {
   key: string;
+  lookupKeys: string[];
+  legacyKey: string;
   relationType: string;
   sourceFamily: string;
   signalKind: string;
+  framework: string | null;
+  language: string | null;
 }
 
 export interface RelationFeedbackMetadata {
@@ -94,6 +98,11 @@ function normalizeKeyPart(value: string): string {
     || 'unknown';
 }
 
+function normalizeOptionalKeyPart(value: unknown): string | null {
+  const normalized = asNonEmptyString(value);
+  return normalized ? normalizeKeyPart(normalized) : null;
+}
+
 function inferSourceFamily(metadata: Record<string, unknown>): string {
   const source = asNonEmptyString(metadata.source);
   if (source && CONFIG_SOURCES.has(source)) return 'config';
@@ -146,13 +155,27 @@ export function deriveRelationFeedbackDescriptor(input: {
   const relationType = input.relationType.trim().toUpperCase();
   const sourceFamily = inferSourceFamily(metadata);
   const signalKind = inferSignalKind(input.relationType, sourceFamily, metadata);
-  const key = `${relationType}:${sourceFamily}:${signalKind}`;
+  const legacyKey = `${relationType}:${sourceFamily}:${signalKind}`;
+  const framework = sourceFamily === 'code'
+    ? normalizeOptionalKeyPart(metadata.framework)
+    : null;
+  const language = sourceFamily === 'code'
+    ? normalizeOptionalKeyPart(metadata.language)
+    : null;
+  const key = framework && language
+    ? `${legacyKey}:${framework}:${language}`
+    : legacyKey;
+  const lookupKeys = key === legacyKey ? [legacyKey] : [key, legacyKey];
 
   return {
     key,
+    lookupKeys,
+    legacyKey,
     relationType,
     sourceFamily,
     signalKind,
+    framework,
+    language,
   };
 }
 
@@ -399,7 +422,11 @@ export async function applyFeedbackToRelationCandidateInput(
     metadata: baseMetadata,
   });
   const feedbackState = await loadWorkspaceFeedbackState(db, input.workspaceId);
-  const stats = feedbackState.adjustments[descriptor.key];
+  const lookupStats = descriptor.lookupKeys
+    .map((key) => feedbackState.adjustments[key])
+    .filter((bucket): bucket is RelationFeedbackStats => Boolean(bucket));
+  const stats = lookupStats.find((bucket) => bucket.total >= feedbackState.config.minSamples)
+    ?? lookupStats[0];
   const adjustment = computeRelationFeedbackAdjustment(stats, feedbackState.config);
   const adjustedConfidence = round4(clamp(input.confidence + adjustment, 0.1, 0.99));
   const feedback: RelationFeedbackMetadata = {
