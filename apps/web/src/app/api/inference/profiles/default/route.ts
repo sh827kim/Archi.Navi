@@ -121,10 +121,15 @@ interface UpdateProfileBody {
 
 function isMissingColumnError(error: unknown, columns: string[]): boolean {
   if (!error || typeof error !== 'object') return false;
-  const code = Reflect.get(error, 'code');
-  if (code === '42703') return true;
   const message = Reflect.get(error, 'message');
-  return typeof message === 'string' && columns.some((column) => message.includes(column));
+  if (typeof message !== 'string') return false;
+
+  const normalizedMessage = message.toLowerCase();
+  const hasRequestedColumn = columns.some((column) => normalizedMessage.includes(column.toLowerCase()));
+  if (!hasRequestedColumn) return false;
+
+  const code = Reflect.get(error, 'code');
+  return code === '42703' || normalizedMessage.includes('does not exist');
 }
 
 function asCrossValidationConfig(value: unknown): CrossValidationConfig {

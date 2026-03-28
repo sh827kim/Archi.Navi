@@ -65,6 +65,10 @@ function createProfileBaseRow(row: ReturnType<typeof createProfileRow>) {
   };
 }
 
+function createMissingColumnError(column: string) {
+  return Object.assign(new Error(`column "${column}" does not exist`), { code: '42703' });
+}
+
 function createTransactionDb(
   current: ReturnType<typeof createProfileRow>,
   updated: ReturnType<typeof createProfileRow>,
@@ -467,7 +471,7 @@ describe('inference profile default route', () => {
     const row = createProfileRow();
     const execute = vi.fn()
       .mockResolvedValueOnce({ rows: [createProfileBaseRow(row)] })
-      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
+      .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'))
       .mockResolvedValueOnce({
         rows: [{
           cross_validation: null,
@@ -512,12 +516,97 @@ describe('inference profile default route', () => {
     expect(execute).toHaveBeenCalledTimes(3);
   });
 
+  it('GET은 unrelated 42703 오류를 missing feedback column fallback으로 삼키지 않아야 한다', async () => {
+    const row = createProfileRow();
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const db = {
+      select: vi.fn(),
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [createProfileBaseRow(row)] })
+        .mockRejectedValueOnce(createMissingColumnError('unrelated_column')),
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/profiles/default?workspaceId=ws-1'),
+    );
+
+    expect(response.status).toBe(500);
+    expect(db.select).not.toHaveBeenCalled();
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('GET은 default profile이 없어도 legacy-safe 승격 경로로 relation feedback를 유지해야 한다', async () => {
+    const row = createProfileRow();
+    const execute = vi.fn()
+      .mockResolvedValueOnce({ rows: [] })
+      .mockResolvedValueOnce({ rows: [createProfileBaseRow({ ...row, isDefault: false })] })
+      .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'))
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: null,
+          feedback_config: { enabled: false, minSamples: 5, maxAdjustment: 0.2 },
+          feedback_adjustments: {
+            'CALL:code:call': { approved: 4, rejected: 1 },
+          },
+        }],
+      })
+      .mockResolvedValueOnce({ rows: [createProfileBaseRow(row)] })
+      .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'))
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: null,
+          feedback_config: { enabled: false, minSamples: 5, maxAdjustment: 0.2 },
+          feedback_adjustments: {
+            'CALL:code:call': { approved: 4, rejected: 1 },
+          },
+        }],
+      });
+    const updateWhereMock = vi.fn(async () => undefined);
+    const db = {
+      select: vi.fn(),
+      execute,
+      update: vi.fn(() => ({
+        set: vi.fn(() => ({
+          where: updateWhereMock,
+        })),
+      })),
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/profiles/default?workspaceId=ws-1'),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.isDefault).toBe(true);
+    expect(payload.relationFeedbackSummary).toEqual({
+      totalKeys: 1,
+      eligibleKeys: 1,
+      approvedCount: 4,
+      rejectedCount: 1,
+      totalSamples: 5,
+    });
+    expect(payload.domainFeedbackSummary).toEqual({
+      totalKeys: 0,
+      eligibleKeys: 0,
+      approvedCount: 0,
+      rejectedCount: 0,
+      totalSamples: 0,
+    });
+    expect(db.select).not.toHaveBeenCalled();
+    expect(db.update).toHaveBeenCalledTimes(1);
+    expect(updateWhereMock).toHaveBeenCalledTimes(1);
+    expect(execute).toHaveBeenCalledTimes(7);
+  });
+
   it('PUT은 domain feedback 컬럼이 없어도 relation feedback 업데이트를 유지해야 한다', async () => {
     const current = createProfileRow();
     const updated = createProfileRow();
     const executeMock = vi.fn()
       .mockResolvedValueOnce({ rows: [createProfileBaseRow(current)] })
-      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
+      .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'))
       .mockResolvedValueOnce({
         rows: [{
           cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
@@ -528,7 +617,7 @@ describe('inference profile default route', () => {
         }],
       })
       .mockResolvedValueOnce({ rows: [createProfileBaseRow(updated)] })
-      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
+      .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'))
       .mockResolvedValueOnce({
         rows: [{
           cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
@@ -541,7 +630,7 @@ describe('inference profile default route', () => {
     const transactionExecuteMock = vi.fn()
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }));
+      .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'));
     const db = {
       select: vi.fn(),
       execute: executeMock,
