@@ -1,18 +1,35 @@
 // @vitest-environment node
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
+
+const { getDbMock, getWorkspaceRollupChangeCursorMock } = vi.hoisted(() => ({
+  getDbMock: vi.fn(),
+  getWorkspaceRollupChangeCursorMock: vi.fn(),
+}));
+
+vi.mock('@archi-navi/db', () => ({
+  getDb: getDbMock,
+}));
+
+vi.mock('@/lib/rollup-change-events', () => ({
+  getWorkspaceRollupChangeCursor: getWorkspaceRollupChangeCursorMock,
+}));
+
 import { GET } from '@/app/api/rollup-events/route';
-import {
-  publishRollupChangeNotification,
-  resetRollupChangeEventSubscribersForTest,
-} from '@/lib/rollup-change-events';
 
 const decoder = new TextDecoder();
 
 describe('GET /api/rollup-events', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    getDbMock.mockReset();
+    getDbMock.mockResolvedValue({ tag: 'db' });
+    getWorkspaceRollupChangeCursorMock.mockReset();
+  });
+
   afterEach(() => {
-    resetRollupChangeEventSubscribersForTest();
+    vi.useRealTimers();
   });
 
   it('workspaceId가 없으면 400을 반환해야 한다', async () => {
@@ -22,7 +39,21 @@ describe('GET /api/rollup-events', () => {
     await expect(response.json()).resolves.toEqual({ error: 'workspaceId is required' });
   });
 
-  it('연결 직후 connected 이벤트를 보내고 이후 rollup-change 이벤트를 스트리밍해야 한다', async () => {
+  it('연결 직후 connected 이벤트를 보내고 변경 토큰 갱신 시 rollup-change를 스트리밍해야 한다', async () => {
+    getWorkspaceRollupChangeCursorMock
+      .mockResolvedValueOnce({
+        workspaceId: 'ws-1',
+        generationVersion: 3,
+        builtAt: '2026-03-28T00:00:00.000Z',
+        changeToken: 'token-1',
+      })
+      .mockResolvedValue({
+        workspaceId: 'ws-1',
+        generationVersion: 3,
+        builtAt: '2026-03-28T00:00:01.000Z',
+        changeToken: 'token-2',
+      });
+
     const response = await GET(
       new NextRequest('http://localhost/api/rollup-events?workspaceId=ws-1'),
     );
@@ -37,22 +68,13 @@ describe('GET /api/rollup-events', () => {
     expect(connectedText).toContain('event: connected');
     expect(connectedText).toContain('"workspaceId":"ws-1"');
 
-    publishRollupChangeNotification('ws-1', [
-      {
-        type: 'RELATION_APPROVED',
-        payload: {
-          relationType: 'call',
-          subjectObjectId: 'svc-a',
-          objectId: 'svc-b',
-        },
-      },
-    ]);
+    await vi.advanceTimersByTimeAsync(1_000);
 
     const changedChunk = await reader!.read();
     const changedText = decoder.decode(changedChunk.value);
     expect(changedText).toContain('event: rollup-change');
-    expect(changedText).toContain('"eventCount":1');
-    expect(changedText).toContain('"relationType":"call"');
+    expect(changedText).toContain('"changeToken":"token-2"');
+    expect(changedText).toContain('"generationVersion":3');
 
     await reader!.cancel();
   });
