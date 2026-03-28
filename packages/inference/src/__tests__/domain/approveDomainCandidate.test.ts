@@ -73,6 +73,7 @@ async function createCandidate(
   affinityMap: Record<string, number>,
   purity: number,
   primaryDomainId?: string,
+  signals: Record<string, unknown> = {},
 ): Promise<string> {
     const id = generateId();
     await db.insert(domainCandidates).values({
@@ -83,7 +84,7 @@ async function createCandidate(
         purity,
         ...(primaryDomainId ? { primaryDomainId } : {}),
         secondaryDomainIds: [],
-        signals: {},
+        signals,
         status: 'PENDING',
     });
     return id;
@@ -308,5 +309,33 @@ describe('approveDomainCandidate', () => {
 
         const adjustments = await readDomainFeedbackAdjustments(db);
         expect(adjustments).toEqual({});
+    });
+
+    it('T9: feedback.basePurity가 있으면 보정 전 purity bucket으로 집계해야 한다', async () => {
+        const serviceId = await createService(db, 'bucketed-service');
+        const domainId = await createDomain(db, 'bucketed');
+        const candidateId = await createCandidate(
+            db,
+            serviceId,
+            { [domainId]: 1 },
+            0.83,
+            domainId,
+            {
+                feedback: {
+                    basePurity: 0.78,
+                    adjustedPurity: 0.83,
+                },
+            },
+        );
+
+        await approveDomainCandidate(db, candidateId, 'APPROVED');
+
+        const adjustments = await readDomainFeedbackAdjustments(db);
+        expect(adjustments[`TRACK_A:${domainId}:MEDIUM`]).toMatchObject({
+            approved: 1,
+            rejected: 0,
+            total: 1,
+        });
+        expect(adjustments[`TRACK_A:${domainId}:HIGH`]).toBeUndefined();
     });
 });

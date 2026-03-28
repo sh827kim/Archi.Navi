@@ -71,6 +71,13 @@ function asNonEmptyString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function resolveCandidateFeedbackPurity(candidate: typeof domainCandidates.$inferSelect): number {
+  const signals = asRecord(candidate.signals);
+  const feedback = asRecord(signals?.feedback);
+  const basePurity = asFiniteNumber(feedback?.basePurity);
+  return basePurity ?? candidate.purity;
+}
+
 export function getPurityBucket(purity: number): DomainFeedbackPurityBucket {
   if (purity >= 0.8) return 'HIGH';
   if (purity >= 0.5) return 'MEDIUM';
@@ -299,8 +306,9 @@ export async function accumulateDomainCandidateFeedback(
   action: 'APPROVED' | 'REJECTED',
   options?: { track?: DomainFeedbackTrack },
 ): Promise<DomainFeedbackStats | null> {
+  const feedbackPurity = resolveCandidateFeedbackPurity(candidate);
   const descriptor = deriveDomainFeedbackDescriptor({
-    purity: candidate.purity,
+    purity: feedbackPurity,
     track: options?.track ?? 'TRACK_A',
     ...(candidate.primaryDomainId === undefined
       ? {}
