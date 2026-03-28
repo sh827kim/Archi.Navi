@@ -91,14 +91,13 @@ function parsePropertyFile(filePath: string): AstPropertyMap {
 
 function inferPropertyScopePath(dirPath: string): string {
   const segments = splitPathSegments(dirPath);
-  if (segments.length >= 3) {
-    const srcIndex = segments.length - 3;
+  for (let index = 0; index <= segments.length - 3; index += 1) {
     const isSpringResourceDir =
-      segments[srcIndex] === 'src' &&
-      (segments[srcIndex + 1] === 'main' || segments[srcIndex + 1] === 'test') &&
-      segments[srcIndex + 2] === 'resources';
-    if (isSpringResourceDir && srcIndex > 0) {
-      return `/${segments.slice(0, srcIndex).join('/')}`;
+      segments[index] === 'src' &&
+      (segments[index + 1] === 'main' || segments[index + 1] === 'test') &&
+      segments[index + 2] === 'resources';
+    if (isSpringResourceDir && index > 0) {
+      return `/${segments.slice(0, index).join('/')}`;
     }
   }
   return dirPath;

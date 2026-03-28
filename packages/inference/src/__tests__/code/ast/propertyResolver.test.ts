@@ -123,4 +123,27 @@ client:
     expect(mainPropertyMap.get('client.endpoint')).toBe('http://main.internal');
     expect(testPropertyMap.get('client.endpoint')).toBe('http://test.internal');
   });
+
+  it('src/main/resources 하위 디렉터리 property 파일도 src/main/java에서 해석 가능해야 한다', () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const serviceRoot = join(repoRoot, 'services', 'order');
+    const resourceDir = join(serviceRoot, 'src', 'main', 'resources', 'config');
+    const sourceDir = join(serviceRoot, 'src', 'main', 'java');
+    mkdirSync(resourceDir, { recursive: true });
+    mkdirSync(sourceDir, { recursive: true });
+
+    writeFileSync(
+      join(resourceDir, 'application.yml'),
+      `client:
+  endpoint: http://order.internal
+`,
+    );
+
+    const resolver = buildAstPropertyResolver(repoRoot);
+    const propertyMap = resolver.resolveForFile(join(sourceDir, 'OrderClient.java'));
+
+    expect(propertyMap.get('client.endpoint')).toBe('http://order.internal');
+  });
 });
