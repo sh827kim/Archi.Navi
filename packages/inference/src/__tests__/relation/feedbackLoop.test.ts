@@ -286,4 +286,36 @@ describe('relation feedback loop', () => {
       applied: false,
     });
   });
+
+  it('feedback 컬럼이 없는 스키마에서도 저장 경로가 실패하지 않아야 한다', async () => {
+    const legacyDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => {
+              throw Object.assign(new Error('column "feedback_config" does not exist'), { code: '42703' });
+            },
+          }),
+        }),
+      }),
+    };
+
+    const adjusted = await applyFeedbackToRelationCandidateInput(legacyDb as unknown as TestDb, {
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId,
+      objectId,
+      confidence: 0.62,
+      metadata: { source: 'CODE', kind: 'call' },
+    });
+
+    expect(adjusted.confidence).toBe(0.62);
+    expect((adjusted.metadata.feedback as Record<string, unknown>)).toMatchObject({
+      key: 'CALL:code:call',
+      adjustment: 0,
+      adjustedConfidence: 0.62,
+      applied: false,
+      sampleCount: 0,
+    });
+  });
 });

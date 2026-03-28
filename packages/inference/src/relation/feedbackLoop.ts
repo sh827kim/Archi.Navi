@@ -51,6 +51,18 @@ interface FeedbackCandidateInput {
   metadata: Record<string, unknown>;
 }
 
+function isMissingFeedbackColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = Reflect.get(error, 'code');
+  if (code === '42703') return true;
+  const message = Reflect.get(error, 'message');
+  return typeof message === 'string'
+    && (
+      message.includes('feedback_config')
+      || message.includes('feedback_adjustments')
+    );
+}
+
 export const DEFAULT_RELATION_FEEDBACK_CONFIG: RelationFeedbackConfig = {
   enabled: true,
   minSamples: 10,
@@ -210,19 +222,30 @@ async function loadWorkspaceFeedbackState(
   db: FeedbackDbClient,
   workspaceId: string,
 ): Promise<ProfileFeedbackState> {
-  const [profile] = await db
-    .select({
-      feedbackConfig: domainInferenceProfiles.feedbackConfig,
-      feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
-    })
-    .from(domainInferenceProfiles)
-    .where(
-      and(
-        eq(domainInferenceProfiles.workspaceId, workspaceId),
-        eq(domainInferenceProfiles.isDefault, true),
-      ),
-    )
-    .limit(1);
+  let profile: { feedbackConfig: unknown; feedbackAdjustments: unknown } | undefined;
+  try {
+    [profile] = await db
+      .select({
+        feedbackConfig: domainInferenceProfiles.feedbackConfig,
+        feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
+      })
+      .from(domainInferenceProfiles)
+      .where(
+        and(
+          eq(domainInferenceProfiles.workspaceId, workspaceId),
+          eq(domainInferenceProfiles.isDefault, true),
+        ),
+      )
+      .limit(1);
+  } catch (error) {
+    if (!isMissingFeedbackColumnError(error)) {
+      throw error;
+    }
+    return {
+      config: DEFAULT_RELATION_FEEDBACK_CONFIG,
+      adjustments: {},
+    };
+  }
 
   const config = normalizeRelationFeedbackConfig(profile?.feedbackConfig);
   return {
