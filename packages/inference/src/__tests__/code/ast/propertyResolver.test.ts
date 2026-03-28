@@ -63,4 +63,28 @@ client:
 
     expect(propertyMap.get('client.endpoint')).toBe('http://prod.internal');
   });
+
+  it('타겟 파일의 상위 경로가 아닌 sibling 서비스의 property 파일은 선택하면 안 된다', () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const billingResourceDir = join(repoRoot, 'services', 'billing', 'src', 'main', 'resources');
+    const orderSourceDir = join(repoRoot, 'services', 'order', 'src');
+    mkdirSync(billingResourceDir, { recursive: true });
+    mkdirSync(orderSourceDir, { recursive: true });
+
+    writeFileSync(
+      join(billingResourceDir, 'application.yml'),
+      `client:
+  endpoint: http://billing.internal
+`,
+    );
+
+    const resolver = buildAstPropertyResolver(repoRoot);
+    const propertyMap = resolver.resolveForFile(join(orderSourceDir, 'OrderClient.java'));
+
+    expect(resolver.hasEntries).toBe(true);
+    expect(propertyMap.size).toBe(0);
+    expect(propertyMap.get('client.endpoint')).toBeUndefined();
+  });
 });

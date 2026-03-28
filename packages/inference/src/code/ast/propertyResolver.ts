@@ -10,6 +10,7 @@ export type AstPropertyMap = Map<string, string>;
 interface PropertyFileEntry {
   filePath: string;
   dirPath: string;
+  scopePath: string;
   priority: number;
   properties: AstPropertyMap;
 }
@@ -85,20 +86,41 @@ function parsePropertyFile(filePath: string): AstPropertyMap {
   return properties;
 }
 
+function inferPropertyScopePath(dirPath: string): string {
+  const segments = splitPathSegments(dirPath);
+  if (segments.length >= 3) {
+    const srcIndex = segments.length - 3;
+    const isSpringResourceDir =
+      segments[srcIndex] === 'src' &&
+      (segments[srcIndex + 1] === 'main' || segments[srcIndex + 1] === 'test') &&
+      segments[srcIndex + 2] === 'resources';
+    if (isSpringResourceDir && srcIndex > 0) {
+      return `/${segments.slice(0, srcIndex).join('/')}`;
+    }
+  }
+  return dirPath;
+}
+
 function propertyFilePriority(filePath: string): number {
   const baseName = normalizePath(filePath).split('/').pop()?.toLowerCase() ?? '';
   return /^(?:application|bootstrap)-/.test(baseName) ? 1 : 0;
 }
 
-function commonPrefixLength(left: string, right: string): number {
-  const leftParts = normalizePath(left).split('/').filter(Boolean);
-  const rightParts = normalizePath(right).split('/').filter(Boolean);
-  const max = Math.min(leftParts.length, rightParts.length);
-  let count = 0;
-  while (count < max && leftParts[count] === rightParts[count]) {
-    count += 1;
+function splitPathSegments(filePath: string): string[] {
+  return normalizePath(filePath).split('/').filter(Boolean);
+}
+
+function isAncestorDirectory(ancestorDirPath: string, targetFilePath: string): boolean {
+  const ancestorParts = splitPathSegments(ancestorDirPath);
+  const targetParts = splitPathSegments(targetFilePath);
+  if (ancestorParts.length === 0 || ancestorParts.length > targetParts.length) return false;
+
+  for (let index = 0; index < ancestorParts.length; index += 1) {
+    if (ancestorParts[index] !== targetParts[index]) {
+      return false;
+    }
   }
-  return count;
+  return true;
 }
 
 function mergePropertyMaps(entries: PropertyFileEntry[]): AstPropertyMap {
@@ -124,6 +146,7 @@ export function buildAstPropertyResolver(repoRoot: string): AstPropertyResolver 
       return {
         filePath: normalizePath(filePath),
         dirPath: normalizePath(dirname(filePath)),
+        scopePath: inferPropertyScopePath(dirname(filePath)),
         priority: propertyFilePriority(filePath),
         properties,
       } satisfies PropertyFileEntry;
@@ -134,19 +157,24 @@ export function buildAstPropertyResolver(repoRoot: string): AstPropertyResolver 
     hasEntries: entries.length > 0,
     resolveForFile(filePath: string): AstPropertyMap {
       const normalizedFilePath = normalizePath(filePath);
-      let bestScore = 0;
+      let bestDepth = 0;
 
       for (const entry of entries) {
-        const score = commonPrefixLength(normalizedFilePath, entry.dirPath);
-        if (score > bestScore) {
-          bestScore = score;
+        if (!isAncestorDirectory(entry.scopePath, normalizedFilePath)) continue;
+        const depth = splitPathSegments(entry.scopePath).length;
+        if (depth > bestDepth) {
+          bestDepth = depth;
         }
       }
 
-      if (bestScore === 0) return new Map();
+      if (bestDepth === 0) return new Map();
 
       return mergePropertyMaps(
-        entries.filter((entry) => commonPrefixLength(normalizedFilePath, entry.dirPath) === bestScore),
+        entries.filter(
+          (entry) =>
+            isAncestorDirectory(entry.scopePath, normalizedFilePath) &&
+            splitPathSegments(entry.scopePath).length === bestDepth,
+        ),
       );
     },
   };
