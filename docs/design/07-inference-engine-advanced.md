@@ -362,23 +362,28 @@ interface SignalPattern {
 
 ### 6.1 핵심 아이디어
 
-사용자가 후보를 승인/거절할 때마다, **같은 유형의 시그널에 대한 기본 신뢰도를 자동 조정**.
+relation candidate 승인/거절 패턴을 feedback key 단위로 누적하고, 그 결과를 **다음 inference run의 base confidence 보정값**으로 사용한다.
 
 ### 6.2 피드백 수집
 
 ```
 승인/거절 이벤트
       ↓
-key = (signalKind, relationType, framework, language)
+key = (relationType, sourceFamily, signalKind)
 value = { approved, rejected, total, approvalRate }
       ↓
 domain_inference_profiles.feedbackAdjustments에 저장
 ```
 
+- 이번 closure 범위는 relation candidate only 이다.
+- domain candidate 집계/적용은 후속 범위다.
+- 프레임워크/언어 단위 세분화는 이번 key 계약에 포함하지 않는다.
+- 승인 직후 기존 후보를 다시 계산하지 않고, 다음 inference run부터 누적 결과를 사용한다.
+
 ### 6.3 신뢰도 자동 보정
 
 ```typescript
-function adjustedConfidence(base: number, feedback: FeedbackStats): number {
+function applyFeedbackAdjustment(base: number, feedback: FeedbackStats): number {
   if (feedback.total < 10) return base;  // 최소 10건 이상
   const adjustment = (feedback.approvalRate - 0.5) * 0.15; // MAX_ADJUSTMENT = 0.15
   return clamp(base + adjustment, 0.1, 0.99);
@@ -386,8 +391,15 @@ function adjustedConfidence(base: number, feedback: FeedbackStats): number {
 ```
 
 **예시:**
-- `call:code:spring-boot:java` 승인율 90% → +0.06
-- `depend_on:config:docker-compose` 승인율 30% → -0.03
+- `CALL:code:call` 승인율 90% → +0.06
+- `DEPENDS_ON:config:dependency_decl` 승인율 30% → -0.03
+
+### 6.4 적용 순서와 UI 범위
+
+- 순서는 `base confidence → feedback adjustment → cross-validation` 이다.
+- feedback은 base confidence 위에 적용되고, cross-validation은 그 다음 단계로 동작한다.
+- Settings 필수 범위는 `enabled`, `minSamples`, `maxAdjustment`, `summary`, `reset-all` 이다.
+- Approval hint와 per-key 상세 통계 테이블은 후속 범위다.
 
 ---
 
@@ -405,28 +417,34 @@ function adjustedConfidence(base: number, feedback: FeedbackStats): number {
 │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬───────┘   │
 │       │             │            │               │          │
 │       ▼             ▼            ▼               ▼          │
-│  ② Cross-Signal Validation                                  │
+│  ② Feedback Adjustment                                      │
+│  ┌──────────────────────────────────────────────────────┐   │
+│  │ base confidence + feedback adjustment                │   │
+│  └───────────────────────┬──────────────────────────────┘   │
+│                          │                                  │
+│                          ▼                                  │
+│  ③ Cross-Signal Validation                                  │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ 동일 관계 그룹화 → 지지/모순 판정 → 신뢰도 재계산    │   │
 │  └───────────────────────┬──────────────────────────────┘   │
 │                          │                                  │
 │                          ▼                                  │
-│  ③ Candidate Generation + LLM Explanation                   │
+│  ④ Candidate Generation + LLM Explanation                   │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ relation_candidates + 자연어 설명 + 교차 검증 정보    │   │
 │  └───────────────────────┬──────────────────────────────┘   │
 │                          │                                  │
 │                          ▼                                  │
-│  ④ LLM Candidate Filter (기존)                              │
+│  ⑤ LLM Candidate Filter (기존)                              │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ 배치 그룹화 → 맥락 포함 평가 → accept/reject         │   │
 │  └───────────────────────┬──────────────────────────────┘   │
 │                          │                                  │
 │                          ▼                                  │
-│  ⑤ Approval + Feedback Loop                                 │
+│  ⑥ Approval + Feedback Loop                                 │
 │  ┌──────────────────────────────────────────────────────┐   │
 │  │ 승인 UI → 확정 → rollup rebuild                       │   │
-│  │       → 피드백 집계 → 신뢰도 자동 보정                │   │
+│  │       → 피드백 집계(다음 run부터 반영)                │   │
 │  └──────────────────────────────────────────────────────┘   │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -443,4 +461,4 @@ function adjustedConfidence(base: number, feedback: FeedbackStats): number {
 | [spec/19-cross-signal-validation-spec.md](../spec/19-cross-signal-validation-spec.md) | Cross-Signal Validation SPEC |
 | [spec/20-llm-inference-boost-spec.md](../spec/20-llm-inference-boost-spec.md) | LLM 추론 부스터 SPEC |
 | [spec/21-framework-plugin-system-spec.md](../spec/21-framework-plugin-system-spec.md) | 프레임워크 플러그인 SPEC |
-| [spec/23-inference-feedback-loop-spec.md](../spec/23-inference-feedback-loop-spec.md) | 피드백 루프 SPEC |
+| [spec/22-inference-feedback-loop-spec.md](../spec/22-inference-feedback-loop-spec.md) | 피드백 루프 SPEC |

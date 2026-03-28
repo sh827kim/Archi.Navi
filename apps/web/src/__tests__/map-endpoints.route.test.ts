@@ -26,6 +26,7 @@ vi.mock('@/lib/rollup-change-events', () => ({
 
 import {
   createPgliteClient,
+  domainInferenceProfiles,
   evidences,
   objectRelations,
   objects,
@@ -222,6 +223,14 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
     const existingEndpointCandidateId = generateId();
     const endpointEvidenceId = generateId();
 
+    await dbHolder.db!.insert(domainInferenceProfiles).values({
+      id: generateId(),
+      workspaceId,
+      name: 'default',
+      kind: 'NAMED',
+      isDefault: true,
+    });
+
     await dbHolder.db!.insert(relationCandidates).values({
       id: existingEndpointCandidateId,
       workspaceId,
@@ -229,7 +238,7 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
       subjectObjectId: sourceServiceId,
       objectId: endpointId,
       confidence: 0.9,
-      metadata: { source: 'config-code-binding' },
+      metadata: { source: 'CODE', signalKind: 'call', framework: 'spring-boot', language: 'java' },
       status: 'PENDING',
     });
     await dbHolder.db!.insert(evidences).values({
@@ -244,7 +253,6 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
       candidateId: existingEndpointCandidateId,
       evidenceId: endpointEvidenceId,
     });
-
     const response = await POST(
       new Request('http://localhost', {
         method: 'POST',

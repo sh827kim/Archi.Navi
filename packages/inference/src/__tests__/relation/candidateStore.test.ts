@@ -169,7 +169,15 @@ describe('saveRelationCandidate', () => {
       .from(relationCandidates)
       .where(eq(relationCandidates.id, candidateId));
     expect(candidate?.confidence).toBe(0.8);
-    expect(candidate?.metadata).toEqual({ source: 'CODE' });
+    expect(candidate?.metadata).toMatchObject({
+      source: 'CODE',
+      feedback: {
+        key: 'CALL:code:call',
+        baseConfidence: 0.8,
+        adjustment: 0,
+        adjustedConfidence: 0.8,
+      },
+    });
 
     const linkedEvidenceRows = await db
       .select()
@@ -295,7 +303,7 @@ describe('saveRelationCandidate', () => {
       .from(relationCandidates)
       .where(eq(relationCandidates.id, candidateId));
     expect(candidate?.confidence).toBe(0.8);
-    expect(candidate?.metadata).toEqual({ source: 'CONFIG' });
+    expect(candidate?.metadata).toEqual({ source: 'application_yml' });
 
     const linkedEvidenceRows = await db
       .select()

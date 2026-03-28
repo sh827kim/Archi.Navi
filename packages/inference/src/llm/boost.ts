@@ -10,7 +10,13 @@ import {
   relationCandidates,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { asRecord } from '../utils/metadata';
+import {
+  asRecord,
+  getBaseCandidateConfidence,
+  getPreCrossValidationConfidence,
+  stripCrossValidationMetadata,
+} from '../relation/utils';
+import { applyFeedbackToRelationCandidateInput } from '../relation/feedbackLoop';
 
 export interface LlmBoostSuggestion {
   targetServiceName: string;
@@ -112,18 +118,37 @@ async function upsertBoostCandidate(
 
   const pending = existing.find((row) => row.status === 'PENDING');
   if (pending) {
+    const pendingBaseConfidence = getBaseCandidateConfidence(pending.confidence ?? 0, pending.metadata);
     const existingMetadata = asRecord(pending.metadata) ?? {};
     const mergedMetadata =
       typeof existingMetadata.source === 'string' && existingMetadata.source !== 'LLM_BOOST'
         ? existingMetadata
         : input.metadata;
 
-    if ((pending.confidence ?? 0) < input.confidence || existingMetadata.source === 'LLM_BOOST') {
+    const nextBaseConfidence = Math.max(pendingBaseConfidence, input.confidence);
+
+    if (nextBaseConfidence > pendingBaseConfidence || existingMetadata.source === 'LLM_BOOST') {
+      const adjustedInput = await applyFeedbackToRelationCandidateInput(db, {
+        workspaceId: input.workspaceId,
+        relationType: input.relationType,
+        subjectObjectId: input.subjectObjectId,
+        objectId: input.objectId,
+        confidence: nextBaseConfidence,
+        metadata: mergedMetadata,
+      });
       await db
         .update(relationCandidates)
         .set({
-          confidence: Math.max(pending.confidence ?? 0, input.confidence),
-          metadata: mergedMetadata,
+          confidence: adjustedInput.confidence,
+          metadata: stripCrossValidationMetadata(adjustedInput.metadata),
+        })
+        .where(eq(relationCandidates.id, pending.id));
+    } else if (Object.prototype.hasOwnProperty.call(existingMetadata, 'crossValidation')) {
+      await db
+        .update(relationCandidates)
+        .set({
+          confidence: getPreCrossValidationConfidence(pending.confidence ?? 0, pending.metadata),
+          metadata: stripCrossValidationMetadata(pending.metadata),
         })
         .where(eq(relationCandidates.id, pending.id));
     }
@@ -140,14 +165,22 @@ async function upsertBoostCandidate(
   }
 
   const candidateId = generateId();
-  await db.insert(relationCandidates).values({
-    id: candidateId,
+  const adjustedInput = await applyFeedbackToRelationCandidateInput(db, {
     workspaceId: input.workspaceId,
     relationType: input.relationType,
     subjectObjectId: input.subjectObjectId,
     objectId: input.objectId,
     confidence: input.confidence,
     metadata: input.metadata,
+  });
+  await db.insert(relationCandidates).values({
+    id: candidateId,
+    workspaceId: input.workspaceId,
+    relationType: input.relationType,
+    subjectObjectId: input.subjectObjectId,
+    objectId: input.objectId,
+    confidence: adjustedInput.confidence,
+    metadata: adjustedInput.metadata,
     status: 'PENDING',
   });
   await db.insert(relationCandidateEvidences).values({

@@ -35,6 +35,7 @@ import {
     type CallExtractionResult,
     type ExtractedCall,
 } from '../llm/callExtractorPrompts';
+import { saveRelationCandidate } from '../relation/candidateStore';
 
 // ── 타입 ──────────────────────────────────────────────
 
@@ -173,7 +174,7 @@ async function findReusableRelationTarget(
     relationType: string,
     subjectObjectId: string,
     objectId: string,
-): Promise<{ candidateId?: string; relationId?: string } | null> {
+): Promise<{ relationId?: string } | null> {
     const [existingRelation] = await db
         .select({ id: objectRelations.id })
         .from(objectRelations)
@@ -190,27 +191,6 @@ async function findReusableRelationTarget(
 
     if (existingRelation) {
         return { relationId: existingRelation.id };
-    }
-
-    const [existingCandidate] = await db
-        .select({ id: relationCandidates.id })
-        .from(relationCandidates)
-        .where(
-            and(
-                eq(relationCandidates.workspaceId, workspaceId),
-                eq(relationCandidates.relationType, relationType),
-                eq(relationCandidates.subjectObjectId, subjectObjectId),
-                eq(relationCandidates.objectId, objectId),
-                or(
-                    eq(relationCandidates.status, 'PENDING'),
-                    eq(relationCandidates.status, 'APPROVED'),
-                ),
-            ),
-        )
-        .limit(1);
-
-    if (existingCandidate) {
-        return { candidateId: existingCandidate.id };
     }
 
     return null;
@@ -349,26 +329,24 @@ async function saveLlmCompoundDependencies(
             continue;
         }
 
-        // 신규 후보 생성
-        const candidateId = generateId();
-        await db.insert(relationCandidates).values({
-            id: candidateId,
-            workspaceId,
-            relationType: dep.relationType,
-            subjectObjectId: sourceServiceId,
-            objectId: targetServiceId,
-            confidence: dep.confidence,
-            metadata: {
-                source: 'LLM_CONFIG',
-                evidence: dep.evidence,
-                targetType: 'service',
+        const saved = await saveRelationCandidate(
+            db,
+            {
+                workspaceId,
+                relationType: dep.relationType,
+                subjectObjectId: sourceServiceId,
+                objectId: targetServiceId,
+                confidence: dep.confidence,
+                metadata: {
+                    source: 'LLM_CONFIG',
+                    signalKind: 'dependency_decl',
+                    evidence: dep.evidence,
+                    targetType: 'service',
+                },
             },
-            status: 'PENDING',
-        });
-        await db.insert(relationCandidateEvidences)
-            .values({ workspaceId, candidateId, evidenceId })
-            .onConflictDoNothing();
-        created += 1;
+            evidenceId,
+        );
+        created += Number(saved.created);
     }
 
     return created;
@@ -570,29 +548,28 @@ async function saveLlmCallCandidate(
         return false;
     }
 
-    const candidateId = generateId();
-    await db.insert(relationCandidates).values({
-        id: candidateId,
-        workspaceId,
-        relationType: 'call',
-        subjectObjectId: sourceServiceId,
-        objectId: targetObjectId,
-        confidence: call.confidence,
-        metadata: {
-            source: 'LLM_CODE',
-            httpMethod: call.httpMethod,
-            path: call.path,
-            targetType,
-            targetServiceId,
-            evidence: call.evidence,
+    const saved = await saveRelationCandidate(
+        db,
+        {
+            workspaceId,
+            relationType: 'call',
+            subjectObjectId: sourceServiceId,
+            objectId: targetObjectId,
+            confidence: call.confidence,
+            metadata: {
+                source: 'LLM_CODE',
+                signalKind: 'call',
+                httpMethod: call.httpMethod,
+                path: call.path,
+                targetType,
+                targetServiceId,
+                evidence: call.evidence,
+            },
         },
-        status: 'PENDING',
-    });
-    await db.insert(relationCandidateEvidences)
-        .values({ workspaceId, candidateId, evidenceId })
-        .onConflictDoNothing();
+        evidenceId,
+    );
 
-    return true;
+    return saved.created;
 }
 
 /** 경로 정규화: path parameter를 {param}으로 통일, 슬래시 정리 */

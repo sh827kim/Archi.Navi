@@ -15,7 +15,7 @@
 | Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
-| 추론 엔진 고도화 (P4) | ✅ | Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신 구현 완료. 4-6은 후속 고도화 범위 |
+| 추론 엔진 고도화 (P4) | ✅ | Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신, 4-6 relation-only feedback loop 구현 완료. domain candidate, approval hint, per-key detail table은 후속 범위 |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -93,7 +93,8 @@
 
 ### 2.1 추론 엔진 품질 고도화 (P4)
 
-- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신은 구현 완료되었고, 4-6 피드백 루프가 다음 고도화 범위로 남아 있다.
+- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신, 4-6 relation-only feedback loop까지 구현 완료되었다.
+- ✅ 4-6의 현재 구현 계약은 relation candidate feedback 집계, next-run-only confidence 보정, Settings summary/reset-all, quick/queued parity까지이며, domain candidate/approval hint/per-key detail table은 후속 범위다.
 - ⚠️ 4-5의 실시간 계약은 SSE notification 후 refetch 방식이므로, 대형 그래프에서 재조회 비용 최적화 여지는 남아 있다.
 
 ### 2.2 실행 오케스트레이션 Phase 2+
@@ -121,7 +122,7 @@
 | 4-3. LLM 추론 부스터 | `docs/spec/19-llm-inference-boost-spec.md` | ✅ Implemented |
 | 4-4. 프레임워크 플러그인 시스템 | `docs/spec/20-framework-plugin-system-spec.md` | ✅ Implemented |
 | 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/21-realtime-rollup-spec.md` | ✅ Implemented |
-| 4-6. 추론 피드백 루프 | `docs/spec/22-inference-feedback-loop-spec.md` | 📋 Draft |
+| 4-6. 추론 피드백 루프 | `docs/spec/22-inference-feedback-loop-spec.md` | ✅ Implemented |
 
 ### 3.2 P5: 개발자 생산성 기능 (v3.1+)
 

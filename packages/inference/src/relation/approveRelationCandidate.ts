@@ -13,6 +13,7 @@ import {
   relationEvidences,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { accumulateRelationCandidateFeedback } from './feedbackLoop';
 
 export interface ApproveRelationCandidateResult {
   success: boolean;
@@ -39,10 +40,16 @@ export async function approveRelationCandidate(
       throw new Error('candidate not found');
     }
 
+    const shouldAggregateFeedback = candidate.status === 'PENDING' || candidate.reviewedAt === null;
+
     await tx
       .update(relationCandidates)
       .set({ status: action, reviewedAt })
       .where(eq(relationCandidates.id, candidateId));
+
+    if (shouldAggregateFeedback) {
+      await accumulateRelationCandidateFeedback(tx, candidate, action);
+    }
 
     if (action === 'REJECTED') {
       return {
