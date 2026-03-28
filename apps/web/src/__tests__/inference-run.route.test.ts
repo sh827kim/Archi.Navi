@@ -703,7 +703,7 @@ describe('POST /api/inference/run', () => {
     expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
   });
 
-  it('service.metadata.scanPath 에서 발견한 로컬 경로는 allowed root 밖이어도 추론에 사용해야 한다', async () => {
+  it('service.metadata.scanPath 에서 발견한 경로도 allowed root 검증을 적용해야 한다', async () => {
     const externalRepoRoot = mkdtempSync(join(tmpdir(), 'archi-navi-external-repo-'));
     vi.stubEnv('ARCHI_NAVI_ALLOWED_INFERENCE_ROOTS', process.cwd());
     getDbMock.mockResolvedValue({
@@ -737,21 +737,14 @@ describe('POST /api/inference/run', () => {
       }),
     );
 
-    expect(response.status).toBe(200);
-    expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        select: expect.any(Function),
-      }),
-      expect.objectContaining({
-        workspaceId: 'ws-1',
-        repoRoot: externalRepoRoot,
-      }),
-    );
+    expect(response.status).toBe(400);
+    expect(extractCodeSignalsWithEngineMock).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toEqual(
       expect.objectContaining({
+        error: expect.stringContaining('config/code 추론을 실행할 로컬 repoRoot가 없습니다'),
         repoRoots: expect.objectContaining({
-          used: [externalRepoRoot],
-          skippedDisallowed: [],
+          used: [],
+          skippedDisallowed: [externalRepoRoot],
         }),
       }),
     );

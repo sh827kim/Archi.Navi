@@ -202,7 +202,7 @@ export async function POST(req: NextRequest) {
     const skippedMissingRoots: string[] = [];
     const skippedDisallowedRoots: string[] = [];
 
-    for (const { repoRoot, source } of mergedRoots) {
+    for (const { repoRoot } of mergedRoots) {
       if (isLikelyRemotePath(repoRoot)) {
         if (!skippedNonLocalRoots.includes(repoRoot)) skippedNonLocalRoots.push(repoRoot);
         continue;
@@ -214,8 +214,7 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
-      const shouldEnforceAllowedRoots = source === 'provided';
-      if (shouldEnforceAllowedRoots && !isPathWithinAllowedRoots(normalized, allowedInferenceRoots)) {
+      if (!isPathWithinAllowedRoots(normalized, allowedInferenceRoots)) {
         if (!skippedDisallowedRoots.includes(normalized)) skippedDisallowedRoots.push(normalized);
         continue;
       }
