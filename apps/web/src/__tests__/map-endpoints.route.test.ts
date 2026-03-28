@@ -173,6 +173,48 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
         ),
       );
     expect(relations).toHaveLength(1);
+    expect(createRelationChangeEventMock).toHaveBeenCalledTimes(1);
+    expect(applyRollupChangesMock).toHaveBeenCalledTimes(1);
+    expect(applyRollupChangesMock.mock.calls[0]?.[1]).toBe(workspaceId);
+    expect(applyRollupChangesMock.mock.calls[0]?.[2]).toHaveLength(1);
+  });
+
+  it('여러 endpoint를 한 번에 매핑하면 rollup 변경을 배치로 적용해야 한다', async () => {
+    const { candidateId, endpointId, targetServiceId } = await seedBaseGraph('call');
+    const secondEndpointId = generateId();
+
+    await dbHolder.db!.insert(objects).values({
+      id: secondEndpointId,
+      workspaceId,
+      objectType: 'api_endpoint',
+      category: 'COMPUTE',
+      granularity: 'ATOMIC',
+      name: 'POST /api/orders',
+      parentId: targetServiceId,
+      path: `/orders/${targetServiceId}/${secondEndpointId}`,
+      depth: 1,
+      visibility: 'VISIBLE',
+      metadata: { method: 'POST', path: '/api/orders' },
+    });
+
+    const response = await POST(
+      new Request('http://localhost', {
+        method: 'POST',
+        body: JSON.stringify({ endpointIds: [endpointId, secondEndpointId] }),
+        headers: { 'Content-Type': 'application/json' },
+      }) as never,
+      { params: Promise.resolve({ id: candidateId }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      createdRelationCount: 2,
+      resolvedRelationCount: 2,
+      reusedRelationCount: 0,
+    });
+    expect(createRelationChangeEventMock).toHaveBeenCalledTimes(2);
+    expect(applyRollupChangesMock).toHaveBeenCalledTimes(1);
+    expect(applyRollupChangesMock.mock.calls[0]?.[2]).toHaveLength(2);
   });
 
   it('동일 endpoint 후보가 이미 PENDING 이면 이를 승인해 재사용해야 한다', async () => {
@@ -254,6 +296,8 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
         ),
       );
     expect(linkedEvidence).toHaveLength(2);
+    expect(createRelationChangeEventMock).toHaveBeenCalledTimes(1);
+    expect(applyRollupChangesMock).toHaveBeenCalledTimes(1);
   });
 
   it('유효한 endpoint relation을 하나도 만들지 못하면 원본 후보를 PENDING 으로 유지해야 한다', async () => {
@@ -296,6 +340,8 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
       .where(eq(relationCandidates.id, candidateId))
       .limit(1);
     expect(originalCandidate?.status).toBe('PENDING');
+    expect(createRelationChangeEventMock).not.toHaveBeenCalled();
+    expect(applyRollupChangesMock).not.toHaveBeenCalled();
   });
 
   it('이미 확정된 endpoint relation이 있으면 이를 재사용하고 원본 후보를 승인해야 한다', async () => {
@@ -347,5 +393,53 @@ describe('POST /api/inference/candidates/:id/map-endpoints', () => {
         ),
       );
     expect(linkedEvidence).toHaveLength(1);
+    expect(createRelationChangeEventMock).not.toHaveBeenCalled();
+    expect(applyRollupChangesMock).not.toHaveBeenCalled();
+  });
+
+  it('이미 APPROVED 인 endpoint 후보와 base relation이 있으면 rollup 변경을 다시 발행하지 않아야 한다', async () => {
+    const { sourceServiceId, endpointId, candidateId } = await seedBaseGraph('call');
+    const existingEndpointCandidateId = generateId();
+    const relationId = generateId();
+
+    await dbHolder.db!.insert(relationCandidates).values({
+      id: existingEndpointCandidateId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: endpointId,
+      confidence: 0.9,
+      metadata: { source: 'config-code-binding' },
+      status: 'APPROVED',
+    });
+    await dbHolder.db!.insert(objectRelations).values({
+      id: relationId,
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId: sourceServiceId,
+      objectId: endpointId,
+      confidence: 1,
+      status: 'APPROVED',
+      source: 'INFERRED',
+      metadata: {},
+    });
+
+    const response = await POST(
+      new Request('http://localhost', {
+        method: 'POST',
+        body: JSON.stringify({ endpointIds: [endpointId] }),
+        headers: { 'Content-Type': 'application/json' },
+      }) as never,
+      { params: Promise.resolve({ id: candidateId }) },
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      createdRelationCount: 0,
+      resolvedRelationCount: 1,
+      reusedRelationCount: 1,
+    });
+    expect(createRelationChangeEventMock).not.toHaveBeenCalled();
+    expect(applyRollupChangesMock).not.toHaveBeenCalled();
   });
 });

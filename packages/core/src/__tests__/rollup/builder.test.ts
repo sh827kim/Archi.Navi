@@ -24,7 +24,14 @@ vi.mock('../../graph-index/index', () => ({
 import { rebuildRollups, incrementalRebuild } from '../../rollup/builder';
 import { createNewGeneration, activateGeneration, getActiveGeneration, updateGenerationMeta } from '../../rollup/generationManager';
 import { invalidateCache } from '../../graph-index/index';
-import { objectRelations, objects, objectRollups, objectDomainAffinities, objectGraphStats } from '@archi-navi/db';
+import {
+    objectRelations,
+    objects,
+    objectRollups,
+    objectRollupProvenances,
+    objectDomainAffinities,
+    objectGraphStats,
+} from '@archi-navi/db';
 import type { ChangeEvent } from '../../rollup/types';
 import { id, WORKSPACE_ID, createStandardScenario, makeRelation, makeAffinity } from './helpers/fixtures';
 
@@ -102,6 +109,428 @@ function createTestDb(selectResponses: Array<unknown[]>) {
         getDeleted: () => deleted,
         getSelectCallCount: () => selectCallIdx,
     };
+}
+
+interface StatefulRollupState {
+    rollups: Array<Record<string, unknown>>;
+    provenances: Array<Record<string, unknown>>;
+    graphStats: Array<Record<string, unknown>>;
+}
+
+type StatefulSelectHandler = (state: StatefulRollupState) => unknown[];
+type StatefulDeleteHandler = (state: StatefulRollupState, table: unknown) => void;
+
+function createStatefulTestDb(options?: {
+    initialState?: Partial<StatefulRollupState>;
+    selectHandlers?: StatefulSelectHandler[];
+    deleteHandlers?: StatefulDeleteHandler[];
+}) {
+    const state: StatefulRollupState = {
+        rollups: [...(options?.initialState?.rollups ?? [])],
+        provenances: [...(options?.initialState?.provenances ?? [])],
+        graphStats: [...(options?.initialState?.graphStats ?? [])],
+    };
+    const inserted: InsertedData[] = [];
+    const deleted: DeleteCall[] = [];
+    const selectHandlers = options?.selectHandlers ?? [];
+    const deleteHandlers = options?.deleteHandlers ?? [];
+    let selectCallIdx = 0;
+    let deleteCallIdx = 0;
+
+    const nextSelect = () => {
+        const handler = selectHandlers[selectCallIdx];
+        selectCallIdx++;
+        return Promise.resolve(handler ? handler(state) : []);
+    };
+
+    const mockDb = {
+        select: vi.fn().mockImplementation(() => ({
+            from: vi.fn().mockReturnValue({
+                where: vi.fn().mockImplementation(() => nextSelect()),
+                innerJoin: vi.fn().mockReturnValue({
+                    where: vi.fn().mockImplementation(() => nextSelect()),
+                }),
+                orderBy: vi.fn().mockReturnValue({
+                    limit: vi.fn().mockImplementation(() => nextSelect()),
+                }),
+            }),
+        })),
+        insert: vi.fn().mockImplementation((table: unknown) => ({
+            values: vi.fn().mockImplementation((rows: unknown) => {
+                const normalizedRows = Array.isArray(rows) ? rows : [rows as Record<string, unknown>];
+                inserted.push({ table, rows: normalizedRows });
+                if (table === objectRollups) {
+                    state.rollups.push(...normalizedRows);
+                } else if (table === objectRollupProvenances) {
+                    state.provenances.push(...normalizedRows);
+                } else if (table === objectGraphStats) {
+                    state.graphStats.push(...normalizedRows);
+                }
+                return Promise.resolve();
+            }),
+        })),
+        delete: vi.fn().mockImplementation((table: unknown) => ({
+            where: vi.fn().mockImplementation(() => {
+                deleted.push({ table });
+                const handler = deleteHandlers[deleteCallIdx];
+                deleteCallIdx++;
+                if (handler) {
+                    handler(state, table);
+                }
+                return Promise.resolve();
+            }),
+        })),
+        update: vi.fn().mockImplementation(() => ({
+            set: vi.fn().mockReturnValue({
+                where: vi.fn().mockResolvedValue(undefined),
+            }),
+        })),
+    };
+
+    return {
+        db: mockDb as unknown as Parameters<typeof rebuildRollups>[0],
+        getState: () => ({
+            rollups: [...state.rollups],
+            provenances: [...state.provenances],
+            graphStats: [...state.graphStats],
+        }),
+        getInserted: () => inserted,
+        getDeleted: () => deleted,
+        getSelectCallCount: () => selectCallIdx,
+        getDeleteCallCount: () => deleteCallIdx,
+    };
+}
+
+function buildCallJoinedFromRelations(
+    relations: Array<ReturnType<typeof makeRelation>>,
+    objectRows: ReturnType<typeof createStandardScenario>['objects'],
+) {
+    const objectMap = new Map(objectRows.map((objectRow) => [objectRow.id, objectRow]));
+    return relations
+        .filter((relation) => relation.relationType === 'call')
+        .map((relation) => ({
+            relation,
+            targetParentId: objectMap.get(relation.objectId)?.parentId ?? null,
+            targetGranularity: objectMap.get(relation.objectId)?.granularity ?? 'ATOMIC',
+        }));
+}
+
+function buildTableJoinedFromRelations(
+    relations: Array<ReturnType<typeof makeRelation>>,
+    objectRows: ReturnType<typeof createStandardScenario>['objects'],
+    relationType: 'read' | 'write',
+) {
+    const objectMap = new Map(objectRows.map((objectRow) => [objectRow.id, objectRow]));
+    return relations
+        .filter((relation) => relation.relationType === relationType)
+        .map((relation) => ({
+            relation,
+            tableParentId: objectMap.get(relation.objectId)?.parentId ?? null,
+        }));
+}
+
+function buildTopicJoinedFromRelations(
+    relations: Array<ReturnType<typeof makeRelation>>,
+    objectRows: ReturnType<typeof createStandardScenario>['objects'],
+    relationType: 'produce' | 'consume',
+) {
+    const objectMap = new Map(objectRows.map((objectRow) => [objectRow.id, objectRow]));
+    return relations
+        .filter((relation) => relation.relationType === relationType)
+        .map((relation) => ({
+            relation,
+            topicParentId: objectMap.get(relation.objectId)?.parentId ?? null,
+        }));
+}
+
+function buildFullRebuildSelectHandlers(
+    relations: Array<ReturnType<typeof makeRelation>>,
+    objectRows: ReturnType<typeof createStandardScenario>['objects'],
+    affinities: ReturnType<typeof createStandardScenario>['affinities'],
+): StatefulSelectHandler[] {
+    const graphStatsHandlers: StatefulSelectHandler[] = [
+        (state) =>
+            state.rollups
+                .filter((row) => row['rollupLevel'] === 'SERVICE_TO_SERVICE')
+                .map((row) => ({
+                    subjectObjectId: row['subjectObjectId'],
+                    objectId: row['objectId'],
+                })),
+        (state) =>
+            state.rollups
+                .filter((row) => row['rollupLevel'] === 'SERVICE_TO_DATABASE')
+                .map((row) => ({
+                    subjectObjectId: row['subjectObjectId'],
+                    objectId: row['objectId'],
+                })),
+        (state) =>
+            state.rollups
+                .filter((row) => row['rollupLevel'] === 'SERVICE_TO_BROKER')
+                .map((row) => ({
+                    subjectObjectId: row['subjectObjectId'],
+                    objectId: row['objectId'],
+                })),
+        (state) =>
+            state.rollups
+                .filter((row) => row['rollupLevel'] === 'DOMAIN_TO_DOMAIN')
+                .map((row) => ({
+                    subjectObjectId: row['subjectObjectId'],
+                    objectId: row['objectId'],
+                })),
+    ];
+
+    const baseHandlers: StatefulSelectHandler[] = [
+        () => buildCallJoinedFromRelations(relations, objectRows),
+        () => relations.filter((relation) => relation.relationType === 'depend_on'),
+        () => buildTableJoinedFromRelations(relations, objectRows, 'read'),
+        () => buildTableJoinedFromRelations(relations, objectRows, 'write'),
+        () => buildTopicJoinedFromRelations(relations, objectRows, 'produce'),
+        () => buildTopicJoinedFromRelations(relations, objectRows, 'consume'),
+        (state) =>
+            state.rollups.filter(
+                (row) =>
+                    row['rollupLevel'] === 'SERVICE_TO_SERVICE' &&
+                    row['relationType'] === 'call',
+            ),
+    ];
+
+    const hasCallRelations = relations.some((relation) => relation.relationType === 'call');
+    if (!hasCallRelations) {
+        return [...baseHandlers, ...graphStatsHandlers];
+    }
+
+    return [
+        ...baseHandlers,
+        (state) => state.provenances,
+        () => affinities,
+        ...graphStatsHandlers,
+    ];
+}
+
+function cloneState(state: StatefulRollupState): StatefulRollupState {
+    return {
+        rollups: state.rollups.map((row) => ({ ...row })),
+        provenances: state.provenances.map((row) => ({ ...row })),
+        graphStats: state.graphStats.map((row) => ({ ...row })),
+    };
+}
+
+function removeRollupsFromState(
+    state: StatefulRollupState,
+    predicate: (row: Record<string, unknown>) => boolean,
+) {
+    const removedRollups = state.rollups.filter(predicate);
+    if (removedRollups.length === 0) {
+        return;
+    }
+    const removedRollupIds = new Set(
+        removedRollups
+            .map((row) => row['id'])
+            .filter((id): id is string => typeof id === 'string' && id.length > 0),
+    );
+    state.rollups = state.rollups.filter((row) => !predicate(row));
+    state.provenances = state.provenances.filter(
+        (row) => !removedRollupIds.has(String(row['rollupId'] ?? '')),
+    );
+}
+
+function removeGraphStatsFromState(
+    state: StatefulRollupState,
+    rollupLevel: string,
+) {
+    state.graphStats = state.graphStats.filter((row) => row['rollupLevel'] !== rollupLevel);
+}
+
+function buildIncrementalS2SDeletionHandlers(
+    affectedServiceIds: string[],
+): StatefulDeleteHandler[] {
+    const affectedIdSet = new Set(affectedServiceIds);
+    return [
+        (state, table) => {
+            if (table !== objectRollups) return;
+            removeRollupsFromState(
+                state,
+                (row) =>
+                    row['rollupLevel'] === 'SERVICE_TO_SERVICE' &&
+                    (affectedIdSet.has(String(row['subjectObjectId'])) ||
+                        affectedIdSet.has(String(row['objectId']))),
+            );
+        },
+        (state, table) => {
+            if (table !== objectRollups) return;
+            removeRollupsFromState(
+                state,
+                (row) => row['rollupLevel'] === 'DOMAIN_TO_DOMAIN',
+            );
+        },
+        (state, table) => {
+            if (table !== objectGraphStats) return;
+            removeGraphStatsFromState(state, 'SERVICE_TO_SERVICE');
+        },
+        (state, table) => {
+            if (table !== objectGraphStats) return;
+            removeGraphStatsFromState(state, 'DOMAIN_TO_DOMAIN');
+        },
+    ];
+}
+
+function buildIncrementalS2SDeletionSelectHandlers(options: {
+    relations: Array<ReturnType<typeof makeRelation>>;
+    objectRows: ReturnType<typeof createStandardScenario>['objects'];
+    affinities: ReturnType<typeof createStandardScenario>['affinities'];
+}) {
+    const { relations, objectRows, affinities } = options;
+    return [
+        () => buildCallJoinedFromRelations(relations, objectRows),
+        () => relations.filter((relation) => relation.relationType === 'depend_on'),
+        (state: StatefulRollupState) =>
+            state.rollups.filter(
+                (row) =>
+                    row['rollupLevel'] === 'SERVICE_TO_SERVICE' &&
+                    row['relationType'] === 'call',
+            ),
+        (state: StatefulRollupState) => state.provenances,
+        () => affinities,
+        (state: StatefulRollupState) =>
+            state.rollups
+                .filter((row) => row['rollupLevel'] === 'SERVICE_TO_SERVICE')
+                .map((row) => ({
+                    subjectObjectId: row['subjectObjectId'],
+                    objectId: row['objectId'],
+                })),
+        (state: StatefulRollupState) =>
+            state.rollups
+                .filter((row) => row['rollupLevel'] === 'DOMAIN_TO_DOMAIN')
+                .map((row) => ({
+                    subjectObjectId: row['subjectObjectId'],
+                    objectId: row['objectId'],
+                })),
+    ];
+}
+
+function buildIncrementalS2DBHandlers(
+    affectedServiceIds: string[],
+): StatefulDeleteHandler[] {
+    const affectedIdSet = new Set(affectedServiceIds);
+    return [
+        (state, table) => {
+            if (table !== objectRollups) return;
+            removeRollupsFromState(
+                state,
+                (row) =>
+                    row['rollupLevel'] === 'SERVICE_TO_DATABASE' &&
+                    affectedIdSet.has(String(row['subjectObjectId'])),
+            );
+        },
+        (state, table) => {
+            if (table !== objectGraphStats) return;
+            removeGraphStatsFromState(state, 'SERVICE_TO_DATABASE');
+        },
+    ];
+}
+
+function buildIncrementalS2DBSelectHandlers(options: {
+    relations: Array<ReturnType<typeof makeRelation>>;
+    objectRows: ReturnType<typeof createStandardScenario>['objects'];
+    affectedServiceIds: string[];
+}) {
+    const affectedIdSet = new Set(options.affectedServiceIds);
+    const filterByAffectedSubject = (
+        joinedRows: Array<{
+            relation: ReturnType<typeof makeRelation>;
+            tableParentId: string | null;
+        }>,
+    ) =>
+        joinedRows.filter((row) =>
+            affectedIdSet.has(row.relation.subjectObjectId),
+        );
+
+    return [
+        () =>
+            filterByAffectedSubject(
+                buildTableJoinedFromRelations(options.relations, options.objectRows, 'read'),
+            ),
+        () =>
+            filterByAffectedSubject(
+                buildTableJoinedFromRelations(options.relations, options.objectRows, 'write'),
+            ),
+        (state: StatefulRollupState) =>
+            state.rollups
+                .filter((row) => row['rollupLevel'] === 'SERVICE_TO_DATABASE')
+                .map((row) => ({
+                    subjectObjectId: row['subjectObjectId'],
+                    objectId: row['objectId'],
+                })),
+    ];
+}
+
+function normalizeComparableState(state: StatefulRollupState) {
+    const rollupKeyById = new Map<string, string>();
+    const normalizedRollups = state.rollups
+        .map((row) => {
+            const key = [
+                row['rollupLevel'],
+                row['relationType'],
+                row['subjectObjectId'],
+                row['objectId'],
+            ].join('|');
+            const id = row['id'];
+            if (typeof id === 'string' && id.length > 0) {
+                rollupKeyById.set(id, key);
+            }
+            return {
+                key,
+                edgeWeight: row['edgeWeight'],
+                confidence: row['confidence'] == null ? null : Number(row['confidence']),
+            };
+        })
+        .sort((a, b) => a.key.localeCompare(b.key));
+
+    const normalizedProvenances = state.provenances
+        .map((row) => ({
+            rollupKey: rollupKeyById.get(String(row['rollupId'] ?? '')) ?? '',
+            baseRelationId: row['baseRelationId'],
+        }))
+        .sort((a, b) => {
+            const left = `${a.rollupKey}|${a.baseRelationId}`;
+            const right = `${b.rollupKey}|${b.baseRelationId}`;
+            return left.localeCompare(right);
+        });
+
+    const normalizedGraphStats = state.graphStats
+        .map((row) => ({
+            rollupLevel: row['rollupLevel'],
+            objectId: row['objectId'],
+            outDegree: row['outDegree'],
+            inDegree: row['inDegree'],
+        }))
+        .sort((a, b) => {
+            const left = `${a.rollupLevel}|${a.objectId}`;
+            const right = `${b.rollupLevel}|${b.objectId}`;
+            return left.localeCompare(right);
+        });
+
+    return {
+        rollups: normalizedRollups,
+        provenances: normalizedProvenances,
+        graphStats: normalizedGraphStats,
+    };
+}
+
+async function buildFullRebuildState(options: {
+    relations: Array<ReturnType<typeof makeRelation>>;
+    objectRows: ReturnType<typeof createStandardScenario>['objects'];
+    affinities: ReturnType<typeof createStandardScenario>['affinities'];
+}) {
+    const { db, getState } = createStatefulTestDb({
+        selectHandlers: buildFullRebuildSelectHandlers(
+            options.relations,
+            options.objectRows,
+            options.affinities,
+        ),
+    });
+    await rebuildRollups(db, WORKSPACE_ID);
+    return getState();
 }
 
 // ─── 전체 리빌드 테스트 ──────────────────────────────────────────────────────────
@@ -1007,5 +1436,308 @@ describe('incrementalRebuild (증분 리빌드)', () => {
         expect(version).toBe(1);
         expect(updateGenerationMeta).not.toHaveBeenCalled();
         expect(invalidateCache).not.toHaveBeenCalled();
+    });
+
+    it('T18: call relation 삭제 시 weight/provenance/graph stats가 full rebuild와 동일해야 한다', async () => {
+        const { objects: objectRows, relations, affinities, svcA, svcB } = scenario;
+        const remainingRelations = relations.filter((relation) => relation.id !== id('rel-call2'));
+
+        const initialState = await buildFullRebuildState({
+            relations,
+            objectRows,
+            affinities,
+        });
+        const expectedState = await buildFullRebuildState({
+            relations: remainingRelations,
+            objectRows,
+            affinities,
+        });
+
+        const { db, getState } = createStatefulTestDb({
+            initialState: cloneState(initialState),
+            selectHandlers: buildIncrementalS2SDeletionSelectHandlers({
+                relations: remainingRelations,
+                objectRows,
+                affinities,
+            }),
+            deleteHandlers: buildIncrementalS2SDeletionHandlers([svcA.id, svcB.id]),
+        });
+
+        await incrementalRebuild(db, WORKSPACE_ID, [
+            {
+                type: 'RELATION_DELETED',
+                payload: {
+                    relationType: 'call',
+                    subjectObjectId: svcA.id,
+                    objectId: id('ep-b2'),
+                },
+            },
+        ]);
+
+        const finalState = getState();
+        const normalizedFinalState = normalizeComparableState(finalState);
+        const normalizedExpectedState = normalizeComparableState(expectedState);
+
+        expect(normalizedFinalState).toEqual(normalizedExpectedState);
+
+        const s2sEdge = normalizedFinalState.rollups.find(
+            (row) =>
+                row.key ===
+                `SERVICE_TO_SERVICE|call|${svcA.id}|${svcB.id}`,
+        );
+        expect(s2sEdge).toMatchObject({
+            edgeWeight: 1,
+            confidence: 0.9,
+        });
+
+        const s2sProvenance = normalizedFinalState.provenances
+            .filter(
+                (row) =>
+                    row.rollupKey ===
+                    `SERVICE_TO_SERVICE|call|${svcA.id}|${svcB.id}`,
+            )
+            .map((row) => row.baseRelationId);
+        expect(s2sProvenance).toEqual([id('rel-call1')]);
+
+        const s2sStats = normalizedFinalState.graphStats.filter(
+            (row) => row.rollupLevel === 'SERVICE_TO_SERVICE',
+        );
+        expect(s2sStats).toEqual([
+            {
+                rollupLevel: 'SERVICE_TO_SERVICE',
+                objectId: svcA.id,
+                outDegree: 1,
+                inDegree: 0,
+            },
+            {
+                rollupLevel: 'SERVICE_TO_SERVICE',
+                objectId: svcB.id,
+                outDegree: 0,
+                inDegree: 1,
+            },
+        ]);
+    });
+
+    it('T19: 마지막 call relation 삭제 시 edge/provenance/graph stats가 제거되고 full rebuild와 동일해야 한다', async () => {
+        const { objects: objectRows, relations, affinities, svcA, svcB } = scenario;
+        const remainingRelations = relations.filter(
+            (relation) =>
+                relation.id !== id('rel-call1') &&
+                relation.id !== id('rel-call2'),
+        );
+
+        const initialState = await buildFullRebuildState({
+            relations,
+            objectRows,
+            affinities,
+        });
+        const expectedState = await buildFullRebuildState({
+            relations: remainingRelations,
+            objectRows,
+            affinities,
+        });
+
+        const { db, getState } = createStatefulTestDb({
+            initialState: cloneState(initialState),
+            selectHandlers: [
+                () => buildCallJoinedFromRelations(remainingRelations, objectRows),
+                () => remainingRelations.filter((relation) => relation.relationType === 'depend_on'),
+                (state) =>
+                    state.rollups.filter(
+                        (row) =>
+                            row['rollupLevel'] === 'SERVICE_TO_SERVICE' &&
+                            row['relationType'] === 'call',
+                    ),
+                (state) =>
+                    state.rollups
+                        .filter((row) => row['rollupLevel'] === 'SERVICE_TO_SERVICE')
+                        .map((row) => ({
+                            subjectObjectId: row['subjectObjectId'],
+                            objectId: row['objectId'],
+                        })),
+                (state) =>
+                    state.rollups
+                        .filter((row) => row['rollupLevel'] === 'DOMAIN_TO_DOMAIN')
+                        .map((row) => ({
+                            subjectObjectId: row['subjectObjectId'],
+                            objectId: row['objectId'],
+                        })),
+            ],
+            deleteHandlers: buildIncrementalS2SDeletionHandlers([svcA.id, svcB.id]),
+        });
+
+        await incrementalRebuild(db, WORKSPACE_ID, [
+            {
+                type: 'RELATION_DELETED',
+                payload: {
+                    relationType: 'call',
+                    subjectObjectId: svcA.id,
+                    objectId: id('ep-b1'),
+                },
+            },
+        ]);
+
+        const finalState = getState();
+        const normalizedFinalState = normalizeComparableState(finalState);
+        const normalizedExpectedState = normalizeComparableState(expectedState);
+
+        expect(normalizedFinalState).toEqual(normalizedExpectedState);
+        expect(
+            normalizedFinalState.rollups.find(
+                (row) =>
+                    row.key ===
+                    `SERVICE_TO_SERVICE|call|${svcA.id}|${svcB.id}`,
+            ),
+        ).toBeUndefined();
+        expect(
+            normalizedFinalState.provenances.find(
+                (row) =>
+                    row.rollupKey ===
+                    `SERVICE_TO_SERVICE|call|${svcA.id}|${svcB.id}`,
+            ),
+        ).toBeUndefined();
+        expect(
+            normalizedFinalState.graphStats.find(
+                (row) => row.rollupLevel === 'SERVICE_TO_SERVICE',
+            ),
+        ).toBeUndefined();
+        expect(
+            normalizedFinalState.rollups.find(
+                (row) => row.key.startsWith('DOMAIN_TO_DOMAIN|call|'),
+            ),
+        ).toBeUndefined();
+    });
+
+    it('T20: call relation 승인 시 weight/provenance/graph stats가 full rebuild와 동일해야 한다', async () => {
+        const { objects: objectRows, relations, affinities, svcA, svcB } = scenario;
+        const initialRelations = relations.filter((relation) => relation.id !== id('rel-call2'));
+
+        const initialState = await buildFullRebuildState({
+            relations: initialRelations,
+            objectRows,
+            affinities,
+        });
+        const expectedState = await buildFullRebuildState({
+            relations,
+            objectRows,
+            affinities,
+        });
+
+        const { db, getState } = createStatefulTestDb({
+            initialState: cloneState(initialState),
+            selectHandlers: buildIncrementalS2SDeletionSelectHandlers({
+                relations,
+                objectRows,
+                affinities,
+            }),
+            deleteHandlers: buildIncrementalS2SDeletionHandlers([svcA.id, svcB.id]),
+        });
+
+        await incrementalRebuild(db, WORKSPACE_ID, [
+            {
+                type: 'RELATION_APPROVED',
+                payload: {
+                    relationType: 'call',
+                    subjectObjectId: svcA.id,
+                    objectId: id('ep-b2'),
+                },
+            },
+        ]);
+
+        const normalizedFinalState = normalizeComparableState(getState());
+        const normalizedExpectedState = normalizeComparableState(expectedState);
+
+        expect(normalizedFinalState).toEqual(normalizedExpectedState);
+
+        const s2sEdge = normalizedFinalState.rollups.find(
+            (row) =>
+                row.key ===
+                `SERVICE_TO_SERVICE|call|${svcA.id}|${svcB.id}`,
+        );
+        expect(s2sEdge?.edgeWeight).toBe(2);
+        expect(s2sEdge?.confidence).toBeCloseTo(0.85, 10);
+
+        const s2sProvenance = normalizedFinalState.provenances
+            .filter(
+                (row) =>
+                    row.rollupKey ===
+                    `SERVICE_TO_SERVICE|call|${svcA.id}|${svcB.id}`,
+            )
+            .map((row) => row.baseRelationId);
+        expect(s2sProvenance).toEqual([id('rel-call1'), id('rel-call2')]);
+    });
+
+    it('T21: read relation 승인으로 새 S2DB edge가 추가될 때 full rebuild와 동일해야 한다', async () => {
+        const { objects: objectRows, relations, affinities, svcA, dbX } = scenario;
+        const initialRelations = relations.filter((relation) => relation.id !== id('rel-read'));
+
+        const initialState = await buildFullRebuildState({
+            relations: initialRelations,
+            objectRows,
+            affinities,
+        });
+        const expectedState = await buildFullRebuildState({
+            relations,
+            objectRows,
+            affinities,
+        });
+
+        const { db, getState } = createStatefulTestDb({
+            initialState: cloneState(initialState),
+            selectHandlers: buildIncrementalS2DBSelectHandlers({
+                relations,
+                objectRows,
+                affectedServiceIds: [svcA.id],
+            }),
+            deleteHandlers: buildIncrementalS2DBHandlers([svcA.id]),
+        });
+
+        await incrementalRebuild(db, WORKSPACE_ID, [
+            {
+                type: 'RELATION_APPROVED',
+                payload: {
+                    relationType: 'read',
+                    subjectObjectId: svcA.id,
+                    objectId: id('tbl-x'),
+                },
+            },
+        ]);
+
+        const normalizedFinalState = normalizeComparableState(getState());
+        const normalizedExpectedState = normalizeComparableState(expectedState);
+
+        expect(normalizedFinalState).toEqual(normalizedExpectedState);
+
+        const s2dbEdge = normalizedFinalState.rollups.find(
+            (row) =>
+                row.key ===
+                `SERVICE_TO_DATABASE|read|${svcA.id}|${dbX.id}`,
+        );
+        expect(s2dbEdge?.edgeWeight).toBe(1);
+        expect(s2dbEdge?.confidence).toBeCloseTo(0.7, 10);
+
+        const s2dbStats = normalizedFinalState.graphStats.filter(
+            (row) => row.rollupLevel === 'SERVICE_TO_DATABASE',
+        );
+        expect(s2dbStats).toEqual([
+            {
+                rollupLevel: 'SERVICE_TO_DATABASE',
+                objectId: dbX.id,
+                outDegree: 0,
+                inDegree: 2,
+            },
+            {
+                rollupLevel: 'SERVICE_TO_DATABASE',
+                objectId: scenario.svcA.id,
+                outDegree: 1,
+                inDegree: 0,
+            },
+            {
+                rollupLevel: 'SERVICE_TO_DATABASE',
+                objectId: scenario.svcB.id,
+                outDegree: 1,
+                inDegree: 0,
+            },
+        ]);
     });
 });

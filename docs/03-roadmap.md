@@ -28,7 +28,7 @@
 | P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
 | P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation, 4-3 LLM 추론 부스터, 4-4 프레임워크 플러그인 시스템 구현 완료. 4-5~4-6은 후속 범위 |
+| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation, 4-3 LLM 추론 부스터, 4-4 프레임워크 플러그인 시스템, 4-5 Delta Rollup + 실시간 갱신 구현 완료. 4-6은 후속 범위 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
@@ -333,15 +333,19 @@
   - gRPC, GraphQL, tRPC, Quarkus 등 새 프레임워크 지원 용이
   - 오픈소스 커뮤니티 기여 진입 장벽 대폭 감소
 
-### 📋 4-5. Delta Rollup + 실시간 그래프 갱신
+### ✅ 4-5. Delta Rollup + 실시간 그래프 갱신
 - **SPEC:** `docs/spec/21-realtime-rollup-spec.md`
-- **핵심:**
-  - 관계 승인/삭제 시 해당 rollup 엣지만 delta update (full rebuild 없이)
-  - WebSocket으로 프론트엔드에 그래프 변경 push
-  - 일괄 승인 시 배치 delta 처리
-- **기대 효과:**
-  - 대규모 코드베이스에서 수백 건 일괄 승인 시 성능 향상
-  - 실시간 시각적 피드백
+- **구현 완료 범위:**
+  - 관계 후보 승인, 수동 relation 추가, 승인된 base relation 삭제가 `incrementalRebuild` 기반 delta rollup으로 처리된다.
+  - `map-endpoints`는 여러 relation change event를 모아 batch delta로 처리한다.
+  - 실시간 반영 계약은 WebSocket이 아니라 `SSE(EventSource) + client refetch + failure 시 polling fallback`이다.
+  - 서버는 edge delta payload를 push하지 않고 `rollup-change` notification만 발행한다.
+- **검증 근거:**
+  - T4 기록 측정값(10건 기준): sequential avg `0.694ms`, batch avg `0.138ms`, improvement `80.06%`
+  - batch와 sequential 최종 상태 동일성 검증 포함
+  - approval/addition/delete parity 테스트와 endpoint batch mapping 테스트 보강
+- **남은 리스크:**
+  - 현재 실시간 갱신은 refetch 기반이라 대형 그래프에서는 재조회 비용이 후속 최적화 포인트다.
 
 ### 📋 4-6. 추론 피드백 루프
 - **SPEC:** `docs/spec/22-inference-feedback-loop-spec.md`
