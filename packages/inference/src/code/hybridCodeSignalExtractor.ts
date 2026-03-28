@@ -6,16 +6,11 @@ import { generateId } from '@archi-navi/shared';
 import type {
   CodeSignalOptions,
   CodeSignalResult,
-  ExtractedSignal,
   FileScanResult,
 } from './codeSignalExtractor';
-import { scanJavaKotlin, scanMyBatisXml } from './scanners/javaKotlin';
-import { scanTypeScript } from './scanners/typeScript';
-import { scanPython } from './scanners/python';
-import { scanJavaKotlinAst } from './ast/astJavaKotlin';
-import { scanTypeScriptAst } from './ast/astTypeScript';
-import { scanPythonAst } from './ast/astPython';
-import { mergeHybridSignals } from './hybridSignalMerge';
+import { scanMyBatisXml } from './scanners/javaKotlin';
+import { detectPlugins } from './plugins/pluginRegistry';
+import { scanFileWithHybridPlugins } from './plugins/runtime';
 import {
   findJavaKotlinFiles,
   findMyBatisXmlFiles,
@@ -178,83 +173,8 @@ async function processFile(
   return { skipped: false, isNew, signalCount: scanResult.signals.length };
 }
 
-function buildScanResult(base: FileScanResult, signals: ExtractedSignal[]): FileScanResult {
-  const resultBase = {
-    language: base.language,
-    sha256: base.sha256,
-    signals,
-  };
-
-  if (base.packageName) {
-    return {
-      ...resultBase,
-      packageName: base.packageName,
-    };
-  }
-
-  return resultBase;
-}
-
-async function mergeJavaOrKotlinSignals(filePath: string, content: string): Promise<FileScanResult> {
-  const regexResult = scanJavaKotlin(filePath, content);
-  let astResult: FileScanResult | null = null;
-
-  try {
-    astResult = await scanJavaKotlinAst(filePath, content);
-  } catch {
-    astResult = null;
-  }
-
-  const mergedSignals = mergeHybridSignals([
-    ...regexResult.signals.map((signal) => ({ source: 'regex' as const, signal })),
-    ...(astResult?.signals ?? []).map((signal) => ({ source: 'ast' as const, signal })),
-  ]);
-
-  return buildScanResult(astResult ?? regexResult, mergedSignals);
-}
-
-async function mergeTypeScriptSignals(filePath: string, content: string): Promise<FileScanResult> {
-  const regexResult = scanTypeScript(filePath, content);
-  let astResult: FileScanResult | null = null;
-
-  try {
-    astResult = await scanTypeScriptAst(filePath, content);
-  } catch {
-    astResult = null;
-  }
-
-  const mergedSignals = mergeHybridSignals([
-    ...regexResult.signals.map((signal) => ({ source: 'regex' as const, signal })),
-    ...(astResult?.signals ?? []).map((signal) => ({ source: 'ast' as const, signal })),
-  ]);
-
-  return buildScanResult(astResult ?? regexResult, mergedSignals);
-}
-
-async function mergePythonSignals(filePath: string, content: string): Promise<FileScanResult> {
-  const regexResult = scanPython(filePath, content);
-  let astResult: FileScanResult | null = null;
-
-  try {
-    astResult = await scanPythonAst(filePath, content);
-  } catch {
-    astResult = null;
-  }
-
-  const mergedSignals = mergeHybridSignals([
-    ...regexResult.signals.map((signal) => ({ source: 'regex' as const, signal })),
-    ...(astResult?.signals ?? []).map((signal) => ({ source: 'ast' as const, signal })),
-  ]);
-
-  return buildScanResult(astResult ?? regexResult, mergedSignals);
-}
-
 function mergeMyBatisSignals(filePath: string, content: string): FileScanResult {
-  const regexResult = scanMyBatisXml(filePath, content);
-  const mergedSignals = mergeHybridSignals(
-    regexResult.signals.map((signal) => ({ source: 'regex' as const, signal })),
-  );
-  return buildScanResult(regexResult, mergedSignals);
+  return scanMyBatisXml(filePath, content);
 }
 
 export async function extractHybridCodeSignals(
@@ -262,6 +182,7 @@ export async function extractHybridCodeSignals(
   options: CodeSignalOptions,
 ): Promise<CodeSignalResult> {
   const { workspaceId, repoRoot } = options;
+  const detectedPlugins = detectPlugins(repoRoot);
   const forceRescan = options.forceRescan === true;
   const targetFileSet = options.targetFilePaths
     ? new Set(options.targetFilePaths.map((path) => path.replace(/\\/g, '/')))
@@ -316,9 +237,16 @@ export async function extractHybridCodeSignals(
     }
   }
 
-  await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), mergeJavaOrKotlinSignals);
-  await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), mergeTypeScriptSignals);
-  await processAll(filterTargetFiles(findPythonFiles(repoRoot)), mergePythonSignals);
+  const codeFiles = filterTargetFiles([
+    ...findJavaKotlinFiles(repoRoot),
+    ...findTypeScriptFiles(repoRoot),
+    ...findPythonFiles(repoRoot),
+  ]);
+
+  await processAll(
+    codeFiles,
+    (filePath, content) => scanFileWithHybridPlugins(filePath, content, repoRoot, detectedPlugins),
+  );
   await processAll(filterTargetFiles(findMyBatisXmlFiles(repoRoot)), mergeMyBatisSignals);
 
   return result;

@@ -1,7 +1,8 @@
 # 20. 프레임워크 플러그인 시스템 (SPEC) (Roadmap 4-4)
 
-상태: Draft
+상태: Implemented
 작성일: 2026-03-08
+구현 반영일: 2026-03-28
 
 ## 1. 목적
 
@@ -25,10 +26,12 @@ interface FrameworkPlugin {
   version: string;
   languages: Language[];
   detector: { filePatterns?: string[]; packageJsonDeps?: string[] };
-  regexPatterns: SignalPattern[];
-  astExtractor?: (tree: SyntaxTree, filePath: string) => ExtractedSignal[];
+  regexPatterns?: SignalPattern[];
+  regexScanner?: (filePath: string, content: string) => FileScanResult;
+  astExtractor?: (filePath: string, content: string, context: FrameworkAstScanContext) => FileScanResult;
   configParsers?: { filePatterns: string[]; parse: (content: string, filePath: string) => ConfigSignal[] }[];
   confidenceRules?: { signalKind: SignalKind; condition: (s: ExtractedSignal) => boolean; adjustment: number }[];
+  fallback?: boolean;
 }
 ```
 
@@ -53,3 +56,12 @@ gRPC, GraphQL, tRPC, Quarkus, Ktor, Django, RabbitMQ
 | T3 | 미감지 시 범용 플러그인 fallback |
 | T4 | 새 플러그인 추가 시 기존 코드 수정 불필요 |
 | T5 | 마이그레이션 후 기존 테스트 통과 |
+
+## 7. 구현 메모
+
+- 구현 위치: `packages/inference/src/code/plugins/`
+- 내장 플러그인: `spring-boot`, `java-common`, `express`, `nestjs`, `typescript-common`, `fastapi`, `flask`, `python-common`
+- 적용 범위: `extractCodeSignals`, `extractHybridCodeSignals`, `extractAstCodeSignals`
+- 검증:
+  - code 영역 회귀 테스트 255건 통과
+  - `@archi-navi/inference` unit test 543건 통과

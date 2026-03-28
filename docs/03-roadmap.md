@@ -1,6 +1,6 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22 | 최종 갱신: 2026-03-27
+> 작성일: 2026-02-22 | 최종 갱신: 2026-03-28
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
 > 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
@@ -18,7 +18,7 @@
 
 ---
 
-## 현재 상태 요약 (2026-03-27)
+## 현재 상태 요약 (2026-03-28)
 
 | 구간 | 상태 | 비고 |
 |------|------|------|
@@ -28,7 +28,7 @@
 | P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
 | P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation, 4-3 LLM 추론 부스터 구현 완료. 4-4~4-6은 후속 범위 |
+| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation, 4-3 LLM 추론 부스터, 4-4 프레임워크 플러그인 시스템 구현 완료. 4-5~4-6은 후속 범위 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
@@ -316,7 +316,7 @@
   - Discovery 도메인 객체 `metadata.llmLabel` 에 한국어/영어 쌍 저장
   - LLM 미설정/실패 시 기존 추론 결과 유지(graceful degradation)
 
-### 📋 4-4. 프레임워크 플러그인 시스템
+### ✅ 4-4. 프레임워크 플러그인 시스템
 - **SPEC:** `docs/spec/20-framework-plugin-system-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §5
 - **핵심:**
@@ -324,6 +324,11 @@
   - PluginRegistry (등록, 자동 감지, 조회)
   - 기존 하드코딩 패턴을 빌트인 플러그인으로 마이그레이션
   - 프로젝트별 자동 플러그인 선택
+- **구현 완료:**
+  - `packages/inference/src/code/plugins/`에 plugin type/registry/runtime 추가
+  - `spring-boot`, `java-common`, `express`, `nestjs`, `typescript-common`, `fastapi`, `flask`, `python-common` built-in plugin 등록
+  - `extractCodeSignals` / `extractHybridCodeSignals` / `extractAstCodeSignals`가 파일별 플러그인 선택 기반으로 동작하도록 전환
+  - manifest 기반 detector + 언어별 fallback + registry 확장 테스트 추가
 - **기대 효과:**
   - gRPC, GraphQL, tRPC, Quarkus 등 새 프레임워크 지원 용이
   - 오픈소스 커뮤니티 기여 진입 장벽 대폭 감소
