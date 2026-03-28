@@ -21,9 +21,10 @@ import { generateId } from '@archi-navi/shared';
 import { and, eq, inArray, or } from 'drizzle-orm';
 import {
     asRecord,
-    getRawCandidateConfidence,
+    getBaseCandidateConfidence,
     stripCrossValidationMetadata,
 } from './utils';
+import { saveRelationCandidate } from './candidateStore';
 
 export interface ConfigCodeBindingOptions {
     workspaceId: string;
@@ -193,7 +194,7 @@ export async function bindConfigToCodeEndpoints(
         // 원본 후보의 evidence 조회
         const evidenceIds = configEvidenceIdsByCandidateId.get(candidate.id) ?? [];
         const baseMeta = stripCrossValidationMetadata((candidate.metadata ?? {}) as Record<string, unknown>);
-        const rawCandidateConfidence = getRawCandidateConfidence(candidate.confidence ?? 0.7, candidate.metadata);
+        const rawCandidateConfidence = getBaseCandidateConfidence(candidate.confidence ?? 0.7, candidate.metadata);
 
         for (const endpoint of endpoints) {
             const existingRelation = await db
@@ -212,59 +213,35 @@ export async function bindConfigToCodeEndpoints(
 
             if (existingRelation.length > 0) continue;
 
-            // 이미 동일 후보가 있는지 확인
-            const existing = await db
-                .select({ id: relationCandidates.id })
-                .from(relationCandidates)
-                .where(
-                    and(
-                        eq(relationCandidates.workspaceId, workspaceId),
-                        eq(relationCandidates.relationType, 'call'),
-                        eq(relationCandidates.subjectObjectId, candidate.subjectObjectId),
-                        eq(relationCandidates.objectId, endpoint.id),
-                        or(
-                            eq(relationCandidates.status, 'PENDING'),
-                            eq(relationCandidates.status, 'APPROVED'),
-                        ),
-                    ),
-                )
-                .limit(1);
-
-            if (existing.length > 0) continue;
-
             // endpoint 레벨 후보 생성 (confidence 할인: 원본 * 0.85, 최소 0.5)
             const endpointConfidence = Math.max(
                 rawCandidateConfidence * 0.85,
                 0.5,
             );
-
-            const candidateId = generateId();
-            await db.insert(relationCandidates).values({
-                id: candidateId,
-                workspaceId,
-                relationType: 'call',
-                subjectObjectId: candidate.subjectObjectId,
-                objectId: endpoint.id,
-                confidence: endpointConfidence,
-                metadata: {
-                    ...baseMeta,
-                    crossBound: true,
-                    originalCandidateId: candidate.id,
-                    targetType: 'api_endpoint',
-                    targetServiceId,
-                },
-                status: 'PENDING',
-            });
-
-            // evidence 링크 복사
+            let created = false;
             for (const evidenceId of evidenceIds) {
-                await db
-                    .insert(relationCandidateEvidences)
-                    .values({ workspaceId, candidateId, evidenceId })
-                    .onConflictDoNothing();
+                const saved = await saveRelationCandidate(
+                    db,
+                    {
+                        workspaceId,
+                        relationType: 'call',
+                        subjectObjectId: candidate.subjectObjectId,
+                        objectId: endpoint.id,
+                        confidence: endpointConfidence,
+                        metadata: {
+                            ...baseMeta,
+                            crossBound: true,
+                            originalCandidateId: candidate.id,
+                            targetType: 'api_endpoint',
+                            targetServiceId,
+                        },
+                    },
+                    evidenceId,
+                );
+                created = created || saved.created;
             }
 
-            createdEndpointCandidateCount += 1;
+            createdEndpointCandidateCount += Number(created);
         }
     }
 

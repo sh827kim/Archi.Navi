@@ -27,9 +27,11 @@ export async function PATCH(
     const [candidate] = await db
       .select({
         workspaceId: relationCandidates.workspaceId,
+        status: relationCandidates.status,
         relationType: relationCandidates.relationType,
         subjectObjectId: relationCandidates.subjectObjectId,
         objectId: relationCandidates.objectId,
+        metadata: relationCandidates.metadata,
       })
       .from(relationCandidates)
       .where(eq(relationCandidates.id, id))

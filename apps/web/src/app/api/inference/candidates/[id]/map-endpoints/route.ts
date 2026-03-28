@@ -3,8 +3,15 @@
  * 사용자가 선택한 엔드포인트에 대해 개별 relation을 생성하고 원본 후보를 처리 완료
  */
 import { type NextRequest, NextResponse } from 'next/server';
-import { getDb, objects, relationCandidates, objectRelations, relationCandidateEvidences, relationEvidences } from '@archi-navi/db';
-import { eq, and, or } from 'drizzle-orm';
+import {
+  getDb,
+  objects,
+  relationCandidates,
+  objectRelations,
+  relationCandidateEvidences,
+  relationEvidences,
+} from '@archi-navi/db';
+import { and, eq, or } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
 import { approveRelationCandidate } from '@archi-navi/inference';
 import { applyRollupChanges, createRelationChangeEvent } from '@/lib/rollup-change-events';
@@ -71,6 +78,7 @@ export async function POST(
       .where(eq(relationCandidateEvidences.candidateId, id));
 
     const createdRelations: Array<{ endpointId: string; relationId: string }> = [];
+    const rollupChangedEndpointIds = new Set<string>();
     let createdRelationCount = 0;
 
     // 선택된 각 엔드포인트에 대해 relation 생성
@@ -91,7 +99,13 @@ export async function POST(
       if (!endpoint || endpoint.parentId !== candidate.objectId) continue;
 
       const [existingCandidate] = await db
-        .select({ id: relationCandidates.id, status: relationCandidates.status })
+        .select({
+          id: relationCandidates.id,
+          status: relationCandidates.status,
+          workspaceId: relationCandidates.workspaceId,
+          relationType: relationCandidates.relationType,
+          metadata: relationCandidates.metadata,
+        })
         .from(relationCandidates)
         .where(
           and(
@@ -113,6 +127,7 @@ export async function POST(
         if (existingCandidate.status === 'PENDING') {
           const approved = await approveRelationCandidate(db, existingCandidate.id, 'APPROVED');
           relationId = approved.relationId;
+          rollupChangedEndpointIds.add(endpointId);
         } else {
           const [existingApprovedRelation] = await db
             .select({ id: objectRelations.id })
@@ -132,6 +147,7 @@ export async function POST(
           if (!relationId) {
             const approved = await approveRelationCandidate(db, existingCandidate.id, 'APPROVED');
             relationId = approved.relationId;
+            rollupChangedEndpointIds.add(endpointId);
           }
         }
 
@@ -188,6 +204,7 @@ export async function POST(
 
       createdRelations.push({ endpointId, relationId });
       createdRelationCount += 1;
+      rollupChangedEndpointIds.add(endpointId);
     }
 
     const resolvedRelationCount = createdRelations.length;
@@ -226,11 +243,11 @@ export async function POST(
     }
 
     // 롤업 변경 적용
-    const rollupEvents = createdRelations.map((r) =>
+    const rollupEvents = [...rollupChangedEndpointIds].map((endpointId) =>
       createRelationChangeEvent('APPROVED', {
         relationType: candidate.relationType,
         subjectObjectId: candidate.subjectObjectId,
-        objectId: r.endpointId,
+        objectId: endpointId,
       }),
     );
     if (rollupEvents.length > 0) {

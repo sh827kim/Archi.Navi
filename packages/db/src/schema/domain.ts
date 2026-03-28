@@ -83,6 +83,12 @@ export const domainInferenceProfiles = pgTable(
     resolution: real('resolution'),
 
     enabledLayers: jsonb('enabled_layers').default(['call', 'db', 'msg', 'code']),
+    feedbackConfig: jsonb('feedback_config').default({
+      enabled: true,
+      minSamples: 10,
+      maxAdjustment: 0.15,
+    }),
+    feedbackAdjustments: jsonb('feedback_adjustments').default({}),
     crossValidation: jsonb('cross_validation').default({
       enabled: true,
       boostFactor: 0.3,

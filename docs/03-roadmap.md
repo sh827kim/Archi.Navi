@@ -28,7 +28,7 @@
 | P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
 | P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | ⚠️ In Progress | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation, 4-3 LLM 추론 부스터, 4-4 프레임워크 플러그인 시스템 구현 완료. 4-5~4-6은 후속 범위 |
+| P4 (4-1 ~ 4-6) | ✅ 완료 | 4-1 Inter-procedural AST, 4-2 Cross-Signal Validation, 4-3 LLM 추론 부스터, 4-4 프레임워크 플러그인 시스템, 4-5 Delta Rollup + 실시간 갱신, 4-6 relation-only feedback loop 구현 완료. domain candidate, approval hint, per-key detail table은 후속 범위 |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
 
 ---
@@ -333,26 +333,34 @@
   - gRPC, GraphQL, tRPC, Quarkus 등 새 프레임워크 지원 용이
   - 오픈소스 커뮤니티 기여 진입 장벽 대폭 감소
 
-### 📋 4-5. Delta Rollup + 실시간 그래프 갱신
+### ✅ 4-5. Delta Rollup + 실시간 그래프 갱신
 - **SPEC:** `docs/spec/21-realtime-rollup-spec.md`
-- **핵심:**
-  - 관계 승인/삭제 시 해당 rollup 엣지만 delta update (full rebuild 없이)
-  - WebSocket으로 프론트엔드에 그래프 변경 push
-  - 일괄 승인 시 배치 delta 처리
-- **기대 효과:**
-  - 대규모 코드베이스에서 수백 건 일괄 승인 시 성능 향상
-  - 실시간 시각적 피드백
+- **구현 완료 범위:**
+  - 관계 후보 승인, 수동 relation 추가, 승인된 base relation 삭제가 `incrementalRebuild` 기반 delta rollup으로 처리된다.
+  - `map-endpoints`는 여러 relation change event를 모아 batch delta로 처리한다.
+  - 실시간 반영 계약은 WebSocket이 아니라 `SSE(EventSource) + client refetch + failure 시 polling fallback`이다.
+  - 서버는 edge delta payload를 push하지 않고 `rollup-change` notification만 발행한다.
+- **검증 근거:**
+  - T4 기록 측정값(10건 기준): sequential avg `0.694ms`, batch avg `0.138ms`, improvement `80.06%`
+  - batch와 sequential 최종 상태 동일성 검증 포함
+  - approval/addition/delete parity 테스트와 endpoint batch mapping 테스트 보강
+- **남은 리스크:**
+  - 현재 실시간 갱신은 refetch 기반이라 대형 그래프에서는 재조회 비용이 후속 최적화 포인트다.
 
-### 📋 4-6. 추론 피드백 루프
+### ✅ 4-6. 추론 피드백 루프
 - **SPEC:** `docs/spec/22-inference-feedback-loop-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §6
-- **핵심:**
-  - 승인/거절 패턴을 시그널 유형별로 집계
-  - 기본 신뢰도 자동 보정 (최소 10건 이상 축적 시)
-  - domain_inference_profiles에 피드백 데이터 저장
-- **기대 효과:**
-  - 사용할수록 노이즈 감소 (반복 거절 패턴 학습)
-  - 워크스페이스별 맞춤 신뢰도 프로필 자동 형성
+- **구현 완료 범위:**
+  - relation candidate 승인/거절을 `relationType:sourceFamily:signalKind` canonical key 기준으로 집계
+  - 누적 결과를 기존 후보에 소급하지 않고 다음 inference run부터만 base confidence 보정에 반영
+  - `domain_inference_profiles`의 `feedbackConfig`/`feedbackAdjustments` 저장, Settings summary, `reset-all` 액션 연결
+  - quick run과 queued run이 동일한 feedback 보정 규칙을 적용하도록 parity 테스트 반영
+- **후속 범위:**
+  - domain candidate 집계/보정
+  - Approval hint 노출
+  - per-key detail table
+- **남은 리스크:**
+  - feedback key 차원이 `relationType:sourceFamily:signalKind`로 고정되어 있어 framework/language별 세분화 보정은 후속 확장 범위다.
 
 ---
 

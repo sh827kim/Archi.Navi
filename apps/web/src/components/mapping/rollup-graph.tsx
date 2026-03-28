@@ -1,8 +1,9 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { subscribeToRollupEvents } from '@/lib/rollup-event-source';
 import {
   RollupGraph3D,
   type RollupGraph3DLink,
@@ -215,6 +216,12 @@ function parseHubThreshold(value: string | null): number {
 
 export function RollupGraph() {
   const { workspaceId } = useWorkspace();
+  const buildGraphRef = useRef<((level: ViewLevel, expanded: Set<string>) => Promise<void>) | null>(
+    null,
+  );
+  const buildGraphRequestIdRef = useRef(0);
+  const viewLevelRef = useRef<ViewLevel>('DOMAIN_TO_DOMAIN');
+  const expandedSetRef = useRef<Set<string>>(new Set());
 
   const [loading, setLoading] = useState(true);
   const [isEmpty, setIsEmpty] = useState(false);
@@ -256,6 +263,14 @@ export function RollupGraph() {
     setContributorLoadingMore(false);
     setUnusedAtomicItems([]);
   }, [workspaceId]);
+
+  useEffect(() => {
+    viewLevelRef.current = viewLevel;
+  }, [viewLevel]);
+
+  useEffect(() => {
+    expandedSetRef.current = expandedSet;
+  }, [expandedSet]);
 
   useEffect(() => {
     try {
@@ -473,6 +488,9 @@ export function RollupGraph() {
 
   const buildGraph = useCallback(
     async (level: ViewLevel, expanded: Set<string>) => {
+      const requestId = buildGraphRequestIdRef.current + 1;
+      buildGraphRequestIdRef.current = requestId;
+
       setLoading(true);
       setIsEmpty(false);
 
@@ -484,6 +502,7 @@ export function RollupGraph() {
           allGraphStats,
           allDomainAffinities,
         } = await fetchData(expanded.size > 0 || level === 'UNUSED_ATOMIC');
+        if (buildGraphRequestIdRef.current !== requestId) return;
 
         const domainObjects = allObjects.filter((o) => o.objectType === 'domain' && o.depth === 0);
         const domainIdSet = new Set(domainObjects.map((domain) => domain.id));
@@ -745,10 +764,10 @@ export function RollupGraph() {
           const stat = graphStatMap.get(obj.id);
           return {
             id: obj.id,
-          label: obj.displayName ?? obj.name,
-          objectType: obj.objectType,
-          color: NODE_COLORS[obj.objectType] ?? NODE_COLORS.default ?? '#94a3b8',
-          radius: isCompound ? 22 : isChild ? 12 : 16,
+            label: obj.displayName ?? obj.name,
+            objectType: obj.objectType,
+            color: NODE_COLORS[obj.objectType] ?? NODE_COLORS.default ?? '#94a3b8',
+            radius: isCompound ? 22 : isChild ? 12 : 16,
             isHub: hubNodeIds.has(obj.id),
             inDegree: stat?.inDegree ?? 0,
             outDegree: stat?.outDegree ?? 0,
@@ -813,11 +832,13 @@ export function RollupGraph() {
 
         setGraph3DData({ nodes: graph3DNodes, links: graph3DLinks });
       } catch (err) {
+        if (buildGraphRequestIdRef.current !== requestId) return;
         console.error('[RollupGraph] 로드 실패:', err);
         setIsEmpty(true);
         setGraph3DData({ nodes: [], links: [] });
         setUnusedAtomicItems([]);
       } finally {
+        if (buildGraphRequestIdRef.current !== requestId) return;
         setLoading(false);
       }
     },
@@ -825,8 +846,29 @@ export function RollupGraph() {
   );
 
   useEffect(() => {
+    buildGraphRef.current = buildGraph;
+  }, [buildGraph]);
+
+  useEffect(() => {
     void buildGraph(viewLevel, expandedSet);
   }, [viewLevel, expandedSet, buildGraph]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+
+    const subscription = subscribeToRollupEvents({
+      workspaceId,
+      onRollupChange: () => {
+        const currentBuildGraph = buildGraphRef.current;
+        if (!currentBuildGraph) return;
+        void currentBuildGraph(viewLevelRef.current, new Set(expandedSetRef.current));
+      },
+    });
+
+    return () => {
+      subscription.close();
+    };
+  }, [workspaceId]);
 
   const handleLevelChange = (level: ViewLevel) => {
     setSelectedContributorLink(null);
