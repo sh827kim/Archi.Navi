@@ -78,4 +78,36 @@ describe('GET /api/rollup-events', () => {
 
     await reader!.cancel();
   });
+
+  it('초기 커서가 없으면 첫 번째 커서 생성 시 rollup-change를 스트리밍해야 한다', async () => {
+    getWorkspaceRollupChangeCursorMock
+      .mockResolvedValueOnce(null)
+      .mockResolvedValue({
+        workspaceId: 'ws-1',
+        generationVersion: 4,
+        builtAt: '2026-03-28T00:00:02.000Z',
+        changeToken: 'token-1',
+      });
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/rollup-events?workspaceId=ws-1'),
+    );
+
+    const reader = response.body?.getReader();
+    expect(reader).toBeDefined();
+
+    const connectedChunk = await reader!.read();
+    const connectedText = decoder.decode(connectedChunk.value);
+    expect(connectedText).toContain('event: connected');
+
+    await vi.advanceTimersByTimeAsync(1_000);
+
+    const changedChunk = await reader!.read();
+    const changedText = decoder.decode(changedChunk.value);
+    expect(changedText).toContain('event: rollup-change');
+    expect(changedText).toContain('"changeToken":"token-1"');
+    expect(changedText).toContain('"generationVersion":4');
+
+    await reader!.cancel();
+  });
 });

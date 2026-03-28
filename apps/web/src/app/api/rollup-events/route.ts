@@ -26,7 +26,8 @@ export async function GET(req: NextRequest) {
       let closed = false;
       let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
       let pollTimer: ReturnType<typeof setInterval> | undefined;
-      let lastCursorToken: string | null = null;
+      let lastCursorToken: string | undefined;
+      let hasSeenMissingInitialCursor = false;
 
       const close = () => {
         if (closed) return;
@@ -51,10 +52,20 @@ export async function GET(req: NextRequest) {
 
       const syncCursor = async () => {
         const cursor = await getWorkspaceRollupChangeCursor(db, workspaceId);
-        if (!cursor || closed) return;
+        if (closed) return;
 
-        if (lastCursorToken === null) {
+        if (!cursor) {
+          if (lastCursorToken === undefined) {
+            hasSeenMissingInitialCursor = true;
+          }
+          return;
+        }
+
+        if (lastCursorToken === undefined) {
           lastCursorToken = cursor.changeToken;
+          if (hasSeenMissingInitialCursor) {
+            sendRollupChanged(cursor);
+          }
           return;
         }
 
