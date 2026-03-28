@@ -126,7 +126,15 @@ describe('inference profile default route', () => {
       ...createProfileRow(),
       crossValidation: current.crossValidation,
       feedbackConfig: current.feedbackConfig,
-      feedbackAdjustments: current.feedbackAdjustments,
+      feedbackAdjustments: {
+        'CALL:code:call': {
+          approved: 9,
+          rejected: 2,
+          total: 11,
+          approvalRate: 0.8181818181,
+          adjustment: 0.06,
+        },
+      },
     };
 
     const selectMock = vi
@@ -158,7 +166,11 @@ describe('inference profile default route', () => {
       .mockResolvedValueOnce({
         rows: [{
           cross_validation: updated.crossValidation,
-          feedback_config: updated.feedbackConfig,
+          feedback_config: {
+            enabled: false,
+            minSamples: 5,
+            maxAdjustment: 0.2,
+          },
           feedback_adjustments: updated.feedbackAdjustments,
         }],
       });
@@ -205,6 +217,9 @@ describe('inference profile default route', () => {
       }),
     ]));
     expect(transactionExecuteMock).toHaveBeenCalledTimes(2);
+    const feedbackConfigQuery = transactionExecuteMock.mock.calls[1]?.[0] as { strings: string[] };
+    expect(feedbackConfigQuery.strings.join('')).toContain('set feedback_config = ');
+    expect(feedbackConfigQuery.strings.join('')).not.toContain('feedback_adjustments =');
     const payload = await response.json();
     expect(payload).toMatchObject({
       feedbackConfig: {
@@ -216,8 +231,8 @@ describe('inference profile default route', () => {
         totalKeys: 1,
         eligibleKeys: 1,
         approvedCount: 9,
-        rejectedCount: 1,
-        totalSamples: 10,
+        rejectedCount: 2,
+        totalSamples: 11,
       },
     });
     expect(payload.feedbackSummary).not.toHaveProperty('entries');
@@ -274,8 +289,12 @@ describe('inference profile default route', () => {
       .mockResolvedValueOnce({
         rows: [{
           cross_validation: current.crossValidation,
-          feedback_config: current.feedbackConfig,
-          feedback_adjustments: current.feedbackAdjustments,
+          feedback_config: {
+            enabled: true,
+            minSamples: 10,
+            maxAdjustment: 0.15,
+          },
+          feedback_adjustments: {},
         }],
       });
     const db = {

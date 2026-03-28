@@ -422,10 +422,6 @@ export async function PUT(req: NextRequest) {
             ? clamp(feedbackConfigInput.maxAdjustment, 0, 1)
             : currentFeedbackConfig.maxAdjustment,
         };
-    const feedbackAdjustments = resetAll
-      ? {}
-      : asFeedbackAdjustments(current.feedbackAdjustments, feedbackConfig);
-
     await db.transaction(async (tx) => {
       await tx
         .update(domainInferenceProfiles)
@@ -457,24 +453,27 @@ export async function PUT(req: NextRequest) {
       `);
 
       try {
-        await tx.execute(sql`
-          update domain_inference_profiles
-          set feedback_config = ${JSON.stringify(feedbackConfig)}::jsonb,
-              feedback_adjustments = ${JSON.stringify(feedbackAdjustments)}::jsonb
-          where id = ${current.id}
-        `);
+        if (resetAll) {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set feedback_config = ${JSON.stringify(feedbackConfig)}::jsonb,
+                feedback_adjustments = '{}'::jsonb
+            where id = ${current.id}
+          `);
+        } else {
+          await tx.execute(sql`
+            update domain_inference_profiles
+            set feedback_config = ${JSON.stringify(feedbackConfig)}::jsonb
+            where id = ${current.id}
+          `);
+        }
       } catch {
         // feedback 컬럼 마이그레이션이 아직 적용되지 않은 환경에서는 no-op 처리한다.
       }
     });
 
     const updated = await ensureDefaultProfile(workspaceId);
-    return NextResponse.json(toPublicProfile({
-      ...updated,
-      crossValidation,
-      feedbackConfig,
-      feedbackAdjustments,
-    }));
+    return NextResponse.json(toPublicProfile(updated));
   } catch (error) {
     console.error('[PUT /api/inference/profiles/default]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
