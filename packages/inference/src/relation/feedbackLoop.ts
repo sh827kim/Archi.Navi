@@ -257,12 +257,76 @@ async function loadWorkspaceFeedbackState(
 async function ensureDefaultWorkspaceProfile(
   db: FeedbackDbClient,
   workspaceId: string,
-): Promise<{ id: string; feedbackConfig: unknown; feedbackAdjustments: unknown }> {
-  const [existingDefault] = await db
+): Promise<{
+  id: string;
+  feedbackConfig: unknown;
+  feedbackAdjustments: unknown;
+  supportsFeedbackColumns: boolean;
+}> {
+  try {
+    const [existingDefault] = await db
+      .select({
+        id: domainInferenceProfiles.id,
+        feedbackConfig: domainInferenceProfiles.feedbackConfig,
+        feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
+      })
+      .from(domainInferenceProfiles)
+      .where(
+        and(
+          eq(domainInferenceProfiles.workspaceId, workspaceId),
+          eq(domainInferenceProfiles.isDefault, true),
+        ),
+      )
+      .limit(1);
+    if (existingDefault) return { ...existingDefault, supportsFeedbackColumns: true };
+
+    const [existingAny] = await db
+      .select({
+        id: domainInferenceProfiles.id,
+        feedbackConfig: domainInferenceProfiles.feedbackConfig,
+        feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
+      })
+      .from(domainInferenceProfiles)
+      .where(eq(domainInferenceProfiles.workspaceId, workspaceId))
+      .limit(1);
+    if (existingAny) {
+      await db
+        .update(domainInferenceProfiles)
+        .set({ isDefault: true, updatedAt: new Date() })
+        .where(eq(domainInferenceProfiles.id, existingAny.id));
+      return { ...existingAny, supportsFeedbackColumns: true };
+    }
+
+    const [created] = await db
+      .insert(domainInferenceProfiles)
+      .values({
+        workspaceId,
+        name: 'default',
+        kind: 'NAMED',
+        isDefault: true,
+        feedbackConfig: DEFAULT_RELATION_FEEDBACK_CONFIG,
+        feedbackAdjustments: {},
+      })
+      .returning({
+        id: domainInferenceProfiles.id,
+        feedbackConfig: domainInferenceProfiles.feedbackConfig,
+        feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
+      });
+
+    if (!created) {
+      throw new Error('default inference profile not found');
+    }
+
+    return { ...created, supportsFeedbackColumns: true };
+  } catch (error) {
+    if (!isMissingFeedbackColumnError(error)) {
+      throw error;
+    }
+  }
+
+  const [legacyDefault] = await db
     .select({
       id: domainInferenceProfiles.id,
-      feedbackConfig: domainInferenceProfiles.feedbackConfig,
-      feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
     })
     .from(domainInferenceProfiles)
     .where(
@@ -272,46 +336,57 @@ async function ensureDefaultWorkspaceProfile(
       ),
     )
     .limit(1);
-  if (existingDefault) return existingDefault;
+  if (legacyDefault) {
+    return {
+      ...legacyDefault,
+      feedbackConfig: DEFAULT_RELATION_FEEDBACK_CONFIG,
+      feedbackAdjustments: {},
+      supportsFeedbackColumns: false,
+    };
+  }
 
-  const [existingAny] = await db
+  const [legacyAny] = await db
     .select({
       id: domainInferenceProfiles.id,
-      feedbackConfig: domainInferenceProfiles.feedbackConfig,
-      feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
     })
     .from(domainInferenceProfiles)
     .where(eq(domainInferenceProfiles.workspaceId, workspaceId))
     .limit(1);
-  if (existingAny) {
+  if (legacyAny) {
     await db
       .update(domainInferenceProfiles)
       .set({ isDefault: true, updatedAt: new Date() })
-      .where(eq(domainInferenceProfiles.id, existingAny.id));
-    return existingAny;
+      .where(eq(domainInferenceProfiles.id, legacyAny.id));
+    return {
+      ...legacyAny,
+      feedbackConfig: DEFAULT_RELATION_FEEDBACK_CONFIG,
+      feedbackAdjustments: {},
+      supportsFeedbackColumns: false,
+    };
   }
 
-  const [created] = await db
+  const [createdLegacy] = await db
     .insert(domainInferenceProfiles)
     .values({
       workspaceId,
       name: 'default',
       kind: 'NAMED',
       isDefault: true,
-      feedbackConfig: DEFAULT_RELATION_FEEDBACK_CONFIG,
-      feedbackAdjustments: {},
     })
     .returning({
       id: domainInferenceProfiles.id,
-      feedbackConfig: domainInferenceProfiles.feedbackConfig,
-      feedbackAdjustments: domainInferenceProfiles.feedbackAdjustments,
     });
 
-  if (!created) {
+  if (!createdLegacy) {
     throw new Error('default inference profile not found');
   }
 
-  return created;
+  return {
+    ...createdLegacy,
+    feedbackConfig: DEFAULT_RELATION_FEEDBACK_CONFIG,
+    feedbackAdjustments: {},
+    supportsFeedbackColumns: false,
+  };
 }
 
 export async function applyFeedbackToRelationCandidateInput(
@@ -354,6 +429,9 @@ export async function accumulateRelationCandidateFeedback(
   action: 'APPROVED' | 'REJECTED',
 ): Promise<RelationFeedbackStats | null> {
   const profile = await ensureDefaultWorkspaceProfile(db, candidate.workspaceId);
+  if (!profile.supportsFeedbackColumns) {
+    return null;
+  }
   const config = normalizeRelationFeedbackConfig(profile.feedbackConfig);
   const adjustments = normalizeRelationFeedbackAdjustments(profile.feedbackAdjustments, config);
   const descriptor = deriveRelationFeedbackDescriptor({
@@ -377,16 +455,23 @@ export async function accumulateRelationCandidateFeedback(
   next.approvalRate = round4(next.total > 0 ? next.approved / next.total : 0);
   next.adjustment = computeRelationFeedbackAdjustment(next, config);
 
-  await db
-    .update(domainInferenceProfiles)
-    .set({
-      feedbackAdjustments: {
-        ...adjustments,
-        [descriptor.key]: next,
-      },
-      updatedAt: new Date(),
-    })
-    .where(eq(domainInferenceProfiles.id, profile.id));
+  try {
+    await db
+      .update(domainInferenceProfiles)
+      .set({
+        feedbackAdjustments: {
+          ...adjustments,
+          [descriptor.key]: next,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(domainInferenceProfiles.id, profile.id));
+  } catch (error) {
+    if (isMissingFeedbackColumnError(error)) {
+      return null;
+    }
+    throw error;
+  }
 
   return next;
 }
