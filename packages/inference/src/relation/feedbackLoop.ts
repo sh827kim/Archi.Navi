@@ -422,9 +422,11 @@ export async function applyFeedbackToRelationCandidateInput(
     metadata: baseMetadata,
   });
   const feedbackState = await loadWorkspaceFeedbackState(db, input.workspaceId);
-  const stats = descriptor.lookupKeys
+  const lookupStats = descriptor.lookupKeys
     .map((key) => feedbackState.adjustments[key])
-    .find((bucket) => bucket);
+    .filter((bucket): bucket is RelationFeedbackStats => Boolean(bucket));
+  const stats = lookupStats.find((bucket) => bucket.total >= feedbackState.config.minSamples)
+    ?? lookupStats[0];
   const adjustment = computeRelationFeedbackAdjustment(stats, feedbackState.config);
   const adjustedConfidence = round4(clamp(input.confidence + adjustment, 0.1, 0.99));
   const feedback: RelationFeedbackMetadata = {
