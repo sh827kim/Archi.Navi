@@ -11,9 +11,12 @@ interface PropertyFileEntry {
   filePath: string;
   dirPath: string;
   scopePath: string;
+  sourceSet: PropertySourceSet;
   priority: number;
   properties: AstPropertyMap;
 }
+
+type PropertySourceSet = 'main' | 'test' | 'unknown';
 
 export interface AstPropertyResolver {
   hasEntries: boolean;
@@ -101,6 +104,42 @@ function inferPropertyScopePath(dirPath: string): string {
   return dirPath;
 }
 
+function inferPropertySourceSet(dirPath: string): PropertySourceSet {
+  const segments = splitPathSegments(dirPath);
+  for (let index = 0; index <= segments.length - 3; index += 1) {
+    const isSourceSetResourceDir =
+      segments[index] === 'src' &&
+      (segments[index + 1] === 'main' || segments[index + 1] === 'test') &&
+      segments[index + 2] === 'resources';
+    if (isSourceSetResourceDir) {
+      return segments[index + 1] as PropertySourceSet;
+    }
+  }
+  return 'unknown';
+}
+
+function inferTargetSourceSet(filePath: string): PropertySourceSet {
+  const segments = splitPathSegments(filePath);
+  for (let index = 0; index <= segments.length - 2; index += 1) {
+    const isSourceSetPath =
+      segments[index] === 'src' && (segments[index + 1] === 'main' || segments[index + 1] === 'test');
+    if (isSourceSetPath) {
+      return segments[index + 1] as PropertySourceSet;
+    }
+  }
+  return 'unknown';
+}
+
+function shouldIncludePropertyEntry(
+  entrySourceSet: PropertySourceSet,
+  targetSourceSet: PropertySourceSet,
+): boolean {
+  if (entrySourceSet === 'unknown' || targetSourceSet === 'unknown') return true;
+  if (targetSourceSet === 'main') return entrySourceSet === 'main';
+  if (targetSourceSet === 'test') return entrySourceSet === 'main' || entrySourceSet === 'test';
+  return true;
+}
+
 function propertyFilePriority(filePath: string): number {
   const baseName = normalizePath(filePath).split('/').pop()?.toLowerCase() ?? '';
   return /^(?:application|bootstrap)-/.test(baseName) ? 1 : 0;
@@ -147,6 +186,7 @@ export function buildAstPropertyResolver(repoRoot: string): AstPropertyResolver 
         filePath: normalizePath(filePath),
         dirPath: normalizePath(dirname(filePath)),
         scopePath: inferPropertyScopePath(dirname(filePath)),
+        sourceSet: inferPropertySourceSet(dirname(filePath)),
         priority: propertyFilePriority(filePath),
         properties,
       } satisfies PropertyFileEntry;
@@ -157,9 +197,11 @@ export function buildAstPropertyResolver(repoRoot: string): AstPropertyResolver 
     hasEntries: entries.length > 0,
     resolveForFile(filePath: string): AstPropertyMap {
       const normalizedFilePath = normalizePath(filePath);
+      const targetSourceSet = inferTargetSourceSet(normalizedFilePath);
       let bestDepth = 0;
 
       for (const entry of entries) {
+        if (!shouldIncludePropertyEntry(entry.sourceSet, targetSourceSet)) continue;
         if (!isAncestorDirectory(entry.scopePath, normalizedFilePath)) continue;
         const depth = splitPathSegments(entry.scopePath).length;
         if (depth > bestDepth) {
@@ -172,6 +214,7 @@ export function buildAstPropertyResolver(repoRoot: string): AstPropertyResolver 
       return mergePropertyMaps(
         entries.filter(
           (entry) =>
+            shouldIncludePropertyEntry(entry.sourceSet, targetSourceSet) &&
             isAncestorDirectory(entry.scopePath, normalizedFilePath) &&
             splitPathSegments(entry.scopePath).length === bestDepth,
         ),

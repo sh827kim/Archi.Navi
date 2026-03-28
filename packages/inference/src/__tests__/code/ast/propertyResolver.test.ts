@@ -87,4 +87,40 @@ client:
     expect(propertyMap.size).toBe(0);
     expect(propertyMap.get('client.endpoint')).toBeUndefined();
   });
+
+  it('src/main 파일 해석 시 src/test/resources 설정이 섞여 override 되지 않아야 한다', () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const resourceRoot = join(repoRoot, 'services', 'order', 'src');
+    const mainResourceDir = join(resourceRoot, 'main', 'resources');
+    const testResourceDir = join(resourceRoot, 'test', 'resources');
+    mkdirSync(mainResourceDir, { recursive: true });
+    mkdirSync(testResourceDir, { recursive: true });
+
+    writeFileSync(
+      join(mainResourceDir, 'application.yml'),
+      `client:
+  endpoint: http://main.internal
+`,
+    );
+    writeFileSync(
+      join(testResourceDir, 'application-test.yml'),
+      `client:
+  endpoint: http://test.internal
+`,
+    );
+
+    const resolver = buildAstPropertyResolver(repoRoot);
+
+    const mainPropertyMap = resolver.resolveForFile(
+      join(repoRoot, 'services', 'order', 'src', 'main', 'java', 'OrderClient.java'),
+    );
+    const testPropertyMap = resolver.resolveForFile(
+      join(repoRoot, 'services', 'order', 'src', 'test', 'java', 'OrderClientTest.java'),
+    );
+
+    expect(mainPropertyMap.get('client.endpoint')).toBe('http://main.internal');
+    expect(testPropertyMap.get('client.endpoint')).toBe('http://test.internal');
+  });
 });
