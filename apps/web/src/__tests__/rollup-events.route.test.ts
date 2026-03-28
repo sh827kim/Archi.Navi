@@ -39,7 +39,7 @@ describe('GET /api/rollup-events', () => {
     await expect(response.json()).resolves.toEqual({ error: 'workspaceId is required' });
   });
 
-  it('연결 직후 connected 이벤트를 보내고 변경 토큰 갱신 시 rollup-change를 스트리밍해야 한다', async () => {
+  it('연결 직후 connected 이벤트를 보내고 초기/후속 커서 모두 rollup-change로 스트리밍해야 한다', async () => {
     getWorkspaceRollupChangeCursorMock
       .mockResolvedValueOnce({
         workspaceId: 'ws-1',
@@ -67,6 +67,12 @@ describe('GET /api/rollup-events', () => {
     const connectedText = decoder.decode(connectedChunk.value);
     expect(connectedText).toContain('event: connected');
     expect(connectedText).toContain('"workspaceId":"ws-1"');
+
+    const initialChangedChunk = await reader!.read();
+    const initialChangedText = decoder.decode(initialChangedChunk.value);
+    expect(initialChangedText).toContain('event: rollup-change');
+    expect(initialChangedText).toContain('"changeToken":"token-1"');
+    expect(initialChangedText).toContain('"generationVersion":3');
 
     await vi.advanceTimersByTimeAsync(1_000);
 

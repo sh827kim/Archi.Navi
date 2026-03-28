@@ -27,7 +27,6 @@ export async function GET(req: NextRequest) {
       let keepAliveTimer: ReturnType<typeof setInterval> | undefined;
       let pollTimer: ReturnType<typeof setInterval> | undefined;
       let lastCursorToken: string | undefined;
-      let hasSeenMissingInitialCursor = false;
 
       const close = () => {
         if (closed) return;
@@ -55,17 +54,12 @@ export async function GET(req: NextRequest) {
         if (closed) return;
 
         if (!cursor) {
-          if (lastCursorToken === undefined) {
-            hasSeenMissingInitialCursor = true;
-          }
           return;
         }
 
         if (lastCursorToken === undefined) {
           lastCursorToken = cursor.changeToken;
-          if (hasSeenMissingInitialCursor) {
-            sendRollupChanged(cursor);
-          }
+          sendRollupChanged(cursor);
           return;
         }
 
