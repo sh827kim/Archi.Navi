@@ -45,6 +45,26 @@ function createProfileRow() {
   };
 }
 
+function createProfileBaseRow(row: ReturnType<typeof createProfileRow>) {
+  return {
+    id: row.id,
+    workspace_id: row.workspaceId,
+    name: row.name,
+    kind: row.kind,
+    is_default: row.isDefault,
+    w_code: row.wCode,
+    w_db: row.wDb,
+    w_msg: row.wMsg,
+    secondary_threshold: row.secondaryThreshold,
+    min_cluster_size: row.minClusterSize,
+    resolution: row.resolution,
+    edge_w_call: row.edgeWCall,
+    edge_w_rw: row.edgeWRw,
+    edge_w_msg: row.edgeWMsg,
+    enabled_layers: row.enabledLayers,
+  };
+}
+
 function createTransactionDb(
   current: ReturnType<typeof createProfileRow>,
   updated: ReturnType<typeof createProfileRow>,
@@ -63,31 +83,16 @@ function createTransactionDb(
     domain_feedback_adjustments: unknown;
   },
 ) {
-  const selectMock = vi
-    .fn()
-    .mockReturnValueOnce({
-      from: () => ({
-        where: () => ({
-          limit: async () => [current],
-        }),
-      }),
-    })
-    .mockReturnValueOnce({
-      from: () => ({
-        where: () => ({
-          limit: async () => [updated],
-        }),
-      }),
-    });
-
   const executeMock = vi.fn()
+    .mockResolvedValueOnce({ rows: [createProfileBaseRow(current)] })
     .mockResolvedValueOnce({ rows: [currentState] })
+    .mockResolvedValueOnce({ rows: [createProfileBaseRow(updated)] })
     .mockResolvedValueOnce({ rows: [updatedState] });
   const transactionExecuteMock = vi.fn(async () => undefined);
 
   return {
     db: {
-      select: selectMock,
+      select: vi.fn(),
       execute: executeMock,
       transaction: async (callback: (tx: {
         update: (table: unknown) => {
@@ -115,22 +120,18 @@ describe('inference profile default route', () => {
   it('GET은 relation/domain feedback 설정이 없을 때 분리된 기본값과 빈 summary를 반환해야 한다', async () => {
     const row = createProfileRow();
     const db = {
-      select: vi.fn().mockReturnValue({
-        from: () => ({
-          where: () => ({
-            limit: async () => [row],
-          }),
+      select: vi.fn(),
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [createProfileBaseRow(row)] })
+        .mockResolvedValueOnce({
+          rows: [{
+            cross_validation: null,
+            feedback_config: null,
+            feedback_adjustments: null,
+            domain_feedback_config: null,
+            domain_feedback_adjustments: null,
+          }],
         }),
-      }),
-      execute: vi.fn(async () => ({
-        rows: [{
-          cross_validation: null,
-          feedback_config: null,
-          feedback_adjustments: null,
-          domain_feedback_config: null,
-          domain_feedback_adjustments: null,
-        }],
-      })),
     };
     getDbMock.mockResolvedValue(db);
 
@@ -170,33 +171,30 @@ describe('inference profile default route', () => {
     expect(payload).not.toHaveProperty('feedbackSummary');
     expect(payload).not.toHaveProperty('relationFeedbackEntries');
     expect(payload).not.toHaveProperty('domainFeedbackEntries');
+    expect(db.select).not.toHaveBeenCalled();
   });
 
   it('GET은 includeFeedbackEntries=true일 때 relation/domain detail list를 각각 정렬해 반환해야 한다', async () => {
     const row = createProfileRow();
     const db = {
-      select: vi.fn().mockReturnValue({
-        from: () => ({
-          where: () => ({
-            limit: async () => [row],
-          }),
+      select: vi.fn(),
+      execute: vi.fn()
+        .mockResolvedValueOnce({ rows: [createProfileBaseRow(row)] })
+        .mockResolvedValueOnce({
+          rows: [{
+            cross_validation: null,
+            feedback_config: { enabled: true, minSamples: 5, maxAdjustment: 0.15 },
+            feedback_adjustments: {
+              'READ:db:query': { approved: 3, rejected: 9 },
+              'CALL:code:call': { approved: 9, rejected: 3 },
+            },
+            domain_feedback_config: { enabled: true, minSamples: 2, maxAdjustment: 0.2 },
+            domain_feedback_adjustments: {
+              'TRACK_A:domain-b:LOW': { approved: 0, rejected: 2 },
+              'TRACK_A:domain-a:HIGH': { approved: 3, rejected: 1 },
+            },
+          }],
         }),
-      }),
-      execute: vi.fn(async () => ({
-        rows: [{
-          cross_validation: null,
-          feedback_config: { enabled: true, minSamples: 5, maxAdjustment: 0.15 },
-          feedback_adjustments: {
-            'READ:db:query': { approved: 3, rejected: 9 },
-            'CALL:code:call': { approved: 9, rejected: 3 },
-          },
-          domain_feedback_config: { enabled: true, minSamples: 2, maxAdjustment: 0.2 },
-          domain_feedback_adjustments: {
-            'TRACK_A:domain-b:LOW': { approved: 0, rejected: 2 },
-            'TRACK_A:domain-a:HIGH': { approved: 3, rejected: 1 },
-          },
-        }],
-      })),
     };
     getDbMock.mockResolvedValue(db);
 
@@ -249,6 +247,7 @@ describe('inference profile default route', () => {
       },
     ]);
     expect(payload).not.toHaveProperty('feedbackEntries');
+    expect(db.select).not.toHaveBeenCalled();
   });
 
   it('PUT은 relation/domain feedback 설정을 독립적으로 저장하고 summary를 분리해 반환해야 한다', async () => {
@@ -467,6 +466,7 @@ describe('inference profile default route', () => {
   it('GET은 domain feedback 컬럼이 없어도 relation feedback 상태를 유지해야 한다', async () => {
     const row = createProfileRow();
     const execute = vi.fn()
+      .mockResolvedValueOnce({ rows: [createProfileBaseRow(row)] })
       .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
       .mockResolvedValueOnce({
         rows: [{
@@ -478,13 +478,7 @@ describe('inference profile default route', () => {
         }],
       });
     const db = {
-      select: vi.fn().mockReturnValue({
-        from: () => ({
-          where: () => ({
-            limit: async () => [row],
-          }),
-        }),
-      }),
+      select: vi.fn(),
       execute,
     };
     getDbMock.mockResolvedValue(db);
@@ -514,28 +508,15 @@ describe('inference profile default route', () => {
       rejectedCount: 0,
       totalSamples: 0,
     });
+    expect(db.select).not.toHaveBeenCalled();
+    expect(execute).toHaveBeenCalledTimes(3);
   });
 
   it('PUT은 domain feedback 컬럼이 없어도 relation feedback 업데이트를 유지해야 한다', async () => {
     const current = createProfileRow();
     const updated = createProfileRow();
-    const selectMock = vi
-      .fn()
-      .mockReturnValueOnce({
-        from: () => ({
-          where: () => ({
-            limit: async () => [current],
-          }),
-        }),
-      })
-      .mockReturnValueOnce({
-        from: () => ({
-          where: () => ({
-            limit: async () => [updated],
-          }),
-        }),
-      });
     const executeMock = vi.fn()
+      .mockResolvedValueOnce({ rows: [createProfileBaseRow(current)] })
       .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
       .mockResolvedValueOnce({
         rows: [{
@@ -546,6 +527,7 @@ describe('inference profile default route', () => {
           },
         }],
       })
+      .mockResolvedValueOnce({ rows: [createProfileBaseRow(updated)] })
       .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
       .mockResolvedValueOnce({
         rows: [{
@@ -561,7 +543,7 @@ describe('inference profile default route', () => {
       .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }));
     const db = {
-      select: selectMock,
+      select: vi.fn(),
       execute: executeMock,
       transaction: async (callback: (tx: {
         update: (table: unknown) => {
@@ -598,6 +580,8 @@ describe('inference profile default route', () => {
     }));
 
     expect(response.status).toBe(200);
+    expect(db.select).not.toHaveBeenCalled();
+    expect(executeMock).toHaveBeenCalledTimes(6);
     expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
     const relationQuery = transactionExecuteMock.mock.calls[1]?.[0] as { strings: string[] };
     const domainQuery = transactionExecuteMock.mock.calls[2]?.[0] as { strings: string[] };

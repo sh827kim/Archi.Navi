@@ -3,7 +3,7 @@
  * - GET: 워크스페이스 기본 추론 프로필 조회 (없으면 생성)
  * - PUT: 워크스페이스 기본 추론 프로필 갱신
  */
-import { and, eq, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
 
@@ -80,6 +80,24 @@ interface ProfileResponse {
   feedbackAdjustments?: unknown;
   domainFeedbackConfig?: unknown;
   domainFeedbackAdjustments?: unknown;
+}
+
+interface ProfileBaseRow {
+  id: string;
+  workspace_id: string;
+  name: string;
+  kind: string;
+  is_default: boolean | null;
+  w_code: number | null;
+  w_db: number | null;
+  w_msg: number | null;
+  secondary_threshold: number | null;
+  min_cluster_size: number | null;
+  resolution: number | null;
+  edge_w_call: number | null;
+  edge_w_rw: number | null;
+  edge_w_msg: number | null;
+  enabled_layers: unknown;
 }
 
 interface UpdateProfileBody {
@@ -222,6 +240,26 @@ function buildFeedbackEntries(
       if (adjustmentDiff !== 0) return adjustmentDiff;
       return left.key.localeCompare(right.key);
     });
+}
+
+function toProfileResponseRow(row: ProfileBaseRow): ProfileResponse {
+  return {
+    id: row.id,
+    workspaceId: row.workspace_id,
+    name: row.name,
+    kind: row.kind,
+    isDefault: row.is_default,
+    wCode: row.w_code,
+    wDb: row.w_db,
+    wMsg: row.w_msg,
+    secondaryThreshold: row.secondary_threshold,
+    minClusterSize: row.min_cluster_size,
+    resolution: row.resolution,
+    edgeWCall: row.edge_w_call,
+    edgeWRw: row.edge_w_rw,
+    edgeWMsg: row.edge_w_msg,
+    enabledLayers: row.enabled_layers,
+  };
 }
 
 function toPublicProfile(
@@ -384,19 +422,63 @@ async function selectProfileJsonState(
   }
 }
 
+async function selectProfileBaseRow(
+  db: Awaited<ReturnType<typeof getDb>>,
+  workspaceId: string,
+  options: { defaultOnly: boolean },
+): Promise<ProfileResponse | null> {
+  const baseRows = options.defaultOnly
+    ? await db.execute<ProfileBaseRow>(sql`
+      select
+        id,
+        workspace_id,
+        name,
+        kind,
+        is_default,
+        w_code,
+        w_db,
+        w_msg,
+        secondary_threshold,
+        min_cluster_size,
+        resolution,
+        edge_w_call,
+        edge_w_rw,
+        edge_w_msg,
+        enabled_layers
+      from domain_inference_profiles
+      where workspace_id = ${workspaceId}
+        and is_default = true
+      limit 1
+    `)
+    : await db.execute<ProfileBaseRow>(sql`
+      select
+        id,
+        workspace_id,
+        name,
+        kind,
+        is_default,
+        w_code,
+        w_db,
+        w_msg,
+        secondary_threshold,
+        min_cluster_size,
+        resolution,
+        edge_w_call,
+        edge_w_rw,
+        edge_w_msg,
+        enabled_layers
+      from domain_inference_profiles
+      where workspace_id = ${workspaceId}
+      limit 1
+    `);
+
+  const row = baseRows.rows[0];
+  return row ? toProfileResponseRow(row) : null;
+}
+
 async function selectDefaultProfile(workspaceId: string): Promise<ProfileResponse | null> {
   const db = await getDb();
-  const rows = await db
-    .select()
-    .from(domainInferenceProfiles)
-    .where(
-      and(
-        eq(domainInferenceProfiles.workspaceId, workspaceId),
-        eq(domainInferenceProfiles.isDefault, true),
-      ),
-    )
-    .limit(1);
-  const row = rows[0] ?? null;
+  const row = await selectProfileBaseRow(db, workspaceId, { defaultOnly: true });
   if (!row) return null;
 
   const state = await selectProfileJsonState(db, row.id);
@@ -413,12 +495,7 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
 
 async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | null> {
   const db = await getDb();
-  const rows = await db
-    .select()
-    .from(domainInferenceProfiles)
-    .where(eq(domainInferenceProfiles.workspaceId, workspaceId))
-    .limit(1);
-  const row = rows[0] ?? null;
+  const row = await selectProfileBaseRow(db, workspaceId, { defaultOnly: false });
   if (!row) return null;
 
   const state = await selectProfileJsonState(db, row.id);
