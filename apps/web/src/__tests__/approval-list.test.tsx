@@ -73,6 +73,24 @@ interface RelationCandidate {
       penalty: number;
     }>;
   };
+  feedback?: {
+    key: string;
+    baseConfidence: number;
+    adjustment: number;
+    adjustedConfidence: number;
+    applied: boolean;
+    sampleCount: number;
+  };
+  metadata?: {
+    feedback?: {
+      key: string;
+      baseConfidence: number;
+      adjustment: number;
+      adjustedConfidence: number;
+      applied: boolean;
+      sampleCount: number;
+    };
+  };
 }
 
 interface EndpointInfo {
@@ -544,6 +562,113 @@ describe('ApprovalList', () => {
 
     expect(screen.getByText('late-warning')).toBeTruthy();
     expect(screen.queryByText('service-0')).toBeNull();
+  });
+
+  it('relation approval 카드에 feedback hint 상태를 구분해 표시해야 한다', async () => {
+    const noStats = {
+      ...createCandidate('cand-feedback-0', 'GET /inventory'),
+      objectGranularity: 'ATOMIC' as const,
+      objectParentName: 'inventory-service',
+      objectObjectType: 'api_endpoint',
+      metadata: {
+        feedback: {
+          key: 'CALL:code:call',
+          baseConfidence: 0.6,
+          adjustment: 0,
+          adjustedConfidence: 0.6,
+          applied: false,
+          sampleCount: 0,
+        },
+      },
+    };
+    const insufficient = {
+      ...createCandidate('cand-feedback-1', 'GET /payments'),
+      objectGranularity: 'ATOMIC' as const,
+      objectParentName: 'payment-service',
+      objectObjectType: 'api_endpoint',
+      metadata: {
+        feedback: {
+          key: 'CALL:code:call',
+          baseConfidence: 0.62,
+          adjustment: 0,
+          adjustedConfidence: 0.62,
+          applied: false,
+          sampleCount: 4,
+        },
+      },
+    };
+    const applied = {
+      ...createCandidate('cand-feedback-2', 'GET /orders'),
+      objectGranularity: 'ATOMIC' as const,
+      objectParentName: 'order-service',
+      objectObjectType: 'api_endpoint',
+      metadata: {
+        feedback: {
+          key: 'CALL:code:call',
+          baseConfidence: 0.6,
+          adjustment: 0.06,
+          adjustedConfidence: 0.66,
+          applied: true,
+          sampleCount: 12,
+        },
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([noStats, insufficient, applied]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('GET /orders');
+    const cards = screen.getAllByTestId('approval-candidate-card');
+    const appliedCard = cards.find((card) => card.textContent?.includes('GET /orders'));
+    const insufficientCard = cards.find((card) => card.textContent?.includes('GET /payments'));
+    const noStatsCard = cards.find((card) => card.textContent?.includes('GET /inventory'));
+
+    expect(appliedCard?.textContent).toContain('보정 적용');
+    expect(appliedCard?.textContent).toContain('표본 12건');
+    expect(appliedCard?.textContent).toContain('+6%p');
+    expect(appliedCard?.textContent).toContain('60% → 66%');
+    expect(insufficientCard?.textContent).toContain('표본 부족');
+    expect(insufficientCard?.textContent).toContain('표본 4건으로 아직 보정 전입니다.');
+    expect(noStatsCard?.textContent).toContain('통계 없음');
+    expect(noStatsCard?.textContent).toContain('이 후보 key의 승인/거절 통계가 아직 없습니다.');
+  });
+
+  it('COMPOUND 후보의 feedback hint는 세부 매핑 흐름을 깨지 않아야 한다', async () => {
+    const compoundCandidate = {
+      ...createCandidate('cand-feedback-compound', 'billing-service'),
+      metadata: {
+        feedback: {
+          key: 'CALL:config:dependency_decl',
+          baseConfidence: 0.48,
+          adjustment: 0.04,
+          adjustedConfidence: 0.52,
+          applied: true,
+          sampleCount: 11,
+        },
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([compoundCandidate]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('billing-service');
+    const card = screen.getByTestId('approval-candidate-card');
+    expect(card.textContent).toContain('세부 매핑 전 prior에 +4%p 보정이 반영되어 있습니다.');
+    expect(card.textContent).toContain('실제 승인/거절은 세부 매핑 후 생성되는 atomic 후보에서 진행됩니다.');
   });
 
   it('LLM 설명이 있으면 후보 카드에 표시해야 한다', async () => {

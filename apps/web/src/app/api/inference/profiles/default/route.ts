@@ -43,6 +43,16 @@ interface FeedbackSummary {
   totalSamples: number;
 }
 
+interface FeedbackEntry {
+  key: string;
+  approved: number;
+  rejected: number;
+  total: number;
+  approvalRate: number;
+  adjustment: number;
+  eligible: boolean;
+}
+
 const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
   enabled: true,
   minSamples: 10,
@@ -68,6 +78,8 @@ interface ProfileResponse {
   crossValidation?: unknown;
   feedbackConfig?: unknown;
   feedbackAdjustments?: unknown;
+  domainFeedbackConfig?: unknown;
+  domainFeedbackAdjustments?: unknown;
 }
 
 interface UpdateProfileBody {
@@ -83,8 +95,10 @@ interface UpdateProfileBody {
   edgeWMsg?: number;
   enabledLayers?: string[];
   crossValidation?: Partial<CrossValidationConfig>;
-  feedbackConfig?: Partial<FeedbackConfig>;
-  resetAll?: boolean;
+  relationFeedbackConfig?: Partial<FeedbackConfig>;
+  domainFeedbackConfig?: Partial<FeedbackConfig>;
+  resetRelationFeedback?: boolean;
+  resetDomainFeedback?: boolean;
 }
 
 function asCrossValidationConfig(value: unknown): CrossValidationConfig {
@@ -180,10 +194,51 @@ function buildFeedbackSummary(
   };
 }
 
-function toPublicProfile(row: ProfileResponse) {
+function buildFeedbackEntries(
+  adjustments: Record<string, FeedbackStats>,
+  config: FeedbackConfig,
+): FeedbackEntry[] {
+  return Object.entries(adjustments)
+    .map(([key, entry]) => ({
+      key,
+      approved: entry.approved,
+      rejected: entry.rejected,
+      total: entry.total,
+      approvalRate: entry.approvalRate,
+      adjustment: entry.adjustment,
+      eligible: entry.total >= config.minSamples,
+    }))
+    .sort((left, right) => {
+      if (right.total !== left.total) return right.total - left.total;
+      const adjustmentDiff = Math.abs(right.adjustment) - Math.abs(left.adjustment);
+      if (adjustmentDiff !== 0) return adjustmentDiff;
+      return left.key.localeCompare(right.key);
+    });
+}
+
+function toPublicProfile(
+  row: ProfileResponse,
+  options?: { includeFeedbackEntries?: boolean },
+) {
   const crossValidation = asCrossValidationConfig(row.crossValidation);
-  const feedbackConfig = asFeedbackConfig(row.feedbackConfig);
-  const feedbackAdjustments = asFeedbackAdjustments(row.feedbackAdjustments, feedbackConfig);
+  const relationFeedbackConfig = asFeedbackConfig(row.feedbackConfig);
+  const relationFeedbackAdjustments = asFeedbackAdjustments(
+    row.feedbackAdjustments,
+    relationFeedbackConfig,
+  );
+  const relationFeedbackSummary = buildFeedbackSummary(
+    relationFeedbackAdjustments,
+    relationFeedbackConfig,
+  );
+  const domainFeedbackConfig = asFeedbackConfig(row.domainFeedbackConfig);
+  const domainFeedbackAdjustments = asFeedbackAdjustments(
+    row.domainFeedbackAdjustments,
+    domainFeedbackConfig,
+  );
+  const domainFeedbackSummary = buildFeedbackSummary(
+    domainFeedbackAdjustments,
+    domainFeedbackConfig,
+  );
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -203,8 +258,22 @@ function toPublicProfile(row: ProfileResponse) {
       ? (row.enabledLayers as unknown[]).filter((v): v is string => typeof v === 'string')
       : ['call', 'db', 'msg', 'code'],
     crossValidation,
-    feedbackConfig,
-    feedbackSummary: buildFeedbackSummary(feedbackAdjustments, feedbackConfig),
+    relationFeedbackConfig,
+    relationFeedbackSummary,
+    domainFeedbackConfig,
+    domainFeedbackSummary,
+    ...(options?.includeFeedbackEntries
+      ? {
+          relationFeedbackEntries: buildFeedbackEntries(
+            relationFeedbackAdjustments,
+            relationFeedbackConfig,
+          ),
+          domainFeedbackEntries: buildFeedbackEntries(
+            domainFeedbackAdjustments,
+            domainFeedbackConfig,
+          ),
+        }
+      : {}),
   };
 }
 
@@ -215,14 +284,23 @@ async function selectProfileJsonState(
   crossValidation: unknown;
   feedbackConfig: unknown;
   feedbackAdjustments: unknown;
+  domainFeedbackConfig: unknown;
+  domainFeedbackAdjustments: unknown;
 }> {
   try {
     const state = await db.execute<{
       cross_validation: unknown;
       feedback_config: unknown;
       feedback_adjustments: unknown;
+      domain_feedback_config: unknown;
+      domain_feedback_adjustments: unknown;
     }>(sql`
-      select cross_validation, feedback_config, feedback_adjustments
+      select
+        cross_validation,
+        feedback_config,
+        feedback_adjustments,
+        domain_feedback_config,
+        domain_feedback_adjustments
       from domain_inference_profiles
       where id = ${profileId}
       limit 1
@@ -232,6 +310,8 @@ async function selectProfileJsonState(
       crossValidation: state.rows[0]?.cross_validation,
       feedbackConfig: state.rows[0]?.feedback_config,
       feedbackAdjustments: state.rows[0]?.feedback_adjustments,
+      domainFeedbackConfig: state.rows[0]?.domain_feedback_config,
+      domainFeedbackAdjustments: state.rows[0]?.domain_feedback_adjustments,
     };
   } catch {
     const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
@@ -245,6 +325,8 @@ async function selectProfileJsonState(
       crossValidation: crossValidation.rows[0]?.cross_validation,
       feedbackConfig: undefined,
       feedbackAdjustments: undefined,
+      domainFeedbackConfig: undefined,
+      domainFeedbackAdjustments: undefined,
     };
   }
 }
@@ -271,6 +353,8 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
     crossValidation: state.crossValidation,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
+    domainFeedbackConfig: state.domainFeedbackConfig,
+    domainFeedbackAdjustments: state.domainFeedbackAdjustments,
   };
 }
 
@@ -291,6 +375,8 @@ async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | 
     crossValidation: state.crossValidation,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
+    domainFeedbackConfig: state.domainFeedbackConfig,
+    domainFeedbackAdjustments: state.domainFeedbackAdjustments,
   };
 }
 
@@ -331,14 +417,19 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
 
+function shouldIncludeFeedbackEntries(req: NextRequest): boolean {
+  return req.nextUrl.searchParams.get('includeFeedbackEntries') === 'true';
+}
+
 export async function GET(req: NextRequest) {
   try {
     const workspaceId = req.nextUrl.searchParams.get('workspaceId');
     if (!workspaceId) {
       return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
     }
+    const includeFeedbackEntries = shouldIncludeFeedbackEntries(req);
     const profile = await ensureDefaultProfile(workspaceId);
-    return NextResponse.json(toPublicProfile(profile));
+    return NextResponse.json(toPublicProfile(profile, { includeFeedbackEntries }));
   } catch (error) {
     console.error('[GET /api/inference/profiles/default]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
@@ -347,6 +438,7 @@ export async function GET(req: NextRequest) {
 
 export async function PUT(req: NextRequest) {
   try {
+    const includeFeedbackEntries = shouldIncludeFeedbackEntries(req);
     const body = (await req.json().catch(() => ({}))) as UpdateProfileBody;
     const workspaceId = body.workspaceId;
     if (!workspaceId) {
@@ -406,25 +498,44 @@ export async function PUT(req: NextRequest) {
         ? clamp(crossValidationInput.penaltyFactor, 0, 1)
         : currentCrossValidation.penaltyFactor,
     };
-    const resetAll = body.resetAll === true;
-    const currentFeedbackConfig = asFeedbackConfig(current.feedbackConfig);
-    const feedbackConfigInput = body.feedbackConfig ?? {};
-    const feedbackConfig = resetAll
+    const resetRelationFeedback = body.resetRelationFeedback === true;
+    const resetDomainFeedback = body.resetDomainFeedback === true;
+    const currentRelationFeedbackConfig = asFeedbackConfig(current.feedbackConfig);
+    const relationFeedbackConfigInput = body.relationFeedbackConfig ?? {};
+    const relationFeedbackConfig = resetRelationFeedback
       ? DEFAULT_FEEDBACK_CONFIG
       : {
-          enabled: typeof feedbackConfigInput.enabled === 'boolean'
-            ? feedbackConfigInput.enabled
-            : currentFeedbackConfig.enabled,
-          minSamples: isFiniteNumber(feedbackConfigInput.minSamples)
-            ? Math.round(clamp(feedbackConfigInput.minSamples, 1, 10_000))
-            : currentFeedbackConfig.minSamples,
-          maxAdjustment: isFiniteNumber(feedbackConfigInput.maxAdjustment)
-            ? clamp(feedbackConfigInput.maxAdjustment, 0, 1)
-            : currentFeedbackConfig.maxAdjustment,
+          enabled: typeof relationFeedbackConfigInput.enabled === 'boolean'
+            ? relationFeedbackConfigInput.enabled
+            : currentRelationFeedbackConfig.enabled,
+          minSamples: isFiniteNumber(relationFeedbackConfigInput.minSamples)
+            ? Math.round(clamp(relationFeedbackConfigInput.minSamples, 1, 10_000))
+            : currentRelationFeedbackConfig.minSamples,
+          maxAdjustment: isFiniteNumber(relationFeedbackConfigInput.maxAdjustment)
+            ? clamp(relationFeedbackConfigInput.maxAdjustment, 0, 1)
+            : currentRelationFeedbackConfig.maxAdjustment,
         };
-    const feedbackAdjustments = resetAll
+    const relationFeedbackAdjustments = resetRelationFeedback
       ? {}
-      : asFeedbackAdjustments(current.feedbackAdjustments, feedbackConfig);
+      : asFeedbackAdjustments(current.feedbackAdjustments, relationFeedbackConfig);
+    const currentDomainFeedbackConfig = asFeedbackConfig(current.domainFeedbackConfig);
+    const domainFeedbackConfigInput = body.domainFeedbackConfig ?? {};
+    const domainFeedbackConfig = resetDomainFeedback
+      ? DEFAULT_FEEDBACK_CONFIG
+      : {
+          enabled: typeof domainFeedbackConfigInput.enabled === 'boolean'
+            ? domainFeedbackConfigInput.enabled
+            : currentDomainFeedbackConfig.enabled,
+          minSamples: isFiniteNumber(domainFeedbackConfigInput.minSamples)
+            ? Math.round(clamp(domainFeedbackConfigInput.minSamples, 1, 10_000))
+            : currentDomainFeedbackConfig.minSamples,
+          maxAdjustment: isFiniteNumber(domainFeedbackConfigInput.maxAdjustment)
+            ? clamp(domainFeedbackConfigInput.maxAdjustment, 0, 1)
+            : currentDomainFeedbackConfig.maxAdjustment,
+        };
+    const domainFeedbackAdjustments = resetDomainFeedback
+      ? {}
+      : asFeedbackAdjustments(current.domainFeedbackAdjustments, domainFeedbackConfig);
 
     await db.transaction(async (tx) => {
       await tx
@@ -459,8 +570,10 @@ export async function PUT(req: NextRequest) {
       try {
         await tx.execute(sql`
           update domain_inference_profiles
-          set feedback_config = ${JSON.stringify(feedbackConfig)}::jsonb,
-              feedback_adjustments = ${JSON.stringify(feedbackAdjustments)}::jsonb
+          set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb,
+              feedback_adjustments = ${JSON.stringify(relationFeedbackAdjustments)}::jsonb,
+              domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb,
+              domain_feedback_adjustments = ${JSON.stringify(domainFeedbackAdjustments)}::jsonb
           where id = ${current.id}
         `);
       } catch {
@@ -469,12 +582,19 @@ export async function PUT(req: NextRequest) {
     });
 
     const updated = await ensureDefaultProfile(workspaceId);
-    return NextResponse.json(toPublicProfile({
-      ...updated,
-      crossValidation,
-      feedbackConfig,
-      feedbackAdjustments,
-    }));
+    return NextResponse.json(
+      toPublicProfile(
+        {
+          ...updated,
+          crossValidation,
+          feedbackConfig: relationFeedbackConfig,
+          feedbackAdjustments: relationFeedbackAdjustments,
+          domainFeedbackConfig,
+          domainFeedbackAdjustments,
+        },
+        { includeFeedbackEntries },
+      ),
+    );
   } catch (error) {
     console.error('[PUT /api/inference/profiles/default]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

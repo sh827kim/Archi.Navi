@@ -48,11 +48,142 @@ interface RelationCandidate {
     supportingSources: string[];
     contradictions?: CrossValidationContradiction[];
   };
+  feedback?: RelationFeedbackMetadata;
+  metadata?: {
+    feedback?: RelationFeedbackMetadata;
+  };
+}
+
+interface RelationFeedbackMetadata {
+  key: string;
+  baseConfidence: number;
+  adjustment: number;
+  adjustedConfidence: number;
+  applied: boolean;
+  sampleCount: number;
 }
 
 function getLlmExplanationSummary(candidate: RelationCandidate): string | null {
   const summary = candidate.llmExplanation?.summary;
   return typeof summary === 'string' && summary.trim().length > 0 ? summary.trim() : null;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asRelationFeedbackMetadata(value: unknown): RelationFeedbackMetadata | null {
+  const record = asRecord(value);
+  const key = typeof record?.key === 'string' && record.key.trim().length > 0
+    ? record.key.trim()
+    : null;
+  const baseConfidence = asFiniteNumber(record?.baseConfidence);
+  const adjustment = asFiniteNumber(record?.adjustment);
+  const adjustedConfidence = asFiniteNumber(record?.adjustedConfidence);
+  const sampleCount = asFiniteNumber(record?.sampleCount);
+
+  if (
+    !key
+    || baseConfidence === null
+    || adjustment === null
+    || adjustedConfidence === null
+    || sampleCount === null
+    || typeof record?.applied !== 'boolean'
+  ) {
+    return null;
+  }
+
+  return {
+    key,
+    baseConfidence,
+    adjustment,
+    adjustedConfidence,
+    applied: record.applied,
+    sampleCount: Math.max(0, Math.round(sampleCount)),
+  };
+}
+
+function getCandidateFeedback(candidate: RelationCandidate): RelationFeedbackMetadata | null {
+  return asRelationFeedbackMetadata(candidate.feedback)
+    ?? asRelationFeedbackMetadata(candidate.metadata?.feedback);
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatSignedPercentPoints(value: number): string {
+  const rounded = Math.round(value * 1000) / 10;
+  if (Object.is(rounded, -0)) return '0%p';
+  return `${rounded > 0 ? '+' : ''}${rounded}%p`;
+}
+
+function getFeedbackState(feedback: RelationFeedbackMetadata): 'no-stats' | 'insufficient' | 'applied' {
+  if (feedback.sampleCount === 0) return 'no-stats';
+  if (!feedback.applied) return 'insufficient';
+  return 'applied';
+}
+
+function FeedbackHint({
+  candidate,
+  compoundCandidate,
+}: {
+  candidate: RelationCandidate;
+  compoundCandidate: boolean;
+}) {
+  const feedback = getCandidateFeedback(candidate);
+  if (!feedback) return null;
+
+  const state = getFeedbackState(feedback);
+  const statusLabel = state === 'no-stats'
+    ? '통계 없음'
+    : state === 'insufficient'
+      ? '표본 부족'
+      : '보정 적용';
+  const summary = compoundCandidate
+    ? (
+      state === 'no-stats'
+        ? '세부 매핑 전 단계라 참고용 feedback 통계가 아직 없습니다.'
+        : state === 'insufficient'
+          ? `표본 ${feedback.sampleCount}건이지만 세부 매핑 후보 단계에서는 아직 보정 전입니다.`
+          : `세부 매핑 전 prior에 ${formatSignedPercentPoints(feedback.adjustment)} 보정이 반영되어 있습니다.`
+    )
+    : (
+      state === 'no-stats'
+        ? '이 후보 key의 승인/거절 통계가 아직 없습니다.'
+        : state === 'insufficient'
+          ? `표본 ${feedback.sampleCount}건으로 아직 보정 전입니다.`
+          : `표본 ${feedback.sampleCount}건 기준 ${formatSignedPercentPoints(feedback.adjustment)} 보정이 적용되었습니다.`
+    );
+
+  return (
+    <div
+      data-testid="approval-feedback-hint"
+      className="mt-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground"
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-medium text-foreground">Feedback hint</span>
+        <span className="rounded-full border border-border/60 px-2 py-0.5">{statusLabel}</span>
+        <span>{summary}</span>
+      </div>
+      <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 font-mono">
+        <span>key {feedback.key}</span>
+        <span>표본 {feedback.sampleCount}건</span>
+        <span>{formatPercent(feedback.baseConfidence)} → {formatPercent(feedback.adjustedConfidence)}</span>
+      </div>
+      {compoundCandidate && (
+        <div className="mt-1">
+          실제 승인/거절은 세부 매핑 후 생성되는 atomic 후보에서 진행됩니다.
+        </div>
+      )}
+    </div>
+  );
 }
 
 /** 엔드포인트 (세부 매핑용) */
@@ -520,6 +651,7 @@ export function ApprovalList() {
                           {llmExplanation}
                         </p>
                       )}
+                      <FeedbackHint candidate={cand} compoundCandidate />
                     </div>
 
                     <div className="ml-4 flex items-center gap-4">
@@ -580,6 +712,7 @@ export function ApprovalList() {
                           {llmExplanation}
                         </p>
                       )}
+                      <FeedbackHint candidate={cand} compoundCandidate={false} />
                     </div>
 
                     <div className="ml-4 flex items-center gap-4">

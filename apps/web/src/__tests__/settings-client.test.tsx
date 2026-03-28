@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const { toast } = vi.hoisted(() => ({
   toast: {
@@ -115,7 +115,7 @@ describe('EngineSettings', () => {
     localStorage.clear();
   });
 
-  it('feedback 설정 저장과 reset-all UI를 노출하고 상호작용해야 한다', async () => {
+  it('relation/domain feedback summary와 reset을 분리해 렌더링하고 요청해야 한다', async () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(jsonResponse({
         id: 'profile-1',
@@ -128,89 +128,320 @@ describe('EngineSettings', () => {
           boostFactor: 0.3,
           penaltyFactor: 0.85,
         },
-        feedbackConfig: {
+        relationFeedbackConfig: {
           enabled: true,
           minSamples: 12,
           maxAdjustment: 0.18,
         },
-        feedbackSummary: {
+        relationFeedbackSummary: {
+          totalKeys: 2,
+          eligibleKeys: 1,
+          approvedCount: 16,
+          rejectedCount: 4,
+          totalSamples: 20,
+        },
+        relationFeedbackEntries: [
+          {
+            key: 'READ:db:schema_hint',
+            approved: 3,
+            rejected: 1,
+            total: 4,
+            approvalRate: 0.75,
+            adjustment: 0,
+          },
+          {
+            key: 'CALL:code:call',
+            approved: 13,
+            rejected: 3,
+            total: 16,
+            approvalRate: 0.8125,
+            adjustment: 0.05,
+          },
+        ],
+        domainFeedbackConfig: {
+          enabled: true,
+          minSamples: 6,
+          maxAdjustment: 0.12,
+        },
+        domainFeedbackSummary: {
           totalKeys: 1,
           eligibleKeys: 1,
-          approvedCount: 9,
+          approvedCount: 7,
           rejectedCount: 1,
-          totalSamples: 10,
+          totalSamples: 8,
         },
+        domainFeedbackEntries: [
+          {
+            key: 'TRACK_A:domain-order:HIGH',
+            approved: 7,
+            rejected: 1,
+            total: 8,
+            approvalRate: 0.875,
+            adjustment: 0.045,
+          },
+        ],
       }))
       .mockResolvedValueOnce(jsonResponse({
         id: 'profile-1',
-        feedbackConfig: {
+        relationFeedbackConfig: {
           enabled: true,
           minSamples: 15,
           maxAdjustment: 0.2,
         },
-        feedbackSummary: {
+        relationFeedbackSummary: {
+          totalKeys: 2,
+          eligibleKeys: 1,
+          approvedCount: 16,
+          rejectedCount: 4,
+          totalSamples: 20,
+        },
+        relationFeedbackEntries: [
+          {
+            key: 'READ:db:schema_hint',
+            approved: 3,
+            rejected: 1,
+            total: 4,
+            approvalRate: 0.75,
+            adjustment: 0,
+          },
+          {
+            key: 'CALL:code:call',
+            approved: 13,
+            rejected: 3,
+            total: 16,
+            approvalRate: 0.8125,
+            adjustment: 0.05,
+          },
+        ],
+        domainFeedbackConfig: {
+          enabled: true,
+          minSamples: 9,
+          maxAdjustment: 0.18,
+        },
+        domainFeedbackSummary: {
           totalKeys: 1,
           eligibleKeys: 0,
-          approvedCount: 9,
+          approvedCount: 7,
           rejectedCount: 1,
-          totalSamples: 10,
+          totalSamples: 8,
         },
+        domainFeedbackEntries: [
+          {
+            key: 'TRACK_A:domain-order:HIGH',
+            approved: 7,
+            rejected: 1,
+            total: 8,
+            approvalRate: 0.875,
+            adjustment: 0,
+          },
+        ],
       }))
       .mockResolvedValueOnce(jsonResponse({
         id: 'profile-1',
-        feedbackConfig: {
+        relationFeedbackConfig: {
           enabled: true,
           minSamples: 10,
           maxAdjustment: 0.15,
         },
-        feedbackSummary: {
+        relationFeedbackSummary: {
           totalKeys: 0,
           eligibleKeys: 0,
           approvedCount: 0,
           rejectedCount: 0,
           totalSamples: 0,
         },
+        relationFeedbackEntries: [],
+        domainFeedbackConfig: {
+          enabled: true,
+          minSamples: 9,
+          maxAdjustment: 0.18,
+        },
+        domainFeedbackSummary: {
+          totalKeys: 1,
+          eligibleKeys: 0,
+          approvedCount: 7,
+          rejectedCount: 1,
+          totalSamples: 8,
+        },
+        domainFeedbackEntries: [
+          {
+            key: 'TRACK_A:domain-order:HIGH',
+            approved: 7,
+            rejected: 1,
+            total: 8,
+            approvalRate: 0.875,
+            adjustment: 0,
+          },
+        ],
+      }))
+      .mockResolvedValueOnce(jsonResponse({
+        id: 'profile-1',
+        relationFeedbackConfig: {
+          enabled: true,
+          minSamples: 10,
+          maxAdjustment: 0.15,
+        },
+        relationFeedbackSummary: {
+          totalKeys: 0,
+          eligibleKeys: 0,
+          approvedCount: 0,
+          rejectedCount: 0,
+          totalSamples: 0,
+        },
+        relationFeedbackEntries: [],
+        domainFeedbackConfig: {
+          enabled: true,
+          minSamples: 10,
+          maxAdjustment: 0.15,
+        },
+        domainFeedbackSummary: {
+          totalKeys: 0,
+          eligibleKeys: 0,
+          approvedCount: 0,
+          rejectedCount: 0,
+          totalSamples: 0,
+        },
+        domainFeedbackEntries: [],
       }));
     vi.stubGlobal('fetch', fetchMock);
 
     render(<EngineSettings workspaceId="ws-1" />);
 
     await screen.findByDisplayValue('12');
-    expect(screen.getByText('key별 상세 통계는 노출하지 않고, 현재 기본 프로필의 누적 요약만 표시합니다.')).toBeTruthy();
-    expect(screen.queryByText('call:code:*:*')).toBeNull();
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
+      '/api/inference/profiles/default?workspaceId=ws-1&includeFeedbackEntries=true',
+    );
 
-    fireEvent.change(screen.getByLabelText('최소 샘플 수'), { target: { value: '15' } });
-    fireEvent.change(screen.getByLabelText('최대 보정치'), { target: { value: '0.2' } });
+    const relationSection = screen.getByTestId('relation-feedback-section');
+    const relationTable = within(relationSection).getByTestId('relation-feedback-detail-table');
+    const relationRows = within(relationTable).getAllByRole('row');
+    expect(relationRows[1]?.textContent).toContain('CALL:code:call');
+    expect(relationRows[2]?.textContent).toContain('READ:db:schema_hint');
+    expect(within(relationSection).getByText('+5%p')).toBeTruthy();
+
+    const domainSection = screen.getByTestId('domain-feedback-section');
+    const domainTable = within(domainSection).getByTestId('domain-feedback-detail-table');
+    expect(within(domainTable).getByText('TRACK_A:domain-order:HIGH')).toBeTruthy();
+    expect(within(domainSection).getByText('+4.5%p')).toBeTruthy();
+    expect(
+      screen.getByText(/queued\/orchestrated parity는 여기서 보장하지 않습니다/),
+    ).toBeTruthy();
+
+    fireEvent.change(
+      within(relationSection).getByLabelText('최소 샘플 수'),
+      { target: { value: '15' } },
+    );
+    fireEvent.change(
+      within(relationSection).getByLabelText('최대 보정치'),
+      { target: { value: '0.2' } },
+    );
+    fireEvent.change(
+      within(domainSection).getByLabelText('최소 샘플 수'),
+      { target: { value: '9' } },
+    );
+    fireEvent.change(
+      within(domainSection).getByLabelText('최대 보정치'),
+      { target: { value: '0.18' } },
+    );
     fireEvent.click(screen.getByRole('button', { name: '설정 저장' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(2);
     });
     const saveCall = fetchMock.mock.calls[1];
-    expect(saveCall?.[0]).toBe('/api/inference/profiles/default');
+    expect(saveCall?.[0]).toBe('/api/inference/profiles/default?includeFeedbackEntries=true');
     expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({
       workspaceId: 'ws-1',
-      feedbackConfig: {
+      relationFeedbackConfig: {
         enabled: true,
         minSamples: 15,
         maxAdjustment: 0.2,
       },
+      domainFeedbackConfig: {
+        enabled: true,
+        minSamples: 9,
+        maxAdjustment: 0.18,
+      },
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Reset all' }));
+    fireEvent.click(within(relationSection).getByRole('button', { name: 'Relation reset' }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledTimes(3);
     });
-    const resetCall = fetchMock.mock.calls[2];
-    expect(JSON.parse(String(resetCall?.[1]?.body))).toMatchObject({
+    const relationResetCall = fetchMock.mock.calls[2];
+    expect(relationResetCall?.[0]).toBe('/api/inference/profiles/default?includeFeedbackEntries=true');
+    expect(JSON.parse(String(relationResetCall?.[1]?.body))).toMatchObject({
       workspaceId: 'ws-1',
-      resetAll: true,
+      resetRelationFeedback: true,
     });
     await waitFor(() => {
-      expect(screen.getByText('아직 누적된 feedback 집계가 없습니다.')).toBeTruthy();
+      expect(within(relationSection).getByText('아직 누적된 relation feedback 집계가 없습니다.')).toBeTruthy();
     });
-    expect(screen.getByDisplayValue('10')).toBeTruthy();
-    expect(screen.getByDisplayValue('0.15')).toBeTruthy();
+    expect(within(domainSection).getByTestId('domain-feedback-detail-table')).toBeTruthy();
+
+    fireEvent.click(within(domainSection).getByRole('button', { name: 'Domain reset' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledTimes(4);
+    });
+    const domainResetCall = fetchMock.mock.calls[3];
+    expect(domainResetCall?.[0]).toBe('/api/inference/profiles/default?includeFeedbackEntries=true');
+    expect(JSON.parse(String(domainResetCall?.[1]?.body))).toMatchObject({
+      workspaceId: 'ws-1',
+      resetDomainFeedback: true,
+    });
+    await waitFor(() => {
+      expect(within(domainSection).getByText('아직 누적된 domain feedback 집계가 없습니다.')).toBeTruthy();
+    });
+  });
+
+  it('legacy feedback alias만 내려오면 relation UI는 공개 계약 기본값을 유지해야 한다', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(jsonResponse({
+      id: 'profile-1',
+      wCode: 0.5,
+      wDb: 0.3,
+      wMsg: 0.2,
+      minClusterSize: 3,
+      crossValidation: {
+        enabled: true,
+        boostFactor: 0.3,
+        penaltyFactor: 0.85,
+      },
+      feedbackConfig: {
+        enabled: false,
+        minSamples: 99,
+        maxAdjustment: 0.9,
+      },
+      feedbackSummary: {
+        totalKeys: 3,
+        eligibleKeys: 3,
+        approvedCount: 20,
+        rejectedCount: 2,
+        totalSamples: 22,
+      },
+      feedbackEntries: [
+        {
+          key: 'CALL:legacy:alias',
+          approved: 20,
+          rejected: 2,
+          total: 22,
+          approvalRate: 0.91,
+          adjustment: 0.2,
+        },
+      ],
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<EngineSettings workspaceId="ws-1" />);
+
+    const relationSection = await screen.findByTestId('relation-feedback-section');
+    expect(within(relationSection).getByLabelText('최소 샘플 수')).toHaveProperty('value', '10');
+    expect(within(relationSection).getByLabelText('최대 보정치')).toHaveProperty('value', '0.15');
+    expect(
+      within(relationSection).getByText('아직 누적된 relation feedback 집계가 없습니다.'),
+    ).toBeTruthy();
+    expect(screen.queryByText('CALL:legacy:alias')).toBeNull();
   });
 });

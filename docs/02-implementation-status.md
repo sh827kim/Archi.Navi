@@ -15,7 +15,7 @@
 | Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
-| 추론 엔진 고도화 (P4) | ✅ | Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신, 4-6 relation-only feedback loop 구현 완료. domain candidate, approval hint, per-key detail table은 후속 범위 |
+| 추론 엔진 고도화 (P4) | ✅ | 4-1~4-6 구현 완료. 4-6은 relation/domain feedback public contract 분리, Track A domain feedback 집계/next-run-only 반영, Settings/API 분리 계약, code-origin relation feedback key specialization까지 반영 완료 |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -93,8 +93,13 @@
 
 ### 2.1 추론 엔진 품질 고도화 (P4)
 
-- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신, 4-6 relation-only feedback loop까지 구현 완료되었다.
-- ✅ 4-6의 현재 구현 계약은 relation candidate feedback 집계, next-run-only confidence 보정, Settings summary/reset-all, quick/queued parity까지이며, domain candidate/approval hint/per-key detail table은 후속 범위다.
+- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신은 구현 완료 상태다.
+- ✅ 4-6은 relation feedback canonical key 집계와 next-run-only relation 보정 위에, Track A domain feedback 집계 및 next-run-only domain 보정까지 반영되었다.
+- ✅ 후속 specialization으로 code-origin relation feedback key가 `framework/language`를 안정적으로 가지면 v2 key를 사용하고, 없으면 legacy v1로 fallback 하도록 확장되었다.
+- ✅ next-run relation 보정 lookup은 `v2 -> legacy v1` dual-read를 사용하며, `GET /api/inference/candidates`는 3-segment/5-segment feedback key를 모두 opaque string으로 수용한다.
+- ✅ 공개 프로필 계약은 `relationFeedback*` / `domainFeedback*` 및 `resetRelationFeedback` / `resetDomainFeedback`로 분리되어 있으며, generic alias `feedbackConfig` / `feedbackAdjustments` / `feedbackSummary` / `feedbackEntries` / `resetAll`은 더 이상 public contract가 아니다.
+- ✅ relation 측 내부 저장 컬럼의 generic 명명(`feedback_*`)은 구현 세부사항이며, closure 완료 판단은 public contract 기준으로 본다.
+- ⚠️ queued/orchestrated parity는 4-6 완료 기준에 포함하지 않으며, Track B / domain discovery feedback도 여전히 범위 밖이다.
 - ⚠️ 4-5의 실시간 계약은 SSE notification 후 refetch 방식이므로, 대형 그래프에서 재조회 비용 최적화 여지는 남아 있다.
 
 ### 2.2 실행 오케스트레이션 Phase 2+
@@ -123,6 +128,7 @@
 | 4-4. 프레임워크 플러그인 시스템 | `docs/spec/20-framework-plugin-system-spec.md` | ✅ Implemented |
 | 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/21-realtime-rollup-spec.md` | ✅ Implemented |
 | 4-6. 추론 피드백 루프 | `docs/spec/22-inference-feedback-loop-spec.md` | ✅ Implemented |
+| 4-6a. Relation feedback key specialization | `docs/spec/36-relation-feedback-key-specialization-spec.md` | ✅ Implemented |
 
 ### 3.2 P5: 개발자 생산성 기능 (v3.1+)
 

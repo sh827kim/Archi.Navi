@@ -8,5 +8,23 @@ export { runSeedBasedInference } from './seedBased';
 export { runDiscovery } from './discovery';
 export { approveDomainCandidate } from './approveDomainCandidate';
 export type { ApproveDomainCandidateResult } from './approveDomainCandidate';
+export {
+  DEFAULT_DOMAIN_FEEDBACK_CONFIG,
+  accumulateDomainCandidateFeedback,
+  applyDomainFeedbackToSeedCandidate,
+  computeDomainFeedbackAdjustment,
+  deriveDomainFeedbackDescriptor,
+  getPurityBucket,
+  normalizeDomainFeedbackAdjustments,
+  normalizeDomainFeedbackConfig,
+} from './feedbackLoop';
+export type {
+  DomainFeedbackConfig,
+  DomainFeedbackDescriptor,
+  DomainFeedbackMetadata,
+  DomainFeedbackPurityBucket,
+  DomainFeedbackStats,
+  DomainFeedbackTrack,
+} from './feedbackLoop';
 export { extractLabelCandidates } from './labelExtractor';
 export type { LabelCandidate } from './labelExtractor';

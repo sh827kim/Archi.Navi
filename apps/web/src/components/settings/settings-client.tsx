@@ -96,6 +96,24 @@ interface FeedbackSummary {
   totalSamples: number;
 }
 
+interface FeedbackEntry {
+  key: string;
+  approved: number;
+  rejected: number;
+  total: number;
+  approvalRate: number;
+  adjustment: number;
+}
+
+interface InferenceProfileFeedbackPayload {
+  relationFeedbackConfig?: FeedbackConfig;
+  relationFeedbackSummary?: FeedbackSummary;
+  relationFeedbackEntries?: FeedbackEntry[];
+  domainFeedbackConfig?: FeedbackConfig;
+  domainFeedbackSummary?: FeedbackSummary;
+  domainFeedbackEntries?: FeedbackEntry[];
+}
+
 /* ─── localStorage 키 ─── */
 const LS = {
   AI_PROVIDER: 'archi-navi:ai-provider',
@@ -141,6 +159,130 @@ const EMPTY_FEEDBACK_SUMMARY: FeedbackSummary = {
   rejectedCount: 0,
   totalSamples: 0,
 };
+
+function buildDefaultProfileUrl(
+  workspaceId: string,
+  options?: { includeFeedbackEntries?: boolean },
+): string {
+  const searchParams = new URLSearchParams({ workspaceId });
+  if (options?.includeFeedbackEntries) {
+    searchParams.set('includeFeedbackEntries', 'true');
+  }
+  return `/api/inference/profiles/default?${searchParams.toString()}`;
+}
+
+function buildDefaultProfileMutationUrl(options?: { includeFeedbackEntries?: boolean }): string {
+  if (!options?.includeFeedbackEntries) {
+    return '/api/inference/profiles/default';
+  }
+
+  const searchParams = new URLSearchParams({ includeFeedbackEntries: 'true' });
+  return `/api/inference/profiles/default?${searchParams.toString()}`;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function normalizeFeedbackEntries(value: unknown): FeedbackEntry[] {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .flatMap((entry) => {
+      const record = asRecord(entry);
+      const key = typeof record?.key === 'string' && record.key.trim().length > 0
+        ? record.key.trim()
+        : null;
+      if (!key) return [];
+
+      const approved = Math.max(0, Math.round(asFiniteNumber(record.approved) ?? 0));
+      const rejected = Math.max(0, Math.round(asFiniteNumber(record.rejected) ?? 0));
+      const total = Math.max(
+        approved + rejected,
+        Math.round(asFiniteNumber(record.total) ?? approved + rejected),
+      );
+      const approvalRate = total > 0 ? approved / total : 0;
+      const adjustment = asFiniteNumber(record.adjustment) ?? 0;
+
+      return [{
+        key,
+        approved,
+        rejected,
+        total,
+        approvalRate,
+        adjustment,
+      }];
+    })
+    .sort((a, b) => {
+      if (b.total !== a.total) return b.total - a.total;
+      const adjustmentGap = Math.abs(b.adjustment) - Math.abs(a.adjustment);
+      if (adjustmentGap !== 0) return adjustmentGap;
+      return a.key.localeCompare(b.key);
+    });
+}
+
+function applyRelationFeedbackPayload(
+  payload: InferenceProfileFeedbackPayload,
+  fallbackConfig: FeedbackConfig,
+): {
+  config: FeedbackConfig;
+  summary: FeedbackSummary;
+  entries: FeedbackEntry[];
+} {
+  return {
+    config: {
+      enabled: payload.relationFeedbackConfig?.enabled ?? fallbackConfig.enabled,
+      minSamples: payload.relationFeedbackConfig?.minSamples ?? fallbackConfig.minSamples,
+      maxAdjustment: payload.relationFeedbackConfig?.maxAdjustment ?? fallbackConfig.maxAdjustment,
+    },
+    summary: payload.relationFeedbackSummary ?? EMPTY_FEEDBACK_SUMMARY,
+    entries: normalizeFeedbackEntries(payload.relationFeedbackEntries),
+  };
+}
+
+function applyDomainFeedbackPayload(
+  payload: InferenceProfileFeedbackPayload,
+  fallbackConfig: FeedbackConfig,
+): {
+  config: FeedbackConfig;
+  summary: FeedbackSummary;
+  entries: FeedbackEntry[];
+} {
+  return {
+    config: {
+      enabled: payload.domainFeedbackConfig?.enabled ?? fallbackConfig.enabled,
+      minSamples: payload.domainFeedbackConfig?.minSamples ?? fallbackConfig.minSamples,
+      maxAdjustment: payload.domainFeedbackConfig?.maxAdjustment ?? fallbackConfig.maxAdjustment,
+    },
+    summary: payload.domainFeedbackSummary ?? EMPTY_FEEDBACK_SUMMARY,
+    entries: normalizeFeedbackEntries(payload.domainFeedbackEntries),
+  };
+}
+
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatSignedPercentPoints(value: number): string {
+  const rounded = Math.round(value * 1000) / 10;
+  if (Object.is(rounded, -0)) return '0%p';
+  return `${rounded > 0 ? '+' : ''}${rounded}%p`;
+}
+
+function getFeedbackEntryStatus(
+  entry: FeedbackEntry,
+  minSamples: number,
+): '통계 없음' | '표본 부족' | '보정 적용' {
+  if (entry.total === 0) return '통계 없음';
+  if (entry.total < minSamples) return '표본 부족';
+  return '보정 적용';
+}
 
 function readLocalStorage(key: string, fallback: string): string {
   if (typeof window === 'undefined') return fallback;
@@ -1022,16 +1164,35 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
   const [codeEngine, setCodeEngine] = useState<CodeEngineMode>(() =>
     normalizeCodeEngineMode(readLocalStorage(LS.INF_CODE_ENGINE, 'hybrid')),
   );
-  const [feedbackEnabled, setFeedbackEnabled] = useState(DEFAULT_FEEDBACK_CONFIG.enabled);
-  const [feedbackMinSamples, setFeedbackMinSamples] = useState(DEFAULT_FEEDBACK_CONFIG.minSamples);
-  const [feedbackMaxAdjustment, setFeedbackMaxAdjustment] = useState(
+  const [relationFeedbackEnabled, setRelationFeedbackEnabled] = useState(
+    DEFAULT_FEEDBACK_CONFIG.enabled,
+  );
+  const [relationFeedbackMinSamples, setRelationFeedbackMinSamples] = useState(
+    DEFAULT_FEEDBACK_CONFIG.minSamples,
+  );
+  const [relationFeedbackMaxAdjustment, setRelationFeedbackMaxAdjustment] = useState(
     DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
   );
-  const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummary>(EMPTY_FEEDBACK_SUMMARY);
+  const [relationFeedbackSummary, setRelationFeedbackSummary] = useState<FeedbackSummary>(
+    EMPTY_FEEDBACK_SUMMARY,
+  );
+  const [relationFeedbackEntries, setRelationFeedbackEntries] = useState<FeedbackEntry[]>([]);
+  const [domainFeedbackEnabled, setDomainFeedbackEnabled] = useState(DEFAULT_FEEDBACK_CONFIG.enabled);
+  const [domainFeedbackMinSamples, setDomainFeedbackMinSamples] = useState(
+    DEFAULT_FEEDBACK_CONFIG.minSamples,
+  );
+  const [domainFeedbackMaxAdjustment, setDomainFeedbackMaxAdjustment] = useState(
+    DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
+  );
+  const [domainFeedbackSummary, setDomainFeedbackSummary] = useState<FeedbackSummary>(
+    EMPTY_FEEDBACK_SUMMARY,
+  );
+  const [domainFeedbackEntries, setDomainFeedbackEntries] = useState<FeedbackEntry[]>([]);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [syncingProfile, setSyncingProfile] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
-  const [resettingFeedback, setResettingFeedback] = useState(false);
+  const [resettingRelationFeedback, setResettingRelationFeedback] = useState(false);
+  const [resettingDomainFeedback, setResettingDomainFeedback] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // 가중치 합계 검증
@@ -1048,7 +1209,7 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
     async function loadDefaultProfile() {
       setSyncingProfile(true);
       try {
-        const res = await fetch(`/api/inference/profiles/default?workspaceId=${workspaceId}`);
+        const res = await fetch(buildDefaultProfileUrl(workspaceId, { includeFeedbackEntries: true }));
         if (!res.ok) throw new Error();
         const profile = (await res.json()) as {
           id: string;
@@ -1061,9 +1222,7 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
             boostFactor: number;
             penaltyFactor: number;
           };
-          feedbackConfig?: FeedbackConfig;
-          feedbackSummary?: FeedbackSummary;
-        };
+        } & InferenceProfileFeedbackPayload;
         if (cancelled) return;
         setProfileId(profile.id);
         setWCode(clamp(profile.wCode, 0, 1));
@@ -1073,18 +1232,29 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
         setCrossValidationEnabled(profile.crossValidation?.enabled ?? true);
         setCrossValidationBoostFactor(clamp(profile.crossValidation?.boostFactor ?? 0.3, 0, 1));
         setCrossValidationPenaltyFactor(clamp(profile.crossValidation?.penaltyFactor ?? 0.85, 0, 1));
-        setFeedbackEnabled(profile.feedbackConfig?.enabled ?? DEFAULT_FEEDBACK_CONFIG.enabled);
-        setFeedbackMinSamples(
-          clamp(profile.feedbackConfig?.minSamples ?? DEFAULT_FEEDBACK_CONFIG.minSamples, 1, 10000),
+        const relationFeedback = applyRelationFeedbackPayload(profile, DEFAULT_FEEDBACK_CONFIG);
+        setRelationFeedbackEnabled(
+          relationFeedback.config.enabled,
         );
-        setFeedbackMaxAdjustment(
-          clamp(
-            profile.feedbackConfig?.maxAdjustment ?? DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
-            0,
-            1,
-          ),
+        setRelationFeedbackMinSamples(
+          clamp(relationFeedback.config.minSamples, 1, 10000),
         );
-        setFeedbackSummary(profile.feedbackSummary ?? EMPTY_FEEDBACK_SUMMARY);
+        setRelationFeedbackMaxAdjustment(
+          clamp(relationFeedback.config.maxAdjustment, 0, 1),
+        );
+        setRelationFeedbackSummary(relationFeedback.summary);
+        setRelationFeedbackEntries(relationFeedback.entries);
+
+        const domainFeedback = applyDomainFeedbackPayload(profile, DEFAULT_FEEDBACK_CONFIG);
+        setDomainFeedbackEnabled(domainFeedback.config.enabled);
+        setDomainFeedbackMinSamples(
+          clamp(domainFeedback.config.minSamples, 1, 10000),
+        );
+        setDomainFeedbackMaxAdjustment(
+          clamp(domainFeedback.config.maxAdjustment, 0, 1),
+        );
+        setDomainFeedbackSummary(domainFeedback.summary);
+        setDomainFeedbackEntries(domainFeedback.entries);
       } catch {
         if (!cancelled) {
           toast.error('기본 추론 프로필 로드 실패 (로컬 설정으로 동작)');
@@ -1109,7 +1279,7 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
     }
     setSavingProfile(true);
     try {
-      const res = await fetch('/api/inference/profiles/default', {
+      const res = await fetch(buildDefaultProfileMutationUrl({ includeFeedbackEntries: true }), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -1123,26 +1293,53 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
             boostFactor: crossValidationBoostFactor,
             penaltyFactor: crossValidationPenaltyFactor,
           },
-          feedbackConfig: {
-            enabled: feedbackEnabled,
-            minSamples: feedbackMinSamples,
-            maxAdjustment: feedbackMaxAdjustment,
+          relationFeedbackConfig: {
+            enabled: relationFeedbackEnabled,
+            minSamples: relationFeedbackMinSamples,
+            maxAdjustment: relationFeedbackMaxAdjustment,
+          },
+          domainFeedbackConfig: {
+            enabled: domainFeedbackEnabled,
+            minSamples: domainFeedbackMinSamples,
+            maxAdjustment: domainFeedbackMaxAdjustment,
           },
         }),
       });
       const payload = (await res.json()) as {
         id?: string;
         error?: string;
-        feedbackConfig?: FeedbackConfig;
-        feedbackSummary?: FeedbackSummary;
-      };
+      } & InferenceProfileFeedbackPayload;
       if (!res.ok) throw new Error(payload.error ?? '프로필 저장 실패');
 
       if (payload.id) setProfileId(payload.id);
-      setFeedbackEnabled(payload.feedbackConfig?.enabled ?? feedbackEnabled);
-      setFeedbackMinSamples(payload.feedbackConfig?.minSamples ?? feedbackMinSamples);
-      setFeedbackMaxAdjustment(payload.feedbackConfig?.maxAdjustment ?? feedbackMaxAdjustment);
-      setFeedbackSummary(payload.feedbackSummary ?? EMPTY_FEEDBACK_SUMMARY);
+      const relationFeedback = applyRelationFeedbackPayload(payload, {
+        enabled: relationFeedbackEnabled,
+        minSamples: relationFeedbackMinSamples,
+        maxAdjustment: relationFeedbackMaxAdjustment,
+      });
+      setRelationFeedbackEnabled(relationFeedback.config.enabled);
+      setRelationFeedbackMinSamples(
+        relationFeedback.config.minSamples,
+      );
+      setRelationFeedbackMaxAdjustment(
+        relationFeedback.config.maxAdjustment,
+      );
+      setRelationFeedbackSummary(relationFeedback.summary);
+      setRelationFeedbackEntries(relationFeedback.entries);
+      const domainFeedback = applyDomainFeedbackPayload(payload, {
+        enabled: domainFeedbackEnabled,
+        minSamples: domainFeedbackMinSamples,
+        maxAdjustment: domainFeedbackMaxAdjustment,
+      });
+      setDomainFeedbackEnabled(domainFeedback.config.enabled);
+      setDomainFeedbackMinSamples(
+        domainFeedback.config.minSamples,
+      );
+      setDomainFeedbackMaxAdjustment(
+        domainFeedback.config.maxAdjustment,
+      );
+      setDomainFeedbackSummary(domainFeedback.summary);
+      setDomainFeedbackEntries(domainFeedback.entries);
       localStorage.setItem(LS.INF_W_CODE, wCode.toString());
       localStorage.setItem(LS.INF_W_DB, wDb.toString());
       localStorage.setItem(LS.INF_W_MSG, wMsg.toString());
@@ -1163,33 +1360,65 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
     }
   };
 
-  const resetFeedback = async () => {
-    setResettingFeedback(true);
+  const resetRelationFeedback = async () => {
+    setResettingRelationFeedback(true);
     try {
-      const res = await fetch('/api/inference/profiles/default', {
+      const res = await fetch(buildDefaultProfileMutationUrl({ includeFeedbackEntries: true }), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspaceId, resetAll: true }),
+        body: JSON.stringify({ workspaceId, resetRelationFeedback: true }),
       });
-      const payload = (await res.json()) as {
-        error?: string;
-        feedbackConfig?: FeedbackConfig;
-        feedbackSummary?: FeedbackSummary;
-      };
+      const payload = (await res.json()) as { error?: string } & InferenceProfileFeedbackPayload;
       if (!res.ok) throw new Error(payload.error ?? '피드백 통계 초기화 실패');
 
-      setFeedbackEnabled(payload.feedbackConfig?.enabled ?? DEFAULT_FEEDBACK_CONFIG.enabled);
-      setFeedbackMinSamples(payload.feedbackConfig?.minSamples ?? DEFAULT_FEEDBACK_CONFIG.minSamples);
-      setFeedbackMaxAdjustment(
-        payload.feedbackConfig?.maxAdjustment ?? DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
+      const relationFeedback = applyRelationFeedbackPayload(payload, DEFAULT_FEEDBACK_CONFIG);
+      setRelationFeedbackEnabled(
+        relationFeedback.config.enabled,
       );
-      setFeedbackSummary(payload.feedbackSummary ?? EMPTY_FEEDBACK_SUMMARY);
+      setRelationFeedbackMinSamples(
+        relationFeedback.config.minSamples,
+      );
+      setRelationFeedbackMaxAdjustment(
+        relationFeedback.config.maxAdjustment,
+      );
+      setRelationFeedbackSummary(relationFeedback.summary);
+      setRelationFeedbackEntries(relationFeedback.entries);
       setSaved(false);
-      toast.success('피드백 설정과 집계를 초기화했습니다');
+      toast.success('relation feedback 설정과 집계를 초기화했습니다');
     } catch (error) {
       toast.error(error instanceof Error ? error.message : '피드백 통계 초기화 실패');
     } finally {
-      setResettingFeedback(false);
+      setResettingRelationFeedback(false);
+    }
+  };
+
+  const resetDomainFeedback = async () => {
+    setResettingDomainFeedback(true);
+    try {
+      const res = await fetch(buildDefaultProfileMutationUrl({ includeFeedbackEntries: true }), {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, resetDomainFeedback: true }),
+      });
+      const payload = (await res.json()) as { error?: string } & InferenceProfileFeedbackPayload;
+      if (!res.ok) throw new Error(payload.error ?? '도메인 피드백 통계 초기화 실패');
+
+      const domainFeedback = applyDomainFeedbackPayload(payload, DEFAULT_FEEDBACK_CONFIG);
+      setDomainFeedbackEnabled(domainFeedback.config.enabled);
+      setDomainFeedbackMinSamples(
+        domainFeedback.config.minSamples,
+      );
+      setDomainFeedbackMaxAdjustment(
+        domainFeedback.config.maxAdjustment,
+      );
+      setDomainFeedbackSummary(domainFeedback.summary);
+      setDomainFeedbackEntries(domainFeedback.entries);
+      setSaved(false);
+      toast.success('domain feedback 설정과 집계를 초기화했습니다');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '도메인 피드백 통계 초기화 실패');
+    } finally {
+      setResettingDomainFeedback(false);
     }
   };
 
@@ -1295,104 +1524,64 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
       <Card className="glass-card">
         <CardHeader>
           <CardTitle>Feedback Loop</CardTitle>
-          <CardDescription>relation candidate 승인/거절 집계를 보고 보정 설정을 조정합니다</CardDescription>
+          <CardDescription>relation/domain feedback 설정, 요약, reset을 각각 독립적으로 관리합니다</CardDescription>
         </CardHeader>
         <CardContent className="space-y-5">
-          <div className="flex items-center justify-between rounded-lg border border-border/60 px-4 py-3">
-            <div>
-              <div className="text-sm font-medium text-foreground">피드백 보정 활성화</div>
-              <p className="text-xs text-muted-foreground">
-                집계는 유지하고 confidence 보정 적용 여부만 제어합니다
-              </p>
-            </div>
-            <Switch
-              checked={feedbackEnabled}
-              onCheckedChange={(checked) => {
-                setFeedbackEnabled(checked);
-                setSaved(false);
-              }}
-            />
-          </div>
+          <FeedbackSection
+            title="Relation Feedback"
+            description="relation candidate 승인/거절 집계를 보고 confidence 보정 규칙을 조정합니다"
+            enabled={relationFeedbackEnabled}
+            minSamples={relationFeedbackMinSamples}
+            maxAdjustment={relationFeedbackMaxAdjustment}
+            summary={relationFeedbackSummary}
+            entries={relationFeedbackEntries}
+            testIdPrefix="relation-feedback"
+            resetLabel="Relation reset"
+            resetting={resettingRelationFeedback}
+            syncingProfile={syncingProfile}
+            emptyMessage="아직 누적된 relation feedback 집계가 없습니다."
+            onEnabledChange={(checked) => {
+              setRelationFeedbackEnabled(checked);
+              setSaved(false);
+            }}
+            onMinSamplesChange={(value) => {
+              setRelationFeedbackMinSamples(clamp(value, 1, 10000));
+              setSaved(false);
+            }}
+            onMaxAdjustmentChange={(value) => {
+              setRelationFeedbackMaxAdjustment(clamp(value, 0, 1));
+              setSaved(false);
+            }}
+            onReset={() => void resetRelationFeedback()}
+          />
 
-          <div className="grid gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="feedback-min-samples">
-                최소 샘플 수
-              </label>
-              <Input
-                id="feedback-min-samples"
-                type="number"
-                min={1}
-                max={10000}
-                value={feedbackMinSamples}
-                onChange={(event) => {
-                  setFeedbackMinSamples(clamp(Number(event.target.value), 1, 10000));
-                  setSaved(false);
-                }}
-              />
-            </div>
-            <div className="space-y-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="feedback-max-adjustment">
-                최대 보정치
-              </label>
-              <Input
-                id="feedback-max-adjustment"
-                type="number"
-                min={0}
-                max={1}
-                step={0.01}
-                value={feedbackMaxAdjustment}
-                onChange={(event) => {
-                  setFeedbackMaxAdjustment(clamp(Number(event.target.value), 0, 1));
-                  setSaved(false);
-                }}
-              />
-            </div>
-          </div>
-
-          <div className="grid gap-3 sm:grid-cols-4">
-            <div className="rounded-lg border border-border/60 px-3 py-2">
-              <div className="text-xs text-muted-foreground">총 key</div>
-              <div className="text-lg font-semibold">{feedbackSummary.totalKeys}</div>
-            </div>
-            <div className="rounded-lg border border-border/60 px-3 py-2">
-              <div className="text-xs text-muted-foreground">보정 가능 key</div>
-              <div className="text-lg font-semibold">{feedbackSummary.eligibleKeys}</div>
-            </div>
-            <div className="rounded-lg border border-border/60 px-3 py-2">
-              <div className="text-xs text-muted-foreground">승인 / 거절</div>
-              <div className="text-lg font-semibold">
-                {feedbackSummary.approvedCount} / {feedbackSummary.rejectedCount}
-              </div>
-            </div>
-            <div className="rounded-lg border border-border/60 px-3 py-2">
-              <div className="text-xs text-muted-foreground">총 샘플</div>
-              <div className="text-lg font-semibold">{feedbackSummary.totalSamples}</div>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-medium text-foreground">집계 요약</div>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => void resetFeedback()}
-                disabled={resettingFeedback || syncingProfile}
-              >
-                {resettingFeedback ? '초기화 중...' : 'Reset all'}
-              </Button>
-            </div>
-            {feedbackSummary.totalSamples === 0 ? (
-              <div className="rounded-lg border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
-                아직 누적된 feedback 집계가 없습니다.
-              </div>
-            ) : (
-              <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-                key별 상세 통계는 노출하지 않고, 현재 기본 프로필의 누적 요약만 표시합니다.
-              </div>
-            )}
-          </div>
+          <FeedbackSection
+            title="Domain Feedback"
+            description="현재 공개 계약은 Track A domain candidate feedback 설정/집계만 다룹니다. queued/orchestrated parity는 여기서 보장하지 않습니다"
+            enabled={domainFeedbackEnabled}
+            minSamples={domainFeedbackMinSamples}
+            maxAdjustment={domainFeedbackMaxAdjustment}
+            summary={domainFeedbackSummary}
+            entries={domainFeedbackEntries}
+            testIdPrefix="domain-feedback"
+            resetLabel="Domain reset"
+            resetting={resettingDomainFeedback}
+            syncingProfile={syncingProfile}
+            emptyMessage="아직 누적된 domain feedback 집계가 없습니다."
+            onEnabledChange={(checked) => {
+              setDomainFeedbackEnabled(checked);
+              setSaved(false);
+            }}
+            onMinSamplesChange={(value) => {
+              setDomainFeedbackMinSamples(clamp(value, 1, 10000));
+              setSaved(false);
+            }}
+            onMaxAdjustmentChange={(value) => {
+              setDomainFeedbackMaxAdjustment(clamp(value, 0, 1));
+              setSaved(false);
+            }}
+            onReset={() => void resetDomainFeedback()}
+          />
         </CardContent>
       </Card>
 
@@ -1529,6 +1718,177 @@ export function EngineSettings({ workspaceId }: { workspaceId: string }) {
           '설정 저장'
         )}
       </Button>
+    </div>
+  );
+}
+
+function FeedbackSection({
+  title,
+  description,
+  enabled,
+  minSamples,
+  maxAdjustment,
+  summary,
+  entries,
+  testIdPrefix,
+  resetLabel,
+  resetting,
+  syncingProfile,
+  emptyMessage,
+  onEnabledChange,
+  onMinSamplesChange,
+  onMaxAdjustmentChange,
+  onReset,
+}: {
+  title: string;
+  description: string;
+  enabled: boolean;
+  minSamples: number;
+  maxAdjustment: number;
+  summary: FeedbackSummary;
+  entries: FeedbackEntry[];
+  testIdPrefix: string;
+  resetLabel: string;
+  resetting: boolean;
+  syncingProfile: boolean;
+  emptyMessage: string;
+  onEnabledChange: (checked: boolean) => void;
+  onMinSamplesChange: (value: number) => void;
+  onMaxAdjustmentChange: (value: number) => void;
+  onReset: () => void;
+}) {
+  return (
+    <div
+      className="space-y-5 rounded-xl border border-border/60 px-4 py-4"
+      data-testid={`${testIdPrefix}-section`}
+    >
+      <div className="space-y-1">
+        <div className="text-sm font-medium text-foreground">{title}</div>
+        <p className="text-xs text-muted-foreground">{description}</p>
+      </div>
+
+      <div className="flex items-center justify-between rounded-lg border border-border/60 px-4 py-3">
+        <div>
+          <div className="text-sm font-medium text-foreground">피드백 보정 활성화</div>
+          <p className="text-xs text-muted-foreground">
+            집계는 유지하고 다음 run의 보정 적용 여부만 제어합니다
+          </p>
+        </div>
+        <Switch checked={enabled} onCheckedChange={onEnabledChange} />
+      </div>
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-foreground" htmlFor={`${testIdPrefix}-min-samples`}>
+            최소 샘플 수
+          </label>
+          <Input
+            id={`${testIdPrefix}-min-samples`}
+            type="number"
+            min={1}
+            max={10000}
+            value={minSamples}
+            onChange={(event) => onMinSamplesChange(Number(event.target.value))}
+          />
+        </div>
+        <div className="space-y-2">
+          <label className="text-sm font-medium text-foreground" htmlFor={`${testIdPrefix}-max-adjustment`}>
+            최대 보정치
+          </label>
+          <Input
+            id={`${testIdPrefix}-max-adjustment`}
+            type="number"
+            min={0}
+            max={1}
+            step={0.01}
+            value={maxAdjustment}
+            onChange={(event) => onMaxAdjustmentChange(Number(event.target.value))}
+          />
+        </div>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-4">
+        <div className="rounded-lg border border-border/60 px-3 py-2">
+          <div className="text-xs text-muted-foreground">총 key</div>
+          <div className="text-lg font-semibold">{summary.totalKeys}</div>
+        </div>
+        <div className="rounded-lg border border-border/60 px-3 py-2">
+          <div className="text-xs text-muted-foreground">보정 가능 key</div>
+          <div className="text-lg font-semibold">{summary.eligibleKeys}</div>
+        </div>
+        <div className="rounded-lg border border-border/60 px-3 py-2">
+          <div className="text-xs text-muted-foreground">승인 / 거절</div>
+          <div className="text-lg font-semibold">
+            {summary.approvedCount} / {summary.rejectedCount}
+          </div>
+        </div>
+        <div className="rounded-lg border border-border/60 px-3 py-2">
+          <div className="text-xs text-muted-foreground">총 샘플</div>
+          <div className="text-lg font-semibold">{summary.totalSamples}</div>
+        </div>
+      </div>
+
+      <div className="space-y-2">
+        <div className="flex items-center justify-between">
+          <div className="text-sm font-medium text-foreground">집계 요약</div>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={onReset}
+            disabled={resetting || syncingProfile}
+          >
+            {resetting ? '초기화 중...' : resetLabel}
+          </Button>
+        </div>
+        {summary.totalSamples === 0 ? (
+          <div className="rounded-lg border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
+            {emptyMessage}
+          </div>
+        ) : entries.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
+            key별 상세 통계가 아직 내려오지 않았습니다.
+          </div>
+        ) : (
+          <div className="overflow-hidden rounded-lg border border-border/60">
+            <table
+              className="w-full border-collapse text-sm"
+              data-testid={`${testIdPrefix}-detail-table`}
+            >
+              <thead className="bg-muted/30 text-left text-xs text-muted-foreground">
+                <tr>
+                  <th className="px-3 py-2 font-medium">Key</th>
+                  <th className="px-3 py-2 font-medium">승인 / 거절</th>
+                  <th className="px-3 py-2 font-medium">승인률</th>
+                  <th className="px-3 py-2 font-medium">보정치</th>
+                  <th className="px-3 py-2 font-medium">상태</th>
+                </tr>
+              </thead>
+              <tbody>
+                {entries.map((entry) => {
+                  const status = getFeedbackEntryStatus(entry, minSamples);
+                  return (
+                    <tr key={entry.key} className="border-t border-border/60">
+                      <td className="px-3 py-2 font-mono text-xs text-foreground">{entry.key}</td>
+                      <td className="px-3 py-2 text-foreground">
+                        {entry.approved} / {entry.rejected}
+                      </td>
+                      <td className="px-3 py-2 text-foreground">{formatPercent(entry.approvalRate)}</td>
+                      <td className="px-3 py-2 text-foreground">
+                        {formatSignedPercentPoints(entry.adjustment)}
+                      </td>
+                      <td className="px-3 py-2">
+                        <span className="rounded-full border border-border/60 px-2 py-0.5 text-xs text-muted-foreground">
+                          {status}
+                        </span>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -118,4 +118,50 @@ describe('runSeedBasedInference', () => {
     });
     expect(result.candidateCount).toBe(1);
   });
+
+  it('Track A 재실행 시 누적된 domain feedback 보정을 다음 run 후보에만 적용해야 한다', async () => {
+    const orderDomainId = await createObject(db, 'domain', 'order');
+    await createObject(db, 'service', 'order-api');
+
+    await db.insert(domainInferenceProfiles).values({
+      workspaceId,
+      name: 'default',
+      kind: 'NAMED',
+      isDefault: true,
+      domainFeedbackConfig: {
+        enabled: true,
+        minSamples: 10,
+        maxAdjustment: 0.15,
+      },
+      domainFeedbackAdjustments: {
+        [`TRACK_A:${orderDomainId}:HIGH`]: {
+          approved: 9,
+          rejected: 1,
+          total: 10,
+          approvalRate: 0.9,
+          adjustment: 0.06,
+        },
+      },
+    });
+
+    const result = await runSeedBasedInference(db, { workspaceId });
+    expect(result.candidateCount).toBe(1);
+
+    const [candidate] = await db
+      .select()
+      .from(domainCandidates)
+      .where(eq(domainCandidates.primaryDomainId, orderDomainId));
+    expect(candidate).toBeDefined();
+    expect(candidate?.purity).toBe(1);
+
+    const signals = (candidate?.signals ?? {}) as Record<string, unknown>;
+    expect(signals.feedback).toMatchObject({
+      key: `TRACK_A:${orderDomainId}:HIGH`,
+      basePurity: 1,
+      adjustment: 0.06,
+      adjustedPurity: 1,
+      applied: true,
+      sampleCount: 10,
+    });
+  });
 });

@@ -151,6 +151,52 @@ describe('POST /api/inference/domain-run', () => {
     expect(generateDomainLabelsMock).not.toHaveBeenCalled();
   });
 
+  it('track=b 는 Track A seed run과 domain feedback 적용 경로를 건드리지 않는 no-op 이어야 한다', async () => {
+    getDbMock.mockResolvedValue({});
+    getActiveGenerationMock.mockResolvedValue(11);
+    runDiscoveryMock.mockResolvedValue({
+      runId: 'run-track-b',
+      clusterCount: 5,
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/domain-run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          profileId: 'profile-1',
+          track: 'b',
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(runSeedBasedInferenceMock).not.toHaveBeenCalled();
+    expect(runDiscoveryMock).toHaveBeenCalledWith(
+      {},
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        profileId: 'profile-1',
+        generationVersion: 11,
+      }),
+    );
+
+    const payload = (await response.json()) as {
+      result?: {
+        track?: string;
+        seed: null;
+        discovery?: { clusterCount: number };
+      };
+    };
+    expect(payload.result).toMatchObject({
+      track: 'b',
+      seed: null,
+      discovery: {
+        clusterCount: 5,
+      },
+    });
+  });
+
   it('LLM 설정이 없어도 discovery 결과는 유지하고 200을 반환한다', async () => {
     getDbMock.mockResolvedValue({});
     getActiveGenerationMock.mockResolvedValue(5);

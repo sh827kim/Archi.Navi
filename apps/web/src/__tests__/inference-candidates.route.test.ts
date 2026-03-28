@@ -427,6 +427,101 @@ describe('GET /api/inference/candidates', () => {
     ]));
   });
 
+  it('feedback hint는 5-segment key를 그대로 포함하되 렌더링에 필요한 최소 필드만 노출해야 한다', async () => {
+    const candidates = [
+      {
+        id: 'cand-5',
+        subjectObjectId: 'svc-1',
+        objectId: 'svc-2',
+        relationType: 'call',
+        confidence: 0.76,
+        status: 'PENDING',
+        metadata: {
+          source: 'CODE',
+          feedback: {
+            key: 'CALL:code:call:spring_boot:java',
+            sourceFamily: 'code',
+            signalKind: 'call',
+            applied: true,
+            sampleCount: 10,
+            adjustment: 0.06,
+            baseConfidence: 0.7,
+            adjustedConfidence: 0.76,
+          },
+        },
+      },
+    ];
+    const allObjects = [
+      {
+        id: 'svc-1',
+        displayName: 'order-service',
+        name: 'order-service',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+      {
+        id: 'svc-2',
+        displayName: 'billing-service',
+        name: 'billing-service',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+    ];
+
+    const db = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: () => ({
+            where: () => ({
+              orderBy: () => ({
+                limit: () => ({
+                  offset: async () => candidates,
+                }),
+              }),
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            innerJoin: () => ({
+              where: async () => [],
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            where: async () => allObjects,
+          }),
+        }),
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/candidates?workspaceId=ws-1'),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cand-5',
+        feedback: {
+          key: 'CALL:code:call:spring_boot:java',
+          applied: true,
+          sampleCount: 10,
+          adjustment: 0.06,
+          baseConfidence: 0.7,
+          adjustedConfidence: 0.76,
+        },
+      }),
+    ]));
+    expect(payload[0].feedback).not.toHaveProperty('sourceFamily');
+    expect(payload[0].feedback).not.toHaveProperty('signalKind');
+  });
+
   it('limit/offset query를 후보 조회에 반영해야 한다', async () => {
     const offsetSpy = vi.fn(async () => []);
     const limitSpy = vi.fn(() => ({
