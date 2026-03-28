@@ -536,7 +536,6 @@ export async function PUT(req: NextRequest) {
     const domainFeedbackAdjustments = resetDomainFeedback
       ? {}
       : asFeedbackAdjustments(current.domainFeedbackAdjustments, domainFeedbackConfig);
-
     await db.transaction(async (tx) => {
       await tx
         .update(domainInferenceProfiles)

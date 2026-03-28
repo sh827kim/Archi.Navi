@@ -13,6 +13,7 @@ import {
 import { generateId } from '@archi-navi/shared';
 import { approveRelationCandidate } from '@/relation/approveRelationCandidate';
 import {
+  accumulateRelationCandidateFeedback,
   applyFeedbackToRelationCandidateInput,
   DEFAULT_RELATION_FEEDBACK_CONFIG,
 } from '@/relation/feedbackLoop';
@@ -471,5 +472,88 @@ describe('relation feedback loop', () => {
         adjustedConfidence: 0.76,
       },
     });
+  });
+
+  it('feedback 컬럼이 없는 스키마에서도 저장 경로가 실패하지 않아야 한다', async () => {
+    const legacyDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => {
+              throw Object.assign(new Error('column "feedback_config" does not exist'), { code: '42703' });
+            },
+          }),
+        }),
+      }),
+    };
+
+    const adjusted = await applyFeedbackToRelationCandidateInput(legacyDb as unknown as TestDb, {
+      workspaceId,
+      relationType: 'call',
+      subjectObjectId,
+      objectId,
+      confidence: 0.62,
+      metadata: { source: 'CODE', kind: 'call' },
+    });
+
+    expect(adjusted.confidence).toBe(0.62);
+    expect((adjusted.metadata.feedback as Record<string, unknown>)).toMatchObject({
+      key: 'CALL:code:call',
+      adjustment: 0,
+      adjustedConfidence: 0.62,
+      applied: false,
+      sampleCount: 0,
+    });
+  });
+
+  it('feedback 컬럼이 없는 스키마에서도 집계 경로가 실패하지 않아야 한다', async () => {
+    let selectCallCount = 0;
+    const legacyDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => {
+              selectCallCount += 1;
+              if (selectCallCount === 1) {
+                throw Object.assign(new Error('column "feedback_config" does not exist'), { code: '42703' });
+              }
+              return [];
+            },
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: () => ({
+          returning: async () => [{ id: generateId() }],
+        }),
+      }),
+      update: () => ({
+        set: () => ({
+          where: async () => [],
+        }),
+      }),
+    };
+
+    const result = await accumulateRelationCandidateFeedback(
+      legacyDb as unknown as TestDb,
+      {
+        id: generateId(),
+        workspaceId,
+        relationType: 'call',
+        subjectObjectId,
+        objectId,
+        metadata: { source: 'CODE', kind: 'call' },
+        confidence: 0.6,
+        status: 'PENDING',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        approvedAt: null,
+        reviewedBy: null,
+        evidenceId: null,
+      },
+      'APPROVED',
+    );
+
+    expect(result).toBeNull();
   });
 });
