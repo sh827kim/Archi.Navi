@@ -929,17 +929,20 @@ export function resolveJavaCallTargets(
     interfaceImpl?: string;
     ambiguous?: boolean;
     confidencePenalty?: number;
+    traversalContext: string;
   }> = [{
     typeName: initialTypeName,
     methodName: input.methodName,
     depth: 1,
+    traversalContext: `${initialTypeName}::${input.methodName}`,
   }];
   const visited = new Set<string>();
   const results: AstResolvedJavaCallTarget[] = [];
 
   while (stack.length > 0) {
     const current = stack.pop()!;
-    const visitKey = `${current.typeName}::${current.methodName}::${current.depth}`;
+    const visitKey =
+      `${current.typeName}::${current.methodName}::${current.depth}::${current.traversalContext}`;
     if (visited.has(visitKey)) continue;
     visited.add(visitKey);
 
@@ -956,6 +959,7 @@ export function resolveJavaCallTargets(
           depth: current.depth,
           interfaceImpl: implementation?.name ?? implementations[0]!,
           ambiguous: false,
+          traversalContext: `${current.traversalContext}->${implementations[0]}::${current.methodName}`,
         };
         if (current.confidencePenalty !== undefined) {
           nextState.confidencePenalty = current.confidencePenalty;
@@ -973,6 +977,7 @@ export function resolveJavaCallTargets(
           interfaceImpl: implementation?.name ?? implementationName,
           ambiguous: true,
           confidencePenalty: (current.confidencePenalty ?? 0) + 0.1,
+          traversalContext: `${current.traversalContext}->${implementationName}::${current.methodName}`,
         });
       }
       continue;
@@ -1007,6 +1012,8 @@ export function resolveJavaCallTargets(
             depth: current.depth + 1,
             interfaceImpl: implementation?.name ?? implementations[0]!,
             ambiguous: false,
+            traversalContext:
+              `${current.traversalContext}->${implementations[0]}::${nestedCall.methodName}`,
           };
           if (current.confidencePenalty !== undefined) {
             nextState.confidencePenalty = current.confidencePenalty;
@@ -1024,6 +1031,8 @@ export function resolveJavaCallTargets(
             interfaceImpl: implementation?.name ?? implementationName,
             ambiguous: true,
             confidencePenalty: (current.confidencePenalty ?? 0) + 0.1,
+            traversalContext:
+              `${current.traversalContext}->${implementationName}::${nestedCall.methodName}`,
           });
         }
         continue;
@@ -1033,6 +1042,7 @@ export function resolveJavaCallTargets(
         typeName: nestedTypeName,
         methodName: nestedCall.methodName,
         depth: current.depth + 1,
+        traversalContext: `${current.traversalContext}->${nestedTypeName}::${nestedCall.methodName}`,
       };
       if (current.interfaceImpl !== undefined) {
         nextState.interfaceImpl = current.interfaceImpl;
