@@ -17,11 +17,12 @@ import {
     evidences,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { applyFeedbackToRelationCandidateInput } from '../relation/feedbackLoop';
 import {
     asRecord,
-    getRawCandidateConfidence,
+    getPreCrossValidationConfidence,
     stripCrossValidationMetadata,
-} from '../utils/metadata';
+} from '../relation/utils';
 
 // ─── 타입 정의 ────────────────────────────────────────────────────────────────
 
@@ -356,7 +357,7 @@ export async function extractDbSchemaSignals(
         await db
             .update(relationCandidates)
             .set({
-                confidence: getRawCandidateConfidence(candidate.confidence, candidate.metadata),
+                confidence: getPreCrossValidationConfidence(candidate.confidence, candidate.metadata),
                 metadata: nextMetadata,
             })
             .where(eq(relationCandidates.id, candidate.id));
@@ -405,6 +406,14 @@ export async function extractDbSchemaSignals(
 
         const candidateId = generateId();
         const evidenceId = generateId();
+        const adjustedCandidate = await applyFeedbackToRelationCandidateInput(db, {
+            workspaceId,
+            relationType: 'fk_reference',
+            subjectObjectId: subjectId,
+            objectId,
+            confidence,
+            metadata: meta,
+        });
 
         await db.transaction(async (tx) => {
             await tx.insert(relationCandidates).values({
@@ -413,8 +422,8 @@ export async function extractDbSchemaSignals(
                 relationType: 'fk_reference',
                 subjectObjectId: subjectId,
                 objectId,
-                confidence,
-                metadata: meta,
+                confidence: adjustedCandidate.confidence,
+                metadata: adjustedCandidate.metadata,
                 status: 'PENDING',
             });
 

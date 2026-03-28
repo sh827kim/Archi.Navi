@@ -25,30 +25,33 @@ vi.mock('drizzle-orm', () => ({
 
 import { GET, PUT } from '@/app/api/inference/profiles/default/route';
 
+function createProfileRow() {
+  return {
+    id: 'profile-1',
+    workspaceId: 'ws-1',
+    name: 'default',
+    kind: 'NAMED',
+    isDefault: true,
+    wCode: 0.5,
+    wDb: 0.3,
+    wMsg: 0.2,
+    secondaryThreshold: 0.25,
+    minClusterSize: 3,
+    resolution: 1,
+    edgeWCall: 1,
+    edgeWRw: 0.8,
+    edgeWMsg: 0.6,
+    enabledLayers: ['call', 'db', 'msg', 'code'],
+  };
+}
+
 describe('inference profile default route', () => {
   afterEach(() => {
     vi.clearAllMocks();
   });
 
-  it('GET은 crossValidation 설정이 없을 때 기본값을 반환해야 한다', async () => {
-    const row = {
-      id: 'profile-1',
-      workspaceId: 'ws-1',
-      name: 'default',
-      kind: 'NAMED',
-      isDefault: true,
-      wCode: 0.5,
-      wDb: 0.3,
-      wMsg: 0.2,
-      secondaryThreshold: 0.25,
-      minClusterSize: 3,
-      resolution: 1,
-      edgeWCall: 1,
-      edgeWRw: 0.8,
-      edgeWMsg: 0.6,
-      enabledLayers: ['call', 'db', 'msg', 'code'],
-      crossValidation: null,
-    };
+  it('GET은 feedback/crossValidation 설정이 없을 때 기본값과 빈 summary를 반환해야 한다', async () => {
+    const row = createProfileRow();
     const db = {
       select: vi.fn().mockReturnValue({
         from: () => ({
@@ -57,7 +60,13 @@ describe('inference profile default route', () => {
           }),
         }),
       }),
-      execute: vi.fn(async () => ({ rows: [{ cross_validation: null }] })),
+      execute: vi.fn(async () => ({
+        rows: [{
+          cross_validation: null,
+          feedback_config: null,
+          feedback_adjustments: null,
+        }],
+      })),
     };
     getDbMock.mockResolvedValue(db);
 
@@ -66,46 +75,58 @@ describe('inference profile default route', () => {
     );
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+    const payload = await response.json();
+    expect(payload).toEqual(expect.objectContaining({
       id: 'profile-1',
       crossValidation: {
         enabled: true,
         boostFactor: 0.3,
         penaltyFactor: 0.85,
       },
+      feedbackConfig: {
+        enabled: true,
+        minSamples: 10,
+        maxAdjustment: 0.15,
+      },
+      feedbackSummary: {
+        totalKeys: 0,
+        eligibleKeys: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+        totalSamples: 0,
+      },
     }));
+    expect(payload.feedbackSummary).not.toHaveProperty('entries');
   });
 
-  it('PUT은 crossValidation 설정을 저장하고 응답에 반영해야 한다', async () => {
+  it('PUT은 feedbackConfig를 저장하고 summary를 재계산해 응답에 반영해야 한다', async () => {
     const current = {
-      id: 'profile-1',
-      workspaceId: 'ws-1',
-      name: 'default',
-      kind: 'NAMED',
-      isDefault: true,
-      wCode: 0.5,
-      wDb: 0.3,
-      wMsg: 0.2,
-      secondaryThreshold: 0.25,
-      minClusterSize: 3,
-      resolution: 1,
-      edgeWCall: 1,
-      edgeWRw: 0.8,
-      edgeWMsg: 0.6,
-      enabledLayers: ['call', 'db', 'msg', 'code'],
+      ...createProfileRow(),
       crossValidation: {
         enabled: true,
         boostFactor: 0.3,
         penaltyFactor: 0.85,
+      },
+      feedbackConfig: {
+        enabled: true,
+        minSamples: 10,
+        maxAdjustment: 0.15,
+      },
+      feedbackAdjustments: {
+        'CALL:code:call': {
+          approved: 9,
+          rejected: 1,
+          total: 10,
+          approvalRate: 0.9,
+          adjustment: 0.06,
+        },
       },
     };
     const updated = {
-      ...current,
-      crossValidation: {
-        enabled: false,
-        boostFactor: 0.1,
-        penaltyFactor: 0.9,
-      },
+      ...createProfileRow(),
+      crossValidation: current.crossValidation,
+      feedbackConfig: current.feedbackConfig,
+      feedbackAdjustments: current.feedbackAdjustments,
     };
 
     const selectMock = vi
@@ -127,8 +148,20 @@ describe('inference profile default route', () => {
 
     const setPayloads: unknown[] = [];
     const executeMock = vi.fn()
-      .mockResolvedValueOnce({ rows: [{ cross_validation: current.crossValidation }] })
-      .mockResolvedValueOnce({ rows: [{ cross_validation: updated.crossValidation }] });
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: current.crossValidation,
+          feedback_config: current.feedbackConfig,
+          feedback_adjustments: current.feedbackAdjustments,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: updated.crossValidation,
+          feedback_config: updated.feedbackConfig,
+          feedback_adjustments: updated.feedbackAdjustments,
+        }],
+      });
     const transactionExecuteMock = vi.fn(async () => undefined);
     const db = {
       select: selectMock,
@@ -156,13 +189,10 @@ describe('inference profile default route', () => {
       method: 'PUT',
       body: JSON.stringify({
         workspaceId: 'ws-1',
-        wCode: 0.5,
-        wDb: 0.3,
-        wMsg: 0.2,
-        crossValidation: {
+        feedbackConfig: {
           enabled: false,
-          boostFactor: 0.1,
-          penaltyFactor: 0.9,
+          minSamples: 5,
+          maxAdjustment: 0.2,
         },
       }),
       headers: { 'Content-Type': 'application/json' },
@@ -174,13 +204,124 @@ describe('inference profile default route', () => {
         isDefault: true,
       }),
     ]));
-    expect(transactionExecuteMock).toHaveBeenCalled();
-    await expect(response.json()).resolves.toEqual(expect.objectContaining({
-      crossValidation: {
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(2);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      feedbackConfig: {
         enabled: false,
-        boostFactor: 0.1,
-        penaltyFactor: 0.9,
+        minSamples: 5,
+        maxAdjustment: 0.2,
+      },
+      feedbackSummary: {
+        totalKeys: 1,
+        eligibleKeys: 1,
+        approvedCount: 9,
+        rejectedCount: 1,
+        totalSamples: 10,
+      },
+    });
+    expect(payload.feedbackSummary).not.toHaveProperty('entries');
+  });
+
+  it('PUT resetAll은 feedback 설정을 기본값으로 돌리고 summary를 비워야 한다', async () => {
+    const current = {
+      ...createProfileRow(),
+      crossValidation: {
+        enabled: true,
+        boostFactor: 0.3,
+        penaltyFactor: 0.85,
+      },
+      feedbackConfig: {
+        enabled: false,
+        minSamples: 5,
+        maxAdjustment: 0.2,
+      },
+      feedbackAdjustments: {
+        'CALL:code:call': {
+          approved: 4,
+          rejected: 1,
+          total: 5,
+          approvalRate: 0.8,
+          adjustment: 0.06,
+        },
+      },
+    };
+
+    const selectMock = vi
+      .fn()
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () => ({
+            limit: async () => [current],
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () => ({
+            limit: async () => [current],
+          }),
+        }),
+      });
+    const executeMock = vi.fn()
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: current.crossValidation,
+          feedback_config: current.feedbackConfig,
+          feedback_adjustments: current.feedbackAdjustments,
+        }],
+      })
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: current.crossValidation,
+          feedback_config: current.feedbackConfig,
+          feedback_adjustments: current.feedbackAdjustments,
+        }],
+      });
+    const db = {
+      select: selectMock,
+      execute: executeMock,
+      transaction: async (callback: (tx: {
+        update: (table: unknown) => {
+          set: (payload: unknown) => { where: () => Promise<void> };
+        };
+        execute: (statement: unknown) => Promise<void>;
+      }) => Promise<void>) => {
+        await callback({
+          update: () => ({
+            set: () => ({ where: async () => {} }),
+          }),
+          execute: vi.fn(async () => undefined),
+        });
+      },
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await PUT(new NextRequest('http://localhost/api/inference/profiles/default', {
+      method: 'PUT',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        resetAll: true,
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toEqual(expect.objectContaining({
+      feedbackConfig: {
+        enabled: true,
+        minSamples: 10,
+        maxAdjustment: 0.15,
+      },
+      feedbackSummary: {
+        totalKeys: 0,
+        eligibleKeys: 0,
+        approvedCount: 0,
+        rejectedCount: 0,
+        totalSamples: 0,
       },
     }));
+    expect(payload.feedbackSummary).not.toHaveProperty('entries');
   });
 });

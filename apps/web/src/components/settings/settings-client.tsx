@@ -82,6 +82,20 @@ interface LayerItem {
   isEnabled: boolean;
 }
 
+interface FeedbackConfig {
+  enabled: boolean;
+  minSamples: number;
+  maxAdjustment: number;
+}
+
+interface FeedbackSummary {
+  totalKeys: number;
+  eligibleKeys: number;
+  approvedCount: number;
+  rejectedCount: number;
+  totalSamples: number;
+}
+
 /* ─── localStorage 키 ─── */
 const LS = {
   AI_PROVIDER: 'archi-navi:ai-provider',
@@ -112,6 +126,20 @@ const DEFAULT_MODELS: Record<string, string> = {
   anthropic: 'claude-sonnet-4-5',
   google: 'gemini-pro',
   custom: '',
+};
+
+const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
+  enabled: true,
+  minSamples: 10,
+  maxAdjustment: 0.15,
+};
+
+const EMPTY_FEEDBACK_SUMMARY: FeedbackSummary = {
+  totalKeys: 0,
+  eligibleKeys: 0,
+  approvedCount: 0,
+  rejectedCount: 0,
+  totalSamples: 0,
 };
 
 function readLocalStorage(key: string, fallback: string): string {
@@ -972,7 +1000,7 @@ function AiSettings() {
 /* ════════════════════════════════════════════════════════════════
    추론 / Rollup 설정
    ════════════════════════════════════════════════════════════════ */
-function EngineSettings({ workspaceId }: { workspaceId: string }) {
+export function EngineSettings({ workspaceId }: { workspaceId: string }) {
   const [wCode, setWCode] = useState(() => readLocalStorageNumber(LS.INF_W_CODE, 0.5, parseFloat));
   const [wDb, setWDb] = useState(() => readLocalStorageNumber(LS.INF_W_DB, 0.3, parseFloat));
   const [wMsg, setWMsg] = useState(() => readLocalStorageNumber(LS.INF_W_MSG, 0.2, parseFloat));
@@ -994,9 +1022,16 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
   const [codeEngine, setCodeEngine] = useState<CodeEngineMode>(() =>
     normalizeCodeEngineMode(readLocalStorage(LS.INF_CODE_ENGINE, 'hybrid')),
   );
+  const [feedbackEnabled, setFeedbackEnabled] = useState(DEFAULT_FEEDBACK_CONFIG.enabled);
+  const [feedbackMinSamples, setFeedbackMinSamples] = useState(DEFAULT_FEEDBACK_CONFIG.minSamples);
+  const [feedbackMaxAdjustment, setFeedbackMaxAdjustment] = useState(
+    DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
+  );
+  const [feedbackSummary, setFeedbackSummary] = useState<FeedbackSummary>(EMPTY_FEEDBACK_SUMMARY);
   const [profileId, setProfileId] = useState<string | null>(null);
   const [syncingProfile, setSyncingProfile] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
+  const [resettingFeedback, setResettingFeedback] = useState(false);
   const [saved, setSaved] = useState(false);
 
   // 가중치 합계 검증
@@ -1026,6 +1061,8 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
             boostFactor: number;
             penaltyFactor: number;
           };
+          feedbackConfig?: FeedbackConfig;
+          feedbackSummary?: FeedbackSummary;
         };
         if (cancelled) return;
         setProfileId(profile.id);
@@ -1036,6 +1073,18 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
         setCrossValidationEnabled(profile.crossValidation?.enabled ?? true);
         setCrossValidationBoostFactor(clamp(profile.crossValidation?.boostFactor ?? 0.3, 0, 1));
         setCrossValidationPenaltyFactor(clamp(profile.crossValidation?.penaltyFactor ?? 0.85, 0, 1));
+        setFeedbackEnabled(profile.feedbackConfig?.enabled ?? DEFAULT_FEEDBACK_CONFIG.enabled);
+        setFeedbackMinSamples(
+          clamp(profile.feedbackConfig?.minSamples ?? DEFAULT_FEEDBACK_CONFIG.minSamples, 1, 10000),
+        );
+        setFeedbackMaxAdjustment(
+          clamp(
+            profile.feedbackConfig?.maxAdjustment ?? DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
+            0,
+            1,
+          ),
+        );
+        setFeedbackSummary(profile.feedbackSummary ?? EMPTY_FEEDBACK_SUMMARY);
       } catch {
         if (!cancelled) {
           toast.error('기본 추론 프로필 로드 실패 (로컬 설정으로 동작)');
@@ -1074,12 +1123,26 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
             boostFactor: crossValidationBoostFactor,
             penaltyFactor: crossValidationPenaltyFactor,
           },
+          feedbackConfig: {
+            enabled: feedbackEnabled,
+            minSamples: feedbackMinSamples,
+            maxAdjustment: feedbackMaxAdjustment,
+          },
         }),
       });
-      const payload = (await res.json()) as { id?: string; error?: string };
+      const payload = (await res.json()) as {
+        id?: string;
+        error?: string;
+        feedbackConfig?: FeedbackConfig;
+        feedbackSummary?: FeedbackSummary;
+      };
       if (!res.ok) throw new Error(payload.error ?? '프로필 저장 실패');
 
       if (payload.id) setProfileId(payload.id);
+      setFeedbackEnabled(payload.feedbackConfig?.enabled ?? feedbackEnabled);
+      setFeedbackMinSamples(payload.feedbackConfig?.minSamples ?? feedbackMinSamples);
+      setFeedbackMaxAdjustment(payload.feedbackConfig?.maxAdjustment ?? feedbackMaxAdjustment);
+      setFeedbackSummary(payload.feedbackSummary ?? EMPTY_FEEDBACK_SUMMARY);
       localStorage.setItem(LS.INF_W_CODE, wCode.toString());
       localStorage.setItem(LS.INF_W_DB, wDb.toString());
       localStorage.setItem(LS.INF_W_MSG, wMsg.toString());
@@ -1097,6 +1160,36 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
       toast.error(error instanceof Error ? error.message : '설정 저장 실패');
     } finally {
       setSavingProfile(false);
+    }
+  };
+
+  const resetFeedback = async () => {
+    setResettingFeedback(true);
+    try {
+      const res = await fetch('/api/inference/profiles/default', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, resetAll: true }),
+      });
+      const payload = (await res.json()) as {
+        error?: string;
+        feedbackConfig?: FeedbackConfig;
+        feedbackSummary?: FeedbackSummary;
+      };
+      if (!res.ok) throw new Error(payload.error ?? '피드백 통계 초기화 실패');
+
+      setFeedbackEnabled(payload.feedbackConfig?.enabled ?? DEFAULT_FEEDBACK_CONFIG.enabled);
+      setFeedbackMinSamples(payload.feedbackConfig?.minSamples ?? DEFAULT_FEEDBACK_CONFIG.minSamples);
+      setFeedbackMaxAdjustment(
+        payload.feedbackConfig?.maxAdjustment ?? DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
+      );
+      setFeedbackSummary(payload.feedbackSummary ?? EMPTY_FEEDBACK_SUMMARY);
+      setSaved(false);
+      toast.success('피드백 설정과 집계를 초기화했습니다');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '피드백 통계 초기화 실패');
+    } finally {
+      setResettingFeedback(false);
     }
   };
 
@@ -1196,6 +1289,110 @@ function EngineSettings({ workspaceId }: { workspaceId: string }) {
           <p className="text-xs text-muted-foreground">
             현재 단일 contradiction penalty: {(1 - crossValidationPenaltyFactor).toFixed(2)}
           </p>
+        </CardContent>
+      </Card>
+
+      <Card className="glass-card">
+        <CardHeader>
+          <CardTitle>Feedback Loop</CardTitle>
+          <CardDescription>relation candidate 승인/거절 집계를 보고 보정 설정을 조정합니다</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-5">
+          <div className="flex items-center justify-between rounded-lg border border-border/60 px-4 py-3">
+            <div>
+              <div className="text-sm font-medium text-foreground">피드백 보정 활성화</div>
+              <p className="text-xs text-muted-foreground">
+                집계는 유지하고 confidence 보정 적용 여부만 제어합니다
+              </p>
+            </div>
+            <Switch
+              checked={feedbackEnabled}
+              onCheckedChange={(checked) => {
+                setFeedbackEnabled(checked);
+                setSaved(false);
+              }}
+            />
+          </div>
+
+          <div className="grid gap-4 sm:grid-cols-2">
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground" htmlFor="feedback-min-samples">
+                최소 샘플 수
+              </label>
+              <Input
+                id="feedback-min-samples"
+                type="number"
+                min={1}
+                max={10000}
+                value={feedbackMinSamples}
+                onChange={(event) => {
+                  setFeedbackMinSamples(clamp(Number(event.target.value), 1, 10000));
+                  setSaved(false);
+                }}
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="text-sm font-medium text-foreground" htmlFor="feedback-max-adjustment">
+                최대 보정치
+              </label>
+              <Input
+                id="feedback-max-adjustment"
+                type="number"
+                min={0}
+                max={1}
+                step={0.01}
+                value={feedbackMaxAdjustment}
+                onChange={(event) => {
+                  setFeedbackMaxAdjustment(clamp(Number(event.target.value), 0, 1));
+                  setSaved(false);
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-4">
+            <div className="rounded-lg border border-border/60 px-3 py-2">
+              <div className="text-xs text-muted-foreground">총 key</div>
+              <div className="text-lg font-semibold">{feedbackSummary.totalKeys}</div>
+            </div>
+            <div className="rounded-lg border border-border/60 px-3 py-2">
+              <div className="text-xs text-muted-foreground">보정 가능 key</div>
+              <div className="text-lg font-semibold">{feedbackSummary.eligibleKeys}</div>
+            </div>
+            <div className="rounded-lg border border-border/60 px-3 py-2">
+              <div className="text-xs text-muted-foreground">승인 / 거절</div>
+              <div className="text-lg font-semibold">
+                {feedbackSummary.approvedCount} / {feedbackSummary.rejectedCount}
+              </div>
+            </div>
+            <div className="rounded-lg border border-border/60 px-3 py-2">
+              <div className="text-xs text-muted-foreground">총 샘플</div>
+              <div className="text-lg font-semibold">{feedbackSummary.totalSamples}</div>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div className="text-sm font-medium text-foreground">집계 요약</div>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void resetFeedback()}
+                disabled={resettingFeedback || syncingProfile}
+              >
+                {resettingFeedback ? '초기화 중...' : 'Reset all'}
+              </Button>
+            </div>
+            {feedbackSummary.totalSamples === 0 ? (
+              <div className="rounded-lg border border-dashed border-border/60 px-4 py-6 text-sm text-muted-foreground">
+                아직 누적된 feedback 집계가 없습니다.
+              </div>
+            ) : (
+              <div className="rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
+                key별 상세 통계는 노출하지 않고, 현재 기본 프로필의 누적 요약만 표시합니다.
+              </div>
+            )}
+          </div>
         </CardContent>
       </Card>
 

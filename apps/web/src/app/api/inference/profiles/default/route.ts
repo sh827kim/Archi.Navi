@@ -21,6 +21,34 @@ const DEFAULT_CROSS_VALIDATION_CONFIG: CrossValidationConfig = {
   penaltyFactor: 0.85,
 };
 
+interface FeedbackConfig {
+  enabled: boolean;
+  minSamples: number;
+  maxAdjustment: number;
+}
+
+interface FeedbackStats {
+  approved: number;
+  rejected: number;
+  total: number;
+  approvalRate: number;
+  adjustment: number;
+}
+
+interface FeedbackSummary {
+  totalKeys: number;
+  eligibleKeys: number;
+  approvedCount: number;
+  rejectedCount: number;
+  totalSamples: number;
+}
+
+const DEFAULT_FEEDBACK_CONFIG: FeedbackConfig = {
+  enabled: true,
+  minSamples: 10,
+  maxAdjustment: 0.15,
+};
+
 interface ProfileResponse {
   id: string;
   workspaceId: string;
@@ -38,6 +66,8 @@ interface ProfileResponse {
   edgeWMsg: number | null;
   enabledLayers: unknown;
   crossValidation?: unknown;
+  feedbackConfig?: unknown;
+  feedbackAdjustments?: unknown;
 }
 
 interface UpdateProfileBody {
@@ -53,6 +83,8 @@ interface UpdateProfileBody {
   edgeWMsg?: number;
   enabledLayers?: string[];
   crossValidation?: Partial<CrossValidationConfig>;
+  feedbackConfig?: Partial<FeedbackConfig>;
+  resetAll?: boolean;
 }
 
 function asCrossValidationConfig(value: unknown): CrossValidationConfig {
@@ -73,8 +105,85 @@ function asCrossValidationConfig(value: unknown): CrossValidationConfig {
   };
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
+function asFeedbackConfig(value: unknown): FeedbackConfig {
+  const record = asRecord(value);
+
+  return {
+    enabled: typeof record['enabled'] === 'boolean'
+      ? record['enabled']
+      : DEFAULT_FEEDBACK_CONFIG.enabled,
+    minSamples: isFiniteNumber(record['minSamples'])
+      ? Math.round(clamp(record['minSamples'], 1, 10_000))
+      : DEFAULT_FEEDBACK_CONFIG.minSamples,
+    maxAdjustment: isFiniteNumber(record['maxAdjustment'])
+      ? clamp(record['maxAdjustment'], 0, 1)
+      : DEFAULT_FEEDBACK_CONFIG.maxAdjustment,
+  };
+}
+
+function normalizeFeedbackStats(
+  value: unknown,
+  config: FeedbackConfig,
+): FeedbackStats {
+  const record = asRecord(value);
+  const approved = isFiniteNumber(record['approved'])
+    ? Math.max(0, Math.round(record['approved']))
+    : 0;
+  const rejected = isFiniteNumber(record['rejected'])
+    ? Math.max(0, Math.round(record['rejected']))
+    : 0;
+  const total = approved + rejected;
+  const approvalRate = total > 0 ? approved / total : 0;
+  const adjustment = total >= config.minSamples
+    ? clamp((approvalRate - 0.5) * config.maxAdjustment, -config.maxAdjustment, config.maxAdjustment)
+    : 0;
+
+  return {
+    approved,
+    rejected,
+    total,
+    approvalRate,
+    adjustment,
+  };
+}
+
+function asFeedbackAdjustments(
+  value: unknown,
+  config: FeedbackConfig,
+): Record<string, FeedbackStats> {
+  const record = asRecord(value);
+  return Object.fromEntries(
+    Object.entries(record)
+      .filter(([key]) => key.trim().length > 0)
+      .map(([key, entry]) => [key, normalizeFeedbackStats(entry, config)]),
+  );
+}
+
+function buildFeedbackSummary(
+  adjustments: Record<string, FeedbackStats>,
+  config: FeedbackConfig,
+): FeedbackSummary {
+  const entries = Object.values(adjustments);
+
+  return {
+    totalKeys: entries.length,
+    eligibleKeys: entries.filter((entry) => entry.total >= config.minSamples).length,
+    approvedCount: entries.reduce((sum, entry) => sum + entry.approved, 0),
+    rejectedCount: entries.reduce((sum, entry) => sum + entry.rejected, 0),
+    totalSamples: entries.reduce((sum, entry) => sum + entry.total, 0),
+  };
+}
+
 function toPublicProfile(row: ProfileResponse) {
   const crossValidation = asCrossValidationConfig(row.crossValidation);
+  const feedbackConfig = asFeedbackConfig(row.feedbackConfig);
+  const feedbackAdjustments = asFeedbackAdjustments(row.feedbackAdjustments, feedbackConfig);
   return {
     id: row.id,
     workspaceId: row.workspaceId,
@@ -94,7 +203,50 @@ function toPublicProfile(row: ProfileResponse) {
       ? (row.enabledLayers as unknown[]).filter((v): v is string => typeof v === 'string')
       : ['call', 'db', 'msg', 'code'],
     crossValidation,
+    feedbackConfig,
+    feedbackSummary: buildFeedbackSummary(feedbackAdjustments, feedbackConfig),
   };
+}
+
+async function selectProfileJsonState(
+  db: Awaited<ReturnType<typeof getDb>>,
+  profileId: string,
+): Promise<{
+  crossValidation: unknown;
+  feedbackConfig: unknown;
+  feedbackAdjustments: unknown;
+}> {
+  try {
+    const state = await db.execute<{
+      cross_validation: unknown;
+      feedback_config: unknown;
+      feedback_adjustments: unknown;
+    }>(sql`
+      select cross_validation, feedback_config, feedback_adjustments
+      from domain_inference_profiles
+      where id = ${profileId}
+      limit 1
+    `);
+
+    return {
+      crossValidation: state.rows[0]?.cross_validation,
+      feedbackConfig: state.rows[0]?.feedback_config,
+      feedbackAdjustments: state.rows[0]?.feedback_adjustments,
+    };
+  } catch {
+    const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
+      select cross_validation
+      from domain_inference_profiles
+      where id = ${profileId}
+      limit 1
+    `);
+
+    return {
+      crossValidation: crossValidation.rows[0]?.cross_validation,
+      feedbackConfig: undefined,
+      feedbackAdjustments: undefined,
+    };
+  }
 }
 
 async function selectDefaultProfile(workspaceId: string): Promise<ProfileResponse | null> {
@@ -112,16 +264,13 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
   const row = rows[0] ?? null;
   if (!row) return null;
 
-  const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
-    select cross_validation
-    from domain_inference_profiles
-    where id = ${row.id}
-    limit 1
-  `);
+  const state = await selectProfileJsonState(db, row.id);
 
   return {
     ...row,
-    crossValidation: crossValidation.rows[0]?.cross_validation,
+    crossValidation: state.crossValidation,
+    feedbackConfig: state.feedbackConfig,
+    feedbackAdjustments: state.feedbackAdjustments,
   };
 }
 
@@ -135,16 +284,13 @@ async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | 
   const row = rows[0] ?? null;
   if (!row) return null;
 
-  const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
-    select cross_validation
-    from domain_inference_profiles
-    where id = ${row.id}
-    limit 1
-  `);
+  const state = await selectProfileJsonState(db, row.id);
 
   return {
     ...row,
-    crossValidation: crossValidation.rows[0]?.cross_validation,
+    crossValidation: state.crossValidation,
+    feedbackConfig: state.feedbackConfig,
+    feedbackAdjustments: state.feedbackAdjustments,
   };
 }
 
@@ -260,6 +406,25 @@ export async function PUT(req: NextRequest) {
         ? clamp(crossValidationInput.penaltyFactor, 0, 1)
         : currentCrossValidation.penaltyFactor,
     };
+    const resetAll = body.resetAll === true;
+    const currentFeedbackConfig = asFeedbackConfig(current.feedbackConfig);
+    const feedbackConfigInput = body.feedbackConfig ?? {};
+    const feedbackConfig = resetAll
+      ? DEFAULT_FEEDBACK_CONFIG
+      : {
+          enabled: typeof feedbackConfigInput.enabled === 'boolean'
+            ? feedbackConfigInput.enabled
+            : currentFeedbackConfig.enabled,
+          minSamples: isFiniteNumber(feedbackConfigInput.minSamples)
+            ? Math.round(clamp(feedbackConfigInput.minSamples, 1, 10_000))
+            : currentFeedbackConfig.minSamples,
+          maxAdjustment: isFiniteNumber(feedbackConfigInput.maxAdjustment)
+            ? clamp(feedbackConfigInput.maxAdjustment, 0, 1)
+            : currentFeedbackConfig.maxAdjustment,
+        };
+    const feedbackAdjustments = resetAll
+      ? {}
+      : asFeedbackAdjustments(current.feedbackAdjustments, feedbackConfig);
 
     await db.transaction(async (tx) => {
       await tx
@@ -290,10 +455,26 @@ export async function PUT(req: NextRequest) {
         set cross_validation = ${JSON.stringify(crossValidation)}::jsonb
         where id = ${current.id}
       `);
+
+      try {
+        await tx.execute(sql`
+          update domain_inference_profiles
+          set feedback_config = ${JSON.stringify(feedbackConfig)}::jsonb,
+              feedback_adjustments = ${JSON.stringify(feedbackAdjustments)}::jsonb
+          where id = ${current.id}
+        `);
+      } catch {
+        // feedback 컬럼 마이그레이션이 아직 적용되지 않은 환경에서는 no-op 처리한다.
+      }
     });
 
     const updated = await ensureDefaultProfile(workspaceId);
-    return NextResponse.json(toPublicProfile(updated));
+    return NextResponse.json(toPublicProfile({
+      ...updated,
+      crossValidation,
+      feedbackConfig,
+      feedbackAdjustments,
+    }));
   } catch (error) {
     console.error('[PUT /api/inference/profiles/default]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

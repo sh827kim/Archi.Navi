@@ -99,7 +99,13 @@ export async function POST(
       if (!endpoint || endpoint.parentId !== candidate.objectId) continue;
 
       const [existingCandidate] = await db
-        .select({ id: relationCandidates.id, status: relationCandidates.status })
+        .select({
+          id: relationCandidates.id,
+          status: relationCandidates.status,
+          workspaceId: relationCandidates.workspaceId,
+          relationType: relationCandidates.relationType,
+          metadata: relationCandidates.metadata,
+        })
         .from(relationCandidates)
         .where(
           and(

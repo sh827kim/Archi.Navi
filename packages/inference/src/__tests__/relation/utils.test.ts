@@ -2,7 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   asFiniteNumber,
   asRecord,
-  getRawCandidateConfidence,
+  getBaseCandidateConfidence,
+  getPreCrossValidationConfidence,
   stripCrossValidationMetadata,
 } from '@/relation/utils';
 
@@ -22,11 +23,20 @@ describe('relation utils', () => {
 
   it('crossValidation.originalConfidence를 우선해야 한다', () => {
     expect(
-      getRawCandidateConfidence(0.9, {
+      getPreCrossValidationConfidence(0.9, {
         crossValidation: { originalConfidence: 0.4 },
       }),
     ).toBe(0.4);
-    expect(getRawCandidateConfidence(0.9, {})).toBe(0.9);
+    expect(getPreCrossValidationConfidence(0.9, {})).toBe(0.9);
+  });
+
+  it('feedback.baseConfidence가 있으면 base confidence를 우선해야 한다', () => {
+    expect(
+      getBaseCandidateConfidence(0.95, {
+        feedback: { baseConfidence: 0.6 },
+        crossValidation: { originalConfidence: 0.8 },
+      }),
+    ).toBe(0.6);
   });
 
   it('crossValidation metadata만 제거해야 한다', () => {

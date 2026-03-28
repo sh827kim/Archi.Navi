@@ -8,9 +8,11 @@ import { generateId } from '@archi-navi/shared';
 import { and, eq, or } from 'drizzle-orm';
 import {
   asRecord,
-  getRawCandidateConfidence,
+  getBaseCandidateConfidence,
+  getPreCrossValidationConfidence,
   stripCrossValidationMetadata,
 } from './utils';
+import { applyFeedbackToRelationCandidateInput } from './feedbackLoop';
 
 export interface SaveRelationCandidateParams {
   workspaceId: string;
@@ -27,6 +29,7 @@ export async function saveRelationCandidate(
   evidenceId: string,
 ): Promise<{ created: boolean }> {
   const { workspaceId, relationType, subjectObjectId, objectId, confidence, metadata } = params;
+  const adjustedParams = await applyFeedbackToRelationCandidateInput(db, params);
 
   const manualRelation = await db
     .select({ id: objectRelations.id })
@@ -69,23 +72,23 @@ export async function saveRelationCandidate(
 
   const pending = existingCandidates.find((candidate) => candidate.status === 'PENDING');
   if (pending) {
-    const pendingRawConfidence = getRawCandidateConfidence(pending.confidence ?? 0, pending.metadata);
+    const pendingBaseConfidence = getBaseCandidateConfidence(pending.confidence ?? 0, pending.metadata);
     const pendingMetadata = asRecord(pending.metadata) ?? {};
 
-    if (confidence > pendingRawConfidence) {
+    if (confidence >= pendingBaseConfidence) {
       await db
         .update(relationCandidates)
         .set({
-          confidence,
-          metadata: stripCrossValidationMetadata(metadata),
+          confidence: adjustedParams.confidence,
+          metadata: stripCrossValidationMetadata(adjustedParams.metadata),
         })
         .where(eq(relationCandidates.id, pending.id));
     } else if (Object.prototype.hasOwnProperty.call(pendingMetadata, 'crossValidation')) {
       await db
         .update(relationCandidates)
         .set({
-          confidence: pendingRawConfidence,
-          metadata: stripCrossValidationMetadata(metadata),
+          confidence: getPreCrossValidationConfidence(pending.confidence ?? 0, pending.metadata),
+          metadata: stripCrossValidationMetadata(pending.metadata),
         })
         .where(eq(relationCandidates.id, pending.id));
     }
@@ -104,8 +107,8 @@ export async function saveRelationCandidate(
     relationType,
     subjectObjectId,
     objectId,
-    confidence,
-    metadata,
+    confidence: adjustedParams.confidence,
+    metadata: adjustedParams.metadata,
     status: 'PENDING',
   });
   await db.insert(relationCandidateEvidences).values({ workspaceId, candidateId, evidenceId });
