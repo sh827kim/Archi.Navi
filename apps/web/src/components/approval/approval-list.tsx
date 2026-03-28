@@ -8,7 +8,7 @@
 'use client';
 
 import { useEffect, useState, useTransition, useCallback, useRef } from 'react';
-import { Check, X, Sparkles, Link2, ChevronRight } from 'lucide-react';
+import { Check, X, Sparkles, Link2, ChevronRight, Bot, Zap, FlaskConical, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Button, Badge, Spinner, ConfirmDialog,
@@ -19,6 +19,7 @@ import {
   getCrossValidationContradictionLabel,
   type CrossValidationContradiction,
 } from '@/lib/cross-validation';
+import { getClientAiRequestHeaders } from '@/lib/client-ai-settings';
 
 /** 후보 관계 타입 (API 응답) */
 interface RelationCandidate {
@@ -76,6 +77,54 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function getApiErrorMessage(payload: unknown, fallback: string): string {
+  const record = asRecord(payload);
+  if (!record) return fallback;
+
+  if (typeof record.error === 'string' && record.error.trim().length > 0) {
+    return record.error.trim();
+  }
+
+  const errorRecord = asRecord(record.error);
+  if (typeof errorRecord?.message === 'string' && errorRecord.message.trim().length > 0) {
+    return errorRecord.message.trim();
+  }
+
+  return fallback;
+}
+
+function getSmartInferenceSummary(payload: unknown): {
+  candidatesCreated: number;
+  phase2Count: number;
+  phase3Count: number;
+} {
+  const record = asRecord(payload);
+  const directSummary = asRecord(record?.summary);
+  const nestedData = asRecord(record?.data);
+  const nestedSummary = asRecord(nestedData?.summary);
+  const phase2 = asRecord(nestedData?.phase2);
+  const phase3 = asRecord(nestedData?.phase3);
+
+  const candidatesCreated = asFiniteNumber(directSummary?.candidatesCreated)
+    ?? asFiniteNumber(nestedSummary?.candidatesCreated)
+    ?? asFiniteNumber(phase3?.candidateCount)
+    ?? 0;
+  const phase2Count = asFiniteNumber(directSummary?.phase2Count)
+    ?? asFiniteNumber(nestedSummary?.phase2Count)
+    ?? asFiniteNumber(phase2?.analyzedServiceCount)
+    ?? 0;
+  const phase3Count = asFiniteNumber(directSummary?.phase3Count)
+    ?? asFiniteNumber(nestedSummary?.phase3Count)
+    ?? asFiniteNumber(phase3?.analyzedServiceCount)
+    ?? 0;
+
+  return {
+    candidatesCreated,
+    phase2Count,
+    phase3Count,
+  };
 }
 
 function asRelationFeedbackMetadata(value: unknown): RelationFeedbackMetadata | null {
@@ -194,6 +243,11 @@ interface EndpointInfo {
   path: string;
 }
 
+interface ScanPathsResponse {
+  paths?: string[];
+  parentDirs?: string[];
+}
+
 type CrossValidationFilter = 'all' | 'warnings' | 'supported' | 'single';
 type CrossValidationSort = 'cross-validation-priority' | 'confidence-desc' | 'confidence-asc';
 
@@ -206,6 +260,26 @@ function resolveCodeEngine(): 'hybrid' | 'ast' | 'regex' {
   if (saved === 'regex') return 'regex';
   if (saved === 'ast' || saved === 'auto') return 'ast';
   return 'hybrid';
+}
+
+async function resolveInferenceRepoRoots(workspaceId: string): Promise<string[]> {
+  if (!workspaceId) return [];
+
+  try {
+    const res = await fetch(`/api/scan/paths?workspaceId=${encodeURIComponent(workspaceId)}`);
+    if (!res.ok) return [];
+
+    const payload = (await res.json()) as ScanPathsResponse;
+    const parentDirs = (payload.parentDirs ?? []).map((path) => path.trim()).filter((path) => path.length > 0);
+    if (parentDirs.length > 0) {
+      return [...new Set(parentDirs)];
+    }
+
+    const paths = (payload.paths ?? []).map((path) => path.trim()).filter((path) => path.length > 0);
+    return [...new Set(paths)];
+  } catch {
+    return [];
+  }
 }
 
 /** 서비스 레벨 후보 여부 */
@@ -314,48 +388,99 @@ export function ApprovalList() {
     'cross-validation-priority',
   );
 
-  const loadCandidates = useCallback(async () => {
-    setLoading(true);
+  // S1-1: LLM 추론 관련 상태
+  const [inferenceMode, setInferenceMode] = useState<'standard' | 'llm-boost' | 'smart'>('standard');
+  const [runningLlmFilter, setRunningLlmFilter] = useState(false);
+
+  // S1-6: 페이지 단위 로딩 상태
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+
+  const loadCandidates = useCallback(async (append = false) => {
+    if (!append) setLoading(true);
+    else setLoadingMore(true);
     try {
-      const allCandidates: RelationCandidate[] = [];
-      let offset = 0;
+      const offset = append ? candidates.length : 0;
+      const res = await fetch(
+        `/api/inference/candidates?workspaceId=${workspaceId}&status=PENDING&limit=${CANDIDATE_PAGE_SIZE}&offset=${offset}`,
+      );
+      if (!res.ok) throw new Error();
 
-      while (true) {
-        const res = await fetch(
-          `/api/inference/candidates?workspaceId=${workspaceId}&status=PENDING&limit=${CANDIDATE_PAGE_SIZE}&offset=${offset}`,
-        );
-        if (!res.ok) throw new Error();
-
-        const page = (await res.json()) as RelationCandidate[];
-        allCandidates.push(...page);
-        if (page.length < CANDIDATE_PAGE_SIZE) break;
-        offset += page.length;
+      const page = (await res.json()) as RelationCandidate[];
+      if (append) {
+        setCandidates((prev) => [...prev, ...page]);
+      } else {
+        setCandidates(page);
       }
-
-      setCandidates(allCandidates);
+      setHasMore(page.length >= CANDIDATE_PAGE_SIZE);
     } catch {
-      setCandidates([]);
+      if (!append) setCandidates([]);
     } finally {
       setLoading(false);
+      setLoadingMore(false);
     }
-  }, [workspaceId]);
+  }, [workspaceId, candidates.length]);
 
   useEffect(() => {
-    void loadCandidates();
-  }, [loadCandidates]);
+    void loadCandidates(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
 
   const runInference = async () => {
     setRunningInference(true);
     try {
+      if (!workspaceId) throw new Error('workspaceId is required');
+      const aiHeaders = getClientAiRequestHeaders();
+      const repoRoots = await resolveInferenceRepoRoots(workspaceId);
+
+      // S1-1a: Smart Pipeline 모드
+      if (inferenceMode === 'smart') {
+        const res = await fetch('/api/inference/smart', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...aiHeaders },
+          body: JSON.stringify({
+            workspaceId,
+            repoRoots,
+            useServiceMetadataPaths: true,
+          }),
+        });
+        const payload = (await res.json()) as unknown;
+        if (!res.ok) throw new Error(getApiErrorMessage(payload, 'Smart 추론 실행 실패'));
+
+        const summary = getSmartInferenceSummary(payload);
+        const created = summary.candidatesCreated;
+        const p2 = summary.phase2Count;
+        const p3 = summary.phase3Count;
+        if (created > 0) {
+          toast.success(`Smart 추론 완료 — 후보 ${created}개 생성 (Config LLM: ${p2}, Code LLM: ${p3})`);
+        } else {
+          toast.warning('Smart 추론 완료 — 신규 후보가 생성되지 않았습니다.');
+        }
+        await loadCandidates();
+        return;
+      }
+
+      // S1-1b: LLM Boost 모드 또는 Standard 모드
+      const body: Record<string, unknown> = {
+        workspaceId,
+        modes: ['config', 'code', 'db'],
+        useServiceMetadataPaths: true,
+        repoRoots,
+        codeEngine: resolveCodeEngine(),
+      };
+
+      if (inferenceMode === 'llm-boost') {
+        body.llmBoost = {
+          enabled: true,
+          codeIntentAnalysis: true,
+          generateExplanations: true,
+        };
+      }
+
       const res = await fetch('/api/inference/run', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          workspaceId,
-          modes: ['config', 'code', 'db'],
-          useServiceMetadataPaths: true,
-          codeEngine: resolveCodeEngine(),
-        }),
+        headers: { 'Content-Type': 'application/json', ...aiHeaders },
+        body: JSON.stringify(body),
       });
       const payload = (await res.json()) as {
         error?: string;
@@ -369,6 +494,7 @@ export function ApprovalList() {
             scanFailures?: Array<{ filePath: string; reason: string; language: string }>;
           };
         };
+        llmBoost?: { codeIntentAnalysis?: { generatedCount?: number } };
         warnings?: string[];
       };
       if (!res.ok) throw new Error(payload.error ?? '추론 실행 실패');
@@ -377,11 +503,15 @@ export function ApprovalList() {
       const enginesUsed = payload.results?.code?.enginesUsed ?? [];
       const fallbackCount = payload.results?.code?.fallbackCount ?? 0;
       const scanFailureCount = payload.results?.code?.scanFailures?.length ?? 0;
+      const llmBoostCount = payload.llmBoost?.codeIntentAnalysis?.generatedCount ?? 0;
 
       // 엔진 메타 정보 문자열 조립
       const engineParts: string[] = [];
       if (enginesUsed.length > 0) {
         engineParts.push(`엔진: ${enginesUsed.join('+')}`);
+      }
+      if (llmBoostCount > 0) {
+        engineParts.push(`LLM 보강: ${llmBoostCount}건`);
       }
       if (fallbackCount > 0) {
         engineParts.push(`fallback ${fallbackCount}건`);
@@ -415,6 +545,40 @@ export function ApprovalList() {
       toast.error(error instanceof Error ? error.message : '추론 실행 실패');
     } finally {
       setRunningInference(false);
+    }
+  };
+
+  // S1-1c: LLM Filter — 후보를 LLM으로 평가
+  const runLlmFilter = async () => {
+    setRunningLlmFilter(true);
+    try {
+      const res = await fetch('/api/inference/llm-filter', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...getClientAiRequestHeaders() },
+        body: JSON.stringify({
+          workspaceId,
+          generateExplanations: true,
+        }),
+      });
+      const payload = (await res.json()) as {
+        error?: string;
+        filtered?: number;
+        explained?: number;
+      };
+      if (!res.ok) throw new Error(payload.error ?? 'LLM 필터 실행 실패');
+
+      const filtered = payload.filtered ?? 0;
+      const explained = payload.explained ?? 0;
+      if (filtered > 0 || explained > 0) {
+        toast.success(`LLM 평가 완료 — ${filtered}개 평가, ${explained}개 설명 생성`);
+      } else {
+        toast.warning('LLM 평가 완료 — 처리된 후보가 없습니다.');
+      }
+      await loadCandidates();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'LLM 필터 실행 실패');
+    } finally {
+      setRunningLlmFilter(false);
     }
   };
 
@@ -543,14 +707,25 @@ export function ApprovalList() {
         <p className="text-xs">
           먼저 코드 스캔으로 서비스 경로를 등록한 뒤, 아래 추론 실행으로 후보를 생성하세요
         </p>
-        <Button
-          onClick={() => void runInference()}
-          disabled={runningInference}
-          className="mt-2"
-        >
-          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-          {runningInference ? '추론 실행 중...' : '추론 실행'}
-        </Button>
+        <div className="mt-2 flex items-center gap-2">
+          <select
+            aria-label="추론 모드"
+            value={inferenceMode}
+            onChange={(e) => setInferenceMode(e.target.value as typeof inferenceMode)}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+          >
+            <option value="standard">정적 분석</option>
+            <option value="llm-boost">정적 + LLM 보강</option>
+            <option value="smart">Smart (LLM 3-Phase)</option>
+          </select>
+          <Button
+            onClick={() => void runInference()}
+            disabled={runningInference}
+          >
+            {inferenceMode === 'smart' ? <Bot className="h-3.5 w-3.5 mr-1.5" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+            {runningInference ? '추론 실행 중...' : '추론 실행'}
+          </Button>
+        </div>
       </div>
     );
   }
@@ -596,14 +771,38 @@ export function ApprovalList() {
             </select>
           </label>
         </div>
-        <Button
-          variant="outline"
-          onClick={() => void runInference()}
-          disabled={runningInference}
-        >
-          <Sparkles className="h-3.5 w-3.5 mr-1.5" />
-          {runningInference ? '추론 실행 중...' : '추론 실행'}
-        </Button>
+        <div className="flex items-center gap-2">
+          {/* S1-1c: LLM Filter 버튼 */}
+          <Button
+            variant="outline"
+            onClick={() => void runLlmFilter()}
+            disabled={runningLlmFilter || candidates.length === 0}
+            title="LLM으로 후보를 평가하고 설명을 생성합니다"
+          >
+            <FlaskConical className="h-3.5 w-3.5 mr-1.5" />
+            {runningLlmFilter ? 'LLM 평가 중...' : 'LLM 평가'}
+          </Button>
+
+          {/* S1-1a/b: 추론 모드 선택 + 실행 */}
+          <select
+            aria-label="추론 모드"
+            value={inferenceMode}
+            onChange={(e) => setInferenceMode(e.target.value as typeof inferenceMode)}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+          >
+            <option value="standard">정적 분석</option>
+            <option value="llm-boost">정적 + LLM 보강</option>
+            <option value="smart">Smart (LLM 3-Phase)</option>
+          </select>
+          <Button
+            variant="outline"
+            onClick={() => void runInference()}
+            disabled={runningInference}
+          >
+            {inferenceMode === 'smart' ? <Bot className="h-3.5 w-3.5 mr-1.5" /> : inferenceMode === 'llm-boost' ? <Zap className="h-3.5 w-3.5 mr-1.5" /> : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+            {runningInference ? '추론 실행 중...' : '추론 실행'}
+          </Button>
+        </div>
       </div>
 
       {visibleCandidates.length === 0 && (
@@ -750,6 +949,23 @@ export function ApprovalList() {
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* S1-6: 더 보기 버튼 */}
+      {hasMore && (
+        <div className="flex justify-center pt-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => void loadCandidates(true)}
+            disabled={loadingMore}
+          >
+            {loadingMore ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" />
+            ) : null}
+            더 보기 ({candidates.length}건 로드됨)
+          </Button>
         </div>
       )}
 

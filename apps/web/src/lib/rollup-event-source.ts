@@ -7,6 +7,7 @@ export interface RollupEventSubscriptionOptions {
   onRollupChange: () => void;
   onError?: () => void;
   fallbackIntervalMs?: number;
+  skipInitialChangeEvent?: boolean;
 }
 
 export interface RollupEventSubscription {
@@ -57,8 +58,14 @@ export function subscribeToRollupEvents(
 
   let fallbackSubscription: RollupEventSubscription | null = null;
   let closed = false;
+  let hasSeenFirstChangeEvent = false;
 
   const handleRollupChange = () => {
+    if (options.skipInitialChangeEvent && !hasSeenFirstChangeEvent) {
+      hasSeenFirstChangeEvent = true;
+      return;
+    }
+    hasSeenFirstChangeEvent = true;
     options.onRollupChange();
   };
 
@@ -68,7 +75,7 @@ export function subscribeToRollupEvents(
     eventSource.removeEventListener('error', handleError);
     eventSource.close();
     options.onError?.();
-    fallbackSubscription = createPollingSubscription(true);
+    fallbackSubscription = createPollingSubscription(!options.skipInitialChangeEvent);
   };
 
   eventSource.addEventListener('rollup-change', handleRollupChange);

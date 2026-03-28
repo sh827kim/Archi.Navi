@@ -44,6 +44,7 @@
 - [34-cross-signal-validation-orphan-fk-spec.md](./34-cross-signal-validation-orphan-fk-spec.md)
 - [35-cross-signal-validation-finalization-spec.md](./35-cross-signal-validation-finalization-spec.md)
 - [36-relation-feedback-key-specialization-spec.md](./36-relation-feedback-key-specialization-spec.md)
+- [37-smart-pipeline-atomic-redesign-spec.md](./37-smart-pipeline-atomic-redesign-spec.md)
 
 ## 참고
 - 구현 체크리스트: [docs/checklists/README.md](../checklists/README.md)

@@ -858,6 +858,7 @@ export function RollupGraph() {
 
     const subscription = subscribeToRollupEvents({
       workspaceId,
+      skipInitialChangeEvent: true,
       onRollupChange: () => {
         const currentBuildGraph = buildGraphRef.current;
         if (!currentBuildGraph) return;

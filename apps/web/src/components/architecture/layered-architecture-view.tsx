@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { cn, Input, Button, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { subscribeToRollupEvents } from '@/lib/rollup-event-source';
 
 /* ─── 타입 ─── */
 interface LayerData {
@@ -275,6 +276,14 @@ export function LayeredArchitectureView() {
   const { workspaceId } = useWorkspace();
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
+  const graphSignatureRef = useRef<string>('');
+  const isLoadingRef = useRef(false);
+  const curveStyleRef = useRef<CurveStyle>('bezier');
+  const destroyTimerRef = useRef<number | null>(null);
+  const lastInitialLoadRef = useRef<{ workspaceId: string | null; startedAt: number }>({
+    workspaceId: null,
+    startedAt: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [hiddenEdgeTypes, setHiddenEdgeTypes] = useState<Set<string>>(new Set());
@@ -287,8 +296,18 @@ export function LayeredArchitectureView() {
   const [hiddenLayerIds, setHiddenLayerIds] = useState<Set<string>>(new Set());
 
   /* ─── 데이터 로드 (workspaceId 변경 시 자동 재실행) ─── */
-  const loadData = useCallback(async () => {
-    setLoading(true);
+  const loadData = useCallback(async (options?: {
+    showLoadingOverlay?: boolean;
+    preserveViewport?: boolean;
+  }) => {
+    if (isLoadingRef.current) return;
+    isLoadingRef.current = true;
+    const showLoadingOverlay = options?.showLoadingOverlay ?? cyRef.current === null;
+    const preserveViewport = options?.preserveViewport ?? cyRef.current !== null;
+
+    if (showLoadingOverlay) {
+      setLoading(true);
+    }
     try {
       const q = `workspaceId=${workspaceId}`;
       const [
@@ -326,8 +345,11 @@ export function LayeredArchitectureView() {
       const graphEdges = rollupEdges;
 
       if (layers.length === 0 && allObjects.length === 0) {
+        graphSignatureRef.current = '';
         setHasData(false);
-        setLoading(false);
+        if (cyRef.current) {
+          cyRef.current.elements().remove();
+        }
         return;
       }
 
@@ -345,7 +367,6 @@ export function LayeredArchitectureView() {
         .sort((a, b) => a.sortOrder - b.sortOrder);
 
       setActiveLayers(newActiveLayers);
-      setHiddenLayerIds(new Set()); // 워크스페이스 전환 시 visibility 초기화
 
       // 배치된 Object 중 COMPOUND 레벨만 (Atomic은 아키텍처 뷰 대상 아님)
       const assignedObjects = allObjects.filter(
@@ -514,40 +535,125 @@ export function LayeredArchitectureView() {
         }
       }
 
-      // Cytoscape 초기화/업데이트 (이전 인스턴스 정리 후 재생성)
-      if (cyRef.current) {
-        cyRef.current.destroy();
-        cyRef.current = null; // destroy 후 null로 초기화해 이중 destroy 방지
-      }
+      const graphSignature = JSON.stringify({
+        layers: newActiveLayers.map((layer) => ({
+          id: layer.id,
+          name: layer.name,
+          displayName: layer.displayName,
+          color: layer.color,
+          sortOrder: layer.sortOrder,
+        })),
+        objects: assignedObjects.map((obj) => ({
+          id: obj.id,
+          name: obj.name,
+          displayName: obj.displayName,
+          objectType: obj.objectType,
+          layerId: assignMap.get(obj.id) ?? null,
+          tags: sortTags(nodeTags[obj.id] ?? []).map((tag) => ({
+            id: tag.id,
+            name: tag.name,
+            color: tag.color,
+          })),
+        })),
+        edges: graphEdges
+          .filter((edge) => assignedIds.has(edge.source) && assignedIds.has(edge.target))
+          .map((edge) => ({
+            id: edge.id,
+            source: edge.source,
+            target: edge.target,
+            relationType: edge.relationType,
+          })),
+      });
 
       if (containerRef.current) {
-        cyRef.current = cytoscape({
-          container: containerRef.current,
-          elements,
-          style: cytoscapeStyles,
-          layout: { name: 'preset' },
-          minZoom: 0.2,
-          maxZoom: 2.5,
-          wheelSensitivity: 0.3,
-        });
+        if (cyRef.current && graphSignatureRef.current === graphSignature) {
+          cyRef.current.resize();
+          return;
+        }
 
-        cyRef.current.fit(undefined, 40);
+        graphSignatureRef.current = graphSignature;
+
+        if (!cyRef.current) {
+          cyRef.current = cytoscape({
+            container: containerRef.current,
+            elements,
+            style: cytoscapeStyles,
+            layout: { name: 'preset' },
+            minZoom: 0.2,
+            maxZoom: 2.5,
+            wheelSensitivity: 0.3,
+          });
+
+          cyRef.current.fit(undefined, 40);
+          return;
+        }
+
+        const cy = cyRef.current;
+        const previousZoom = cy.zoom();
+        const previousPan = cy.pan();
+
+        cy.batch(() => {
+          cy.elements().remove();
+          cy.add(elements);
+          cy.edges().style('curve-style', curveStyleRef.current);
+        });
+        cy.resize();
+
+        if (preserveViewport) {
+          cy.zoom(previousZoom);
+          cy.pan(previousPan);
+        } else {
+          cy.fit(undefined, 40);
+        }
       }
     } catch (err) {
       console.error('[LayeredArchitectureView] 데이터 로드 실패:', err);
       setHasData(false);
     } finally {
-      setLoading(false);
+      if (showLoadingOverlay) {
+        setLoading(false);
+      }
+      isLoadingRef.current = false;
     }
   }, [workspaceId]); // workspaceId 변경 시 loadData 재생성 → useEffect 재실행
 
   useEffect(() => {
-    void loadData();
+    if (destroyTimerRef.current !== null) {
+      window.clearTimeout(destroyTimerRef.current);
+      destroyTimerRef.current = null;
+    }
+
+    const now = Date.now();
+    const shouldSkipDuplicateInitialLoad =
+      lastInitialLoadRef.current.workspaceId === workspaceId
+      && (now - lastInitialLoadRef.current.startedAt) < 1000;
+
+    if (!shouldSkipDuplicateInitialLoad) {
+      lastInitialLoadRef.current = { workspaceId, startedAt: now };
+      setHiddenLayerIds(new Set());
+      graphSignatureRef.current = '';
+      void loadData({ showLoadingOverlay: true, preserveViewport: false });
+    }
+
     return () => {
-      cyRef.current?.destroy();
-      cyRef.current = null; // 언마운트/재실행 시 null로 초기화
+      destroyTimerRef.current = window.setTimeout(() => {
+        cyRef.current?.destroy();
+        cyRef.current = null; // 언마운트/재실행 시 null로 초기화
+        destroyTimerRef.current = null;
+      }, 0);
     };
   }, [loadData]);
+
+  /* ─── SSE: rollup 변경 시 자동 갱신 ─── */
+  useEffect(() => {
+    if (!workspaceId) return;
+    const sub = subscribeToRollupEvents({
+      workspaceId,
+      skipInitialChangeEvent: true,
+      onRollupChange: () => void loadData({ showLoadingOverlay: false, preserveViewport: true }),
+    });
+    return () => sub.close();
+  }, [workspaceId, loadData]);
 
   /* ─── 레이어 visibility 토글 ─── */
   useEffect(() => {
@@ -637,6 +743,7 @@ export function LayeredArchitectureView() {
   useEffect(() => {
     const cy = cyRef.current;
     if (!cy) return;
+    curveStyleRef.current = curveStyle;
     cy.edges().style('curve-style', curveStyle);
   }, [curveStyle]);
 
