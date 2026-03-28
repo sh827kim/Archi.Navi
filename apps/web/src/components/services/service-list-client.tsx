@@ -500,9 +500,22 @@ function ObjectDetailSheet({
                 </div>
                 <div className="rounded-lg bg-muted/30 px-3 py-2">
                   <p className="text-xs text-muted-foreground mb-0.5">가시성</p>
-                  <p className={cn('font-medium', detail.visibility === 'VISIBLE' ? 'text-green-400' : 'text-muted-foreground')}>
+                  <button
+                    className={cn(
+                      'flex items-center gap-1.5 font-medium transition-colors hover:opacity-80',
+                      detail.visibility === 'VISIBLE' ? 'text-green-400' : 'text-muted-foreground',
+                    )}
+                    onClick={async () => {
+                      const next = detail.visibility === 'VISIBLE' ? 'HIDDEN' : 'VISIBLE';
+                      await saveField('visibility', next);
+                    }}
+                    title="클릭하여 가시성 전환"
+                  >
+                    {detail.visibility === 'VISIBLE'
+                      ? <Eye className="h-3.5 w-3.5" />
+                      : <EyeOff className="h-3.5 w-3.5" />}
                     {detail.visibility}
-                  </p>
+                  </button>
                 </div>
                 <div className="rounded-lg bg-muted/30 px-3 py-2">
                   <p className="text-xs text-muted-foreground mb-0.5">Depth</p>

@@ -6,6 +6,7 @@ import {
   cancelInferenceRun,
   retryInferenceRun,
   executeInferenceRun,
+  getInferenceRunDetail,
   type InferenceRunListItem,
 } from '@archi-navi/inference';
 
@@ -92,4 +93,58 @@ export async function mutateDashboardInferenceRun(input: {
     });
   }
   return result;
+}
+
+/* ─── 상세 조회 ─── */
+export interface DashboardInferenceRunDetail {
+  run: DashboardInferenceRunItem;
+  sources: Array<{
+    id: string;
+    sourceType: string;
+    sourceRef: string;
+    resolvedRepoRoot: string | null;
+    status: string;
+    message: string | null;
+  }>;
+  events: Array<{
+    id: string;
+    level: string;
+    eventType: string;
+    message: string;
+    createdAt: string;
+  }>;
+}
+
+export async function getDashboardInferenceRunDetail(input: {
+  workspaceId: string;
+  runId: string;
+}): Promise<DashboardInferenceRunDetail | null> {
+  const workspaceId = input.workspaceId.trim();
+  const runId = input.runId.trim();
+  if (!workspaceId || !runId) return null;
+
+  try {
+    const db = await getDb();
+    const detail = await getInferenceRunDetail(db, { workspaceId, runId });
+    return {
+      run: serializeRunItem(detail.run),
+      sources: detail.sources.map((s) => ({
+        id: s.id,
+        sourceType: s.sourceType,
+        sourceRef: s.sourceRef,
+        resolvedRepoRoot: s.resolvedRepoRoot,
+        status: s.status,
+        message: s.message,
+      })),
+      events: detail.events.map((e) => ({
+        id: e.id,
+        level: e.level,
+        eventType: e.eventType,
+        message: e.message,
+        createdAt: e.createdAt.toISOString(),
+      })),
+    };
+  } catch {
+    return null;
+  }
 }
