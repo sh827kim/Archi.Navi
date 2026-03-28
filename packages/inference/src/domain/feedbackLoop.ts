@@ -59,6 +59,18 @@ export const DEFAULT_DOMAIN_FEEDBACK_CONFIG: DomainFeedbackConfig = {
   maxAdjustment: 0.15,
 };
 
+function isMissingDomainFeedbackColumnError(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = Reflect.get(error, 'code');
+  if (code === '42703') return true;
+  const message = Reflect.get(error, 'message');
+  return typeof message === 'string'
+    && (
+      message.includes('domain_feedback_config')
+      || message.includes('domain_feedback_adjustments')
+    );
+}
+
 function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value));
 }
@@ -180,19 +192,30 @@ async function loadWorkspaceFeedbackState(
   db: FeedbackDbClient,
   workspaceId: string,
 ): Promise<ProfileFeedbackState> {
-  const [profile] = await db
-    .select({
-      domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
-      domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
-    })
-    .from(domainInferenceProfiles)
-    .where(
-      and(
-        eq(domainInferenceProfiles.workspaceId, workspaceId),
-        eq(domainInferenceProfiles.isDefault, true),
-      ),
-    )
-    .limit(1);
+  let profile: { domainFeedbackConfig: unknown; domainFeedbackAdjustments: unknown } | undefined;
+  try {
+    [profile] = await db
+      .select({
+        domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
+        domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
+      })
+      .from(domainInferenceProfiles)
+      .where(
+        and(
+          eq(domainInferenceProfiles.workspaceId, workspaceId),
+          eq(domainInferenceProfiles.isDefault, true),
+        ),
+      )
+      .limit(1);
+  } catch (error) {
+    if (!isMissingDomainFeedbackColumnError(error)) {
+      throw error;
+    }
+    return {
+      config: DEFAULT_DOMAIN_FEEDBACK_CONFIG,
+      adjustments: {},
+    };
+  }
 
   const config = normalizeDomainFeedbackConfig(profile?.domainFeedbackConfig);
   return {
@@ -204,12 +227,76 @@ async function loadWorkspaceFeedbackState(
 async function ensureDefaultWorkspaceProfile(
   db: FeedbackDbClient,
   workspaceId: string,
-): Promise<{ id: string; domainFeedbackConfig: unknown; domainFeedbackAdjustments: unknown }> {
-  const [existingDefault] = await db
+): Promise<{
+  id: string;
+  domainFeedbackConfig: unknown;
+  domainFeedbackAdjustments: unknown;
+  supportsFeedbackColumns: boolean;
+}> {
+  try {
+    const [existingDefault] = await db
+      .select({
+        id: domainInferenceProfiles.id,
+        domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
+        domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
+      })
+      .from(domainInferenceProfiles)
+      .where(
+        and(
+          eq(domainInferenceProfiles.workspaceId, workspaceId),
+          eq(domainInferenceProfiles.isDefault, true),
+        ),
+      )
+      .limit(1);
+    if (existingDefault) return { ...existingDefault, supportsFeedbackColumns: true };
+
+    const [existingAny] = await db
+      .select({
+        id: domainInferenceProfiles.id,
+        domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
+        domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
+      })
+      .from(domainInferenceProfiles)
+      .where(eq(domainInferenceProfiles.workspaceId, workspaceId))
+      .limit(1);
+    if (existingAny) {
+      await db
+        .update(domainInferenceProfiles)
+        .set({ isDefault: true, updatedAt: new Date() })
+        .where(eq(domainInferenceProfiles.id, existingAny.id));
+      return { ...existingAny, supportsFeedbackColumns: true };
+    }
+
+    const [created] = await db
+      .insert(domainInferenceProfiles)
+      .values({
+        workspaceId,
+        name: 'default',
+        kind: 'NAMED',
+        isDefault: true,
+        domainFeedbackConfig: DEFAULT_DOMAIN_FEEDBACK_CONFIG,
+        domainFeedbackAdjustments: {},
+      })
+      .returning({
+        id: domainInferenceProfiles.id,
+        domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
+        domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
+      });
+
+    if (!created) {
+      throw new Error('default inference profile not found');
+    }
+
+    return { ...created, supportsFeedbackColumns: true };
+  } catch (error) {
+    if (!isMissingDomainFeedbackColumnError(error)) {
+      throw error;
+    }
+  }
+
+  const [legacyDefault] = await db
     .select({
       id: domainInferenceProfiles.id,
-      domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
-      domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
     })
     .from(domainInferenceProfiles)
     .where(
@@ -219,46 +306,57 @@ async function ensureDefaultWorkspaceProfile(
       ),
     )
     .limit(1);
-  if (existingDefault) return existingDefault;
+  if (legacyDefault) {
+    return {
+      ...legacyDefault,
+      domainFeedbackConfig: DEFAULT_DOMAIN_FEEDBACK_CONFIG,
+      domainFeedbackAdjustments: {},
+      supportsFeedbackColumns: false,
+    };
+  }
 
-  const [existingAny] = await db
+  const [legacyAny] = await db
     .select({
       id: domainInferenceProfiles.id,
-      domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
-      domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
     })
     .from(domainInferenceProfiles)
     .where(eq(domainInferenceProfiles.workspaceId, workspaceId))
     .limit(1);
-  if (existingAny) {
+  if (legacyAny) {
     await db
       .update(domainInferenceProfiles)
       .set({ isDefault: true, updatedAt: new Date() })
-      .where(eq(domainInferenceProfiles.id, existingAny.id));
-    return existingAny;
+      .where(eq(domainInferenceProfiles.id, legacyAny.id));
+    return {
+      ...legacyAny,
+      domainFeedbackConfig: DEFAULT_DOMAIN_FEEDBACK_CONFIG,
+      domainFeedbackAdjustments: {},
+      supportsFeedbackColumns: false,
+    };
   }
 
-  const [created] = await db
+  const [createdLegacy] = await db
     .insert(domainInferenceProfiles)
     .values({
       workspaceId,
       name: 'default',
       kind: 'NAMED',
       isDefault: true,
-      domainFeedbackConfig: DEFAULT_DOMAIN_FEEDBACK_CONFIG,
-      domainFeedbackAdjustments: {},
     })
     .returning({
       id: domainInferenceProfiles.id,
-      domainFeedbackConfig: domainInferenceProfiles.domainFeedbackConfig,
-      domainFeedbackAdjustments: domainInferenceProfiles.domainFeedbackAdjustments,
     });
 
-  if (!created) {
+  if (!createdLegacy) {
     throw new Error('default inference profile not found');
   }
 
-  return created;
+  return {
+    ...createdLegacy,
+    domainFeedbackConfig: DEFAULT_DOMAIN_FEEDBACK_CONFIG,
+    domainFeedbackAdjustments: {},
+    supportsFeedbackColumns: false,
+  };
 }
 
 export async function applyDomainFeedbackToSeedCandidate(
@@ -319,6 +417,9 @@ export async function accumulateDomainCandidateFeedback(
   }
 
   const profile = await ensureDefaultWorkspaceProfile(db, candidate.workspaceId);
+  if (!profile.supportsFeedbackColumns) {
+    return null;
+  }
   const config = normalizeDomainFeedbackConfig(profile.domainFeedbackConfig);
   const adjustments = normalizeDomainFeedbackAdjustments(
     profile.domainFeedbackAdjustments,

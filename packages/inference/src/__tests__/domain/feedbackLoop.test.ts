@@ -276,4 +276,84 @@ describe('domain feedback loop', () => {
       .where(eq(domainInferenceProfiles.workspaceId, workspaceId));
     expect(profiles).toHaveLength(0);
   });
+
+  it('domain feedback 컬럼이 없는 스키마에서도 seed candidate 적용 경로가 실패하지 않아야 한다', async () => {
+    const legacyDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => {
+              throw Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' });
+            },
+          }),
+        }),
+      }),
+    };
+
+    const result = await applyDomainFeedbackToSeedCandidate(legacyDb as unknown as TestDb, {
+      workspaceId,
+      primaryDomainId: 'domain-order',
+      purity: 0.82,
+      track: 'TRACK_A',
+    });
+
+    expect(result.purity).toBe(0.82);
+    expect(result.feedback).toMatchObject({
+      key: 'TRACK_A:domain-order:HIGH',
+      adjustment: 0,
+      adjustedPurity: 0.82,
+      applied: false,
+      sampleCount: 0,
+    });
+  });
+
+  it('domain feedback 컬럼이 없는 스키마에서도 집계 경로가 실패하지 않아야 한다', async () => {
+    let selectCallCount = 0;
+    const legacyDb = {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => {
+              selectCallCount += 1;
+              if (selectCallCount === 1) {
+                throw Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' });
+              }
+              return [];
+            },
+          }),
+        }),
+      }),
+      insert: () => ({
+        values: () => ({
+          returning: async () => [{ id: generateId() }],
+        }),
+      }),
+      update: () => ({
+        set: () => ({
+          where: async () => [],
+        }),
+      }),
+    };
+
+    const result = await accumulateDomainCandidateFeedback(
+      legacyDb as unknown as TestDb,
+      {
+        id: generateId(),
+        workspaceId,
+        objectId: generateId(),
+        affinityMap: {},
+        purity: 0.72,
+        primaryDomainId: 'domain-order',
+        secondaryDomainIds: [],
+        signals: {},
+        status: 'PENDING',
+        reviewedAt: null,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+      'APPROVED',
+    );
+
+    expect(result).toBeNull();
+  });
 });

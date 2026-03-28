@@ -101,6 +101,14 @@ interface UpdateProfileBody {
   resetDomainFeedback?: boolean;
 }
 
+function isMissingColumnError(error: unknown, columns: string[]): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const code = Reflect.get(error, 'code');
+  if (code === '42703') return true;
+  const message = Reflect.get(error, 'message');
+  return typeof message === 'string' && columns.some((column) => message.includes(column));
+}
+
 function asCrossValidationConfig(value: unknown): CrossValidationConfig {
   const record = value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -313,7 +321,41 @@ async function selectProfileJsonState(
       domainFeedbackConfig: state.rows[0]?.domain_feedback_config,
       domainFeedbackAdjustments: state.rows[0]?.domain_feedback_adjustments,
     };
-  } catch {
+  } catch (error) {
+    if (!isMissingColumnError(error, ['domain_feedback_config', 'domain_feedback_adjustments'])) {
+      throw error;
+    }
+  }
+
+  try {
+    const relationState = await db.execute<{
+      cross_validation: unknown;
+      feedback_config: unknown;
+      feedback_adjustments: unknown;
+    }>(sql`
+      select
+        cross_validation,
+        feedback_config,
+        feedback_adjustments
+      from domain_inference_profiles
+      where id = ${profileId}
+      limit 1
+    `);
+
+    return {
+      crossValidation: relationState.rows[0]?.cross_validation,
+      feedbackConfig: relationState.rows[0]?.feedback_config,
+      feedbackAdjustments: relationState.rows[0]?.feedback_adjustments,
+      domainFeedbackConfig: undefined,
+      domainFeedbackAdjustments: undefined,
+    };
+  } catch (error) {
+    if (!isMissingColumnError(error, ['feedback_config', 'feedback_adjustments'])) {
+      throw error;
+    }
+  }
+
+  try {
     const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
       select cross_validation
       from domain_inference_profiles
@@ -323,6 +365,17 @@ async function selectProfileJsonState(
 
     return {
       crossValidation: crossValidation.rows[0]?.cross_validation,
+      feedbackConfig: undefined,
+      feedbackAdjustments: undefined,
+      domainFeedbackConfig: undefined,
+      domainFeedbackAdjustments: undefined,
+    };
+  } catch (error) {
+    if (!isMissingColumnError(error, ['cross_validation'])) {
+      throw error;
+    }
+    return {
+      crossValidation: undefined,
       feedbackConfig: undefined,
       feedbackAdjustments: undefined,
       domainFeedbackConfig: undefined,
@@ -570,30 +623,31 @@ export async function PUT(req: NextRequest) {
         await tx.execute(sql`
           update domain_inference_profiles
           set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb,
-              feedback_adjustments = ${JSON.stringify(relationFeedbackAdjustments)}::jsonb,
-              domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb,
+              feedback_adjustments = ${JSON.stringify(relationFeedbackAdjustments)}::jsonb
+          where id = ${current.id}
+        `);
+      } catch (error) {
+        if (!isMissingColumnError(error, ['feedback_config', 'feedback_adjustments'])) {
+          throw error;
+        }
+      }
+
+      try {
+        await tx.execute(sql`
+          update domain_inference_profiles
+          set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb,
               domain_feedback_adjustments = ${JSON.stringify(domainFeedbackAdjustments)}::jsonb
           where id = ${current.id}
         `);
-      } catch {
-        // feedback 컬럼 마이그레이션이 아직 적용되지 않은 환경에서는 no-op 처리한다.
+      } catch (error) {
+        if (!isMissingColumnError(error, ['domain_feedback_config', 'domain_feedback_adjustments'])) {
+          throw error;
+        }
       }
     });
 
     const updated = await ensureDefaultProfile(workspaceId);
-    return NextResponse.json(
-      toPublicProfile(
-        {
-          ...updated,
-          crossValidation,
-          feedbackConfig: relationFeedbackConfig,
-          feedbackAdjustments: relationFeedbackAdjustments,
-          domainFeedbackConfig,
-          domainFeedbackAdjustments,
-        },
-        { includeFeedbackEntries },
-      ),
-    );
+    return NextResponse.json(toPublicProfile(updated, { includeFeedbackEntries }));
   } catch (error) {
     console.error('[PUT /api/inference/profiles/default]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });

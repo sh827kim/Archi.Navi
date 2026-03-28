@@ -304,7 +304,7 @@ describe('inference profile default route', () => {
     ));
 
     expect(response.status).toBe(200);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(2);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
 
     const payload = await response.json();
     expect(payload.relationFeedbackConfig).toEqual({
@@ -455,6 +455,169 @@ describe('inference profile default route', () => {
       approvedCount: 3,
       rejectedCount: 1,
       totalSamples: 4,
+    });
+  });
+
+  it('GET은 domain feedback 컬럼이 없어도 relation feedback 상태를 유지해야 한다', async () => {
+    const row = createProfileRow();
+    const execute = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: null,
+          feedback_config: { enabled: false, minSamples: 5, maxAdjustment: 0.2 },
+          feedback_adjustments: {
+            'CALL:code:call': { approved: 4, rejected: 1 },
+          },
+        }],
+      });
+    const db = {
+      select: vi.fn().mockReturnValue({
+        from: () => ({
+          where: () => ({
+            limit: async () => [row],
+          }),
+        }),
+      }),
+      execute,
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/profiles/default?workspaceId=ws-1'),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload.relationFeedbackConfig).toEqual({
+      enabled: false,
+      minSamples: 5,
+      maxAdjustment: 0.2,
+    });
+    expect(payload.relationFeedbackSummary).toEqual({
+      totalKeys: 1,
+      eligibleKeys: 1,
+      approvedCount: 4,
+      rejectedCount: 1,
+      totalSamples: 5,
+    });
+    expect(payload.domainFeedbackSummary).toEqual({
+      totalKeys: 0,
+      eligibleKeys: 0,
+      approvedCount: 0,
+      rejectedCount: 0,
+      totalSamples: 0,
+    });
+  });
+
+  it('PUT은 domain feedback 컬럼이 없어도 relation feedback 업데이트를 유지해야 한다', async () => {
+    const current = createProfileRow();
+    const updated = createProfileRow();
+    const selectMock = vi
+      .fn()
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () => ({
+            limit: async () => [current],
+          }),
+        }),
+      })
+      .mockReturnValueOnce({
+        from: () => ({
+          where: () => ({
+            limit: async () => [updated],
+          }),
+        }),
+      });
+    const executeMock = vi.fn()
+      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
+          feedback_config: { enabled: true, minSamples: 10, maxAdjustment: 0.15 },
+          feedback_adjustments: {
+            'CALL:code:call': { approved: 9, rejected: 1 },
+          },
+        }],
+      })
+      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }))
+      .mockResolvedValueOnce({
+        rows: [{
+          cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
+          feedback_config: { enabled: false, minSamples: 5, maxAdjustment: 0.2 },
+          feedback_adjustments: {
+            'CALL:code:call': { approved: 9, rejected: 1 },
+          },
+        }],
+      });
+    const transactionExecuteMock = vi.fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error('column "domain_feedback_config" does not exist'), { code: '42703' }));
+    const db = {
+      select: selectMock,
+      execute: executeMock,
+      transaction: async (callback: (tx: {
+        update: (table: unknown) => {
+          set: (payload: unknown) => { where: () => Promise<void> };
+        };
+        execute: (statement: unknown) => Promise<void>;
+      }) => Promise<void>) => {
+        await callback({
+          update: () => ({
+            set: () => ({ where: async () => undefined }),
+          }),
+          execute: transactionExecuteMock,
+        });
+      },
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await PUT(new NextRequest('http://localhost/api/inference/profiles/default', {
+      method: 'PUT',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        relationFeedbackConfig: {
+          enabled: false,
+          minSamples: 5,
+          maxAdjustment: 0.2,
+        },
+        domainFeedbackConfig: {
+          enabled: true,
+          minSamples: 3,
+          maxAdjustment: 0.18,
+        },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
+    const relationQuery = transactionExecuteMock.mock.calls[1]?.[0] as { strings: string[] };
+    const domainQuery = transactionExecuteMock.mock.calls[2]?.[0] as { strings: string[] };
+    expect(relationQuery.strings.join('')).toContain('feedback_config');
+    expect(relationQuery.strings.join('')).not.toContain('domain_feedback_config');
+    expect(domainQuery.strings.join('')).toContain('domain_feedback_config');
+
+    const payload = await response.json();
+    expect(payload.relationFeedbackConfig).toEqual({
+      enabled: false,
+      minSamples: 5,
+      maxAdjustment: 0.2,
+    });
+    expect(payload.relationFeedbackSummary).toEqual({
+      totalKeys: 1,
+      eligibleKeys: 1,
+      approvedCount: 9,
+      rejectedCount: 1,
+      totalSamples: 10,
+    });
+    expect(payload.domainFeedbackSummary).toEqual({
+      totalKeys: 0,
+      eligibleKeys: 0,
+      approvedCount: 0,
+      rejectedCount: 0,
+      totalSamples: 0,
     });
   });
 });
