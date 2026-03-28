@@ -13,6 +13,14 @@ export {
     normalizeCodeSignalEngine,
 } from './codeSignalEngine';
 export { mergeHybridSignals } from './hybridSignalMerge';
+export { builtInPlugins, getBuiltInPlugins } from './plugins/builtInPlugins';
+export { PluginRegistry, pluginRegistry, detectPlugins } from './plugins/pluginRegistry';
+export {
+    detectLanguageFromFilePath,
+    scanFileWithAstPlugins,
+    scanFileWithRegexPlugins,
+    scanFileWithHybridPlugins,
+} from './plugins/runtime';
 export type {
     CodeSignalOptions,
     CodeSignalResult,
@@ -21,6 +29,11 @@ export type {
     ScanFailureDetail,
     SignalKind,
 } from './codeSignalExtractor';
+export type {
+    FrameworkPlugin,
+    FrameworkPluginDetector,
+    FrameworkPluginLanguage,
+} from './plugins/types';
 export type {
     CodeSignalEngine,
     CodeSignalEngineResult,

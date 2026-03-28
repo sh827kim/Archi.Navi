@@ -15,9 +15,8 @@ import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import type { CodeSignalOptions, CodeSignalResult, FileScanResult, ScanFailureDetail } from '../codeSignalExtractor';
-import { scanJavaKotlinAst } from './astJavaKotlin';
-import { scanTypeScriptAst } from './astTypeScript';
-import { scanPythonAst } from './astPython';
+import { detectPlugins } from '../plugins/pluginRegistry';
+import { scanFileWithAstPlugins } from '../plugins/runtime';
 import { buildProjectSymbolTable } from './symbolTable';
 import { AstRuntimeError } from './wasmParser';
 import { buildAstPropertyResolver } from './propertyResolver';
@@ -172,6 +171,7 @@ export async function extractAstCodeSignals(
 ): Promise<CodeSignalResult> {
     const { workspaceId, repoRoot } = options;
     const forceRescan = options.forceRescan === true;
+    const detectedPlugins = detectPlugins(repoRoot);
     const targetFileSet = options.targetFilePaths
         ? new Set(options.targetFilePaths.map((path) => path.replace(/\\/g, '/')))
         : null;
@@ -270,9 +270,10 @@ export async function extractAstCodeSignals(
     // 1. Java/Kotlin 파일 처리 (AST)
     await processAll(
         filterTargetFiles(findJavaKotlinFiles(repoRoot)),
-        (filePath, content) => scanJavaKotlinAst(
+        (filePath, content) => scanFileWithAstPlugins(
             filePath,
             content,
+            repoRoot,
             {
                 ...(interProceduralSymbolTable
                     ? {
@@ -286,14 +287,33 @@ export async function extractAstCodeSignals(
                     ? { propertyMap: propertyResolver.resolveForFile(filePath) }
                     : {}),
             },
+            detectedPlugins,
         ),
     );
 
     // 2. TypeScript/JavaScript 파일 처리 (AST)
-    await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), scanTypeScriptAst);
+    await processAll(
+        filterTargetFiles(findTypeScriptFiles(repoRoot)),
+        (filePath, content) => scanFileWithAstPlugins(
+            filePath,
+            content,
+            repoRoot,
+            {},
+            detectedPlugins,
+        ),
+    );
 
     // 3. Python 파일 처리 (AST)
-    await processAll(filterTargetFiles(findPythonFiles(repoRoot)), scanPythonAst);
+    await processAll(
+        filterTargetFiles(findPythonFiles(repoRoot)),
+        (filePath, content) => scanFileWithAstPlugins(
+            filePath,
+            content,
+            repoRoot,
+            {},
+            detectedPlugins,
+        ),
+    );
 
     return result;
 }

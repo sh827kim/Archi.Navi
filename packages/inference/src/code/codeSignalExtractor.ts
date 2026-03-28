@@ -10,9 +10,9 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { scanJavaKotlin, scanMyBatisXml } from './scanners/javaKotlin';
-import { scanTypeScript } from './scanners/typeScript';
-import { scanPython } from './scanners/python';
+import { scanMyBatisXml } from './scanners/javaKotlin';
+import { detectPlugins } from './plugins/pluginRegistry';
+import { scanFileWithRegexPlugins } from './plugins/runtime';
 import {
   findJavaKotlinFiles,
   findMyBatisXmlFiles,
@@ -300,6 +300,7 @@ export async function extractCodeSignals(
     options: CodeSignalOptions,
 ): Promise<CodeSignalResult> {
     const { workspaceId, repoRoot } = options;
+    const detectedPlugins = detectPlugins(repoRoot);
     const forceRescan = options.forceRescan === true;
     const targetFileSet = options.targetFilePaths
         ? new Set(options.targetFilePaths.map((path) => path.replace(/\\/g, '/')))
@@ -360,17 +361,20 @@ export async function extractCodeSignals(
         }
     }
 
-    // 1. Java/Kotlin 파일 처리
-    await processAll(filterTargetFiles(findJavaKotlinFiles(repoRoot)), scanJavaKotlin);
+    const codeFiles = filterTargetFiles([
+        ...findJavaKotlinFiles(repoRoot),
+        ...findTypeScriptFiles(repoRoot),
+        ...findPythonFiles(repoRoot),
+    ]);
+
+    // 1. 코드 파일 처리 (플러그인 레지스트리 기반)
+    await processAll(
+        codeFiles,
+        (filePath, content) => scanFileWithRegexPlugins(filePath, content, repoRoot, detectedPlugins),
+    );
 
     // 2. MyBatis XML 파일 처리
     await processAll(filterTargetFiles(findMyBatisXmlFiles(repoRoot)), scanMyBatisXml);
-
-    // 3. TypeScript/JavaScript 파일 처리
-    await processAll(filterTargetFiles(findTypeScriptFiles(repoRoot)), scanTypeScript);
-
-    // 4. Python 파일 처리
-    await processAll(filterTargetFiles(findPythonFiles(repoRoot)), scanPython);
 
     return result;
 }

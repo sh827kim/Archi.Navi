@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-27
+> 최종 점검일: 2026-03-28
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -15,7 +15,7 @@
 | Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
-| 추론 엔진 고도화 (P4) | ✅ | Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터(코드 의도 분석/관계 설명/도메인 라벨) 구현 완료. 4-4~4-6은 후속 고도화 범위 |
+| 추론 엔진 고도화 (P4) | ✅ | Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템 구현 완료. 4-5~4-6은 후속 고도화 범위 |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -88,7 +88,7 @@
 
 ### 2.1 추론 엔진 품질 고도화 (P4)
 
-- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터는 구현 완료되었고, 플러그인 시스템 / 실시간 갱신 / 피드백 루프가 다음 고도화 범위로 남아 있다.
+- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템은 구현 완료되었고, 실시간 갱신 / 피드백 루프가 다음 고도화 범위로 남아 있다.
 
 ### 2.2 실행 오케스트레이션 Phase 2+
 
@@ -113,7 +113,7 @@
 | 4-2. Cross-Signal Validation | `docs/spec/18-cross-signal-validation-spec.md` | ✅ Implemented |
 | 4-2a. Approval Mapping / Cross-validation UI 정합성 | `docs/spec/28-approval-mapping-ui-consistency-spec.md` | ✅ Implemented |
 | 4-3. LLM 추론 부스터 | `docs/spec/19-llm-inference-boost-spec.md` | ✅ Implemented |
-| 4-4. 프레임워크 플러그인 시스템 | `docs/spec/20-framework-plugin-system-spec.md` | 📋 Draft |
+| 4-4. 프레임워크 플러그인 시스템 | `docs/spec/20-framework-plugin-system-spec.md` | ✅ Implemented |
 | 4-5. Delta Rollup + 실시간 갱신 | `docs/spec/21-realtime-rollup-spec.md` | 📋 Draft |
 | 4-6. 추론 피드백 루프 | `docs/spec/22-inference-feedback-loop-spec.md` | 📋 Draft |
 
