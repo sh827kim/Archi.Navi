@@ -65,6 +65,12 @@ function createProfileBaseRow(row: ReturnType<typeof createProfileRow>) {
   };
 }
 
+function getExecutedSql(mock: { mock: { calls: unknown[][] } }, index: number): { strings: string[] } {
+  const statement = mock.mock.calls[index]?.[0];
+  expect(statement).toBeDefined();
+  return statement as { strings: string[] };
+}
+
 function createMissingColumnError(column: string) {
   return Object.assign(new Error(`column "${column}" does not exist`), { code: '42703' });
 }
@@ -308,8 +314,8 @@ describe('inference profile default route', () => {
 
     expect(response.status).toBe(200);
     expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
-    const relationQuery = transactionExecuteMock.mock.calls[1]?.[0] as { strings: string[] };
-    const domainQuery = transactionExecuteMock.mock.calls[2]?.[0] as { strings: string[] };
+    const relationQuery = getExecutedSql(transactionExecuteMock, 1);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 2);
     expect(relationQuery.strings.join('')).toContain('set feedback_config = ');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');
     expect(domainQuery.strings.join('')).toContain('set domain_feedback_config = ');
@@ -672,8 +678,8 @@ describe('inference profile default route', () => {
     expect(db.select).not.toHaveBeenCalled();
     expect(executeMock).toHaveBeenCalledTimes(6);
     expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
-    const relationQuery = transactionExecuteMock.mock.calls[1]?.[0] as { strings: string[] };
-    const domainQuery = transactionExecuteMock.mock.calls[2]?.[0] as { strings: string[] };
+    const relationQuery = getExecutedSql(transactionExecuteMock, 1);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 2);
     expect(relationQuery.strings.join('')).toContain('feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('domain_feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');

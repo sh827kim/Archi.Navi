@@ -82,7 +82,7 @@ interface ProfileResponse {
   domainFeedbackAdjustments?: unknown;
 }
 
-interface ProfileBaseRow {
+type ProfileBaseRow = Record<string, unknown> & {
   id: string;
   workspace_id: string;
   name: string;
@@ -98,7 +98,7 @@ interface ProfileBaseRow {
   edge_w_rw: number | null;
   edge_w_msg: number | null;
   enabled_layers: unknown;
-}
+};
 
 interface UpdateProfileBody {
   workspaceId?: string;
@@ -352,7 +352,7 @@ async function selectProfileJsonState(
         feedback_adjustments,
         domain_feedback_config,
         domain_feedback_adjustments
-      from domain_inference_profiles
+      from ${domainInferenceProfiles}
       where id = ${profileId}
       limit 1
     `);
@@ -380,7 +380,7 @@ async function selectProfileJsonState(
         cross_validation,
         feedback_config,
         feedback_adjustments
-      from domain_inference_profiles
+      from ${domainInferenceProfiles}
       where id = ${profileId}
       limit 1
     `);
@@ -401,7 +401,7 @@ async function selectProfileJsonState(
   try {
     const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
       select cross_validation
-      from domain_inference_profiles
+      from ${domainInferenceProfiles}
       where id = ${profileId}
       limit 1
     `);
@@ -450,7 +450,7 @@ async function selectProfileBaseRow(
         edge_w_rw,
         edge_w_msg,
         enabled_layers
-      from domain_inference_profiles
+      from ${domainInferenceProfiles}
       where workspace_id = ${workspaceId}
         and is_default = true
       limit 1
@@ -472,7 +472,7 @@ async function selectProfileBaseRow(
         edge_w_rw,
         edge_w_msg,
         enabled_layers
-      from domain_inference_profiles
+      from ${domainInferenceProfiles}
       where workspace_id = ${workspaceId}
       limit 1
     `);
@@ -690,7 +690,7 @@ export async function PUT(req: NextRequest) {
         .where(eq(domainInferenceProfiles.id, current.id));
 
       await tx.execute(sql`
-        update domain_inference_profiles
+        update ${domainInferenceProfiles}
         set cross_validation = ${JSON.stringify(crossValidation)}::jsonb
         where id = ${current.id}
       `);
@@ -698,14 +698,14 @@ export async function PUT(req: NextRequest) {
       try {
         if (resetRelationFeedback) {
           await tx.execute(sql`
-            update domain_inference_profiles
+            update ${domainInferenceProfiles}
             set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb,
                 feedback_adjustments = '{}'::jsonb
             where id = ${current.id}
           `);
         } else {
           await tx.execute(sql`
-            update domain_inference_profiles
+            update ${domainInferenceProfiles}
             set feedback_config = ${JSON.stringify(relationFeedbackConfig)}::jsonb
             where id = ${current.id}
           `);
@@ -719,14 +719,14 @@ export async function PUT(req: NextRequest) {
       try {
         if (resetDomainFeedback) {
           await tx.execute(sql`
-            update domain_inference_profiles
+            update ${domainInferenceProfiles}
             set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb,
                 domain_feedback_adjustments = '{}'::jsonb
             where id = ${current.id}
           `);
         } else {
           await tx.execute(sql`
-            update domain_inference_profiles
+            update ${domainInferenceProfiles}
             set domain_feedback_config = ${JSON.stringify(domainFeedbackConfig)}::jsonb
             where id = ${current.id}
           `);

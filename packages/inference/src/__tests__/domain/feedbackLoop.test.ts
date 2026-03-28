@@ -348,8 +348,9 @@ describe('domain feedback loop', () => {
         signals: {},
         status: 'PENDING',
         reviewedAt: null,
+        reviewedBy: null,
+        runId: null,
         createdAt: new Date(),
-        updatedAt: new Date(),
       },
       'APPROVED',
     );

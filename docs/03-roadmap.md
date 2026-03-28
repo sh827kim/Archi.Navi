@@ -13,8 +13,13 @@
 | **P1** | 추론 파이프라인 MVP — 70%+ 자동화 달성 | v2.0 ✅ |
 | **P2** | AST 정밀 추출 + AI 고도화 | v2.1 ✅ |
 | **P3** | 대규모 그래프 성능 + 추론 고도화 | v2.2 ✅ |
-| **P4** | 🔥 추론 엔진 고도화 — 90%+ 정밀도 달성 | v3.0 |
-| **P5** | 개발자 생산성 기능 + 구조 개선 | v3.1+ |
+| **P4** | 추론 엔진 고도화 — 90%+ 정밀도 달성 | v3.0 ✅ |
+| **S1** | 🔧 안정화 — Dead Feature 활성화 + UX 기반 구축 + AI 고도화 | v3.1 |
+| **P5** | 개발자 생산성 기능 + 구조 개선 | v3.2+ |
+
+> **핵심 방향 전환**: P4까지의 백엔드/엔진 구현은 완료되었으나, 다수의 기능이 UI와 연결되지 않아 사용 불가 상태다.
+> P5 신규 기능보다 **기존 구현의 활성화와 UX 안정화를 우선** 수행한다.
+> 이유: (1) 이미 만든 코드를 살리는 것이 ROI 최대, (2) P5는 정확한 추론 결과에 의존하므로 LLM 추론 활성화가 전제조건.
 
 ---
 
@@ -23,13 +28,11 @@
 | 구간 | 상태 | 비고 |
 |------|------|------|
 | P1 (1-1 ~ 1-6) | ✅ 완료 | 추론 MVP 기능/승인 플로우 구현 완료 |
-| P2 (2-1) | ✅ 완료 | `hybrid/ast/regex` 모드, AST fallback, 요청/실사용 엔진 노출, 기본 UI 설정까지 반영 완료 |
-| P2 (2-2 ~ 2-5) | ✅ 완료 | Evidence Assembler/Answer Composer/DOMAIN_SUMMARY/Message 시그널 반영 완료 |
-| P2 (2-6) | ✅ 완료 | 비동기 run 생성/목록/상세, source 해석(local/githubRepo/githubOrg), 이벤트/상태 저장 완료 |
-| P2 (2-7) | ✅ 완료 | endpoint/topic/queue/db_table 후보 생성과 database parent 보장까지 완료 |
+| P2 (2-1 ~ 2-7) | ✅ 완료 | AST hybrid, Evidence Assembler, 비동기 run, Atomic 후보 생성 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
-| P4 (4-1 ~ 4-6) | ✅ 완료 | 4-1~4-6 구현 완료. 4-6은 relation/domain feedback public contract 분리, Track A domain feedback 집계/next-run-only 반영, Settings/API 분리 계약, code-origin relation feedback key specialization까지 반영 완료 |
-| P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, 구현 대기 |
+| P4 (4-1 ~ 4-6) | ✅ 완료 | Inter-procedural AST, Cross-Validation, LLM Booster, Feedback Loop 구현 완료 |
+| **S1 (안정화)** | **🔧 진행 예정** | **Dead Feature 활성화, UX 기반, AI 고도화** |
+| P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, S1 이후 착수 |
 
 ---
 
@@ -98,7 +101,7 @@
 
 ---
 
-## P2: AST 정밀 추출 + AI 고도화 (v2.1)
+## P2: AST 정밀 추출 + AI 고도화 (v2.1) ✅
 
 > **목표**: AST로 추론 정밀도 85~95% 달성, Evidence 기반 AI Chat 고도화
 
@@ -249,11 +252,10 @@
 
 ---
 
-## 🔥 P4: 추론 엔진 고도화 (v3.0)
+## 🔥 P4: 추론 엔진 고도화 (v3.0) ✅
 
 > **목표**: 추론 정밀도 90~95% 달성 + 노이즈 50% 이상 감소
 > **설계 문서**: `docs/design/07-inference-engine-advanced.md`
-> **우선순위**: P2 완료 기반 위에서 가장 먼저 착수할 고도화 영역 — 추론 품질이 전체 시스템 가치를 결정
 
 ### ✅ 4-1. Inter-procedural AST 분석 (기존 2-1 확장)
 - **SPEC:** `docs/spec/17-inter-procedural-ast-spec.md`
@@ -263,7 +265,7 @@
   - Call Chain Resolution — 메서드 호출 체인 추적 (최대 depth 3)
   - Spring 프로퍼티 전파 (`@Value` → application.yml 연결 → URL 확정)
   - 인터페이스 → 구현체 매핑 (FeignClient 등)
-- **현재 구현 범위 (2026-03-27 점검):**
+- **구현 범위:**
   - `interProcedural`, `maxCallChainDepth`, `resolveProperties` 요청 옵션/API 전달 경로 반영
   - 프로젝트 단위 Symbol Table / Implementation Map 구축
   - Java/Kotlin AST 경로에서 depth 2~3 call chain 해석 + `maxCallChainDepth` 적용
@@ -274,10 +276,6 @@
   - TypeScript/Python inter-procedural 해석
   - multi-module symbol table 연결
   - symbol table 디스크 캐싱
-- **기대 효과:**
-  - 현재 미감지 패턴 (간접 호출, 프로퍼티 주입 URL) 커버
-  - 기존 AST 분석의 confidence 추가 상향 (+0.05~0.1)
-- **의존:** 기존 2-1(AST hybrid) 완료 기반
 
 ### ✅ 4-2. Cross-Signal Validation (교차 검증)
 - **SPEC:** `docs/spec/18-cross-signal-validation-spec.md`
@@ -287,24 +285,10 @@
   - 복수 시그널 지지 시 신뢰도 부스트 (Bayesian 업데이트)
   - 모순 감지 (Stale Config, Phantom Call, Dead Topic, Orphan FK)
   - 승인 UI에 교차 검증 배지 표시
-- **기대 효과:**
-  - 동일 관계 2+ 소스 지지 시 confidence 0.08~0.12 부스트
-  - stale config/phantom call 등 노이즈 후보 사전 경고
-- **의존:** 추론 실행 시 2+ 모드 동시 실행
 
 ### ✅ 4-3. LLM 추론 부스터 (기존 LLM 필터 확장)
 - **SPEC:** `docs/spec/19-llm-inference-boost-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §4
-- **기존 참조:** `docs/spec/04-llm-inference-filtering-spec.md` (post-filter, 구현 완료)
-- **핵심:**
-  - 코드 의도 분석 (Pre-inference): 동적 URL, 리플렉션 등 미확정 시그널 보완
-  - 관계 설명 자동 생성: 각 후보에 "왜 이 관계가 존재하는가" 자연어 생성
-  - 도메인 라벨 정제: Track B Discovery의 label_candidates를 자연스러운 이름으로 변환
-  - 배치 그룹화 최적화 + 비용 제어 파라미터
-- **기대 효과:**
-  - Regex/AST 미감지 패턴 5~10% 추가 발견
-  - 승인 판단 시간 단축 (설명 제공)
-  - 도메인 이름 품질 향상
 - **구현 완료 범위:**
   - `POST /api/inference/llm-filter` 에 `generateExplanations` / `maxCalls` 경로 추가
   - 같은 `subjectObjectId` 기준 설명 배치 그룹화
@@ -315,23 +299,16 @@
   - `POST /api/inference/domain-run` 에 `llmLabel.enabled` 연결
   - Discovery 도메인 객체 `metadata.llmLabel` 에 한국어/영어 쌍 저장
   - LLM 미설정/실패 시 기존 추론 결과 유지(graceful degradation)
+- **⚠️ UI 미연결 (S1에서 해결):** 프론트엔드에서 `llmBoost` 파라미터를 전달하지 않아 기능 비활성 상태
 
 ### ✅ 4-4. 프레임워크 플러그인 시스템
 - **SPEC:** `docs/spec/20-framework-plugin-system-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §5
-- **핵심:**
-  - FrameworkPlugin 인터페이스 (regexPatterns, astExtractor, configParsers, detector)
-  - PluginRegistry (등록, 자동 감지, 조회)
-  - 기존 하드코딩 패턴을 빌트인 플러그인으로 마이그레이션
-  - 프로젝트별 자동 플러그인 선택
 - **구현 완료:**
   - `packages/inference/src/code/plugins/`에 plugin type/registry/runtime 추가
   - `spring-boot`, `java-common`, `express`, `nestjs`, `typescript-common`, `fastapi`, `flask`, `python-common` built-in plugin 등록
   - `extractCodeSignals` / `extractHybridCodeSignals` / `extractAstCodeSignals`가 파일별 플러그인 선택 기반으로 동작하도록 전환
   - manifest 기반 detector + 언어별 fallback + registry 확장 테스트 추가
-- **기대 효과:**
-  - gRPC, GraphQL, tRPC, Quarkus 등 새 프레임워크 지원 용이
-  - 오픈소스 커뮤니티 기여 진입 장벽 대폭 감소
 
 ### ✅ 4-5. Delta Rollup + 실시간 그래프 갱신
 - **SPEC:** `docs/spec/21-realtime-rollup-spec.md`
@@ -340,12 +317,7 @@
   - `map-endpoints`는 여러 relation change event를 모아 batch delta로 처리한다.
   - 실시간 반영 계약은 WebSocket이 아니라 `SSE(EventSource) + client refetch + failure 시 polling fallback`이다.
   - 서버는 edge delta payload를 push하지 않고 `rollup-change` notification만 발행한다.
-- **검증 근거:**
-  - T4 기록 측정값(10건 기준): sequential avg `0.694ms`, batch avg `0.138ms`, improvement `80.06%`
-  - batch와 sequential 최종 상태 동일성 검증 포함
-  - approval/addition/delete parity 테스트와 endpoint batch mapping 테스트 보강
-- **남은 리스크:**
-  - 현재 실시간 갱신은 refetch 기반이라 대형 그래프에서는 재조회 비용이 후속 최적화 포인트다.
+- **⚠️ UI 미연결 (S1에서 해결):** SSE EventSource 소비자가 프론트엔드에 미구현, 수동 새로고침 필요
 
 ### ✅ 4-6. 추론 피드백 루프
 - **SPEC:** `docs/spec/22-inference-feedback-loop-spec.md`
@@ -370,9 +342,131 @@
 
 ---
 
-## P5: 개발자 생산성 기능 + 구조 개선 (v3.1+)
+## 🔧 S1: 안정화 — Dead Feature 활성화 + UX 기반 구축 (v3.1)
+
+> **목표**: P4까지 구현된 백엔드 기능을 UI에 연결하고, UX 기반을 다져 P5의 토대를 만든다.
+> **원칙**: 신규 백엔드 로직 최소화, 프론트엔드 연결 및 UX 개선에 집중.
+> **이유**: (1) LLM 추론 활성화 없이 P5를 만들면 부정확한 데이터 위에 기능이 구축됨,
+>           (2) Object 수정, Pagination 등 기본 UX가 불완전한 상태에서 고급 기능은 실용성이 낮음.
+
+### Phase 1: Dead Feature 활성화 (높은 ROI — API 이미 완성)
+
+#### 🔧 S1-1. LLM 추론 기능 UI 연결 ★
+
+> 가장 핵심적인 개선 — P4에서 구현한 3가지 LLM 추론 기능을 UI에서 사용 가능하게 한다.
+
+**S1-1a. Smart Pipeline UI 연결**
+- **백엔드:** `POST /api/inference/smart` (구현 완료)
+- **작업:** 추론 실행 UI에 "Smart 추론 (LLM)" 모드 추가
+- **기능:** 3-Phase(OpenAPI 임포트 → Config LLM 분석 → Code LLM 분석) 파이프라인 실행
+- **UI:** 추론 실행 버튼에 모드 선택 드롭다운 또는 토글 추가
+
+**S1-1b. LLM Boost 옵션 UI 연결**
+- **백엔드:** `POST /api/inference/run` + `llmBoost` 파라미터 (구현 완료)
+- **작업:** 기존 추론 실행 시 `llmBoost.enabled: true` 옵션을 UI에서 토글
+- **기능:** 정적 분석 + LLM 코드 의도 분석 병행 실행
+- **UI:** 추론 실행 버튼 옆 "LLM 보강" 체크박스 또는 Settings 연동
+
+**S1-1c. LLM Filter UI 연결**
+- **백엔드:** `POST /api/inference/llm-filter` (구현 완료)
+- **작업:** 승인 화면에서 LLM 필터 실행 버튼 추가
+- **기능:** PENDING 후보를 LLM이 평가 (LIKELY_VALID/UNCERTAIN/FALSE_POSITIVE), 설명 자동 생성
+- **UI:** 승인 목록 상단에 "LLM 평가 실행" 버튼, 결과를 배지/라벨로 표시
+
+#### 🔧 S1-2. Object 수정 기능 연결
+- **백엔드:** `PATCH /api/objects/:id` (구현 완료)
+- **현재 문제:** 프론트엔드에서 DELETE만 호출, 서비스명/설명/visibility 수정 불가
+- **작업:** 서비스 상세/편집 UI에 PATCH 호출 연결
+- **기대:** 잘못 등록된 서비스명을 삭제/재생성 없이 바로 수정 가능
+
+#### 🔧 S1-3. SSE 실시간 그래프 갱신 연결
+- **백엔드:** `GET /api/rollup-events` SSE 스트림 (구현 완료)
+- **현재 문제:** EventSource 소비자가 프론트엔드에 없음 → rollup 완료 후 수동 새로고침 필요
+- **작업:** Mapping/Architecture 뷰에서 EventSource 구독 → `rollup-change` 이벤트 수신 시 자동 refetch
+- **참조:** `apps/web/src/lib/rollup-event-source.ts` (유틸 이미 존재)
+
+#### 🔧 S1-4. Query Engine 직접 호출 UI
+- **백엔드:** `POST /api/query` (구현 완료 — IMPACT_ANALYSIS, PATH_DISCOVERY, USAGE_DISCOVERY, DOMAIN_SUMMARY)
+- **현재 문제:** Chat에서만 간접 사용, 구조화된 쿼리 UI 없음
+- **작업 옵션:**
+  - (A) 그래프 노드 우클릭 컨텍스트 메뉴 → "영향 분석", "경로 탐색" 바로 실행
+  - (B) 전용 Query Builder 패널 추가
+- **기대:** Chat 없이도 정확한 쿼리 실행 가능, 결과를 그래프 위에 하이라이트
+
+#### 🔧 S1-5. 추론 실행 상세 조회 연결
+- **백엔드:** `GET /api/inference/runs/:id` (구현 완료)
+- **현재 문제:** 추론 이력 목록만 표시, 개별 실행 상세 확인 불가
+- **작업:** 추론 이력 항목 클릭 → 상세 결과/이벤트/성능 지표 표시
+
+#### 🔧 S1-6. 후보 목록 Pagination
+- **백엔드:** `limit/offset` 파라미터 지원 (구현 완료)
+- **현재 문제:** 전체 후보를 한번에 로드, 대규모 워크스페이스에서 성능 저하
+- **작업:** 승인 목록에 커서 기반 또는 페이지 기반 Pagination UI 추가
+
+### Phase 2: UX 기반 구축
+
+#### 🔧 S1-7. Dashboard Home
+- **현재 문제:** 워크스페이스 선택 후 바로 빈 그래프 → 사용자 이탈
+- **작업:** 대시보드 홈 화면 신규 추가
+- **표시 항목:**
+  - 총 서비스/오브젝트 수
+  - 미승인 후보 수 (관계 + 도메인)
+  - 최근 추론 실행 결과 요약
+  - 빠른 액션 (추론 실행, 코드 스캔, 승인 이동)
+
+#### 🔧 S1-8. Empty State 가이드
+- **현재 문제:** 그래프/목록이 비어 있을 때 "다음에 뭘 해야 하는지" 안내 부족
+- **작업:** 주요 화면에 Empty State 액션 카드 추가
+- **대상 화면:**
+  - Architecture View: "서비스를 등록하고 추론을 실행하세요" + 바로가기
+  - Mapping Graph: "코드 스캔으로 시작하기" 또는 "샘플 데이터 로드"
+  - Approval: (이미 부분 구현) 강화 — 추론 미실행 시 안내 문구
+
+#### 🔧 S1-9. 사이드바 접기/펼치기
+- **현재 문제:** 256px 고정 너비 → 그래프 뷰 공간 부족
+- **작업:** 아이콘 모드로 사이드바를 축소/확장하는 토글 버튼 추가
+- **기대:** 그래프 탐색 시 화면 활용도 대폭 향상
+
+### Phase 3: AI 고도화
+
+#### 🔧 S1-10. Chat Intent Router 개선
+- **현재 문제:** "영향"→IMPACT, "경로"→PATH 등 키워드 매칭 기반으로 자연어 의도 파싱이 약함
+- **작업:** LLM 기반 Intent 분류로 전환 (소형 모델로 비용 절감)
+- **기대:** "결제 서비스 바꾸면 어디가 터져?" 같은 자연어도 정확하게 IMPACT_ANALYSIS로 라우팅
+
+#### 🔧 S1-11. 도메인 해석 정확도 개선
+- **현재 문제:** `resolveDomainId()`가 substring 매칭 → "order" 도메인이 "reorder-service"도 매칭
+- **작업:** 단어 경계 매칭 또는 edit distance 기반으로 전환
+- **기대:** false positive 도메인 해석 제거
+
+#### 🔧 S1-12. Evidence Truncation 전략
+- **현재 문제:** `maxOutputTokens: 2048` 하드코딩, 긴 증거 체인이 LLM 토큰 한계 초과 가능
+- **작업:** confidence 상위 N개만 컨텍스트에 포함, 나머지는 "N개 추가 증거 있음"으로 요약
+- **기대:** 대규모 워크스페이스에서도 Chat 응답 안정성 확보
+
+#### 🔧 S1-13. 채팅 기록 영속화
+- **현재 문제:** 새로고침 시 채팅 소실
+- **작업:** localStorage 또는 DB 저장으로 대화 이력 보존
+- **기대:** 이전 질의/답변 참조 가능
+
+### Phase 4: 코드 유지보수성
+
+#### 🔧 S1-14. 대형 컴포넌트 분할
+- **대상:** `rollup-graph.tsx` (1,448줄)
+- **작업:** 렌더링 / 데이터 페칭 / 컨트롤 패널 / 이벤트 핸들링으로 모듈 분리
+- **기대:** 유지보수성 향상, P5 기능 추가 시 변경 범위 축소
+
+#### 🔧 S1-15. Evidence 중복 제거
+- **현재 문제:** 동일 코드 패턴이 다중 파일에서 탐지 시 evidence 중복 → confidence 인플레이션
+- **작업:** content hash(SHA256) 기반 중복 제거 로직 추가
+- **기대:** 추론 신뢰도 정확성 향상
+
+---
+
+## P5: 개발자 생산성 기능 + 구조 개선 (v3.2+)
 
 > **목표**: 추론 엔진의 아키텍처 지식을 일상 개발 워크플로우에 직접 연결
+> **전제 조건**: S1 완료 (LLM 추론 활성화 + UX 안정화)
 > **설계 문서**: `docs/design/08-developer-productivity.md`
 
 ### 📋 5-1. Change Impact Preview (변경 영향도 미리보기)
@@ -383,6 +477,7 @@
   - CLI: `anavi impact --workspace <id> --diff HEAD~1`
   - Query Engine IMPACT_ANALYSIS 연동
 - **기대 효과:** PR 리뷰 시 변경 영향도 즉시 파악
+- **S1 의존:** S1-1(LLM 추론 활성화)로 추론 정확도 확보 후 착수
 
 ### 📋 5-2. Architecture Drift Detection (드리프트 감지)
 - **SPEC:** `docs/spec/24-architecture-drift-detection-spec.md`
@@ -392,6 +487,7 @@
   - 심각도 판정 (INFO/WARNING/CRITICAL)
   - CLI: `anavi drift --workspace <id>`
 - **기대 효과:** 아키텍처 변화를 능동적으로 감지
+- **S1 의존:** S1-3(SSE 실시간 갱신)으로 실시간 알림 인프라 확보 후 착수
 
 ### 📋 5-3. Personal Architecture Journal (개인 아키텍처 저널)
 - **SPEC:** `docs/spec/25-personal-architecture-journal-spec.md`
@@ -418,6 +514,7 @@
   - 서비스별/워크스페이스별 점수 산출 + 등급 판정
   - CLI: `anavi health --workspace <id>`
 - **기대 효과:** 아키텍처 품질 수치화 + 개선 방향 제시
+- **S1 의존:** S1-7(Dashboard Home)에 건강 점수 위젯으로 통합
 
 ### 📋 5-6. 구조적 개선
 - **설계:** `docs/design/08-developer-productivity.md` §7
@@ -432,16 +529,18 @@
 ## 구현 순서 가이드
 
 ```
-P2 완료 기반                   P4 고도화 (★ 최우선)
-──────────────────────────────────────────────────
-2-1 AST/hybrid 운영 완료 ──→ 4-1 Inter-procedural AST
-2-6 비동기 run 오케스트레이션 → 4-6 피드백 루프
-2-7 Atomic 후보 생성 완료 ─→ 4-2 Cross-Signal Validation
-                              4-3 LLM 추론 부스터
-                              4-4 플러그인 시스템
-                              4-5 Delta Rollup
+P1~P4 완료 기반              S1 안정화 (★ 최우선)
+─────────────────────────────────────────────────
+4-3 LLM Booster 구현 ──────→ S1-1 LLM 추론 UI 연결 ★
+4-5 SSE 서버 구현 ─────────→ S1-3 SSE 클라이언트 연결
+PATCH API 구현 ────────────→ S1-2 Object 수정 UI 연결
+Query Engine 구현 ─────────→ S1-4 Query UI 연결
+                              S1-5~6 추론 상세 + Pagination
+                              S1-7~9 Dashboard + Empty State + 사이드바
+                              S1-10~13 AI 고도화
+                              S1-14~15 코드 정리
                               ─────────────────────
-                              P5 생산성 기능
+                              P5 생산성 기능 (S1 완료 후)
                               5-1 Change Impact
                               5-2 Drift Detection
                               5-5 Health Score
@@ -450,8 +549,9 @@ P2 완료 기반                   P4 고도화 (★ 최우선)
                               5-6 구조 개선
 ```
 
-> **핵심**: P2는 완료되었고, 이제 4-1 → 4-2 → 4-3이 추론 품질을 구조적으로 끌어올리는 핵심 3요소다.
-> 특히 4-1은 현재 AST/hybrid 기반 위에 추가되는 다음 단계 고도화다.
+> **핵심**: P4까지 백엔드 구현은 완료되었으나, UI 미연결로 사용 불가능한 기능이 다수 존재한다.
+> S1은 "이미 만든 것을 살리는" 단계로 ROI가 가장 높고, P5의 신뢰도 전제조건을 충족시킨다.
+> 특히 S1-1(LLM 추론 UI 연결)은 전체 시스템 가치를 결정하는 최우선 과제다.
 
 ---
 

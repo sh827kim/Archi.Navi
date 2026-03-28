@@ -60,9 +60,9 @@ MSA/멀티 레포 환경에서는 아래 문제가 반복된다.
 
 ---
 
-## 5. v1 범위 정의
+## 5. 범위 정의
 
-### 5.1 In Scope
+### 5.1 v1 Core (P1–P4) ✅ 완료
 
 1. 서비스 의존 관계 추적/시각화
 2. 서비스 도메인 추론/시각화 (Language-agnostic + AST 보강)
@@ -74,8 +74,34 @@ MSA/멀티 레포 환경에서는 아래 문제가 반복된다.
 8. 지식 편집 UI (수동 오버라이드)
 9. AI Chat 질의 (Evidence 필수)
 10. 멀티 워크스페이스 확장 가능한 데이터 모델
+11. 추론 엔진 고도화 (Inter-procedural AST, Cross-Signal Validation, LLM Booster, Feedback Loop)
 
-### 5.2 Out of Scope (v1)
+### 5.2 S1: 안정화 (v3.1) 🔧 진행 예정
+
+> P4까지 구현된 백엔드 기능 중 UI 미연결 항목 활성화 + UX 기반 구축.
+> 상세: `docs/03-roadmap.md` S1 섹션 참조.
+
+1. LLM 추론 기능 UI 연결 (Smart Pipeline, LLM Boost, LLM Filter)
+2. Object 수정 기능 연결 (PATCH)
+3. SSE 실시간 그래프 갱신 연결
+4. Query Engine 직접 호출 UI
+5. Dashboard Home + Empty State 가이드
+6. 사이드바 접기/펼치기
+7. Chat Intent Router 개선 (LLM 기반)
+8. 채팅 기록 영속화
+9. 대형 컴포넌트 분할 및 코드 유지보수성 개선
+
+### 5.3 P5: 개발자 생산성 (v3.2+) 📋 설계 완료
+
+> S1 완료 후 착수. 상세: `docs/03-roadmap.md` P5 섹션 참조.
+
+1. Change Impact Preview (변경 영향도 미리보기)
+2. Architecture Drift Detection (드리프트 감지)
+3. Architecture Health Score (건강도)
+4. Personal Architecture Journal (저널)
+5. API Contract Diff (API 계약 변경 감지)
+
+### 5.4 Out of Scope
 
 - 중앙 멀티유저 협업/권한 시스템
 - 런타임 tracing 기반 실시간 자동 의존성 확정

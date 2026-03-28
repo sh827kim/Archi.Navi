@@ -196,7 +196,9 @@ function normalizeFeedbackEntries(value: unknown): FeedbackEntry[] {
   return value
     .flatMap((entry) => {
       const record = asRecord(entry);
-      const key = typeof record?.key === 'string' && record.key.trim().length > 0
+      if (!record) return [];
+
+      const key = typeof record.key === 'string' && record.key.trim().length > 0
         ? record.key.trim()
         : null;
       if (!key) return [];

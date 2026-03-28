@@ -645,10 +645,8 @@ describe('relation feedback loop', () => {
         confidence: 0.6,
         status: 'PENDING',
         createdAt: new Date(),
-        updatedAt: new Date(),
-        approvedAt: null,
+        reviewedAt: null,
         reviewedBy: null,
-        evidenceId: null,
       },
       'APPROVED',
     );

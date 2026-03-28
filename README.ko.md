@@ -293,6 +293,8 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 
 ## 구현 현황 (현재)
 
+### 핵심 기능 (P1–P4 완료)
+
 | 항목 | 상태 |
 |------|------|
 | Architecture View (레이어드, Roll-up) | ✅ 완료 |
@@ -306,12 +308,40 @@ Archi.Navi는 소스코드에서 관계를 자동으로 추론합니다.
 | 도메인 추론 Track A (Seed 기반) | ✅ 완료 |
 | 도메인 추론 Track B (Louvain Discovery) | ✅ 완료 |
 | AI Chat (스트리밍, 멀티 프로바이더) | ✅ 완료 |
-| DB 시그널 추출 (추론 정밀도 향상) | ✅ 완료 |
 | Hybrid AST + Regex 코드 시그널 추출 | ✅ 완료 |
-| Evidence Assembler (AI Chat 연동) | ✅ 완료 |
-| 비동기 Inference Run (`/api/inference/runs`) | ✅ 완료 |
-| Cross-Signal Validation | ✅ 완료 |
-| LLM 추론 부스터 | 📋 계획 |
+| Inter-procedural AST 분석 | ✅ 완료 |
+| Cross-Signal Validation (교차 검증) | ✅ 완료 |
+| 프레임워크 플러그인 시스템 | ✅ 완료 |
+| 추론 피드백 루프 | ✅ 완료 |
+| LLM 추론 부스터 (백엔드) | ✅ 완료 |
+| Smart Pipeline — LLM 3-Phase (백엔드) | ✅ 완료 |
+| LLM 후보 필터 (백엔드) | ✅ 완료 |
+
+### S1: 안정화 (진행 예정)
+
+P4까지 LLM 관련 백엔드는 완성되었으나, 일부 기능이 프론트엔드와 연결되지 않은 상태입니다.
+안정화 단계에서는 미연결 기능 활성화와 UX 기반 구축에 집중합니다.
+
+| 항목 | 상태 |
+|------|------|
+| LLM 추론 UI 연결 (Smart / Boost / Filter) | 🔧 예정 |
+| Object 수정(PATCH) UI 연결 | 🔧 예정 |
+| SSE 실시간 그래프 갱신 연결 | 🔧 예정 |
+| Query Engine 직접 호출 UI | 🔧 예정 |
+| Dashboard Home + Empty State 가이드 | 🔧 예정 |
+| Chat Intent Router 개선 (LLM 기반) | 🔧 예정 |
+| 채팅 기록 영속화 | 🔧 예정 |
+| 사이드바 접기/펼치기 | 🔧 예정 |
+
+### P5: 개발자 생산성 (설계 완료 — S1 이후 착수)
+
+| 항목 | 상태 |
+|------|------|
+| Change Impact Preview (변경 영향도 미리보기) | 📋 설계 완료 |
+| Architecture Drift Detection (드리프트 감지) | 📋 설계 완료 |
+| Architecture Health Score (건강도) | 📋 설계 완료 |
+| Personal Architecture Journal (저널) | 📋 설계 완료 |
+| API Contract Diff (API 계약 변경 감지) | 📋 설계 완료 |
 
 ---
 

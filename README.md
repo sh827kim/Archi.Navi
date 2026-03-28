@@ -294,6 +294,8 @@ Relations are stored at the atomic level; Roll-up views are derived via material
 
 ## Implementation Status (Current)
 
+### Core Features (P1–P4 Complete)
+
 | Area | Status |
 |------|--------|
 | Architecture View (layered, roll-up) | ✅ Complete |
@@ -311,7 +313,38 @@ Relations are stored at the atomic level; Roll-up views are derived via material
 | Config / Code / DB relation inference | ✅ Complete |
 | Hybrid AST + Regex code signal extraction | ✅ Complete |
 | Cross-Signal Validation | ✅ Complete |
-| LLM inference booster | 📋 Planned |
+| Inter-procedural AST analysis | ✅ Complete |
+| Framework Plugin System | ✅ Complete |
+| Inference Feedback Loop | ✅ Complete |
+| LLM Inference Booster (backend) | ✅ Complete |
+| Smart Pipeline — LLM 3-Phase (backend) | ✅ Complete |
+| LLM Candidate Filter (backend) | ✅ Complete |
+
+### S1: Stabilization (In Progress)
+
+Backend for LLM features is complete, but several features lack frontend integration.
+The stabilization phase focuses on activating dead features and improving UX foundations.
+
+| Area | Status |
+|------|--------|
+| LLM inference UI integration (Smart / Boost / Filter) | 🔧 Next |
+| Object edit (PATCH) UI | 🔧 Next |
+| SSE real-time graph refresh | 🔧 Next |
+| Query Engine direct UI | 🔧 Next |
+| Dashboard Home + Empty State guides | 🔧 Next |
+| Chat intent router (LLM-based) | 🔧 Next |
+| Chat history persistence | 🔧 Next |
+| Collapsible sidebar | 🔧 Next |
+
+### P5: Developer Productivity (Draft — after S1)
+
+| Area | Status |
+|------|--------|
+| Change Impact Preview | 📋 Designed |
+| Architecture Drift Detection | 📋 Designed |
+| Architecture Health Score | 📋 Designed |
+| Personal Architecture Journal | 📋 Designed |
+| API Contract Diff | 📋 Designed |
 
 ---
 
