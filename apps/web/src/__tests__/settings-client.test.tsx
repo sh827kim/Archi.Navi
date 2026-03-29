@@ -44,6 +44,7 @@ vi.mock('lucide-react', () => {
     FolderOpen: Icon,
     History: Icon,
     ChevronRight: Icon,
+    ArrowUp: Icon,
   };
 });
 
@@ -96,9 +97,15 @@ vi.mock('@archi-navi/ui', () => ({
   ),
   SelectTrigger: ({ children }: { children: React.ReactNode }) => <>{children}</>,
   SelectValue: () => null,
+  Dialog: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogContent: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogDescription: ({ children }: { children: React.ReactNode }) => <p>{children}</p>,
+  DialogFooter: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogHeader: ({ children }: { children: React.ReactNode }) => <div>{children}</div>,
+  DialogTitle: ({ children }: { children: React.ReactNode }) => <h3>{children}</h3>,
 }));
 
-import { EngineSettings } from '@/components/settings/settings-client';
+import { EngineSettings, ScanSettings } from '@/components/settings/settings-client';
 
 function jsonResponse(data: unknown, ok = true): Response {
   return {
@@ -443,5 +450,91 @@ describe('EngineSettings', () => {
       within(relationSection).getByText('아직 누적된 relation feedback 집계가 없습니다.'),
     ).toBeTruthy();
     expect(screen.queryByText('CALL:legacy:alias')).toBeNull();
+  });
+
+  it('코드 스캔 설정에서 폴더 선택 다이얼로그로 경로를 반영할 수 있어야 한다', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/inference/profiles/default?')) {
+        return Promise.resolve(jsonResponse({
+          id: 'profile-1',
+          wCode: 0.5,
+          wDb: 0.3,
+          wMsg: 0.2,
+          minClusterSize: 3,
+          crossValidation: {
+            enabled: true,
+            boostFactor: 0.3,
+            penaltyFactor: 0.85,
+          },
+          relationFeedbackConfig: {
+            enabled: true,
+            minSamples: 10,
+            maxAdjustment: 0.15,
+          },
+          relationFeedbackSummary: {
+            totalKeys: 0,
+            eligibleKeys: 0,
+            approvedCount: 0,
+            rejectedCount: 0,
+            totalSamples: 0,
+          },
+          relationFeedbackEntries: [],
+          domainFeedbackConfig: {
+            enabled: true,
+            minSamples: 10,
+            maxAdjustment: 0.15,
+          },
+          domainFeedbackSummary: {
+            totalKeys: 0,
+            eligibleKeys: 0,
+            approvedCount: 0,
+            rejectedCount: 0,
+            totalSamples: 0,
+          },
+          domainFeedbackEntries: [],
+        }));
+      }
+      if (url === '/api/scan/paths?workspaceId=ws-1') {
+        return Promise.resolve(
+          jsonResponse({
+            paths: ['/Users/spark/workspace/project-a'],
+            parentDirs: ['/Users/spark/workspace'],
+          }),
+        );
+      }
+      if (url === '/api/fs/browse?prefix=%2FUsers%2Fspark%2Fworkspace') {
+        return Promise.resolve(
+          jsonResponse({
+            parent: '/Users/spark/workspace',
+            dirs: [{ name: 'project-a', path: '/Users/spark/workspace/project-a' }],
+          }),
+        );
+      }
+      if (url === '/api/fs/browse?prefix=%2FUsers%2Fspark%2Fworkspace%2Fproject-a') {
+        return Promise.resolve(
+          jsonResponse({
+            parent: '/Users/spark/workspace/project-a',
+            dirs: [],
+          }),
+        );
+      }
+
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ScanSettings workspaceId="ws-1" />);
+
+    await screen.findByDisplayValue('/Users/spark/workspace');
+    fireEvent.click(screen.getByRole('button', { name: '폴더 선택' }));
+    await screen.findByText('project-a');
+
+    fireEvent.click(screen.getByRole('button', { name: /project-a/i }));
+    fireEvent.click(screen.getByRole('button', { name: '현재 경로 선택' }));
+
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('/Users/spark/workspace/project-a')).toBeTruthy();
+    });
   });
 });

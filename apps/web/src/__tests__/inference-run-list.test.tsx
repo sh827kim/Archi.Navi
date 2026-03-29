@@ -1,6 +1,6 @@
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { InferenceRunList } from '@/components/inference/inference-run-list';
 
 const {
@@ -105,7 +105,7 @@ function createDetail() {
         sourceType: 'GITHUB',
         sourceRef: 'repo://acme/core',
         resolvedRepoRoot: '/tmp/repo',
-        status: 'ACTIVE',
+        status: 'SUCCEEDED',
         message: null,
       },
     ],
@@ -132,6 +132,7 @@ describe('InferenceRunList', () => {
   afterEach(() => {
     cleanup();
     vi.unstubAllGlobals();
+    vi.useRealTimers();
   });
 
   it('목록 조회와 액션 요청을 서버 액션으로 수행해야 한다', async () => {
@@ -231,5 +232,74 @@ describe('InferenceRunList', () => {
     await waitFor(() => {
       expect(toast.error).toHaveBeenCalledWith('상세 정보 로드 실패');
     });
+  });
+
+  it('smartSummary 핵심 수치와 상세 소스 메시지를 렌더링해야 한다', async () => {
+    listDashboardInferenceRunsMock.mockResolvedValue([
+      createRun({
+        status: 'SUCCEEDED',
+        stats: {
+          smartSummary: {
+            candidatesCreated: 5,
+            servicePairCount: 4,
+            atomicCandidateCount: 3,
+            serviceFallbackCount: 2,
+            agentRecoveredAtomicCount: 1,
+          },
+        },
+        finishedAt: '2026-03-17T12:01:00.000Z',
+      }),
+    ]);
+    getDashboardInferenceRunDetailMock.mockResolvedValue({
+      ...createDetail(),
+      sources: [
+        {
+          id: 'src-1',
+          sourceType: 'LOCAL',
+          sourceRef: 'repo://acme/core',
+          resolvedRepoRoot: '/tmp/repo',
+          status: 'SKIPPED',
+          message: 'repo root 확인 필요',
+        },
+      ],
+    });
+
+    render(<InferenceRunList />);
+
+    await screen.findByText('후보 5개 생성');
+    expect(screen.getByText('서비스 쌍 4개')).toBeTruthy();
+    expect(screen.getByText('atomic 3개')).toBeTruthy();
+    expect(screen.getByText('fallback 2개')).toBeTruthy();
+    expect(screen.getByText('agent 복구 1개')).toBeTruthy();
+
+    fireEvent.click(screen.getByRole('button', { name: /성공/ }));
+
+    expect(await screen.findByText('repoRoot: /tmp/repo')).toBeTruthy();
+    expect(screen.getByText('메시지: repo root 확인 필요')).toBeTruthy();
+    expect(screen.getByText('건너뜀')).toBeTruthy();
+  });
+
+  it('RUNNING 또는 QUEUED 항목이 있으면 polling으로 자동 새로고침해야 한다', async () => {
+    vi.useFakeTimers();
+    listDashboardInferenceRunsMock.mockResolvedValue([
+      createRun({
+        status: 'QUEUED',
+        startedAt: null,
+      }),
+    ]);
+
+    await act(async () => {
+      render(<InferenceRunList />);
+    });
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(listDashboardInferenceRunsMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(listDashboardInferenceRunsMock).toHaveBeenCalledTimes(2);
   });
 });

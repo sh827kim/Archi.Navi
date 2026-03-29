@@ -31,7 +31,7 @@
 | P2 (2-1 ~ 2-7) | ✅ 완료 | AST hybrid, Evidence Assembler, 비동기 run, Atomic 후보 생성 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
 | P4 (4-1 ~ 4-6) | ✅ 완료 | Inter-procedural AST, Cross-Validation, LLM Booster, Feedback Loop 구현 완료 |
-| **S1 (안정화)** | **🔧 진행 중** | **S1-1~S1-9 완료, 다음 우선순위는 S1-10~S1-15** |
+| **S1 (안정화)** | **🔧 진행 중** | **S1-1~S1-9, S1-16~S1-20 완료. 로컬 스캔 폴더 선택 UX + 스캔 bootstrap + Smart 비동기 운영 UX + Smart agent-assisted/full-agent atomic 분석 모드 + 추론 이력/Query/Chat UX 개선 + Zuul route-aware atomic recovery 반영, 다음 우선순위는 S1-10~S1-15** |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, S1 이후 착수 |
 
 ---
@@ -356,10 +356,10 @@
 > 가장 핵심적인 개선 — Smart를 먼저 요구사항에 맞게 재설계하고, 그 위에 LLM 기능 UI를 안정적으로 연결한다.
 
 **S1-1a. Smart Pipeline 재설계 및 재활성화 (완료)**
-- **현황:** `POST /api/inference/smart` 재설계 범위를 완료했다. Phase 1.5 bootstrap, pair-scoped evidence pack, atomic inference 재작성, fallback observability/UI 노출, optional deep inspection, deterministic tool-assisted deep inspection(1차/2차), trace/observability viewer(`deepInspectionTrace.details` pair drill-down), `no_result` pass-through 표시 보정까지 반영했다.
+- **현황:** `POST /api/inference/smart` 재설계 범위를 완료했다. Phase 1.5 bootstrap, pair-scoped evidence pack, atomic inference 재작성, fallback observability/UI 노출, optional deep inspection, deterministic tool-assisted deep inspection(1차/2차), `pair_pack`/`agent_assisted`/`full_agent` atomic 분석 모드, trace/observability viewer(`deepInspectionTrace.details` pair drill-down), `no_result` pass-through 표시 보정까지 반영했다.
 - **검증(최종):**
-  - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 22 tests passed`
-  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/smart.route.test.ts src/__tests__/approval-list.test.tsx` → `2 files, 25 tests passed`
+  - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 24 tests passed`
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/smart.route.test.ts src/__tests__/approval-list.test.tsx` → `2 files, 30 tests passed`
 - **SPEC:** `docs/spec/37-smart-pipeline-atomic-redesign-spec.md`
 - **목표:** `config -> candidate service pair -> pair-scoped source analysis -> atomic relation` 흐름으로 재구성
 - **핵심 작업 순서:**
@@ -508,6 +508,60 @@
 - **현재 문제:** 동일 코드 패턴이 다중 파일에서 탐지 시 evidence 중복 → confidence 인플레이션
 - **작업:** content hash(SHA256) 기반 중복 제거 로직 추가
 - **기대:** 추론 신뢰도 정확성 향상
+
+### Phase 5: 운영/Query/Assistant UX
+
+#### ✅ S1-16. 추론 이력 운영 UX 개선 (완료)
+- **현황:** Smart run 카드가 `service pair / atomic / fallback / agent recovery`를 표시하고, source badge는 실제 enum(`QUEUED/RUNNING/SUCCEEDED/FAILED/SKIPPED`) 기준으로 렌더링된다.
+- **완료 범위:**
+  - Smart/standard 공통 summary extractor
+  - RUNNING/QUEUED 5초 polling
+  - 상세 패널 `resolvedRepoRoot`/`message` 노출
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/inference-run-list.test.tsx` → `1 file, 7 tests passed`
+- **SPEC:** `docs/spec/43-inference-run-ops-ux-spec.md`
+
+#### ✅ S1-17. Query 결과 Humanized Rendering (완료)
+- **현황:** `/query` 결과 상단에 type별 해석 문구와 요약 카드가 먼저 나오고, `DOMAIN_SUMMARY`는 raw JSON 대신 구조화된 카드/리스트로 렌더링된다.
+- **완료 범위:**
+  - impact/path/usage/domain별 humanized summary
+  - path 후보 stepper형 렌더링
+  - domain summary 카드, 상위 멤버/외부 의존 리스트
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/query-client.test.tsx` → `1 file, 8 tests passed`
+- **SPEC:** `docs/spec/44-query-engine-humanized-results-spec.md`
+
+#### ✅ S1-18. Query 입력 UX/계약 정합성 개선 (완료)
+- **현황:** `/query`가 코어 계약에 맞는 payload를 보내고, ObjectPicker가 독립 컴포넌트/독립 검색 상태를 사용해 입력 안정성을 개선했다.
+- **완료 범위:**
+  - `IMPACT_ANALYSIS -> targetObjectId/maxDepth`
+  - `USAGE_DISCOVERY -> objectId`
+  - picker별 독립 검색 상태, 한글 입력 유지 검증
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/query-client.test.tsx` → `1 file, 8 tests passed`
+- **SPEC:** `docs/spec/45-query-engine-input-usability-spec.md`
+
+#### ✅ S1-19. AI 아키텍처 어시스턴트 질문 범주 확장 (완료)
+- **현황:** `/api/chat`이 service overview / service endpoints intent를 처리하고, 서비스 하위 `api_endpoint` object를 직접 조회해 답변 컨텍스트에 포함한다.
+- **완료 범위:**
+  - `name + displayName` 기반 object resolution
+  - `[서비스 정보]`, `[서비스 API 목록]` 컨텍스트 추가
+  - 채팅 예시 질문 갱신
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/chat.route.test.ts` → `1 file, 1 test passed`
+- **SPEC:** `docs/spec/46-ai-architecture-assistant-scope-expansion-spec.md`
+
+#### ✅ S1-20. Smart Gateway/Proxy Route-Aware Atomic Recovery (완료)
+- **현황:** Smart Pipeline이 direct callsite 매칭을 유지한 채, `Zuul`/gateway route 설정만 있는 pair에 대해 external path를 provider endpoint로 복원할 수 있다.
+- **완료 범위:**
+  - `zuul.prefix`, `zuul.routes.*.path`, `zuul.routes.*.serviceId` 파싱
+  - direct callsite 이후 route-aware alias match / config snippet route recovery 추가
+  - `PATH_NOT_MATCHED`, `NO_ENDPOINT_OBJECTS`, route-only `INSUFFICIENT_CONTEXT` pair를 deep inspection 대상으로 승격
+  - `listGatewayRoutes` tool, `proxy_route` metadata, trigger/tool usage observability 추가
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 30 tests passed`
+  - `pnpm --filter @archi-navi/inference build` → 통과
+- **SPEC:** `docs/spec/47-zuul-route-aware-smart-atomic-spec.md`
 
 ---
 

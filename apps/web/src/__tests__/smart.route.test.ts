@@ -8,9 +8,17 @@ import { tmpdir } from 'node:os';
 const {
   getDbMock,
   executeSmartPipelineMock,
+  createInferenceRunMock,
+  getInferenceRunDetailMock,
+  getSmartInferenceRunDetailMock,
+  executeQueuedSmartInferenceRunMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
   executeSmartPipelineMock: vi.fn(),
+  createInferenceRunMock: vi.fn(),
+  getInferenceRunDetailMock: vi.fn(),
+  getSmartInferenceRunDetailMock: vi.fn(),
+  executeQueuedSmartInferenceRunMock: vi.fn(),
 }));
 
 vi.mock('ai', () => ({
@@ -42,10 +50,17 @@ vi.mock('@archi-navi/inference', async () => {
   return {
     ...actual,
     executeSmartPipeline: executeSmartPipelineMock,
+    createInferenceRun: createInferenceRunMock,
+    getInferenceRunDetail: getInferenceRunDetailMock,
   };
 });
 
-import { POST } from '@/app/api/inference/smart/route';
+vi.mock('@/lib/smart-inference-runs', () => ({
+  getSmartInferenceRunDetail: getSmartInferenceRunDetailMock,
+  executeQueuedSmartInferenceRun: executeQueuedSmartInferenceRunMock,
+}));
+
+import { GET, POST } from '@/app/api/inference/smart/route';
 
 describe('POST /api/inference/smart', () => {
   afterEach(() => {
@@ -97,12 +112,22 @@ describe('POST /api/inference/smart', () => {
         servicePairCount: 3,
       },
       phase3: {
+        analysisMode: 'agent_assisted',
         analyzedServiceCount: 4,
         endpointCallCount: 5,
         candidateCount: 6,
         atomicCandidateCount: 4,
         serviceFallbackCount: 2,
         deepInspectionCount: 2,
+        agentEscalatedPairCount: 2,
+        agentRecoveredAtomicCount: 1,
+        agentFailedPairCount: 1,
+        agentToolUsageSummary: {
+          searchCalls: 3,
+          readCalls: 2,
+          endpointListCalls: 2,
+          totalCalls: 7,
+        },
         deepInspectionTrace: {
           attemptedCount: 2,
           failureCount: 1,
@@ -126,10 +151,12 @@ describe('POST /api/inference/smart', () => {
                 endpointListCalls: 1,
                 totalCalls: 4,
               },
-              recoveredCall: {
-                httpMethod: 'GET',
-                path: '/api/orders/{id}',
-              },
+              recoveredCalls: [
+                {
+                  httpMethod: 'GET',
+                  path: '/api/orders/{id}',
+                },
+              ],
             },
           ],
         },
@@ -160,11 +187,21 @@ describe('POST /api/inference/smart', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       summary: {
+        analysisMode: 'agent_assisted',
         bootstrapEndpointCount: 2,
         servicePairCount: 3,
         atomicCandidateCount: 4,
         serviceFallbackCount: 2,
         deepInspectionCount: 2,
+        agentEscalatedPairCount: 2,
+        agentRecoveredAtomicCount: 1,
+        agentFailedPairCount: 1,
+        agentToolUsageSummary: {
+          searchCalls: 3,
+          readCalls: 2,
+          endpointListCalls: 2,
+          totalCalls: 7,
+        },
         deepInspectionTrace: {
           attemptedCount: 2,
           failureCount: 1,
@@ -188,10 +225,12 @@ describe('POST /api/inference/smart', () => {
                 endpointListCalls: 1,
                 totalCalls: 4,
               },
-              recoveredCall: {
-                httpMethod: 'GET',
-                path: '/api/orders/{id}',
-              },
+              recoveredCalls: [
+                {
+                  httpMethod: 'GET',
+                  path: '/api/orders/{id}',
+                },
+              ],
             },
           ],
         },
@@ -207,11 +246,21 @@ describe('POST /api/inference/smart', () => {
       },
       data: {
         summary: {
+          analysisMode: 'agent_assisted',
           bootstrapEndpointCount: 2,
           servicePairCount: 3,
           atomicCandidateCount: 4,
           serviceFallbackCount: 2,
           deepInspectionCount: 2,
+          agentEscalatedPairCount: 2,
+          agentRecoveredAtomicCount: 1,
+          agentFailedPairCount: 1,
+          agentToolUsageSummary: {
+            searchCalls: 3,
+            readCalls: 2,
+            endpointListCalls: 2,
+            totalCalls: 7,
+          },
           deepInspectionTrace: {
             attemptedCount: 2,
             failureCount: 1,
@@ -235,10 +284,12 @@ describe('POST /api/inference/smart', () => {
                   endpointListCalls: 1,
                   totalCalls: 4,
                 },
-                recoveredCall: {
-                  httpMethod: 'GET',
-                  path: '/api/orders/{id}',
-                },
+                recoveredCalls: [
+                  {
+                    httpMethod: 'GET',
+                    path: '/api/orders/{id}',
+                  },
+                ],
               },
             ],
           },
@@ -254,6 +305,15 @@ describe('POST /api/inference/smart', () => {
         },
       },
     });
+    expect(executeSmartPipelineMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        repoRoots: [repoRoot],
+        atomicAnalysisMode: 'pair_pack',
+        generateAgentStep: expect.any(Function),
+      }),
+    );
   });
 
   it('새 observability 필드가 없더라도 summary 에 기본값을 안전하게 채워야 한다', async () => {
@@ -300,11 +360,21 @@ describe('POST /api/inference/smart', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       summary: {
+        analysisMode: 'pair_pack',
         bootstrapEndpointCount: 0,
         servicePairCount: 0,
         atomicCandidateCount: 0,
         serviceFallbackCount: 0,
         deepInspectionCount: 0,
+        agentEscalatedPairCount: 0,
+        agentRecoveredAtomicCount: 0,
+        agentFailedPairCount: 0,
+        agentToolUsageSummary: {
+          searchCalls: 0,
+          readCalls: 0,
+          endpointListCalls: 0,
+          totalCalls: 0,
+        },
         deepInspectionTrace: {
           attemptedCount: 0,
           failureCount: 0,
@@ -422,6 +492,117 @@ describe('POST /api/inference/smart', () => {
             ],
           },
         },
+      },
+    });
+  });
+
+  it('async=true 이면 smart run을 큐잉하고 202를 반환해야 한다', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-route-async-'));
+    process.env['OPENAI_API_KEY'] = 'test-key';
+    getDbMock.mockResolvedValue({
+      select: vi.fn(() => ({
+        from: vi.fn(() => ({
+          where: vi.fn().mockResolvedValue([]),
+        })),
+      })),
+    });
+    createInferenceRunMock.mockResolvedValue({
+      id: 'smart-run-1',
+      status: 'QUEUED',
+    });
+    executeQueuedSmartInferenceRunMock.mockResolvedValue(undefined);
+    getInferenceRunDetailMock.mockResolvedValue({
+      run: {
+        id: 'smart-run-1',
+        status: 'QUEUED',
+      },
+      sources: [],
+      events: [],
+    });
+
+    const response = await POST(new Request('http://localhost/api/inference/smart', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-ai-provider': 'openai',
+      },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        repoRoots: [repoRoot],
+        useServiceMetadataPaths: false,
+        async: true,
+        analysisMode: 'full_agent',
+      }),
+    }));
+
+    expect(response.status).toBe(202);
+    expect(createInferenceRunMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        triggerType: 'SMART_PIPELINE',
+        modes: ['config', 'code'],
+        sources: [{ type: 'local', ref: repoRoot }],
+      }),
+    );
+    expect(executeQueuedSmartInferenceRunMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        runId: 'smart-run-1',
+        repoRoots: [repoRoot],
+        analysisMode: 'full_agent',
+        generateAgentStep: expect.any(Function),
+      }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      queued: true,
+      runId: 'smart-run-1',
+    });
+  });
+
+  it('GET 상태 조회는 smart run summary를 반환해야 한다', async () => {
+    process.env['OPENAI_API_KEY'] = 'test-key';
+    getDbMock.mockResolvedValue({});
+    getSmartInferenceRunDetailMock.mockResolvedValue({
+      detail: {
+        run: {
+          id: 'smart-run-1',
+          triggerType: 'SMART_PIPELINE',
+          status: 'SUCCEEDED',
+          stats: {
+            smartSummary: {
+              candidatesCreated: 3,
+              phase2Count: 1,
+              phase3Count: 2,
+            },
+          },
+        },
+        sources: [],
+        events: [],
+      },
+      summary: {
+        candidatesCreated: 3,
+        phase2Count: 1,
+        phase3Count: 2,
+      },
+    });
+
+    const response = await GET(
+      new Request('http://localhost/api/inference/smart?workspaceId=ws-1&runId=smart-run-1'),
+    );
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({
+      success: true,
+      summary: {
+        candidatesCreated: 3,
+        phase2Count: 1,
+        phase3Count: 2,
+      },
+      run: {
+        id: 'smart-run-1',
+        status: 'SUCCEEDED',
       },
     });
   });

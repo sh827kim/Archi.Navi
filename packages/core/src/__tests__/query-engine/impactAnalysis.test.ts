@@ -18,7 +18,9 @@ describe('analyzeImpact', () => {
 
   it('direction=BOTH면 inbound/outbound edge를 모두 포함해야 한다', async () => {
     const graph = new Graph({ multi: false, type: 'directed' });
-    ['svc-a', 'svc-b', 'svc-c'].forEach((id) => graph.addNode(id));
+    graph.addNode('svc-a', { name: 'api-gateway', displayName: 'API Gateway', objectType: 'service' });
+    graph.addNode('svc-b', { name: 'order-service', displayName: 'Order Service', objectType: 'service' });
+    graph.addNode('svc-c', { name: 'payment-service', displayName: 'Payment Service', objectType: 'service' });
     graph.addDirectedEdgeWithKey('e-ab', 'svc-a', 'svc-b', {
       relationType: 'call',
       edgeWeight: 2,
@@ -41,6 +43,11 @@ describe('analyzeImpact', () => {
     );
 
     expect(result.nodes.map((n) => n.id).sort()).toEqual(['svc-a', 'svc-b', 'svc-c']);
+    expect(result.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'svc-b', name: 'order-service', displayName: 'Order Service' }),
+      ]),
+    );
     expect(result.edges.map((e) => e.subjectId).sort()).toEqual(['svc-a', 'svc-b']);
     expect(result.edges.map((e) => e.objectId).sort()).toEqual(['svc-b', 'svc-c']);
   });
@@ -63,4 +70,3 @@ describe('analyzeImpact', () => {
     expect(result.edges[0]?.objectId).toBe('svc-b');
   });
 });
-

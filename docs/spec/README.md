@@ -45,6 +45,16 @@
 - [35-cross-signal-validation-finalization-spec.md](./35-cross-signal-validation-finalization-spec.md)
 - [36-relation-feedback-key-specialization-spec.md](./36-relation-feedback-key-specialization-spec.md)
 - [37-smart-pipeline-atomic-redesign-spec.md](./37-smart-pipeline-atomic-redesign-spec.md)
+- [38-s1-phase2-ux-foundation-spec.md](./38-s1-phase2-ux-foundation-spec.md)
+- [39-workspace-folder-picker-spec.md](./39-workspace-folder-picker-spec.md)
+- [40-inference-scan-smart-async-spec.md](./40-inference-scan-smart-async-spec.md)
+- [41-db-recovery-migration-spec.md](./41-db-recovery-migration-spec.md)
+- [42-agent-assisted-smart-atomic-spec.md](./42-agent-assisted-smart-atomic-spec.md)
+- [43-inference-run-ops-ux-spec.md](./43-inference-run-ops-ux-spec.md)
+- [44-query-engine-humanized-results-spec.md](./44-query-engine-humanized-results-spec.md)
+- [45-query-engine-input-usability-spec.md](./45-query-engine-input-usability-spec.md)
+- [46-ai-architecture-assistant-scope-expansion-spec.md](./46-ai-architecture-assistant-scope-expansion-spec.md)
+- [47-zuul-route-aware-smart-atomic-spec.md](./47-zuul-route-aware-smart-atomic-spec.md)
 
 ## 참고
 - 구현 체크리스트: [docs/checklists/README.md](../checklists/README.md)

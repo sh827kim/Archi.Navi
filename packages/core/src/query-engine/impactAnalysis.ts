@@ -6,6 +6,20 @@ import Graph from 'graphology';
 import type { QueryParams, QueryScope, QueryResponse } from '@archi-navi/shared';
 import { DEFAULTS } from '@archi-navi/shared';
 
+function buildNodeFromGraph(graph: Graph, id: string): QueryResponse['result']['nodes'][0] {
+  const attrs = graph.hasNode(id) ? graph.getNodeAttributes(id) : {};
+  const name = typeof attrs['name'] === 'string' ? attrs['name'] : id;
+  const displayName = typeof attrs['displayName'] === 'string' ? attrs['displayName'] : undefined;
+  const objectType = typeof attrs['objectType'] === 'string' ? attrs['objectType'] : 'service';
+
+  return {
+    id,
+    type: objectType as QueryResponse['result']['nodes'][0]['type'],
+    name,
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
 /**
  * 특정 Object의 Upstream/Downstream 영향 범위 분석
  */
@@ -63,7 +77,7 @@ export async function analyzeImpact(
   }
 
   return {
-    nodes: [...visitedNodes].map((id) => ({ id, type: 'service', name: id })),
+    nodes: [...visitedNodes].map((id) => buildNodeFromGraph(graph, id)),
     edges: [...visitedEdges].map((key) => {
       const source = graph.source(key);
       const target = graph.target(key);

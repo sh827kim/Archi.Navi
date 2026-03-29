@@ -3,8 +3,10 @@
  * 환경변수에 따라 PGlite(로컬) 또는 PostgreSQL(서버)을 선택
  */
 import { drizzle as drizzlePglite } from 'drizzle-orm/pglite';
+import { migrate } from 'drizzle-orm/pglite/migrator';
 import { PGlite } from '@electric-sql/pglite';
-import { existsSync, mkdirSync, rmSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync } from 'fs';
+import { join } from 'path';
 import * as schema from './schema/index';
 
 /** DB 클라이언트 타입 */
@@ -83,26 +85,110 @@ function resetCorruptedDataDir(dataDir: string): boolean {
   }
 }
 
-async function initializeDb(pgliteDataDir: string): Promise<DbClient> {
+function archiveAndResetCorruptedDataDir(dataDir: string): string | null {
+  if (dataDir.startsWith('memory://')) return null;
+  if (!existsSync(dataDir)) return null;
+
+  const backupDir = `${dataDir}.broken-${Date.now()}`;
   try {
-    _pg = new PGlite(pgliteDataDir);
-    _client = drizzlePglite(_pg, { schema });
-    await _client.execute('select 1');
-    installShutdownHook();
-    return _client;
-  } catch (error) {
-    await closePg();
-    if (!isPgliteAbortedError(error) || !resetCorruptedDataDir(pgliteDataDir)) {
-      throw error;
+    renameSync(dataDir, backupDir);
+    mkdirSync(dataDir, { recursive: true });
+    return backupDir;
+  } catch {
+    if (resetCorruptedDataDir(dataDir)) {
+      return null;
+    }
+    return null;
+  }
+}
+
+function removeStalePostmasterPid(dataDir: string): boolean {
+  if (dataDir.startsWith('memory://')) return false;
+
+  const pidFile = join(dataDir, 'postmaster.pid');
+  if (!existsSync(pidFile)) return false;
+
+  try {
+    rmSync(pidFile, { force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function hasStalePostmasterPid(dataDir: string): boolean {
+  if (dataDir.startsWith('memory://')) return false;
+
+  const pidFile = join(dataDir, 'postmaster.pid');
+  if (!existsSync(pidFile)) return false;
+
+  try {
+    const firstLine = readFileSync(pidFile, 'utf-8')
+      .split(/\r?\n/u)[0]
+      ?.trim();
+    if (!firstLine) return true;
+
+    const pid = Number(firstLine);
+    if (!Number.isInteger(pid) || pid <= 0) {
+      return true;
     }
 
-    console.warn('[archi-navi/db] PGlite 데이터 손상 감지, 데이터 디렉터리 재생성');
-    _pg = new PGlite(pgliteDataDir);
-    _client = drizzlePglite(_pg, { schema });
-    await _client.execute('select 1');
-    installShutdownHook();
-    return _client;
+    try {
+      process.kill(pid, 0);
+      return false;
+    } catch (error) {
+      if (error instanceof Error && 'code' in error && error.code === 'ESRCH') {
+        return true;
+      }
+      return false;
+    }
+  } catch {
+    return true;
   }
+}
+
+async function createAndVerifyDb(pgliteDataDir: string): Promise<DbClient> {
+  _pg = new PGlite(pgliteDataDir);
+  _client = drizzlePglite(_pg, { schema });
+  await _client.execute('select 1');
+  const migrationsFolder = process.env['MIGRATIONS_FOLDER']?.trim();
+  if (migrationsFolder) {
+    await migrate(_client, { migrationsFolder });
+  }
+  installShutdownHook();
+  return _client;
+}
+
+async function initializeDb(pgliteDataDir: string): Promise<DbClient> {
+  if (hasStalePostmasterPid(pgliteDataDir) && removeStalePostmasterPid(pgliteDataDir)) {
+    console.warn('[archi-navi/db] stale postmaster.pid 감지, pid 파일만 정리');
+  }
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      return await createAndVerifyDb(pgliteDataDir);
+    } catch (error) {
+      lastError = error;
+      await closePg();
+
+      if (!isPgliteAbortedError(error) || attempt === 3) {
+        throw error;
+      }
+      const backupDir = archiveAndResetCorruptedDataDir(pgliteDataDir);
+      if (backupDir === null && !existsSync(pgliteDataDir)) {
+        throw error;
+      }
+
+      console.warn(
+        backupDir
+          ? `[archi-navi/db] PGlite 데이터 손상 감지, ${backupDir} 로 백업 후 재시도 (${attempt}/2)`
+          : `[archi-navi/db] PGlite 데이터 손상 감지, 데이터 디렉터리 재생성 후 재시도 (${attempt}/2)`,
+      );
+    }
+  }
+
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }
 
 /**

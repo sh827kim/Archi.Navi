@@ -5,8 +5,14 @@ import { join } from 'node:path';
 import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 
-const { getDbMock } = vi.hoisted(() => ({
+const {
+  getDbMock,
+  extractCodeSignalsWithEngineMock,
+  inferRelationsFromCodeSignalsMock,
+} = vi.hoisted(() => ({
   getDbMock: vi.fn(),
+  extractCodeSignalsWithEngineMock: vi.fn(),
+  inferRelationsFromCodeSignalsMock: vi.fn(),
 }));
 
 vi.mock('@archi-navi/db', async () => {
@@ -17,9 +23,18 @@ vi.mock('@archi-navi/db', async () => {
   };
 });
 
+vi.mock('@archi-navi/inference', async () => {
+  const actual = await vi.importActual<typeof import('@archi-navi/inference')>('@archi-navi/inference');
+  return {
+    ...actual,
+    extractCodeSignalsWithEngine: extractCodeSignalsWithEngineMock,
+    inferRelationsFromCodeSignals: inferRelationsFromCodeSignalsMock,
+  };
+});
+
 import { createPgliteClient, objects, workspaces } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { registerProjects } from '@/app/api/scan/route';
+import { bootstrapScannedProjects, registerProjects } from '@/app/api/scan/route';
 
 const MIGRATIONS_FOLDER = join(process.cwd(), '../../packages/db/src/migrations');
 const workspaceId = '00000000-0000-0000-0000-000000000081';
@@ -119,6 +134,53 @@ describe('registerProjects', () => {
       scanPath: '/tmp/orders-service',
       language: 'java',
       markerFile: 'pom.xml',
+    });
+  });
+
+  it('스캔 후 1차 코드 분석이 atomic bootstrap 요약을 반환해야 한다', async () => {
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      signalCount: 5,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock.mockResolvedValue({
+      candidateCount: 2,
+      createdEndpointCount: 3,
+      createdTopicCount: 1,
+      createdQueueCount: 0,
+      createdDatabaseCount: 1,
+      createdDbTableCount: 2,
+    });
+
+    const summary = await bootstrapScannedProjects(
+      workspaceId,
+      [
+        {
+          name: 'orders',
+          path: process.cwd(),
+          language: 'typescript',
+          markerFile: 'package.json',
+        },
+      ],
+      false,
+    );
+
+    expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(db, {
+      workspaceId,
+      repoRoot: process.cwd(),
+      codeEngine: 'regex',
+    });
+    expect(inferRelationsFromCodeSignalsMock).toHaveBeenCalledWith(db, {
+      workspaceId,
+      repoRoot: process.cwd(),
+    });
+    expect(summary).toEqual({
+      analyzedProjectCount: 1,
+      signalCount: 5,
+      candidateCount: 2,
+      createdEndpointCount: 3,
+      createdAtomicCount: 7,
+      warnings: [],
     });
   });
 });

@@ -579,6 +579,8 @@ describe('ApprovalList', () => {
           workspaceId: 'ws-1',
           repoRoots: ['/tmp'],
           useServiceMetadataPaths: true,
+          async: true,
+          analysisMode: 'pair_pack',
         }),
       }),
     );
@@ -602,6 +604,23 @@ describe('ApprovalList', () => {
       if (url === '/api/inference/smart') {
         return Promise.resolve(jsonResponse({
           success: true,
+          queued: true,
+          runId: 'smart-run-1',
+          run: {
+            id: 'smart-run-1',
+            status: 'QUEUED',
+          },
+          sources: [],
+        }, true));
+      }
+      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-1')) {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          run: {
+            id: 'smart-run-1',
+            status: 'SUCCEEDED',
+            errorMessage: null,
+          },
           data: {
             phase2: { analyzedServiceCount: 2, servicePairCount: 3 },
             phase3: {
@@ -633,12 +652,24 @@ describe('ApprovalList', () => {
                       endpointListCalls: 1,
                       totalCalls: 4,
                     },
-                    recoveredCall: {
-                      httpMethod: 'GET',
-                      path: '/api/orders/{id}',
-                    },
+                    recoveredCalls: [
+                      {
+                        httpMethod: 'GET',
+                        path: '/api/orders/{id}',
+                      },
+                    ],
                   },
                 ],
+              },
+              analysisMode: 'agent_assisted',
+              agentEscalatedPairCount: 2,
+              agentRecoveredAtomicCount: 1,
+              agentFailedPairCount: 1,
+              agentToolUsageSummary: {
+                searchCalls: 3,
+                readCalls: 2,
+                endpointListCalls: 2,
+                totalCalls: 7,
               },
               fallbackReasonBreakdown: {
                 NO_ENDPOINT_OBJECTS: 1,
@@ -663,11 +694,13 @@ describe('ApprovalList', () => {
 
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(
-        'Smart 추론 완료 — 후보 4개 생성 (Config LLM 2회, Pair LLM 3회, 서비스 쌍 3개, 원자 후보 2개, 서비스 fallback 1개 (엔드포인트 객체 없음 1개), Deep inspect 2회 (저신뢰 1개, 컨텍스트 부족 1개, 실패 1개))',
+        'Smart 추론 완료 — 후보 4개 생성 (Agent-assisted, Config LLM 2회, Pair LLM 3회, 서비스 쌍 3개, 원자 후보 2개, 서비스 fallback 1개 (엔드포인트 객체 없음 1개), Deep inspect 2회 (저신뢰 1개, 컨텍스트 부족 1개, 실패 1개), Agent pair 2개, Agent atomic 복구 1개, Agent 실패 1개)',
       );
     });
     const viewer = await screen.findByTestId('smart-trace-viewer');
     expect(viewer.textContent).toContain('Smart Deep Inspection Trace');
+    expect(viewer.textContent).toContain('Agent-assisted');
+    expect(viewer.textContent).toContain('Agent pair 2개');
     expect(viewer.textContent).toContain('gateway -> orders');
     expect(viewer.textContent).toContain('트리거 저신뢰');
     expect(viewer.textContent).toContain('상태 성공');
@@ -678,6 +711,128 @@ describe('ApprovalList', () => {
       window.localStorage.removeItem('archi-navi:ai-provider');
       window.localStorage.removeItem('archi-navi:ai-api-key');
     }
+  });
+
+  it('Smart Full-agent 모드는 full_agent analysisMode로 비동기 실행을 요청해야 한다', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url.includes('/api/scan/paths?')) {
+        return Promise.resolve(jsonResponse({
+          paths: ['/tmp/orders-service'],
+          parentDirs: ['/tmp'],
+        }));
+      }
+      if (url === '/api/inference/smart') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          queued: true,
+          runId: 'smart-run-full-agent',
+          run: {
+            id: 'smart-run-full-agent',
+            status: 'QUEUED',
+          },
+          sources: [],
+        }));
+      }
+      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-full-agent')) {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          run: {
+            id: 'smart-run-full-agent',
+            status: 'RUNNING',
+          },
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
+    fireEvent.change(screen.getByLabelText('추론 모드'), {
+      target: { value: 'smart-full-agent' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/inference/smart',
+        expect.objectContaining({
+          body: JSON.stringify({
+            workspaceId: 'ws-1',
+            repoRoots: ['/tmp'],
+            useServiceMetadataPaths: true,
+            async: true,
+            analysisMode: 'full_agent',
+          }),
+        }),
+      );
+    });
+  });
+
+  it('Smart Agent-assisted 모드는 agent_assisted analysisMode로 비동기 실행을 요청해야 한다', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url.includes('/api/scan/paths?')) {
+        return Promise.resolve(jsonResponse({
+          paths: ['/tmp/orders-service'],
+          parentDirs: ['/tmp'],
+        }));
+      }
+      if (url === '/api/inference/smart') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          queued: true,
+          runId: 'smart-run-agent-assisted',
+          run: {
+            id: 'smart-run-agent-assisted',
+            status: 'QUEUED',
+          },
+          sources: [],
+        }));
+      }
+      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-agent-assisted')) {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          run: {
+            id: 'smart-run-agent-assisted',
+            status: 'RUNNING',
+          },
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
+    fireEvent.change(screen.getByLabelText('추론 모드'), {
+      target: { value: 'smart-agent' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/inference/smart',
+        expect.objectContaining({
+          body: JSON.stringify({
+            workspaceId: 'ws-1',
+            repoRoots: ['/tmp'],
+            useServiceMetadataPaths: true,
+            async: true,
+            analysisMode: 'agent_assisted',
+          }),
+        }),
+      );
+    });
   });
 
   it('Smart trace detail 필드가 없어도 viewer를 안전하게 렌더링해야 한다', async () => {
@@ -695,6 +850,23 @@ describe('ApprovalList', () => {
       if (url === '/api/inference/smart') {
         return Promise.resolve(jsonResponse({
           success: true,
+          queued: true,
+          runId: 'smart-run-2',
+          run: {
+            id: 'smart-run-2',
+            status: 'QUEUED',
+          },
+          sources: [],
+        }));
+      }
+      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-2')) {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          run: {
+            id: 'smart-run-2',
+            status: 'SUCCEEDED',
+            errorMessage: null,
+          },
           data: {
             phase2: { analyzedServiceCount: 1, servicePairCount: 1 },
             phase3: {
@@ -752,6 +924,23 @@ describe('ApprovalList', () => {
       if (url === '/api/inference/smart') {
         return Promise.resolve(jsonResponse({
           success: true,
+          queued: true,
+          runId: 'smart-run-3',
+          run: {
+            id: 'smart-run-3',
+            status: 'QUEUED',
+          },
+          sources: [],
+        }));
+      }
+      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-3')) {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          run: {
+            id: 'smart-run-3',
+            status: 'SUCCEEDED',
+            errorMessage: null,
+          },
           data: {
             phase2: { analyzedServiceCount: 1, servicePairCount: 1 },
             phase3: {

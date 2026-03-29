@@ -4,7 +4,8 @@
  * generation_version이 변경되면 캐시를 무효화하고 재구성
  */
 import Graph from 'graphology';
-import type { DbClient } from '@archi-navi/db';
+import { inArray } from 'drizzle-orm';
+import { objects, type DbClient } from '@archi-navi/db';
 import type { RollupLevel } from '@archi-navi/shared';
 import { getRollupEdges } from '../graph-store/index';
 
@@ -47,16 +48,39 @@ export async function getOrBuildGraph(
 
   // 캐시 미스 - DB에서 rollup edge 조회 후 그래프 구성
   const edges = await getRollupEdges(db, workspaceId, generationVersion, rollupLevel);
+  const nodeIds = [...new Set(edges.flatMap((edge) => [edge.subjectObjectId, edge.objectId]))];
+  const objectRows = nodeIds.length > 0
+    ? await db
+        .select({
+          id: objects.id,
+          name: objects.name,
+          displayName: objects.displayName,
+          objectType: objects.objectType,
+        })
+        .from(objects)
+        .where(inArray(objects.id, nodeIds))
+    : [];
+  const objectMap = new Map(objectRows.map((row) => [row.id, row]));
 
   const graph = new Graph({ multi: false, type: 'directed' });
 
   for (const edge of edges) {
     // 노드 추가 (없으면 생성)
     if (!graph.hasNode(edge.subjectObjectId)) {
-      graph.addNode(edge.subjectObjectId);
+      const subject = objectMap.get(edge.subjectObjectId);
+      graph.addNode(edge.subjectObjectId, {
+        name: subject?.name ?? edge.subjectObjectId,
+        displayName: subject?.displayName ?? undefined,
+        objectType: subject?.objectType ?? 'service',
+      });
     }
     if (!graph.hasNode(edge.objectId)) {
-      graph.addNode(edge.objectId);
+      const target = objectMap.get(edge.objectId);
+      graph.addNode(edge.objectId, {
+        name: target?.name ?? edge.objectId,
+        displayName: target?.displayName ?? undefined,
+        objectType: target?.objectType ?? 'service',
+      });
     }
 
     // 엣지 추가

@@ -6,6 +6,7 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { getDb, workspaces } from '@archi-navi/db';
 import { eq } from 'drizzle-orm';
 import { normalizeWorkspaceName } from '@/lib/workspace-name';
+import { persistWorkspaceSnapshot } from '@/lib/workspace-snapshot';
 
 export async function PATCH(
   req: NextRequest,
@@ -30,6 +31,8 @@ export async function PATCH(
       return NextResponse.json({ error: 'workspace not found' }, { status: 404 });
     }
 
+    await persistWorkspaceSnapshot(db);
+
     return NextResponse.json({ ok: true });
   } catch (error) {
     console.error('[PATCH /api/workspaces/:id]', error);
@@ -53,6 +56,8 @@ export async function DELETE(
     if (deleted.length === 0) {
       return NextResponse.json({ error: 'workspace not found' }, { status: 404 });
     }
+
+    await persistWorkspaceSnapshot(db);
 
     return NextResponse.json({ ok: true });
   } catch (error) {

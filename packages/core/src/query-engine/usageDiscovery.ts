@@ -4,10 +4,24 @@
  * 상위 객체(database/broker/service)는 rollup 우선 조회
  */
 import Graph from 'graphology';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
-import { objectRelations } from '@archi-navi/db';
+import { objectRelations, objects } from '@archi-navi/db';
 import type { QueryParams, QueryScope, QueryResponse } from '@archi-navi/shared';
+
+function buildNodeFromGraph(graph: Graph, id: string): QueryResponse['result']['nodes'][0] {
+  const attrs = graph.hasNode(id) ? graph.getNodeAttributes(id) : {};
+  const name = typeof attrs['name'] === 'string' ? attrs['name'] : id;
+  const displayName = typeof attrs['displayName'] === 'string' ? attrs['displayName'] : undefined;
+  const objectType = typeof attrs['objectType'] === 'string' ? attrs['objectType'] : 'service';
+
+  return {
+    id,
+    type: objectType as QueryResponse['result']['nodes'][0]['type'],
+    name,
+    ...(displayName ? { displayName } : {}),
+  };
+}
 
 /**
  * 특정 Object를 사용하는 주체 목록 반환
@@ -52,8 +66,34 @@ export async function discoverUsage(
     nodeSet.add(rel.objectId);
   }
 
+  const graphBackedNodes = [...nodeSet].filter((id) => graph.hasNode(id));
+  const dbBackedNodeIds = [...nodeSet].filter((id) => !graph.hasNode(id));
+  const dbNodeRows = dbBackedNodeIds.length > 0
+    ? await db
+        .select({
+          id: objects.id,
+          name: objects.name,
+          displayName: objects.displayName,
+          objectType: objects.objectType,
+        })
+        .from(objects)
+        .where(and(eq(objects.workspaceId, workspaceId), inArray(objects.id, dbBackedNodeIds)))
+    : [];
+  const dbNodeMap = new Map(dbNodeRows.map((row) => [row.id, row]));
+
   return {
-    nodes: [...nodeSet].map((id) => ({ id, type: 'service', name: id })),
+    nodes: [
+      ...graphBackedNodes.map((id) => buildNodeFromGraph(graph, id)),
+      ...dbBackedNodeIds.map((id) => {
+        const row = dbNodeMap.get(id);
+        return {
+          id,
+          type: (row?.objectType ?? 'service') as QueryResponse['result']['nodes'][0]['type'],
+          name: row?.name ?? id,
+          ...(row?.displayName ? { displayName: row.displayName } : {}),
+        };
+      }),
+    ],
     edges: [
       // Rollup edges
       ...[...edgeSet].map((key) => {

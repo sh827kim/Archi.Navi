@@ -21,6 +21,7 @@ import {
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { normalizeWorkspaceName, WORKSPACE_NAME_MAX_LENGTH } from '@/lib/workspace-name';
+import { PathPickerDialog } from '@/components/shared/path-picker-dialog';
 
 type Step = 0 | 1 | 2 | 3 | 4;
 type ScanMode = 'local' | 'workspace-dir' | 'github-repo' | 'github-org';
@@ -41,6 +42,9 @@ interface ScanResult {
   registered: number;
   skipped: number;
   projects: { name: string }[];
+  bootstrap?: {
+    createdAtomicCount: number;
+  };
 }
 
 type ScanStreamEvent =
@@ -90,6 +94,7 @@ export function WorkspaceOnboardingWizard() {
   const progressLabels = ['제목', '추론 설정', '레이어', '태그', '코드 스캔'] as const;
   const weightSum = useMemo(() => Number((wCode + wDb + wMsg).toFixed(2)), [wCode, wDb, wMsg]);
   const selectedScanMode = SCAN_MODE_OPTIONS.find((mode) => mode.value === scanMode)!;
+  const isLocalScanMode = scanMode === 'local' || scanMode === 'workspace-dir';
   const nextId = (prefix: string) => {
     idSeq.current += 1;
     return `${prefix}-${idSeq.current}`;
@@ -302,7 +307,12 @@ export function WorkspaceOnboardingWizard() {
         if (!workspaceId) throw new Error('워크스페이스가 생성되지 않았습니다.');
         const scanResult = await runScan(workspaceId);
         if (scanResult) {
-          toast.success(`코드 스캔 완료: ${scanResult.registered}개 등록, ${scanResult.skipped}개 스킵`);
+          const bootstrapSuffix = scanResult.bootstrap && scanResult.bootstrap.createdAtomicCount > 0
+            ? `, 원자 오브젝트 ${scanResult.bootstrap.createdAtomicCount}개 bootstrap`
+            : '';
+          toast.success(
+            `코드 스캔 완료: ${scanResult.registered}개 등록, ${scanResult.skipped}개 스킵${bootstrapSuffix}`,
+          );
         } else {
           toast.success('코드 스캔을 건너뛰고 설정을 완료했습니다.');
         }
@@ -548,12 +558,24 @@ export function WorkspaceOnboardingWizard() {
                 </div>
                 <div className="space-y-2">
                   <p className="text-sm text-muted-foreground">대상</p>
-                  <Input
-                    value={scanTarget}
-                    onChange={(e) => setScanTarget(e.target.value)}
-                    placeholder={selectedScanMode.placeholder}
-                    disabled={pending}
-                  />
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <Input
+                      value={scanTarget}
+                      onChange={(e) => setScanTarget(e.target.value)}
+                      placeholder={selectedScanMode.placeholder}
+                      disabled={pending}
+                    />
+                    {isLocalScanMode && (
+                      <PathPickerDialog
+                        value={scanTarget}
+                        onSelect={setScanTarget}
+                        disabled={pending}
+                        triggerLabel="폴더 선택"
+                        title="스캔 대상 폴더 선택"
+                        description="로컬 프로젝트 또는 워크스페이스 폴더를 탐색해 선택합니다."
+                      />
+                    )}
+                  </div>
                 </div>
                 <div className="flex items-center justify-between rounded-lg border border-border/70 px-3 py-2">
                   <p className="text-sm text-muted-foreground">미리보기(dry-run)</p>

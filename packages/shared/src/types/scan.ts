@@ -35,4 +35,13 @@ export interface ScanResult {
   registered: number;
   /** 이미 존재하여 건너뛴 프로젝트 수 */
   skipped: number;
+  /** 스캔 직후 수행한 1차 코드 분석 요약 */
+  bootstrap?: {
+    analyzedProjectCount: number;
+    signalCount: number;
+    candidateCount: number;
+    createdEndpointCount: number;
+    createdAtomicCount: number;
+    warnings: string[];
+  };
 }

@@ -6,6 +6,20 @@ import Graph from 'graphology';
 import type { QueryParams, QueryScope, QueryResponse } from '@archi-navi/shared';
 import { DEFAULTS, calculatePathScore } from '@archi-navi/shared';
 
+function buildNodeFromGraph(graph: Graph, id: string): QueryResponse['result']['nodes'][0] {
+  const attrs = graph.hasNode(id) ? graph.getNodeAttributes(id) : {};
+  const name = typeof attrs['name'] === 'string' ? attrs['name'] : id;
+  const displayName = typeof attrs['displayName'] === 'string' ? attrs['displayName'] : undefined;
+  const objectType = typeof attrs['objectType'] === 'string' ? attrs['objectType'] : 'service';
+
+  return {
+    id,
+    type: objectType as QueryResponse['result']['nodes'][0]['type'],
+    name,
+    ...(displayName ? { displayName } : {}),
+  };
+}
+
 /**
  * BFS로 fromObjectId → toObjectId 최단 경로를 최대 topK개 탐색
  */
@@ -84,7 +98,7 @@ export async function findPaths(
   }
 
   return {
-    nodes: [...nodeSet].map((id) => ({ id, type: 'service', name: id })),
+    nodes: [...nodeSet].map((id) => buildNodeFromGraph(graph, id)),
     edges: [...edgeSet].map((key) => buildEdgeFromKey(graph, key)),
     paths: scoredPaths,
   };

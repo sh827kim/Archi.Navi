@@ -31,6 +31,7 @@ const MIGRATIONS_FOLDER = resolveMigrationsFolder();
 export async function register() {
   const { getDb } = await import('@archi-navi/db');
   const { migrate } = await import('drizzle-orm/pglite/migrator');
+  const { restoreWorkspaceSnapshotIfNeeded } = await import('@/lib/workspace-snapshot');
 
   const db = await getDb();
 
@@ -40,5 +41,10 @@ export async function register() {
     console.log('[archi-navi] DB 마이그레이션 완료');
   } catch (e) {
     console.warn('[archi-navi] 마이그레이션 경고 (이미 적용됨):', (e as Error).message);
+  }
+
+  const restoredWorkspaceCount = await restoreWorkspaceSnapshotIfNeeded(db);
+  if (restoredWorkspaceCount > 0) {
+    console.log(`[archi-navi] 워크스페이스 snapshot 복구 완료 (${restoredWorkspaceCount}개)`);
   }
 }

@@ -9,6 +9,10 @@ const { dbHolder } = vi.hoisted(() => ({
   dbHolder: { db: null as any },
 }));
 
+const { persistWorkspaceSnapshotMock } = vi.hoisted(() => ({
+  persistWorkspaceSnapshotMock: vi.fn(),
+}));
+
 vi.mock('@archi-navi/db', async () => {
   const actual = await vi.importActual<typeof import('@archi-navi/db')>('@archi-navi/db');
   return {
@@ -16,6 +20,10 @@ vi.mock('@archi-navi/db', async () => {
     getDb: async () => dbHolder.db,
   };
 });
+
+vi.mock('@/lib/workspace-snapshot', () => ({
+  persistWorkspaceSnapshot: persistWorkspaceSnapshotMock,
+}));
 
 import { createPgliteClient, workspaces } from '@archi-navi/db';
 import { DELETE, PATCH } from '@/app/api/workspaces/[id]/route';
@@ -33,6 +41,7 @@ async function createTestDb() {
 describe('/api/workspaces routes', () => {
   beforeEach(async () => {
     dbHolder.db = await createTestDb();
+    persistWorkspaceSnapshotMock.mockResolvedValue(undefined);
   });
 
   it('GET 목록 응답은 no-store 캐시 정책과 dynamic route 설정을 사용해야 한다', async () => {
@@ -79,6 +88,44 @@ describe('/api/workspaces routes', () => {
     await expect(response.json()).resolves.toEqual({
       error: 'name must be at most 20 characters',
     });
+  });
+
+  it('POST/PATCH/DELETE 이후 workspace snapshot을 갱신해야 한다', async () => {
+    const createResponse = await POST(
+      new Request('http://localhost/api/workspaces', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'snapshot-test' }),
+      }) as never,
+    );
+
+    expect(createResponse.status).toBe(201);
+    expect(persistWorkspaceSnapshotMock).toHaveBeenCalledTimes(1);
+
+    await dbHolder.db.insert(workspaces).values({
+      id: workspaceId,
+      name: 'workspace-update-test',
+    });
+
+    const patchResponse = await PATCH(
+      new Request(`http://localhost/api/workspaces/${workspaceId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'ws-update-next' }),
+      }) as never,
+      { params: Promise.resolve({ id: workspaceId }) },
+    );
+    expect(patchResponse.status).toBe(200);
+
+    const deleteResponse = await DELETE(
+      new Request(`http://localhost/api/workspaces/${workspaceId}`, {
+        method: 'DELETE',
+      }) as never,
+      { params: Promise.resolve({ id: workspaceId }) },
+    );
+    expect(deleteResponse.status).toBe(200);
+
+    expect(persistWorkspaceSnapshotMock).toHaveBeenCalledTimes(3);
   });
 
   it('DELETE는 실제로 워크스페이스를 삭제해야 한다', async () => {
