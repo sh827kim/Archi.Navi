@@ -68,6 +68,7 @@
 - [33-cross-signal-validation-dead-topic-spec.md](./spec/33-cross-signal-validation-dead-topic-spec.md)
 - [34-cross-signal-validation-orphan-fk-spec.md](./spec/34-cross-signal-validation-orphan-fk-spec.md)
 - [35-cross-signal-validation-finalization-spec.md](./spec/35-cross-signal-validation-finalization-spec.md)
+- [38-s1-phase2-ux-foundation-spec.md](./spec/38-s1-phase2-ux-foundation-spec.md)
 
 ### Checklist (`docs/checklists`)
 - [README.md](./checklists/README.md)
@@ -80,3 +81,4 @@
 - [03-roadmap.md](./03-roadmap.md)
 - [04-verification-guide.md](./04-verification-guide.md)
 - [05-npm-distribution.md](./05-npm-distribution.md)
+- [06-s1-phase2-user-test-guide.md](./06-s1-phase2-user-test-guide.md)

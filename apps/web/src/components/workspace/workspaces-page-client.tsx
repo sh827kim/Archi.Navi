@@ -78,7 +78,7 @@ export function WorkspacesPageClient() {
                   key={ws.id}
                   onClick={() => {
                     setWorkspace(ws.id);
-                    router.push('/architecture');
+                    router.push('/home');
                   }}
                   className="rounded-xl border border-border/70 bg-card px-4 py-4 text-left transition-colors hover:bg-accent/40"
                 >

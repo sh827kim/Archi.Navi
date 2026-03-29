@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { cn, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { subscribeToRollupEvents } from '@/lib/rollup-event-source';
+import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
 import {
   RollupGraph3D,
   type RollupGraph3DLink,
@@ -1333,15 +1334,17 @@ export function RollupGraph() {
       )}
 
       {!loading && isEmpty && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 text-zinc-500">
-          <p className="text-sm">이 레벨에 해당하는 Object 데이터가 없습니다.</p>
-          <p className="text-xs">
-            설정 &gt; 개발자 도구에서{' '}
-            <span className="rounded bg-zinc-800 px-1 py-0.5 font-mono text-zinc-300">
-              샘플 넣기
-            </span>
-            를 실행하거나 Object를 직접 등록하세요.
-          </p>
+        <div className="absolute inset-0 flex items-center justify-center p-6">
+          <EmptyStateGuide
+            eyebrow="Mapping Graph"
+            title="현재 레벨에 표시할 Object Mapping이 없습니다"
+            description="Object가 아직 부족하거나 승인되지 않은 후보만 있는 상태일 수 있습니다. 서비스 목록과 승인 대기 화면에서 다음 단계를 진행하세요."
+            actions={[
+              { href: '/services', label: 'Object 목록 열기' },
+              { href: '/approval', label: '승인 대기로 이동', variant: 'outline' },
+            ]}
+            note="설정 화면의 개발자 도구에서 샘플 데이터를 넣어 초기 검증을 진행할 수도 있습니다."
+          />
         </div>
       )}
 

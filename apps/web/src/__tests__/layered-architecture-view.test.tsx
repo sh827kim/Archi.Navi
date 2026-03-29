@@ -1,5 +1,5 @@
 import React from 'react';
-import { act, cleanup, render, waitFor } from '@testing-library/react';
+import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { LayeredArchitectureView } from '@/components/architecture/layered-architecture-view';
 
@@ -198,5 +198,23 @@ describe('LayeredArchitectureView SSE refresh', () => {
     await waitFor(() => {
       expect(getObjectFetchCount()).toBeGreaterThan(before);
     });
+  });
+
+  it('데이터가 없으면 다음 행동 안내를 표시해야 한다', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/layers?')) return Promise.resolve(jsonResponse([]));
+      if (url.startsWith('/api/layers/assignments?')) return Promise.resolve(jsonResponse([]));
+      if (url.startsWith('/api/objects?')) return Promise.resolve(jsonResponse([]));
+      if (url.startsWith('/api/object-tags?')) return Promise.resolve(jsonResponse({}));
+      if (url.startsWith('/api/rollups?')) return Promise.resolve(jsonResponse({ edges: [] }));
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<LayeredArchitectureView />);
+
+    await screen.findByText('아직 레이어드 아키텍처를 그릴 데이터가 없습니다');
+    expect(screen.getByRole('link', { name: 'Object 목록 열기' }).getAttribute('href')).toBe('/services');
+    expect(screen.getByRole('link', { name: '설정으로 이동' }).getAttribute('href')).toBe('/settings');
   });
 });

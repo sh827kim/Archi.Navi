@@ -2,7 +2,7 @@ import { test, expect } from '@playwright/test';
 
 const MOCK_WORKSPACE_ID = '22222222-2222-2222-2222-222222222222';
 
-test('워크스페이스 온보딩 마법사를 완료하면 architecture로 진입한다', async ({ page }) => {
+test('워크스페이스 온보딩 마법사를 완료하면 home으로 진입한다', async ({ page }) => {
   const workspaceName = `e2e-onboarding-${Date.now()}`;
 
   await page.goto('/workspaces/new');
@@ -23,13 +23,14 @@ test('워크스페이스 온보딩 마법사를 완료하면 architecture로 진
   await expect(page.getByText('코드 스캔을 실행하거나 건너뛸 수 있습니다.')).toBeVisible();
 
   await page.getByRole('button', { name: '건너뛰고 완료' }).click();
-  await expect(page).toHaveURL(/\/architecture/, { timeout: 20000 });
+  await expect(page).toHaveURL(/\/home/, { timeout: 20000 });
+  await expect(page.getByRole('heading', { name: new RegExp(`${workspaceName} 운영 요약`) })).toBeVisible();
 
   await page.goto('/workspaces');
   await expect(page.getByRole('button', { name: new RegExp(workspaceName) }).first()).toBeVisible();
 });
 
-test('워크스페이스 목록 선택 시 architecture로 이동한다', async ({ request, page }) => {
+test('워크스페이스 목록 선택 시 home으로 이동한다', async ({ request, page }) => {
   const workspaceName = `e2e-select-${Date.now()}`;
   const create = await request.post('/api/workspaces', {
     data: { name: workspaceName },
@@ -40,7 +41,8 @@ test('워크스페이스 목록 선택 시 architecture로 이동한다', async 
   const target = page.getByRole('button', { name: new RegExp(workspaceName) }).first();
   await expect(target).toBeVisible();
   await target.click();
-  await expect(page).toHaveURL(/\/architecture/);
+  await expect(page).toHaveURL(/\/home/);
+  await expect(page.getByRole('heading', { name: new RegExp(`${workspaceName} 운영 요약`) })).toBeVisible();
 });
 
 test('P3-2: Hub 접기/펼치기 토글이 노드 표시 수를 변경한다', async ({ page }) => {

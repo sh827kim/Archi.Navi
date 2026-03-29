@@ -277,7 +277,7 @@ export function WorkspaceOnboardingWizard() {
   const finalize = async (id: string) => {
     await refreshWorkspaces();
     setWorkspace(id);
-    router.push('/architecture');
+    router.push('/home');
   };
 
   const handleNext = async () => {

@@ -26,7 +26,7 @@ import {
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 
-export function WorkspaceSwitcher() {
+export function WorkspaceSwitcher({ collapsed = false }: { collapsed?: boolean }) {
   const router = useRouter();
   const { workspaceId, workspaceName, workspaces, setWorkspace, refreshWorkspaces } =
     useWorkspace();
@@ -68,17 +68,23 @@ export function WorkspaceSwitcher() {
               'flex min-w-0 w-full items-center gap-2 rounded-lg px-3 py-2 text-left',
               'hover:bg-muted/50 transition-colors',
               'text-sm font-medium text-foreground',
+              collapsed && 'justify-center px-2',
             )}
             title={workspaceName ?? '워크스페이스 선택'}
+            aria-label={workspaceName ?? '워크스페이스 선택'}
           >
             <FolderOpen className="h-4 w-4 shrink-0 text-primary" />
-            <span className="min-w-0 flex-1 truncate">{workspaceName ?? '워크스페이스 선택'}</span>
-            <ChevronDown
-              className={cn(
-                'h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform duration-200',
-                open && 'rotate-180',
-              )}
-            />
+            {!collapsed ? (
+              <>
+                <span className="min-w-0 flex-1 truncate">{workspaceName ?? '워크스페이스 선택'}</span>
+                <ChevronDown
+                  className={cn(
+                    'h-3.5 w-3.5 text-muted-foreground shrink-0 transition-transform duration-200',
+                    open && 'rotate-180',
+                  )}
+                />
+              </>
+            ) : null}
           </button>
         </PopoverTrigger>
 
