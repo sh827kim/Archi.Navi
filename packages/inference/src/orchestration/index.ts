@@ -24,4 +24,5 @@ export type {
   SmartPipelineOptions,
   SmartPipelineResult,
   LlmGenerateFn,
+  SmartFallbackReasonBreakdown,
 } from './smartPipeline';

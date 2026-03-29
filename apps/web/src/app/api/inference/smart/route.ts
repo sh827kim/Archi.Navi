@@ -2,6 +2,7 @@
  * POST /api/inference/smart — Smart 3-Phase 추론 파이프라인
  *
  * Phase 1: OpenAPI spec → provider endpoint 확정
+ * Phase 1.5: Code expose → provider endpoint bootstrap
  * Phase 2: Config files → LLM → Compound 의존성 그래프
  * Phase 3: Consumer 소스코드 → LLM → endpoint-level call 추출
  *
@@ -22,7 +23,6 @@ import {
   executeSmartPipeline,
   type ConfigAnalysisResult,
   type CallExtractionResult,
-  type SmartPipelineResult,
 } from '@archi-navi/inference';
 
 // ── Zod 스키마: LLM 응답 구조 ───────────────────────
@@ -101,8 +101,132 @@ interface SmartRunRequest {
   useServiceMetadataPaths?: boolean;
 }
 
-function buildSmartSummary(result: SmartPipelineResult) {
+interface SmartSummarySource {
+  phase1?: {
+    openApi?: unknown;
+    bootstrapEndpointCount?: number;
+  };
+  phase2: {
+    analyzedServiceCount: number;
+    servicePairCount?: number;
+  };
+  phase3: {
+    analyzedServiceCount: number;
+    candidateCount: number;
+    atomicCandidateCount?: number;
+    serviceFallbackCount?: number;
+    deepInspectionCount?: number;
+    deepInspectionTrace?: {
+      attemptedCount?: number;
+      failureCount?: number;
+      triggerBreakdown?: {
+        lowConfidence?: number;
+        insufficientContext?: number;
+      };
+      details?: Array<{
+        consumerServiceName?: string;
+        providerServiceName?: string;
+        trigger?: {
+          lowConfidence?: boolean;
+          insufficientContext?: boolean;
+        };
+        status?: 'succeeded' | 'no_result' | 'failed';
+        fallbackReasons?: Array<
+          'NO_ENDPOINT_OBJECTS' | 'PATH_NOT_MATCHED' | 'METHOD_NOT_MATCHED' | 'INSUFFICIENT_CONTEXT'
+        >;
+        toolUsage?: {
+          searchCalls?: number;
+          readCalls?: number;
+          endpointListCalls?: number;
+          totalCalls?: number;
+        };
+        recoveredCall?: {
+          httpMethod?: string;
+          path?: string;
+        } | null;
+      }>;
+    };
+    fallbackReasonBreakdown?: Partial<Record<
+      'NO_ENDPOINT_OBJECTS' | 'PATH_NOT_MATCHED' | 'METHOD_NOT_MATCHED' | 'INSUFFICIENT_CONTEXT',
+      number
+    >>;
+  };
+}
+
+function buildDeepInspectionTrace(
+  trace?: SmartSummarySource['phase3']['deepInspectionTrace'],
+) {
+  const details = Array.isArray(trace?.details)
+    ? trace.details.map((detail) => ({
+      consumerServiceName: detail.consumerServiceName ?? '',
+      providerServiceName: detail.providerServiceName ?? '',
+      trigger: {
+        lowConfidence: detail.trigger?.lowConfidence ?? false,
+        insufficientContext: detail.trigger?.insufficientContext ?? false,
+      },
+      status:
+        detail.status === 'failed'
+          ? 'failed'
+          : detail.status === 'no_result'
+            ? 'no_result'
+            : 'succeeded',
+      fallbackReasons: Array.isArray(detail.fallbackReasons)
+        ? detail.fallbackReasons.filter((reason) => (
+          reason === 'NO_ENDPOINT_OBJECTS'
+          || reason === 'PATH_NOT_MATCHED'
+          || reason === 'METHOD_NOT_MATCHED'
+          || reason === 'INSUFFICIENT_CONTEXT'
+        ))
+        : [],
+      toolUsage: {
+        searchCalls: detail.toolUsage?.searchCalls ?? 0,
+        readCalls: detail.toolUsage?.readCalls ?? 0,
+        endpointListCalls: detail.toolUsage?.endpointListCalls ?? 0,
+        totalCalls: detail.toolUsage?.totalCalls ?? 0,
+      },
+      recoveredCall:
+        detail.recoveredCall
+        && typeof detail.recoveredCall.httpMethod === 'string'
+        && typeof detail.recoveredCall.path === 'string'
+          ? {
+            httpMethod: detail.recoveredCall.httpMethod,
+            path: detail.recoveredCall.path,
+          }
+          : null,
+    }))
+    : [];
+
   return {
+    attemptedCount: trace?.attemptedCount ?? 0,
+    failureCount: trace?.failureCount ?? 0,
+    triggerBreakdown: {
+      lowConfidence: trace?.triggerBreakdown?.lowConfidence ?? 0,
+      insufficientContext: trace?.triggerBreakdown?.insufficientContext ?? 0,
+    },
+    details,
+  };
+}
+
+function buildFallbackReasonBreakdown(
+  breakdown?: SmartSummarySource['phase3']['fallbackReasonBreakdown'],
+) {
+  return {
+    NO_ENDPOINT_OBJECTS: breakdown?.NO_ENDPOINT_OBJECTS ?? 0,
+    PATH_NOT_MATCHED: breakdown?.PATH_NOT_MATCHED ?? 0,
+    METHOD_NOT_MATCHED: breakdown?.METHOD_NOT_MATCHED ?? 0,
+    INSUFFICIENT_CONTEXT: breakdown?.INSUFFICIENT_CONTEXT ?? 0,
+  };
+}
+
+function buildSmartSummary(result: SmartSummarySource) {
+  return {
+    bootstrapEndpointCount: result.phase1?.bootstrapEndpointCount ?? 0,
+    servicePairCount: result.phase2.servicePairCount ?? 0,
+    atomicCandidateCount: result.phase3.atomicCandidateCount ?? 0,
+    serviceFallbackCount: result.phase3.serviceFallbackCount ?? 0,
+    deepInspectionCount: result.phase3.deepInspectionCount ?? 0,
+    deepInspectionTrace: buildDeepInspectionTrace(result.phase3.deepInspectionTrace),
+    fallbackReasonBreakdown: buildFallbackReasonBreakdown(result.phase3.fallbackReasonBreakdown),
     candidatesCreated: result.phase3.candidateCount,
     phase2Count: result.phase2.analyzedServiceCount,
     phase3Count: result.phase3.analyzedServiceCount,

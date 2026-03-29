@@ -19,13 +19,15 @@ import {
   relationCandidates,
 } from '@archi-navi/db';
 import { buildUrn, generateId } from '@archi-navi/shared';
-import { and, eq, or } from 'drizzle-orm';
+import { and, eq, inArray, like, or } from 'drizzle-orm';
 import { saveRelationCandidate } from './candidateStore';
 import { asRecord } from './utils';
 
 export interface CodeCandidateInferenceOptions {
   workspaceId: string;
   repoRoot: string;
+  serviceIds?: string[];
+  bootstrapOnly?: boolean;
 }
 
 export interface CodeCandidateInferenceResult {
@@ -37,6 +39,29 @@ export interface CodeCandidateInferenceResult {
   createdQueueCount: number;
   createdDatabaseCount: number;
   createdDbTableCount: number;
+  createdEndpointCount: number;
+}
+
+export interface ApiEndpointBootstrapOptions {
+  workspaceId: string;
+  repoRoot: string;
+  endpointSource?: string;
+}
+
+export interface ApiEndpointBootstrapResult {
+  createdEndpointCount: number;
+  processedExposeCount: number;
+}
+
+export interface CodeExposeEndpointBootstrapOptions {
+  workspaceId: string;
+  repoRoot: string;
+  serviceIds?: string[];
+}
+
+export interface CodeExposeEndpointBootstrapResult {
+  edgeCount: number;
+  exposeEdgeCount: number;
   createdEndpointCount: number;
 }
 
@@ -227,9 +252,10 @@ async function upsertApiEndpoint(
     method: string;
     path: string;
     repoRoot: string;
+    source?: string;
   },
 ): Promise<{ id: string; isNew: boolean }> {
-  const { workspaceId, serviceId, serviceName, method, path, repoRoot } = params;
+  const { workspaceId, serviceId, serviceName, method, path, repoRoot, source } = params;
   const endpointKey = `${serviceName}:${method}:${path}`;
   const urn = buildUrn(workspaceId, 'compute', 'api_endpoint', endpointKey);
   const displayName = `${method} ${path}`;
@@ -271,10 +297,91 @@ async function upsertApiEndpoint(
     path: `/${serviceName}/${slug}`,
     depth: 1,
     visibility: 'VISIBLE',
-    metadata: { method, path, repoRoot, source: 'CODE' },
+    metadata: { method, path, repoRoot, source: source ?? 'CODE' },
   });
 
   return { id, isNew: true };
+}
+
+export async function bootstrapApiEndpointsFromCodeSignals(
+  db: DbClient,
+  options: ApiEndpointBootstrapOptions,
+): Promise<ApiEndpointBootstrapResult> {
+  const { workspaceId, repoRoot } = options;
+  const endpointSource = options.endpointSource ?? 'CODE';
+
+  const allServices = await db
+    .select({ id: objects.id, name: objects.name })
+    .from(objects)
+    .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service')));
+
+  const serviceNameById = new Map(allServices.map((svc) => [svc.id, svc.name] as const));
+
+  const rows = await db
+    .select({
+      ownerObjectId: codeArtifacts.ownerObjectId,
+      calleeSymbol: codeCallEdges.calleeSymbol,
+      evidenceMeta: evidences.metadata,
+    })
+    .from(codeCallEdges)
+    .innerJoin(codeArtifacts, eq(codeCallEdges.callerArtifactId, codeArtifacts.id))
+    .leftJoin(evidences, eq(codeCallEdges.evidenceId, evidences.id))
+    .where(
+      and(
+        eq(codeCallEdges.workspaceId, workspaceId),
+        eq(codeArtifacts.workspaceId, workspaceId),
+        or(
+          eq(codeArtifacts.repoRoot, repoRoot),
+          like(codeArtifacts.repoRoot, `${repoRoot}/%`),
+        ),
+      ),
+    );
+
+  let processedExposeCount = 0;
+  let createdEndpointCount = 0;
+
+  for (const row of rows) {
+    const ownerObjectId = row.ownerObjectId;
+    if (!ownerObjectId) continue;
+
+    const meta = (row.evidenceMeta ?? {}) as EvidenceMeta;
+    if (asString(meta['kind']) !== 'expose') continue;
+
+    const serviceName = serviceNameById.get(ownerObjectId);
+    const path = (asString(meta['path']) ?? row.calleeSymbol).trim();
+    if (!serviceName || !path.startsWith('/')) continue;
+
+    processedExposeCount += 1;
+    const method = (asString(meta['method']) ?? 'ANY').toUpperCase();
+    const { isNew } = await upsertApiEndpoint(db, {
+      workspaceId,
+      serviceId: ownerObjectId,
+      serviceName,
+      method,
+      path,
+      repoRoot,
+      source: endpointSource,
+    });
+    if (isNew) createdEndpointCount += 1;
+  }
+
+  return {
+    createdEndpointCount,
+    processedExposeCount,
+  };
+}
+
+export async function bootstrapApiEndpointsFromExposeSignals(
+  db: DbClient,
+  options: CodeExposeEndpointBootstrapOptions,
+): Promise<CodeExposeEndpointBootstrapResult> {
+  const result = await bootstrapApiEndpointsFromCodeSignals(db, options);
+
+  return {
+    edgeCount: result.processedExposeCount,
+    exposeEdgeCount: result.processedExposeCount,
+    createdEndpointCount: result.createdEndpointCount,
+  };
 }
 
 function normalizeTableName(value: string): string | null {
@@ -448,6 +555,10 @@ export async function inferRelationsFromCodeSignals(
   options: CodeCandidateInferenceOptions,
 ): Promise<CodeCandidateInferenceResult> {
   const { workspaceId, repoRoot } = options;
+  const serviceIds = Array.from(
+    new Set((options.serviceIds ?? []).filter((value): value is string => value.length > 0)),
+  );
+  const bootstrapOnly = options.bootstrapOnly === true;
 
   const allServices = await db
     .select({ id: objects.id, name: objects.name })
@@ -455,6 +566,11 @@ export async function inferRelationsFromCodeSignals(
     .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service')));
 
   const serviceNameById = new Map(allServices.map((svc) => [svc.id, svc.name] as const));
+
+  const bootstrapResult = await bootstrapApiEndpointsFromCodeSignals(db, {
+    workspaceId,
+    repoRoot,
+  });
 
   const existingEndpoints = await db
     .select({
@@ -508,6 +624,7 @@ export async function inferRelationsFromCodeSignals(
         eq(codeCallEdges.workspaceId, workspaceId),
         eq(codeArtifacts.workspaceId, workspaceId),
         eq(codeArtifacts.repoRoot, repoRoot),
+        ...(serviceIds.length > 0 ? [inArray(codeArtifacts.ownerObjectId, serviceIds)] : []),
       ),
     );
 
@@ -518,39 +635,22 @@ export async function inferRelationsFromCodeSignals(
   let createdQueueCount = 0;
   let createdDatabaseCount = 0;
   let createdDbTableCount = 0;
-  let createdEndpointCount = 0;
+  const createdEndpointCount = bootstrapResult.createdEndpointCount;
 
   const databaseCache = new Map<string, DatabaseResolved>();
 
-  // 1) expose 신호로 api_endpoint 객체를 먼저 확보한다.
-  for (const row of rows) {
-    const callerOwnerObjectId = row.callerOwnerObjectId;
-    const evidenceId = row.evidenceId;
-    if (!callerOwnerObjectId || !evidenceId) continue;
-
-    const meta = (row.evidenceMeta ?? {}) as EvidenceMeta;
-    const kind = asString(meta['kind']);
-    if (kind !== 'expose') continue;
-
-    const serviceName = serviceNameById.get(callerOwnerObjectId);
-    if (!serviceName) continue;
-
-    const method = (asString(meta['method']) ?? 'ANY').toUpperCase();
-    const path = row.calleeSymbol.trim();
-    if (!path.startsWith('/')) continue;
-
-    const { id: endpointId, isNew } = await upsertApiEndpoint(db, {
-      workspaceId,
-      serviceId: callerOwnerObjectId,
-      serviceName,
-      method,
-      path,
-      repoRoot,
-    });
-    if (isNew) createdEndpointCount += 1;
-
-    // 동일 path가 여러 endpoint로 매핑되면 call->endpoint 매칭을 보수적으로 막는다.
-    noteEndpoint(callerOwnerObjectId, path, endpointId);
+  if (bootstrapOnly) {
+    return {
+      edgeCount: rows.length,
+      processedEdgeCount: bootstrapResult.processedExposeCount,
+      skippedEdgeCount: Math.max(rows.length - bootstrapResult.processedExposeCount, 0),
+      candidateCount: 0,
+      createdTopicCount: 0,
+      createdQueueCount: 0,
+      createdDatabaseCount: 0,
+      createdDbTableCount: 0,
+      createdEndpointCount,
+    };
   }
 
   for (const row of rows) {

@@ -1,3 +1,5 @@
+// @vitest-environment jsdom
+
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -94,6 +96,14 @@ interface RelationCandidate {
       applied: boolean;
       sampleCount: number;
     };
+    targetType?: 'api_endpoint' | 'service';
+    analysisMode?: string;
+    fallbackReason?: 'NO_ENDPOINT_OBJECTS' | 'PATH_NOT_MATCHED' | 'METHOD_NOT_MATCHED' | 'INSUFFICIENT_CONTEXT';
+    fallbackContext?: {
+      attemptedMethod: string;
+      attemptedPath: string;
+      evidenceSummary?: string;
+    };
   };
 }
 
@@ -159,9 +169,31 @@ function deferredResponse() {
   return { promise, resolve, reject };
 }
 
+function createLocalStorageMock() {
+  const store = new Map<string, string>();
+  return {
+    getItem: vi.fn((key: string) => store.get(key) ?? null),
+    setItem: vi.fn((key: string, value: string) => {
+      store.set(key, value);
+    }),
+    removeItem: vi.fn((key: string) => {
+      store.delete(key);
+    }),
+    clear: vi.fn(() => {
+      store.clear();
+    }),
+  };
+}
+
 describe('ApprovalList', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    const localStorageMock = createLocalStorageMock();
+    vi.stubGlobal('localStorage', localStorageMock);
+    Object.defineProperty(window, 'localStorage', {
+      value: localStorageMock,
+      configurable: true,
+    });
     window.localStorage.clear();
     toast.success.mockReset();
     toast.error.mockReset();
@@ -570,8 +602,50 @@ describe('ApprovalList', () => {
         return Promise.resolve(jsonResponse({
           success: true,
           data: {
-            phase2: { analyzedServiceCount: 2 },
-            phase3: { analyzedServiceCount: 3, candidateCount: 4 },
+            phase2: { analyzedServiceCount: 2, servicePairCount: 3 },
+            phase3: {
+              analyzedServiceCount: 3,
+              candidateCount: 4,
+              atomicCandidateCount: 2,
+              serviceFallbackCount: 1,
+              deepInspectionCount: 2,
+              deepInspectionTrace: {
+                attemptedCount: 2,
+                failureCount: 1,
+                triggerBreakdown: {
+                  lowConfidence: 1,
+                  insufficientContext: 1,
+                },
+                details: [
+                  {
+                    consumerServiceName: 'gateway',
+                    providerServiceName: 'orders',
+                    trigger: {
+                      lowConfidence: true,
+                      insufficientContext: false,
+                    },
+                    status: 'succeeded',
+                    fallbackReasons: ['PATH_NOT_MATCHED'],
+                    toolUsage: {
+                      searchCalls: 2,
+                      readCalls: 1,
+                      endpointListCalls: 1,
+                      totalCalls: 4,
+                    },
+                    recoveredCall: {
+                      httpMethod: 'GET',
+                      path: '/api/orders/{id}',
+                    },
+                  },
+                ],
+              },
+              fallbackReasonBreakdown: {
+                NO_ENDPOINT_OBJECTS: 1,
+                PATH_NOT_MATCHED: 0,
+                METHOD_NOT_MATCHED: 0,
+                INSUFFICIENT_CONTEXT: 0,
+              },
+            },
           },
         }));
       }
@@ -588,12 +662,156 @@ describe('ApprovalList', () => {
 
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(
-        'Smart 추론 완료 — 후보 4개 생성 (Config LLM: 2, Code LLM: 3)',
+        'Smart 추론 완료 — 후보 4개 생성 (Config LLM 2회, Pair LLM 3회, 서비스 쌍 3개, 원자 후보 2개, 서비스 fallback 1개 (엔드포인트 객체 없음 1개), Deep inspect 2회 (저신뢰 1개, 컨텍스트 부족 1개, 실패 1개))',
       );
     });
+    const viewer = await screen.findByTestId('smart-trace-viewer');
+    expect(viewer.textContent).toContain('Smart Deep Inspection Trace');
+    expect(viewer.textContent).toContain('gateway -> orders');
+    expect(viewer.textContent).toContain('트리거 저신뢰');
+    expect(viewer.textContent).toContain('상태 성공');
+    expect(viewer.textContent).toContain('도구 사용 search/read/endpoint/total = 2/1/1/4');
+    expect(viewer.textContent).toContain('복구 호출 GET /api/orders/{id}');
     expect(candidateRequestCount).toBe(2);
-    window.localStorage.removeItem('archi-navi:ai-provider');
-    window.localStorage.removeItem('archi-navi:ai-api-key');
+    if (typeof window.localStorage?.removeItem === 'function') {
+      window.localStorage.removeItem('archi-navi:ai-provider');
+      window.localStorage.removeItem('archi-navi:ai-api-key');
+    }
+  });
+
+  it('Smart trace detail 필드가 없어도 viewer를 안전하게 렌더링해야 한다', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url.includes('/api/scan/paths?')) {
+        return Promise.resolve(jsonResponse({
+          paths: ['/tmp/orders-service'],
+          parentDirs: ['/tmp'],
+        }));
+      }
+      if (url === '/api/inference/smart') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          data: {
+            phase2: { analyzedServiceCount: 1, servicePairCount: 1 },
+            phase3: {
+              analyzedServiceCount: 1,
+              candidateCount: 0,
+              atomicCandidateCount: 0,
+              serviceFallbackCount: 1,
+              deepInspectionCount: 1,
+              deepInspectionTrace: {
+                attemptedCount: 1,
+                failureCount: 0,
+                triggerBreakdown: {
+                  lowConfidence: 1,
+                  insufficientContext: 0,
+                },
+              },
+              fallbackReasonBreakdown: {
+                NO_ENDPOINT_OBJECTS: 0,
+                PATH_NOT_MATCHED: 1,
+                METHOD_NOT_MATCHED: 0,
+                INSUFFICIENT_CONTEXT: 0,
+              },
+            },
+          },
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    fireEvent.change(screen.getByLabelText('추론 모드'), {
+      target: { value: 'smart' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
+
+    const viewer = await screen.findByTestId('smart-trace-viewer');
+    expect(viewer.textContent).toContain('Deep inspect 1회');
+    expect(viewer.textContent).toContain('pair 상세 정보 없음');
+  });
+
+  it('Smart trace viewer가 no_result 상태를 결과 없음으로 표시해야 한다', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url.includes('/api/scan/paths?')) {
+        return Promise.resolve(jsonResponse({
+          paths: ['/tmp/orders-service'],
+          parentDirs: ['/tmp'],
+        }));
+      }
+      if (url === '/api/inference/smart') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          data: {
+            phase2: { analyzedServiceCount: 1, servicePairCount: 1 },
+            phase3: {
+              analyzedServiceCount: 1,
+              candidateCount: 0,
+              atomicCandidateCount: 0,
+              serviceFallbackCount: 1,
+              deepInspectionCount: 1,
+              deepInspectionTrace: {
+                attemptedCount: 1,
+                failureCount: 0,
+                triggerBreakdown: {
+                  lowConfidence: 1,
+                  insufficientContext: 0,
+                },
+                details: [
+                  {
+                    consumerServiceName: 'gateway',
+                    providerServiceName: 'orders',
+                    trigger: {
+                      lowConfidence: true,
+                      insufficientContext: false,
+                    },
+                    status: 'no_result',
+                    fallbackReasons: ['INSUFFICIENT_CONTEXT'],
+                    toolUsage: {
+                      searchCalls: 1,
+                      readCalls: 1,
+                      endpointListCalls: 1,
+                      totalCalls: 3,
+                    },
+                    recoveredCall: null,
+                  },
+                ],
+              },
+              fallbackReasonBreakdown: {
+                NO_ENDPOINT_OBJECTS: 0,
+                PATH_NOT_MATCHED: 0,
+                METHOD_NOT_MATCHED: 0,
+                INSUFFICIENT_CONTEXT: 1,
+              },
+            },
+          },
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    fireEvent.change(screen.getByLabelText('추론 모드'), {
+      target: { value: 'smart' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
+
+    const viewer = await screen.findByTestId('smart-trace-viewer');
+    expect(viewer.textContent).toContain('gateway -> orders');
+    expect(viewer.textContent).toContain('상태 결과 없음');
+    expect(viewer.textContent).toContain('fallback 컨텍스트 부족');
+    expect(viewer.textContent).not.toContain('상태 성공');
   });
 
   it('mixed atomic/compound 목록에서도 교차 검증 정렬 우선순서를 유지해야 한다', async () => {
@@ -780,6 +998,40 @@ describe('ApprovalList', () => {
     const card = screen.getByTestId('approval-candidate-card');
     expect(card.textContent).toContain('세부 매핑 전 prior에 +4%p 보정이 반영되어 있습니다.');
     expect(card.textContent).toContain('실제 승인/거절은 세부 매핑 후 생성되는 atomic 후보에서 진행됩니다.');
+  });
+
+  it('Smart service fallback 후보는 fallback reason hint를 카드에 표시해야 한다', async () => {
+    const fallbackCandidate = {
+      ...createCandidate('cand-smart-fallback', 'orders-service'),
+      metadata: {
+        targetType: 'service' as const,
+        analysisMode: 'pair_pack',
+        fallbackReason: 'PATH_NOT_MATCHED' as const,
+        fallbackContext: {
+          attemptedMethod: 'GET',
+          attemptedPath: '/api/orders/missing',
+          evidenceSummary: 'fetch("http://orders/api/orders/missing")',
+        },
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([fallbackCandidate]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('orders-service');
+    const card = screen.getByTestId('approval-candidate-card');
+    expect(card.textContent).toContain('Smart fallback');
+    expect(card.textContent).toContain('경로 불일치');
+    expect(card.textContent).toContain('호출 경로와 일치하는 endpoint를 찾지 못해 서비스 레벨 후보로 남았습니다.');
+    expect(card.textContent).toContain('시도 호출 GET /api/orders/missing');
+    expect(card.textContent).toContain('근거 fetch("http://orders/api/orders/missing")');
   });
 
   it('LLM 설명이 있으면 후보 카드에 표시해야 한다', async () => {

@@ -146,9 +146,18 @@ export function InferenceRunList() {
     setDetailLoading(true);
     try {
       const detail = await getDashboardInferenceRunDetail({ workspaceId: workspaceId!, runId });
-      if (detail) {
-        setDetailCache((prev) => ({ ...prev, [runId]: detail }));
+      if (!detail) {
+        setExpandedRunId((prev) => (prev === runId ? null : prev));
+        setDetailCache((prev) => {
+          if (!prev[runId]) return prev;
+          const next = { ...prev };
+          delete next[runId];
+          return next;
+        });
+        toast.error('상세 정보 로드 실패');
+        return;
       }
+      setDetailCache((prev) => ({ ...prev, [runId]: detail }));
     } catch {
       toast.error('상세 정보 로드 실패');
     } finally {
