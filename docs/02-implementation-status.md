@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-28
+> 최종 점검일: 2026-03-29
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -32,7 +32,7 @@
   - `POST /api/rollups`: 승인 관계 반영 후 generation 재생성
 - ✅ Rollup 변경 알림 API
   - `GET /api/rollup-events`: `connected` / `rollup-change` SSE notification 스트림 제공
-  - ⚠️ **UI 미연결**: 프론트엔드에서 EventSource 소비자 미구현 → S1-3에서 해결
+  - ✅ 프론트엔드 EventSource 소비자 연결 완료 (Mapping/Architecture 자동 refetch)
 - ✅ `Approval > 관계 후보`
   - `POST /api/inference/run` 호출 버튼 제공
   - 실행 후 PENDING 후보 즉시 재조회
@@ -42,7 +42,7 @@
 - ✅ Inference Run 운영 UI/API
   - `GET/POST /api/inference/runs`, `GET /api/inference/runs/:id`
   - quick run과 queued run 모두 binding/cross-validation 최종화 반영
-  - ⚠️ **상세 조회 UI 미연결**: 개별 실행(`runs/:id`) 상세 페이지 없음 → S1-5에서 해결
+  - 목록에서 개별 실행 상세(source/event) 확장 조회 가능, 실패 시 재시도 가능한 null-failure 처리 반영
 - ✅ `Object Mapping` 3D 렌더러 전환
   - `3D(Force)` 단일 렌더러 제공(2D 선택 UI 제거)
   - WebGL 미지원 환경 fallback 메시지 제공
@@ -60,7 +60,7 @@
   - `SERVICE_TO_SERVICE`, `SERVICE_TO_DATABASE`, `SERVICE_TO_BROKER`, `DOMAIN_TO_DOMAIN`
   - `BUILDING → ACTIVE → ARCHIVED` generation 전환
   - 관계 승인/추가/삭제 및 `map-endpoints` 다중 승인에 대해 delta rebuild + rollup-change notification 발행
-- ⚠️ **Query UI 미연결**: `POST /api/query`를 직접 실행하는 UI 없음, Chat에서만 간접 사용 → S1-4에서 해결
+- ✅ **Query UI 직접 호출 연결**: `/query` 페이지의 `QueryClient`가 `POST /api/query`를 직접 호출하며 `IMPACT_ANALYSIS`, `PATH_DISCOVERY`, `USAGE_DISCOVERY`, `DOMAIN_SUMMARY`를 실행할 수 있음 (S1-4 완료, 검증: web `2 files, 7 tests passed`)
 
 ### 1.3 Inference
 
@@ -93,28 +93,28 @@
 
 ---
 
-## 2) ⚠️ Dead Feature — 구현 완료되었으나 UI 미연결
+## 2) ⚠️ Dead Feature — UI 연결 전환 현황
 
-> P4까지 백엔드 구현이 완료되었으나 프론트엔드에서 호출하지 않아 사용 불가능한 기능 목록.
-> 모두 S1(안정화) 단계에서 UI 연결 예정. 상세는 `docs/03-roadmap.md` S1 섹션 참조.
+> P4까지 백엔드 구현이 완료되었으나 프론트엔드에서 호출하지 않아 사용 불가능했던 기능 목록.
+> S1(안정화)에서 순차 연결 중이며, `S1-1`은 완료됐다. 상세는 `docs/03-roadmap.md` S1 섹션 참조.
 
-### 2.1 🔴 Critical — 핵심 기능 미활성
+### 2.1 🔴 Critical — 핵심 기능 상태
 
 | 기능 | 백엔드 API | 프론트엔드 상태 | 해결 계획 |
 |------|-----------|---------------|----------|
-| **Smart Pipeline (LLM 3-Phase)** | `POST /api/inference/smart` ✅ | 부분 연결 진행 중이나 요구사항과 구현이 불일치하여 재설계 필요 | S1-1a |
-| **LLM Boost (코드 의도 분석)** | `POST /api/inference/run` + `llmBoost` ✅ | `llmBoost` 파라미터 미전달 → 항상 DISABLED | S1-1b |
-| **LLM Filter (후보 평가)** | `POST /api/inference/llm-filter` ✅ | 승인 UI에서 미호출 | S1-1c |
-| **Object 수정 (PATCH)** | `PATCH /api/objects/:id` ✅ | DELETE만 연결, 수정 불가 | S1-2 |
+| **Smart Pipeline (LLM 3-Phase)** | `POST /api/inference/smart` ✅ | `S1-1a` 완료. Phase 1.5/bootstrap, pair-scoped evidence pack, atomic inference/fallback observability, deterministic deep inspection 1차/2차, `deepInspectionTrace.details` 기반 pair drill-down viewer, `no_result` pass-through 표시 보정까지 반영. 최종 검증: inference `1 file, 22 tests passed`, web `2 files, 25 tests passed` | S1-1a |
+| **LLM Boost (코드 의도 분석)** | `POST /api/inference/run` + `llmBoost` ✅ | `S1-1b` 완료. Approval 추론 실행 UI에서 `llm-boost` 모드로 연결됨 | S1-1b |
+| **LLM Filter (후보 평가)** | `POST /api/inference/llm-filter` ✅ | `S1-1c` 완료. 승인 UI의 `LLM 평가 실행` 버튼으로 연결됨 | S1-1c |
+| **Object 수정 (PATCH)** | `PATCH /api/objects/:id` ✅ | `S1-2` 완료. Service 상세 Sheet의 `displayName`/`description` 인라인 편집과 `visibility` 토글, 목록 카드 visibility 토글이 PATCH로 연결됨. 최종 검증: web `2 files, 7 tests passed` | S1-2 |
 
 ### 2.2 🟡 Moderate — 사용자 경험 저하
 
 | 기능 | 백엔드 API | 프론트엔드 상태 | 해결 계획 |
 |------|-----------|---------------|----------|
-| **SSE 실시간 갱신** | `GET /api/rollup-events` (SSE) ✅ | EventSource 소비자 없음 | S1-3 |
-| **Query Engine 직접 호출** | `POST /api/query` ✅ | Chat에서만 간접 사용 | S1-4 |
-| **추론 실행 상세 조회** | `GET /api/inference/runs/:id` ✅ | 목록만 표시, 상세 없음 | S1-5 |
-| **후보 목록 Pagination** | `limit/offset` 파라미터 ✅ | 전체 로드, 페이징 없음 | S1-6 |
+| **SSE 실시간 갱신** | `GET /api/rollup-events` (SSE) ✅ | `S1-3` 완료. Mapping/Architecture에서 SSE 소비 후 `rollup-change` 자동 refetch 연결. 최종 검증: web `3 files, 10 tests passed` | S1-3 |
+| **Query Engine 직접 호출** | `POST /api/query` ✅ | `S1-4` 완료. `/query`의 `QueryClient`에서 직접 실행 가능, 회귀 테스트(`query-client.test.tsx`, `query-page.test.tsx`) 반영. 최종 검증: web `2 files, 7 tests passed` | S1-4 |
+| **추론 실행 상세 조회** | `GET /api/inference/runs/:id` ✅ | `S1-5` 완료. 목록에서 source/event 상세 확장 조회 가능, null-failure/GET route 회귀 테스트 반영. 최종 검증: web `2 files, 12 tests passed` | S1-5 |
+| **후보 목록 Pagination** | `limit/offset` 파라미터 ✅ | `S1-6` 완료. Approval 목록이 200건 단위 페이지 fetch + `더 보기` append 로드를 사용하고, 정렬/필터 흐름을 유지한다. 최종 검증: web `2 files, 29 tests passed` | S1-6 |
 
 ### 2.3 🟢 Minor
 
@@ -133,7 +133,7 @@
 - ✅ 후속 specialization으로 code-origin relation feedback key가 `framework/language`를 안정적으로 가지면 v2 key를 사용하고, 없으면 legacy v1로 fallback 하도록 확장되었다.
 - ✅ next-run relation 보정 lookup은 `v2 -> legacy v1` dual-read를 사용하며, `GET /api/inference/candidates`는 3-segment/5-segment feedback key를 모두 opaque string으로 수용한다.
 - ✅ 공개 프로필 계약은 `relationFeedback*` / `domainFeedback*` 및 `resetRelationFeedback` / `resetDomainFeedback`로 분리되어 있으며, generic alias `feedbackConfig` / `feedbackAdjustments` / `feedbackSummary` / `feedbackEntries` / `resetAll`은 더 이상 public contract가 아니다.
-- ⚠️ **UI 미연결**: LLM Boost, LLM Filter, Smart Pipeline, SSE 클라이언트가 프론트엔드에 연결되지 않음 → S1에서 해결
+- ✅ SSE 클라이언트가 Mapping/Architecture 프론트엔드에 연결되어 `rollup-change` 수신 시 자동 refetch 한다.
 - ⚠️ queued/orchestrated parity는 4-6 완료 기준에 포함하지 않으며, Track B / domain discovery feedback도 여전히 범위 밖이다.
 - ⚠️ 4-5의 실시간 계약은 SSE notification 후 refetch 방식이므로, 대형 그래프에서 재조회 비용 최적화 여지는 남아 있다.
 
@@ -148,12 +148,12 @@
 
 | 항목 | 구분 | 상태 |
 |------|------|------|
-| S1-1. LLM 추론 기능 UI 연결 (Smart/Boost/Filter) | Dead Feature | 🔧 예정 |
-| S1-2. Object 수정 기능 연결 | Dead Feature | 🔧 예정 |
-| S1-3. SSE 실시간 그래프 갱신 연결 | Dead Feature | 🔧 예정 |
-| S1-4. Query Engine 직접 호출 UI | Dead Feature | 🔧 예정 |
-| S1-5. 추론 실행 상세 조회 연결 | Dead Feature | 🔧 예정 |
-| S1-6. 후보 목록 Pagination | Dead Feature | 🔧 예정 |
+| S1-1. LLM 추론 기능 UI 연결 (Smart/Boost/Filter) | Dead Feature | ✅ 완료 |
+| S1-2. Object 수정 기능 연결 | Dead Feature | ✅ 완료 |
+| S1-3. SSE 실시간 그래프 갱신 연결 | Dead Feature | ✅ 완료 |
+| S1-4. Query Engine 직접 호출 UI | Dead Feature | ✅ 완료 |
+| S1-5. 추론 실행 상세 조회 연결 | Dead Feature | ✅ 완료 |
+| S1-6. 후보 목록 Pagination | Dead Feature | ✅ 완료 |
 | S1-7. Dashboard Home | UX 기반 | 🔧 예정 |
 | S1-8. Empty State 가이드 | UX 기반 | 🔧 예정 |
 | S1-9. 사이드바 접기/펼치기 | UX 기반 | 🔧 예정 |
@@ -193,7 +193,7 @@
 - `POST /api/inference/domain-run`
 - `POST /api/chat`
 
-**LLM 추론 (⚠️ UI 미연결 → S1)**
+**LLM 추론 (✅ S1-1 UI 연결 완료)**
 - `POST /api/inference/smart`
 - `POST /api/inference/llm-filter`
 - `POST /api/inference/run` + `llmBoost` 옵션
@@ -202,7 +202,6 @@
 - `POST /api/query`
 - `GET /api/inference/runs/:id`
 - `GET /api/rollup-events` (SSE)
-- `PATCH /api/objects/:id`
 - `GET /api/inference/profiles/default`
 - `PUT /api/inference/profiles/default`
 

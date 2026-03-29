@@ -143,6 +143,11 @@ describe('RollupGraph', () => {
     await act(async () => {
       FakeEventSource.instances[0]?.emit('rollup-change');
     });
+    expect(objectFetchCount).toBe(baselineFetchCount);
+
+    await act(async () => {
+      FakeEventSource.instances[0]?.emit('rollup-change');
+    });
 
     await screen.findByText('domain-after-event');
     expect(objectFetchCount).toBeGreaterThan(baselineFetchCount);
@@ -254,6 +259,9 @@ describe('RollupGraph', () => {
       expect(FakeEventSource.instances).toHaveLength(1);
     });
 
+    await act(async () => {
+      FakeEventSource.instances[0]?.emit('rollup-change');
+    });
     await act(async () => {
       FakeEventSource.instances[0]?.emit('rollup-change');
     });

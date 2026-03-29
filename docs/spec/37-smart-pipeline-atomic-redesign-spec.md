@@ -1,6 +1,6 @@
 # 37. Smart Pipeline Atomic 재설계 (SPEC)
 
-상태: Draft
+상태: Implemented (S1-1a 완료, 2026-03-29)
 작성일: 2026-03-28
 
 > 기존 Smart Pipeline(`POST /api/inference/smart`)을 “서비스 후보 요약” 중심 구조에서
@@ -179,6 +179,10 @@ LLM 입력은 “consumer 일부 파일 모음”이 아니라 “A -> B 서비�
 - `phase3.atomicCandidateCount`
 - `phase3.serviceFallbackCount`
 - `phase3.deepInspectionCount`
+- `phase3.deepInspectionTrace`
+
+`phase3.deepInspectionCount`는 실제 optional deep inspection 실행 시도 수를 의미한다.
+`phase3.deepInspectionTrace`는 실행 시도/실패 수와 trigger breakdown(`lowConfidence`, `insufficientContext`) 요약을 의미한다.
 
 ### 6.2 candidate metadata
 
@@ -190,7 +194,11 @@ Smart 생성 후보는 아래 metadata를 공통으로 가진다.
 - `targetServiceId`
 - `pairEvidenceSummary`
 - `fallbackReason?`
+- `fallbackContext?: { attemptedMethod, attemptedPath, evidenceSummary? }`
 - `analysisMode: "prompt_only" | "pair_pack" | "deep_inspection"`
+
+Approval UI용 후보 조회 API는 위 raw metadata를 그대로 노출하지 않고, Smart service fallback 후보에 한해
+`fallbackContext`만 최소 계약으로 재구성해 내려준다.
 
 ## 7. 구현 순서
 
@@ -209,9 +217,20 @@ Smart 생성 후보는 아래 metadata를 공통으로 가진다.
 ### Step 4. observability / run detail
 - 실행 상세에서 pair 수, fallback 수, bootstrap 수 노출
 - Approval UI에서 fallback reason 표시 가능하게 응답 계약 확장
+- Smart service fallback 후보 카드에 `시도 호출 method/path`와 `근거 요약` 노출
+- Smart 실행 완료 toast에 deep inspection trace summary 노출
 
 ### Step 5. optional deep inspection
-- low-confidence pair에 대해 tool-calling adapter 추가
+- 현재 최소 구현은 `low-confidence` 또는 `INSUFFICIENT_CONTEXT` pair만 optional hook을 타도록 제한한다.
+- deterministic tool-assisted deep inspection 1차는 `searchFiles`, `readFile`, `listServiceEndpoints`와 pair-local budget으로 동작한다.
+- `runDeepInspection` custom hook이 있으면 deterministic adapter보다 우선한다.
+- optional hook이 실패해도 기본 Smart 결과는 유지한다.
+- richer adapter 2차로 복잡한 path template/경로 변형 매칭을 보강했다.
+- trace/observability viewer를 추가해 `deepInspectionTrace.details` 기반 pair drill-down을 Approval UI에서 노출한다.
+- `no_result` 상태는 route/viewer 경계에서 pass-through되며, UI는 이를 `결과 없음`으로 표시한다.
+- 검증:
+  - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` 기준 `1 file, 22 tests passed`
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/smart.route.test.ts src/__tests__/approval-list.test.tsx` 기준 `2 files, 25 tests passed`
 - Agent SDK 도입은 이 단계에서만 검토
 
 ## 8. 수용 기준
@@ -223,6 +242,7 @@ Smart 생성 후보는 아래 metadata를 공통으로 가진다.
 | T3 | pair-scoped evidence pack이 consumer/provider 양쪽 파일을 포함한다 |
 | T4 | Smart가 endpoint 존재 시 `service -> api_endpoint` 후보를 생성한다 |
 | T5 | endpoint 미존재/미매칭 시 fallback reason이 metadata에 저장된다 |
+| T5a | Smart service fallback 후보 조회 응답은 `fallbackContext`를 최소 계약으로 노출한다 |
 | T6 | 단순 키워드 누락 파일이라도 code signal anchor가 있으면 evidence pack에 포함된다 |
 | T7 | Smart 응답 summary에 bootstrap/pair/atomic/fallback 통계가 포함된다 |
 | T8 | low-confidence pair만 deep inspection을 탄다 |
@@ -236,15 +256,20 @@ Smart 생성 후보는 아래 metadata를 공통으로 가진다.
   - pair-scoped evidence pack selection
   - fallback reason persistence
   - atomic candidate positive case
+  - deep inspection gating (`low-confidence` / `INSUFFICIENT_CONTEXT`)
+  - deep inspection failure-safe 기본 결과 유지
 - integration
   - `POST /api/inference/smart` end-to-end with config + source fixtures
   - Smart summary contract
+  - deep inspection trace summary contract
+  - fallback candidate API summary contract
 - e2e
   - Smart 실행 후 Approval 목록에서 atomic 후보 확인
   - endpoint bootstrap 후 atomic candidate 생성 확인
+  - Smart fallback 후보 카드에서 reason/context 표시 확인
 
 ## 10. 후속 범위
 
 - vector/RAG를 이용한 대규모 모노레포 코드 검색 최적화
 - pair별 incremental cache
-- deep inspection trace viewer
+- step-level tool event 로그 시각화 고도화

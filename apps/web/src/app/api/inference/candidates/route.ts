@@ -28,6 +28,26 @@ interface RelationFeedbackHint {
   adjustedConfidence?: number;
 }
 
+interface SmartFallbackContext {
+  attemptedMethod: string;
+  attemptedPath: string;
+  evidenceSummary?: string;
+}
+
+type SmartFallbackReason =
+  | 'NO_ENDPOINT_OBJECTS'
+  | 'PATH_NOT_MATCHED'
+  | 'METHOD_NOT_MATCHED'
+  | 'INSUFFICIENT_CONTEXT';
+
+interface CandidateMetadataSummary {
+  feedback?: RelationFeedbackHint;
+  targetType?: 'api_endpoint' | 'service';
+  analysisMode?: string;
+  fallbackReason?: SmartFallbackReason;
+  fallbackContext?: SmartFallbackContext;
+}
+
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -71,6 +91,75 @@ function asRelationFeedbackHint(value: unknown): RelationFeedbackHint | null {
   }
 
   return hint;
+}
+
+function isSmartFallbackReason(value: unknown): value is SmartFallbackReason {
+  return value === 'NO_ENDPOINT_OBJECTS'
+    || value === 'PATH_NOT_MATCHED'
+    || value === 'METHOD_NOT_MATCHED'
+    || value === 'INSUFFICIENT_CONTEXT';
+}
+
+function asTrimmedString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function summarizeEvidence(value: unknown): string | undefined {
+  const evidence = asTrimmedString(value);
+  if (!evidence) return undefined;
+
+  const collapsed = evidence.replace(/\s+/g, ' ');
+  return collapsed.length > 160
+    ? `${collapsed.slice(0, 157).trimEnd()}...`
+    : collapsed;
+}
+
+function buildSmartFallbackContext(record: Record<string, unknown>): SmartFallbackContext | undefined {
+  const attemptedMethod = asTrimmedString(record['httpMethod']);
+  const attemptedPath = asTrimmedString(record['path']);
+  if (!attemptedMethod || !attemptedPath) {
+    return undefined;
+  }
+
+  const evidenceSummary = summarizeEvidence(record['evidence']);
+
+  return {
+    attemptedMethod,
+    attemptedPath,
+    ...(evidenceSummary ? { evidenceSummary } : {}),
+  };
+}
+
+function asCandidateMetadataSummary(value: unknown): CandidateMetadataSummary | null {
+  const record = asRecord(value);
+  if (!record) return null;
+
+  const feedback = asRelationFeedbackHint(record['feedback']);
+  const targetType = record['targetType'] === 'api_endpoint' || record['targetType'] === 'service'
+    ? record['targetType']
+    : undefined;
+  const analysisMode = typeof record['analysisMode'] === 'string' && record['analysisMode'].trim().length > 0
+    ? record['analysisMode'].trim()
+    : undefined;
+  const fallbackReason = isSmartFallbackReason(record['fallbackReason'])
+    ? record['fallbackReason']
+    : undefined;
+  const fallbackContext =
+    targetType === 'service' && analysisMode === 'pair_pack' && fallbackReason
+      ? buildSmartFallbackContext(record)
+      : undefined;
+
+  if (!feedback && !targetType && !analysisMode && !fallbackReason && !fallbackContext) {
+    return null;
+  }
+
+  return {
+    ...(feedback ? { feedback } : {}),
+    ...(targetType ? { targetType } : {}),
+    ...(analysisMode ? { analysisMode } : {}),
+    ...(fallbackReason ? { fallbackReason } : {}),
+    ...(fallbackContext ? { fallbackContext } : {}),
+  };
 }
 
 function isCrossValidationRuleId(value: unknown): value is CrossValidationContradiction['ruleId'] {
@@ -244,6 +333,7 @@ export async function GET(req: NextRequest) {
           ? meta.llmExplanation
           : null;
       const feedback = asRelationFeedbackHint(meta?.feedback);
+      const metadata = asCandidateMetadataSummary(meta);
       const source = typeof meta?.source === 'string' ? meta.source : null;
       const metadataCrossValidation =
         meta?.crossValidation !== null && typeof meta?.crossValidation === 'object'
@@ -278,6 +368,7 @@ export async function GET(req: NextRequest) {
         status: c.status,
         crossValidation,
         ...(feedback ? { feedback } : {}),
+        ...(metadata ? { metadata } : {}),
         ...(source ? { source } : {}),
         ...(llmAssessment ? { llmAssessment } : {}),
         ...(llmExplanation ? { llmExplanation } : {}),

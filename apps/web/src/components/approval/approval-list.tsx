@@ -52,6 +52,10 @@ interface RelationCandidate {
   feedback?: RelationFeedbackMetadata;
   metadata?: {
     feedback?: RelationFeedbackMetadata;
+    targetType?: 'api_endpoint' | 'service';
+    analysisMode?: string;
+    fallbackReason?: SmartFallbackReason;
+    fallbackContext?: SmartFallbackContext;
   };
 }
 
@@ -62,6 +66,12 @@ interface RelationFeedbackMetadata {
   adjustedConfidence: number;
   applied: boolean;
   sampleCount: number;
+}
+
+interface SmartFallbackContext {
+  attemptedMethod: string;
+  attemptedPath: string;
+  evidenceSummary?: string;
 }
 
 function getLlmExplanationSummary(candidate: RelationCandidate): string | null {
@@ -95,17 +105,178 @@ function getApiErrorMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-function getSmartInferenceSummary(payload: unknown): {
+type SmartFallbackReason =
+  | 'NO_ENDPOINT_OBJECTS'
+  | 'PATH_NOT_MATCHED'
+  | 'METHOD_NOT_MATCHED'
+  | 'INSUFFICIENT_CONTEXT';
+
+interface SmartInferenceSummary {
   candidatesCreated: number;
   phase2Count: number;
   phase3Count: number;
-} {
+  servicePairCount: number;
+  atomicCandidateCount: number;
+  serviceFallbackCount: number;
+  deepInspectionCount: number;
+  deepInspectionTrace: {
+    attemptedCount: number;
+    failureCount: number;
+    triggerBreakdown: {
+      lowConfidence: number;
+      insufficientContext: number;
+    };
+    details: SmartDeepInspectionDetail[];
+  };
+  fallbackReasonBreakdown: Record<SmartFallbackReason, number>;
+}
+
+interface SmartDeepInspectionDetail {
+  consumerServiceName: string;
+  providerServiceName: string;
+  trigger: {
+    lowConfidence: boolean;
+    insufficientContext: boolean;
+  };
+  status: 'succeeded' | 'no_result' | 'failed';
+  fallbackReasons: SmartFallbackReason[];
+  toolUsage: {
+    searchCalls: number;
+    readCalls: number;
+    endpointListCalls: number;
+    totalCalls: number;
+  };
+  recoveredCall: {
+    httpMethod: string;
+    path: string;
+  } | null;
+}
+
+function parseDeepInspectionDetail(value: unknown): SmartDeepInspectionDetail | null {
+  const record = asRecord(value);
+  if (!record) return null;
+  const trigger = asRecord(record.trigger);
+  const toolUsage = asRecord(record.toolUsage);
+  const recoveredCall = asRecord(record.recoveredCall);
+
+  const fallbackReasons = Array.isArray(record.fallbackReasons)
+    ? record.fallbackReasons.filter((reason): reason is SmartFallbackReason => (
+      reason === 'NO_ENDPOINT_OBJECTS'
+      || reason === 'PATH_NOT_MATCHED'
+      || reason === 'METHOD_NOT_MATCHED'
+      || reason === 'INSUFFICIENT_CONTEXT'
+    ))
+    : [];
+
+  const recoveredMethod = typeof recoveredCall?.httpMethod === 'string' ? recoveredCall.httpMethod.trim() : '';
+  const recoveredPath = typeof recoveredCall?.path === 'string' ? recoveredCall.path.trim() : '';
+
+  return {
+    consumerServiceName:
+      typeof record.consumerServiceName === 'string' ? record.consumerServiceName.trim() : '',
+    providerServiceName:
+      typeof record.providerServiceName === 'string' ? record.providerServiceName.trim() : '',
+    trigger: {
+      lowConfidence: !!trigger?.lowConfidence,
+      insufficientContext: !!trigger?.insufficientContext,
+    },
+    status:
+      record.status === 'failed'
+        ? 'failed'
+        : record.status === 'no_result'
+          ? 'no_result'
+          : 'succeeded',
+    fallbackReasons,
+    toolUsage: {
+      searchCalls: asFiniteNumber(toolUsage?.searchCalls) ?? 0,
+      readCalls: asFiniteNumber(toolUsage?.readCalls) ?? 0,
+      endpointListCalls: asFiniteNumber(toolUsage?.endpointListCalls) ?? 0,
+      totalCalls: asFiniteNumber(toolUsage?.totalCalls) ?? 0,
+    },
+    recoveredCall: recoveredMethod.length > 0 && recoveredPath.length > 0
+      ? { httpMethod: recoveredMethod, path: recoveredPath }
+      : null,
+  };
+}
+
+function parseDeepInspectionDetails(value: unknown): SmartDeepInspectionDetail[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => parseDeepInspectionDetail(item))
+    .filter((item): item is SmartDeepInspectionDetail => item !== null);
+}
+
+function parseDeepInspectionTrace(value: unknown): SmartInferenceSummary['deepInspectionTrace'] {
+  const record = asRecord(value);
+  const triggerBreakdown = asRecord(record?.triggerBreakdown);
+  return {
+    attemptedCount: asFiniteNumber(record?.attemptedCount) ?? 0,
+    failureCount: asFiniteNumber(record?.failureCount) ?? 0,
+    triggerBreakdown: {
+      lowConfidence: asFiniteNumber(triggerBreakdown?.lowConfidence) ?? 0,
+      insufficientContext: asFiniteNumber(triggerBreakdown?.insufficientContext) ?? 0,
+    },
+    details: parseDeepInspectionDetails(record?.details),
+  };
+}
+
+function parseFallbackReasonBreakdown(value: unknown): Record<SmartFallbackReason, number> {
+  const record = asRecord(value);
+  return {
+    NO_ENDPOINT_OBJECTS: asFiniteNumber(record?.NO_ENDPOINT_OBJECTS) ?? 0,
+    PATH_NOT_MATCHED: asFiniteNumber(record?.PATH_NOT_MATCHED) ?? 0,
+    METHOD_NOT_MATCHED: asFiniteNumber(record?.METHOD_NOT_MATCHED) ?? 0,
+    INSUFFICIENT_CONTEXT: asFiniteNumber(record?.INSUFFICIENT_CONTEXT) ?? 0,
+  };
+}
+
+function formatFallbackReasonLabel(reason: SmartFallbackReason): string {
+  switch (reason) {
+    case 'NO_ENDPOINT_OBJECTS':
+      return '엔드포인트 객체 없음';
+    case 'PATH_NOT_MATCHED':
+      return '경로 불일치';
+    case 'METHOD_NOT_MATCHED':
+      return '메서드 불일치';
+    case 'INSUFFICIENT_CONTEXT':
+      return '컨텍스트 부족';
+    default:
+      return reason;
+  }
+}
+
+function formatFallbackReasonDescription(reason: SmartFallbackReason): string {
+  switch (reason) {
+    case 'NO_ENDPOINT_OBJECTS':
+      return 'provider 쪽 api_endpoint 객체가 없어 서비스 레벨 후보로 남았습니다.';
+    case 'PATH_NOT_MATCHED':
+      return '호출 경로와 일치하는 endpoint를 찾지 못해 서비스 레벨 후보로 남았습니다.';
+    case 'METHOD_NOT_MATCHED':
+      return '경로는 맞지만 HTTP 메서드가 일치하지 않아 서비스 레벨 후보로 남았습니다.';
+    case 'INSUFFICIENT_CONTEXT':
+      return '코드/프롬프트 증거가 부족해 endpoint 수준으로 확정하지 못했습니다.';
+    default:
+      return 'endpoint 수준으로 확정하지 못해 서비스 레벨 후보로 남았습니다.';
+  }
+}
+
+function getSmartInferenceSummary(payload: unknown): SmartInferenceSummary {
   const record = asRecord(payload);
   const directSummary = asRecord(record?.summary);
   const nestedData = asRecord(record?.data);
   const nestedSummary = asRecord(nestedData?.summary);
   const phase2 = asRecord(nestedData?.phase2);
   const phase3 = asRecord(nestedData?.phase3);
+  const deepInspectionTrace = parseDeepInspectionTrace(
+    directSummary?.deepInspectionTrace
+    ?? nestedSummary?.deepInspectionTrace
+    ?? phase3?.deepInspectionTrace,
+  );
+  const fallbackReasonBreakdown = parseFallbackReasonBreakdown(
+    directSummary?.fallbackReasonBreakdown
+    ?? nestedSummary?.fallbackReasonBreakdown
+    ?? phase3?.fallbackReasonBreakdown,
+  );
 
   const candidatesCreated = asFiniteNumber(directSummary?.candidatesCreated)
     ?? asFiniteNumber(nestedSummary?.candidatesCreated)
@@ -119,11 +290,202 @@ function getSmartInferenceSummary(payload: unknown): {
     ?? asFiniteNumber(nestedSummary?.phase3Count)
     ?? asFiniteNumber(phase3?.analyzedServiceCount)
     ?? 0;
+  const servicePairCount = asFiniteNumber(directSummary?.servicePairCount)
+    ?? asFiniteNumber(nestedSummary?.servicePairCount)
+    ?? asFiniteNumber(phase2?.servicePairCount)
+    ?? 0;
+  const atomicCandidateCount = asFiniteNumber(directSummary?.atomicCandidateCount)
+    ?? asFiniteNumber(nestedSummary?.atomicCandidateCount)
+    ?? asFiniteNumber(phase3?.atomicCandidateCount)
+    ?? 0;
+  const serviceFallbackCount = asFiniteNumber(directSummary?.serviceFallbackCount)
+    ?? asFiniteNumber(nestedSummary?.serviceFallbackCount)
+    ?? asFiniteNumber(phase3?.serviceFallbackCount)
+    ?? Object.values(fallbackReasonBreakdown).reduce((sum, count) => sum + count, 0);
+  const deepInspectionCount = asFiniteNumber(directSummary?.deepInspectionCount)
+    ?? asFiniteNumber(nestedSummary?.deepInspectionCount)
+    ?? asFiniteNumber(phase3?.deepInspectionCount)
+    ?? deepInspectionTrace.attemptedCount;
 
   return {
     candidatesCreated,
     phase2Count,
     phase3Count,
+    servicePairCount,
+    atomicCandidateCount,
+    serviceFallbackCount,
+    deepInspectionCount,
+    deepInspectionTrace,
+    fallbackReasonBreakdown,
+  };
+}
+
+function formatDeepInspectionSummary(
+  trace: SmartInferenceSummary['deepInspectionTrace'],
+): string | null {
+  if (trace.attemptedCount <= 0) return null;
+
+  const details: string[] = [];
+  if (trace.triggerBreakdown.lowConfidence > 0) {
+    details.push(`저신뢰 ${trace.triggerBreakdown.lowConfidence}개`);
+  }
+  if (trace.triggerBreakdown.insufficientContext > 0) {
+    details.push(`컨텍스트 부족 ${trace.triggerBreakdown.insufficientContext}개`);
+  }
+  if (trace.failureCount > 0) {
+    details.push(`실패 ${trace.failureCount}개`);
+  }
+
+  return details.length > 0
+    ? `Deep inspect ${trace.attemptedCount}회 (${details.join(', ')})`
+    : `Deep inspect ${trace.attemptedCount}회`;
+}
+
+function formatSmartInferenceSuccessMessage(summary: SmartInferenceSummary): string {
+  const parts = [
+    `Config LLM ${summary.phase2Count}회`,
+    `Pair LLM ${summary.phase3Count}회`,
+  ];
+
+  if (summary.servicePairCount > 0) {
+    parts.push(`서비스 쌍 ${summary.servicePairCount}개`);
+  }
+  if (summary.atomicCandidateCount > 0) {
+    parts.push(`원자 후보 ${summary.atomicCandidateCount}개`);
+  }
+  if (summary.serviceFallbackCount > 0) {
+    const fallbackDetails = (Object.entries(summary.fallbackReasonBreakdown) as Array<[SmartFallbackReason, number]>)
+      .filter(([, count]) => count > 0)
+      .sort(([, leftCount], [, rightCount]) => rightCount - leftCount)
+      .slice(0, MAX_SMART_TOAST_FALLBACK_REASONS)
+      .map(([reason, count]) => `${formatFallbackReasonLabel(reason)} ${count}개`);
+    const fallbackSuffix = fallbackDetails.length > 0 ? ` (${fallbackDetails.join(', ')})` : '';
+    parts.push(`서비스 fallback ${summary.serviceFallbackCount}개${fallbackSuffix}`);
+  }
+  const deepInspectionSummary = formatDeepInspectionSummary(summary.deepInspectionTrace);
+  if (deepInspectionSummary) {
+    parts.push(deepInspectionSummary);
+  }
+
+  return `Smart 추론 완료 — 후보 ${summary.candidatesCreated}개 생성 (${parts.join(', ')})`;
+}
+
+function formatSmartInferenceNoCandidateMessage(summary: SmartInferenceSummary): string {
+  const deepInspectionSummary = formatDeepInspectionSummary(summary.deepInspectionTrace);
+  const deepInspectionSuffix = deepInspectionSummary ? `, ${deepInspectionSummary}` : '';
+  return `Smart 추론 완료 — 신규 후보 0개 (서비스 쌍 ${summary.servicePairCount}개, 원자 후보 ${summary.atomicCandidateCount}개, 서비스 fallback ${summary.serviceFallbackCount}개${deepInspectionSuffix})`;
+}
+
+function formatTraceDetailPair(detail: SmartDeepInspectionDetail): string {
+  const consumer = detail.consumerServiceName.length > 0 ? detail.consumerServiceName : 'consumer 미상';
+  const provider = detail.providerServiceName.length > 0 ? detail.providerServiceName : 'provider 미상';
+  return `${consumer} -> ${provider}`;
+}
+
+function formatTraceDetailTrigger(detail: SmartDeepInspectionDetail): string {
+  const triggers: string[] = [];
+  if (detail.trigger.lowConfidence) triggers.push('저신뢰');
+  if (detail.trigger.insufficientContext) triggers.push('컨텍스트 부족');
+  return triggers.length > 0 ? triggers.join(', ') : '트리거 없음';
+}
+
+function formatTraceDetailResult(detail: SmartDeepInspectionDetail): string {
+  if (detail.recoveredCall) {
+    return `복구 호출 ${detail.recoveredCall.httpMethod} ${detail.recoveredCall.path}`;
+  }
+  if (detail.fallbackReasons.length > 0) {
+    const fallbackText = detail.fallbackReasons
+      .slice(0, 3)
+      .map((reason) => formatFallbackReasonLabel(reason))
+      .join(', ');
+    return `fallback ${fallbackText}`;
+  }
+  if (detail.status === 'failed') return '복구 실패';
+  if (detail.status === 'no_result') return '복구 결과 없음';
+  return '복구 호출 정보 없음';
+}
+
+function formatTraceDetailStatus(detail: SmartDeepInspectionDetail): string {
+  if (detail.status === 'failed') return '실패';
+  if (detail.status === 'no_result') return '결과 없음';
+  return '성공';
+}
+
+function SmartTraceViewer({ summary }: { summary: SmartInferenceSummary }) {
+  const trace = summary.deepInspectionTrace;
+
+  return (
+    <div
+      data-testid="smart-trace-viewer"
+      className="mb-3 rounded-xl border border-sky-500/30 bg-sky-500/5 p-4"
+    >
+      <div className="text-sm font-medium text-foreground">Smart Deep Inspection Trace</div>
+      <div className="mt-1 text-xs text-muted-foreground">
+        Deep inspect {trace.attemptedCount}회 · 실패 {trace.failureCount}회 · 저신뢰 {trace.triggerBreakdown.lowConfidence}개 · 컨텍스트 부족 {trace.triggerBreakdown.insufficientContext}개
+      </div>
+      {trace.attemptedCount <= 0 ? (
+        <div className="mt-3 text-xs text-muted-foreground">이번 실행에서 deep inspection은 수행되지 않았습니다.</div>
+      ) : trace.details.length === 0 ? (
+        <div className="mt-3 text-xs text-muted-foreground">pair 상세 정보 없음</div>
+      ) : (
+        <div className="mt-3 space-y-2">
+          {trace.details.map((detail, index) => (
+            <div
+              key={`trace-${index}-${detail.consumerServiceName}-${detail.providerServiceName}`}
+              className="rounded-lg border border-border/60 bg-background/70 px-3 py-2 text-xs"
+            >
+              <div className="font-medium text-foreground">
+                {formatTraceDetailPair(detail)}
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                트리거 {formatTraceDetailTrigger(detail)} · 상태 {formatTraceDetailStatus(detail)}
+              </div>
+              <div className="mt-1 text-muted-foreground">
+                도구 사용 search/read/endpoint/total = {detail.toolUsage.searchCalls}/{detail.toolUsage.readCalls}/{detail.toolUsage.endpointListCalls}/{detail.toolUsage.totalCalls}
+              </div>
+              <div className="mt-1 text-muted-foreground">{formatTraceDetailResult(detail)}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function getSmartFallbackReason(candidate: RelationCandidate): SmartFallbackReason | null {
+  const reason = candidate.metadata?.fallbackReason;
+  if (
+    candidate.metadata?.targetType !== 'service'
+    || candidate.metadata?.analysisMode !== 'pair_pack'
+    || !reason
+  ) {
+    return null;
+  }
+  return reason;
+}
+
+function getSmartFallbackContext(candidate: RelationCandidate): SmartFallbackContext | null {
+  const context = candidate.metadata?.fallbackContext;
+  if (
+    candidate.metadata?.targetType !== 'service'
+    || candidate.metadata?.analysisMode !== 'pair_pack'
+    || !context
+  ) {
+    return null;
+  }
+
+  const attemptedMethod = typeof context.attemptedMethod === 'string' ? context.attemptedMethod.trim() : '';
+  const attemptedPath = typeof context.attemptedPath === 'string' ? context.attemptedPath.trim() : '';
+  const evidenceSummary = typeof context.evidenceSummary === 'string' && context.evidenceSummary.trim().length > 0
+    ? context.evidenceSummary.trim()
+    : undefined;
+
+  if (!attemptedMethod || !attemptedPath) return null;
+
+  return {
+    attemptedMethod,
+    attemptedPath,
+    ...(evidenceSummary ? { evidenceSummary } : {}),
   };
 }
 
@@ -235,6 +597,41 @@ function FeedbackHint({
   );
 }
 
+function SmartFallbackHint({ candidate }: { candidate: RelationCandidate }) {
+  const reason = getSmartFallbackReason(candidate);
+  const context = getSmartFallbackContext(candidate);
+  if (!reason) return null;
+
+  return (
+    <div
+      data-testid="approval-smart-fallback-hint"
+      className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-950"
+    >
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className="font-medium">Smart fallback</span>
+        <span className="rounded-full border border-amber-600/30 px-2 py-0.5">
+          {formatFallbackReasonLabel(reason)}
+        </span>
+      </div>
+      <div className="mt-1 text-amber-900/90">
+        {formatFallbackReasonDescription(reason)}
+      </div>
+      {context && (
+        <div className="mt-2 space-y-1 text-amber-950/90">
+          <div>
+            시도 호출 {context.attemptedMethod} {context.attemptedPath}
+          </div>
+          {context.evidenceSummary && (
+            <div>
+              근거 {context.evidenceSummary}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** 엔드포인트 (세부 매핑용) */
 interface EndpointInfo {
   id: string;
@@ -253,6 +650,7 @@ type CrossValidationSort = 'cross-validation-priority' | 'confidence-desc' | 'co
 
 const CODE_ENGINE_LS_KEY = 'archi-navi:inference:code-engine';
 const CANDIDATE_PAGE_SIZE = 200;
+const MAX_SMART_TOAST_FALLBACK_REASONS = 3;
 
 function resolveCodeEngine(): 'hybrid' | 'ast' | 'regex' {
   if (typeof window === 'undefined') return 'hybrid';
@@ -371,6 +769,7 @@ function ObjectLabel({ name, granularity, parentName, objectType }: {
 export function ApprovalList() {
   const { workspaceId } = useWorkspace();
   const [candidates, setCandidates] = useState<RelationCandidate[]>([]);
+  const [lastSmartInferenceSummary, setLastSmartInferenceSummary] = useState<SmartInferenceSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [runningInference, setRunningInference] = useState(false);
   const [isPending, startTransition] = useTransition();
@@ -448,13 +847,11 @@ export function ApprovalList() {
         if (!res.ok) throw new Error(getApiErrorMessage(payload, 'Smart 추론 실행 실패'));
 
         const summary = getSmartInferenceSummary(payload);
-        const created = summary.candidatesCreated;
-        const p2 = summary.phase2Count;
-        const p3 = summary.phase3Count;
-        if (created > 0) {
-          toast.success(`Smart 추론 완료 — 후보 ${created}개 생성 (Config LLM: ${p2}, Code LLM: ${p3})`);
+        setLastSmartInferenceSummary(summary);
+        if (summary.candidatesCreated > 0) {
+          toast.success(formatSmartInferenceSuccessMessage(summary));
         } else {
-          toast.warning('Smart 추론 완료 — 신규 후보가 생성되지 않았습니다.');
+          toast.warning(formatSmartInferenceNoCandidateMessage(summary));
         }
         await loadCandidates();
         return;
@@ -726,6 +1123,11 @@ export function ApprovalList() {
             {runningInference ? '추론 실행 중...' : '추론 실행'}
           </Button>
         </div>
+        {lastSmartInferenceSummary && (
+          <div className="mt-4 w-full max-w-4xl px-4">
+            <SmartTraceViewer summary={lastSmartInferenceSummary} />
+          </div>
+        )}
       </div>
     );
   }
@@ -741,6 +1143,7 @@ export function ApprovalList() {
 
   return (
     <>
+      {lastSmartInferenceSummary && <SmartTraceViewer summary={lastSmartInferenceSummary} />}
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row">
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -850,6 +1253,7 @@ export function ApprovalList() {
                           {llmExplanation}
                         </p>
                       )}
+                      <SmartFallbackHint candidate={cand} />
                       <FeedbackHint candidate={cand} compoundCandidate />
                     </div>
 

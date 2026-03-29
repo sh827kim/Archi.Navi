@@ -272,11 +272,16 @@ function InlineEditField({
       <button
         onClick={() => void commit()}
         disabled={saving}
+        aria-label="인라인 저장"
         className="rounded p-1 text-green-400 hover:bg-green-500/10 transition-colors"
       >
         {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
       </button>
-      <button onClick={cancel} className="rounded p-1 text-muted-foreground hover:bg-muted/50 transition-colors">
+      <button
+        onClick={cancel}
+        aria-label="인라인 편집 취소"
+        className="rounded p-1 text-muted-foreground hover:bg-muted/50 transition-colors"
+      >
         <X className="h-3.5 w-3.5" />
       </button>
     </div>
@@ -505,6 +510,7 @@ function ObjectDetailSheet({
                       'flex items-center gap-1.5 font-medium transition-colors hover:opacity-80',
                       detail.visibility === 'VISIBLE' ? 'text-green-400' : 'text-muted-foreground',
                     )}
+                    aria-label="가시성 전환"
                     onClick={async () => {
                       const next = detail.visibility === 'VISIBLE' ? 'HIDDEN' : 'VISIBLE';
                       await saveField('visibility', next);

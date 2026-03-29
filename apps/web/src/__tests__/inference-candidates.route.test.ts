@@ -522,6 +522,202 @@ describe('GET /api/inference/candidates', () => {
     expect(payload[0].feedback).not.toHaveProperty('signalKind');
   });
 
+  it('Smart fallback 후보는 UI에 필요한 최소 metadata만 응답에 포함해야 한다', async () => {
+    const candidates = [
+      {
+        id: 'cand-smart-fallback',
+        subjectObjectId: 'svc-1',
+        objectId: 'svc-2',
+        relationType: 'call',
+        confidence: 0.68,
+        status: 'PENDING',
+        metadata: {
+          source: 'LLM_CODE',
+          targetType: 'service',
+          analysisMode: 'pair_pack',
+          fallbackReason: 'PATH_NOT_MATCHED',
+          httpMethod: 'GET',
+          path: '/api/orders/missing',
+          evidence: 'fetch("http://orders/api/orders/missing")',
+          targetServiceId: 'svc-2',
+          pairEvidenceSummary: 'should-not-leak',
+          feedback: {
+            key: 'CALL:code:call:spring_boot:java',
+            applied: false,
+            sampleCount: 0,
+            adjustment: 0,
+          },
+        },
+      },
+    ];
+    const allObjects = [
+      {
+        id: 'svc-1',
+        displayName: 'gateway',
+        name: 'gateway',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+      {
+        id: 'svc-2',
+        displayName: 'orders',
+        name: 'orders',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+    ];
+
+    const db = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: () => ({
+            where: () => ({
+              orderBy: () => ({
+                limit: () => ({
+                  offset: async () => candidates,
+                }),
+              }),
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            innerJoin: () => ({
+              where: async () => [],
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            where: async () => allObjects,
+          }),
+        }),
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/candidates?workspaceId=ws-1'),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cand-smart-fallback',
+        metadata: {
+          feedback: {
+            key: 'CALL:code:call:spring_boot:java',
+            applied: false,
+            sampleCount: 0,
+            adjustment: 0,
+          },
+          targetType: 'service',
+          analysisMode: 'pair_pack',
+          fallbackReason: 'PATH_NOT_MATCHED',
+          fallbackContext: {
+            attemptedMethod: 'GET',
+            attemptedPath: '/api/orders/missing',
+            evidenceSummary: 'fetch("http://orders/api/orders/missing")',
+          },
+        },
+      }),
+    ]));
+    expect(payload[0].metadata).not.toHaveProperty('targetServiceId');
+    expect(payload[0].metadata).not.toHaveProperty('pairEvidenceSummary');
+    expect(payload[0].metadata).not.toHaveProperty('httpMethod');
+    expect(payload[0].metadata).not.toHaveProperty('path');
+    expect(payload[0].metadata).not.toHaveProperty('evidence');
+  });
+
+  it('Smart fallback 후보에 method/path가 없으면 fallbackContext를 합성하지 않아야 한다', async () => {
+    const candidates = [
+      {
+        id: 'cand-smart-fallback-no-context',
+        subjectObjectId: 'svc-1',
+        objectId: 'svc-2',
+        relationType: 'call',
+        confidence: 0.41,
+        status: 'PENDING',
+        metadata: {
+          source: 'LLM_CODE',
+          targetType: 'service',
+          analysisMode: 'pair_pack',
+          fallbackReason: 'INSUFFICIENT_CONTEXT',
+          evidence: 'context was too weak',
+        },
+      },
+    ];
+    const allObjects = [
+      {
+        id: 'svc-1',
+        displayName: 'gateway',
+        name: 'gateway',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+      {
+        id: 'svc-2',
+        displayName: 'orders',
+        name: 'orders',
+        granularity: 'COMPOUND',
+        parentId: null,
+        objectType: 'service',
+      },
+    ];
+
+    const db = {
+      select: vi
+        .fn()
+        .mockReturnValueOnce({
+          from: () => ({
+            where: () => ({
+              orderBy: () => ({
+                limit: () => ({
+                  offset: async () => candidates,
+                }),
+              }),
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            innerJoin: () => ({
+              where: async () => [],
+            }),
+          }),
+        })
+        .mockReturnValueOnce({
+          from: () => ({
+            where: async () => allObjects,
+          }),
+        }),
+    };
+    getDbMock.mockResolvedValue(db);
+
+    const response = await GET(
+      new NextRequest('http://localhost/api/inference/candidates?workspaceId=ws-1'),
+    );
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: 'cand-smart-fallback-no-context',
+        metadata: {
+          targetType: 'service',
+          analysisMode: 'pair_pack',
+          fallbackReason: 'INSUFFICIENT_CONTEXT',
+        },
+      }),
+    ]));
+    expect(payload[0].metadata).not.toHaveProperty('fallbackContext');
+    expect(payload[0].metadata).not.toHaveProperty('evidence');
+  });
+
   it('limit/offset query를 후보 조회에 반영해야 한다', async () => {
     const offsetSpy = vi.fn(async () => []);
     const limitSpy = vi.fn(() => ({

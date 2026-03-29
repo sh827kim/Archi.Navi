@@ -1,6 +1,6 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22 | 최종 갱신: 2026-03-28
+> 작성일: 2026-02-22 | 최종 갱신: 2026-03-29
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
 > 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
@@ -23,7 +23,7 @@
 
 ---
 
-## 현재 상태 요약 (2026-03-28)
+## 현재 상태 요약 (2026-03-29)
 
 | 구간 | 상태 | 비고 |
 |------|------|------|
@@ -31,7 +31,7 @@
 | P2 (2-1 ~ 2-7) | ✅ 완료 | AST hybrid, Evidence Assembler, 비동기 run, Atomic 후보 생성 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
 | P4 (4-1 ~ 4-6) | ✅ 완료 | Inter-procedural AST, Cross-Validation, LLM Booster, Feedback Loop 구현 완료 |
-| **S1 (안정화)** | **🔧 진행 예정** | **Dead Feature 활성화, UX 기반, AI 고도화** |
+| **S1 (안정화)** | **🔧 진행 중** | **S1-1~S1-6 Dead Feature 완료, UX 기반/AI 고도화 항목 진행** |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, S1 이후 착수 |
 
 ---
@@ -351,12 +351,15 @@
 
 ### Phase 1: Dead Feature 활성화 (높은 ROI — API 이미 완성)
 
-#### 🔧 S1-1. LLM 추론 기능 재정렬 ★
+#### ✅ S1-1. LLM 추론 기능 재정렬 ★ (완료)
 
 > 가장 핵심적인 개선 — Smart를 먼저 요구사항에 맞게 재설계하고, 그 위에 LLM 기능 UI를 안정적으로 연결한다.
 
-**S1-1a. Smart Pipeline 재설계 및 재활성화**
-- **현황:** `POST /api/inference/smart` API는 존재하지만, 현재 Phase 3 입력 범위가 좁고 `api_endpoint` 부재 시 service fallback 비중이 높다.
+**S1-1a. Smart Pipeline 재설계 및 재활성화 (완료)**
+- **현황:** `POST /api/inference/smart` 재설계 범위를 완료했다. Phase 1.5 bootstrap, pair-scoped evidence pack, atomic inference 재작성, fallback observability/UI 노출, optional deep inspection, deterministic tool-assisted deep inspection(1차/2차), trace/observability viewer(`deepInspectionTrace.details` pair drill-down), `no_result` pass-through 표시 보정까지 반영했다.
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 22 tests passed`
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/smart.route.test.ts src/__tests__/approval-list.test.tsx` → `2 files, 25 tests passed`
 - **SPEC:** `docs/spec/37-smart-pipeline-atomic-redesign-spec.md`
 - **목표:** `config -> candidate service pair -> pair-scoped source analysis -> atomic relation` 흐름으로 재구성
 - **핵심 작업 순서:**
@@ -364,58 +367,78 @@
   - pair-scoped evidence pack assembler 구현
   - Smart Phase 3를 atomic inference 중심으로 재작성
   - fallback reason / run detail observability 추가
-  - low-confidence pair만 optional deep inspection(tool-calling/agent) 적용
-- **UI:** 위 재설계 완료 후 Smart 실행 UI를 정식 활성화하고, summary에 atomic/fallback/bootstrap 통계를 노출
+  - deterministic tool-assisted deep inspection 1차/2차 반영
+  - `deepInspectionTrace.details` 기반 pair drill-down viewer 반영
+- **UI:** Smart 실행 UI는 summary에 atomic/fallback/bootstrap 통계를 노출하며, Approval fallback 후보 카드에 시도 호출/근거 요약을 표시한다. deep inspection 전용 viewer도 Approval 화면에 연결됐다.
 
-**S1-1b. LLM Boost 옵션 UI 연결**
+**S1-1b. LLM Boost 옵션 UI 연결 (완료)**
 - **백엔드:** `POST /api/inference/run` + `llmBoost` 파라미터 (구현 완료)
-- **작업:** 기존 추론 실행 시 `llmBoost.enabled: true` 옵션을 UI에서 토글
+- **상태:** 기존 추론 실행 UI에서 `llmBoost.enabled: true` 옵션을 토글해 호출한다.
 - **기능:** 정적 분석 + LLM 코드 의도 분석 병행 실행
-- **UI:** 추론 실행 버튼 옆 "LLM 보강" 체크박스 또는 Settings 연동
+- **UI:** Approval 추론 실행 흐름에서 `정적 + LLM 보강` 모드로 연결됨
 
-**S1-1c. LLM Filter UI 연결**
+**S1-1c. LLM Filter UI 연결 (완료)**
 - **백엔드:** `POST /api/inference/llm-filter` (구현 완료)
-- **작업:** 승인 화면에서 LLM 필터 실행 버튼 추가
+- **상태:** 승인 화면에서 LLM 필터 실행 버튼이 API 호출로 연결됨
 - **기능:** PENDING 후보를 LLM이 평가 (LIKELY_VALID/UNCERTAIN/FALSE_POSITIVE), 설명 자동 생성
-- **UI:** 승인 목록 상단에 "LLM 평가 실행" 버튼, 결과를 배지/라벨로 표시
+- **UI:** 승인 목록 상단 "LLM 평가 실행" 버튼으로 연결됨
 
-**S1-1 우선순위 재조정**
-- 1순위: `S1-1a Smart Pipeline 재설계 및 atomic화`
-- 2순위: `S1-1b LLM Boost UI 연결`
-- 3순위: `S1-1c LLM Filter UI 연결`
-- 이유:
-  - Smart는 추론 파이프라인의 기준 품질을 결정하므로, 단순 UI 연결보다 backend contract 정렬이 선행되어야 한다.
-  - Boost/Filter는 Smart 재설계 이후에도 독립적으로 붙일 수 있지만, Smart는 이후 Approval/Mapping UX의 기준 데이터가 된다.
+**S1-1 종료 판정**
+- `S1-1a/b/c`를 모두 완료했으며, `S1-1`은 종료로 판정한다.
+- 단, `S1` 전체 완료를 의미하지는 않으며 다음 우선순위는 `S1-7` 이후 UX/AI 항목이다.
 
-#### 🔧 S1-2. Object 수정 기능 연결
+#### ✅ S1-2. Object 수정 기능 연결 (완료)
 - **백엔드:** `PATCH /api/objects/:id` (구현 완료)
-- **현재 문제:** 프론트엔드에서 DELETE만 호출, 서비스명/설명/visibility 수정 불가
-- **작업:** 서비스 상세/편집 UI에 PATCH 호출 연결
-- **기대:** 잘못 등록된 서비스명을 삭제/재생성 없이 바로 수정 가능
+- **현황:** 서비스 상세 Sheet에서 `displayName`/`description` 인라인 편집과 `visibility` 토글이 `PATCH /api/objects/:id`로 연결되어 있다. 목록 카드 visibility 토글도 같은 PATCH 경로를 사용한다.
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/objects-id.route.test.ts src/__tests__/service-list-client.test.tsx` → `2 files, 7 tests passed`
+- **완료 범위:**
+  - `PATCH /api/objects/:id` route 계약 회귀 테스트 추가
+  - `ServiceListClient`의 `displayName`/`description`/`visibility` 편집 흐름 회귀 테스트 추가
+  - `workspaceId` payload와 `where(id + workspaceId)` update scope 회귀 고정
+- **기대 효과:** 잘못 등록된 서비스명을 삭제/재생성 없이 바로 수정 가능
 
-#### 🔧 S1-3. SSE 실시간 그래프 갱신 연결
+#### ✅ S1-3. SSE 실시간 그래프 갱신 연결 (완료)
 - **백엔드:** `GET /api/rollup-events` SSE 스트림 (구현 완료)
-- **현재 문제:** EventSource 소비자가 프론트엔드에 없음 → rollup 완료 후 수동 새로고침 필요
-- **작업:** Mapping/Architecture 뷰에서 EventSource 구독 → `rollup-change` 이벤트 수신 시 자동 refetch
-- **참조:** `apps/web/src/lib/rollup-event-source.ts` (유틸 이미 존재)
+- **현황:** Mapping 화면(`rollup-graph.tsx`)과 Architecture 화면(`layered-architecture-view.tsx`) 모두 `subscribeToRollupEvents` 소비가 연결되어 `rollup-change` 수신 시 자동 refetch가 동작한다.
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/rollup-event-source.test.ts src/__tests__/rollup-graph.test.tsx src/__tests__/layered-architecture-view.test.tsx` → `3 files, 10 tests passed`
+- **완료 범위:**
+  - SSE/polling fallback 유틸 계약 회귀(`rollup-event-source.test.ts`)
+  - Mapping SSE wiring 회귀(`rollup-graph.test.tsx`)
+  - Architecture SSE wiring 회귀(`layered-architecture-view.test.tsx`)
 
-#### 🔧 S1-4. Query Engine 직접 호출 UI
+#### ✅ S1-4. Query Engine 직접 호출 UI (완료)
 - **백엔드:** `POST /api/query` (구현 완료 — IMPACT_ANALYSIS, PATH_DISCOVERY, USAGE_DISCOVERY, DOMAIN_SUMMARY)
-- **현재 문제:** Chat에서만 간접 사용, 구조화된 쿼리 UI 없음
-- **작업 옵션:**
-  - (A) 그래프 노드 우클릭 컨텍스트 메뉴 → "영향 분석", "경로 탐색" 바로 실행
-  - (B) 전용 Query Builder 패널 추가
-- **기대:** Chat 없이도 정확한 쿼리 실행 가능, 결과를 그래프 위에 하이라이트
+- **현황:** `/query` 페이지가 `QueryClient`를 렌더링하며, UI에서 `POST /api/query`를 직접 호출해 `IMPACT_ANALYSIS`, `PATH_DISCOVERY`, `USAGE_DISCOVERY`, `DOMAIN_SUMMARY`를 실행할 수 있다.
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/query-client.test.tsx src/__tests__/query-page.test.tsx` → `2 files, 7 tests passed`
+- **완료 범위:**
+  - `QueryClient` 타입별 파라미터 검증/요청 payload/결과 렌더링/실패 처리 회귀 테스트 추가
+  - `/query` 페이지의 `QueryClient` 렌더링 smoke test 추가
+- **기대 효과:** Chat 없이도 구조화된 쿼리를 직접 실행하고 결과를 즉시 확인 가능
 
-#### 🔧 S1-5. 추론 실행 상세 조회 연결
+#### ✅ S1-5. 추론 실행 상세 조회 연결 (완료)
 - **백엔드:** `GET /api/inference/runs/:id` (구현 완료)
-- **현재 문제:** 추론 이력 목록만 표시, 개별 실행 상세 확인 불가
-- **작업:** 추론 이력 항목 클릭 → 상세 결과/이벤트/성능 지표 표시
+- **현황:** 추론 이력 항목 확장 시 개별 실행 상세, source 목록, event 로그를 즉시 조회해 표시한다.
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/inference-run-list.test.tsx src/__tests__/inference-runs-id.route.test.ts` → `2 files, 12 tests passed`
+- **완료 범위:**
+  - `InferenceRunList` 상세 조회, 캐시 재사용, 실패 toast 흐름 회귀 테스트 추가
+  - `null` 상세 응답 시 확장 상태를 접고 캐시 오염 없이 재조회 가능하도록 보정
+  - `GET /api/inference/runs/:id`의 `401/400/200/404/500` 회귀 테스트 추가
+- **기대 효과:** 추론 실행 목록에서 개별 run의 source/event 상세를 바로 추적 가능
 
-#### 🔧 S1-6. 후보 목록 Pagination
+#### ✅ S1-6. 후보 목록 Pagination (완료)
 - **백엔드:** `limit/offset` 파라미터 지원 (구현 완료)
-- **현재 문제:** 전체 후보를 한번에 로드, 대규모 워크스페이스에서 성능 저하
-- **작업:** 승인 목록에 커서 기반 또는 페이지 기반 Pagination UI 추가
+- **현황:** 승인 목록이 `CANDIDATE_PAGE_SIZE=200` 기준으로 페이지 단위 fetch를 수행하고, `더 보기` 버튼으로 다음 페이지를 append 로드한다.
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/approval-list.test.tsx src/__tests__/inference-candidates.route.test.ts` → `2 files, 29 tests passed`
+- **완료 범위:**
+  - `ApprovalList`가 `limit/offset` 기반으로 후보 목록을 페이지 단위 조회
+  - `더 보기`로 다음 페이지 append 로드 후 기존 정렬/교차 검증 필터 흐름 유지
+  - `GET /api/inference/candidates`의 `limit/offset` contract 회귀 테스트 유지
+- **기대 효과:** 대규모 워크스페이스에서도 승인 목록의 초기 로드 비용을 제한할 수 있음
 
 ### Phase 2: UX 기반 구축
 
