@@ -136,4 +136,22 @@ describe('subscribeToRollupEvents', () => {
     await vi.advanceTimersByTimeAsync(ROLLUP_EVENT_FALLBACK_INTERVAL_MS);
     expect(onRollupChange).toHaveBeenCalledTimes(2);
   });
+
+  it('skipInitialChangeEvent=true 이면 첫 rollup-change 는 무시하고 이후 이벤트만 반영한다', () => {
+    vi.stubGlobal('EventSource', FakeEventSource as unknown as typeof EventSource);
+
+    const onRollupChange = vi.fn();
+    const subscription = subscribeToRollupEvents({
+      workspaceId: 'ws-1',
+      onRollupChange,
+      skipInitialChangeEvent: true,
+    });
+
+    FakeEventSource.instances[0]?.emit('rollup-change');
+    FakeEventSource.instances[0]?.emit('rollup-change');
+
+    expect(onRollupChange).toHaveBeenCalledTimes(1);
+
+    subscription.close();
+  });
 });

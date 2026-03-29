@@ -351,15 +351,21 @@
 
 ### Phase 1: Dead Feature 활성화 (높은 ROI — API 이미 완성)
 
-#### 🔧 S1-1. LLM 추론 기능 UI 연결 ★
+#### 🔧 S1-1. LLM 추론 기능 재정렬 ★
 
-> 가장 핵심적인 개선 — P4에서 구현한 3가지 LLM 추론 기능을 UI에서 사용 가능하게 한다.
+> 가장 핵심적인 개선 — Smart를 먼저 요구사항에 맞게 재설계하고, 그 위에 LLM 기능 UI를 안정적으로 연결한다.
 
-**S1-1a. Smart Pipeline UI 연결**
-- **백엔드:** `POST /api/inference/smart` (구현 완료)
-- **작업:** 추론 실행 UI에 "Smart 추론 (LLM)" 모드 추가
-- **기능:** 3-Phase(OpenAPI 임포트 → Config LLM 분석 → Code LLM 분석) 파이프라인 실행
-- **UI:** 추론 실행 버튼에 모드 선택 드롭다운 또는 토글 추가
+**S1-1a. Smart Pipeline 재설계 및 재활성화**
+- **현황:** `POST /api/inference/smart` API는 존재하지만, 현재 Phase 3 입력 범위가 좁고 `api_endpoint` 부재 시 service fallback 비중이 높다.
+- **SPEC:** `docs/spec/37-smart-pipeline-atomic-redesign-spec.md`
+- **목표:** `config -> candidate service pair -> pair-scoped source analysis -> atomic relation` 흐름으로 재구성
+- **핵심 작업 순서:**
+  - OpenAPI import 뒤에 `Phase 1.5 endpoint bootstrap` 추가 (`expose -> api_endpoint`)
+  - pair-scoped evidence pack assembler 구현
+  - Smart Phase 3를 atomic inference 중심으로 재작성
+  - fallback reason / run detail observability 추가
+  - low-confidence pair만 optional deep inspection(tool-calling/agent) 적용
+- **UI:** 위 재설계 완료 후 Smart 실행 UI를 정식 활성화하고, summary에 atomic/fallback/bootstrap 통계를 노출
 
 **S1-1b. LLM Boost 옵션 UI 연결**
 - **백엔드:** `POST /api/inference/run` + `llmBoost` 파라미터 (구현 완료)
@@ -372,6 +378,14 @@
 - **작업:** 승인 화면에서 LLM 필터 실행 버튼 추가
 - **기능:** PENDING 후보를 LLM이 평가 (LIKELY_VALID/UNCERTAIN/FALSE_POSITIVE), 설명 자동 생성
 - **UI:** 승인 목록 상단에 "LLM 평가 실행" 버튼, 결과를 배지/라벨로 표시
+
+**S1-1 우선순위 재조정**
+- 1순위: `S1-1a Smart Pipeline 재설계 및 atomic화`
+- 2순위: `S1-1b LLM Boost UI 연결`
+- 3순위: `S1-1c LLM Filter UI 연결`
+- 이유:
+  - Smart는 추론 파이프라인의 기준 품질을 결정하므로, 단순 UI 연결보다 backend contract 정렬이 선행되어야 한다.
+  - Boost/Filter는 Smart 재설계 이후에도 독립적으로 붙일 수 있지만, Smart는 이후 Approval/Mapping UX의 기준 데이터가 된다.
 
 #### 🔧 S1-2. Object 수정 기능 연결
 - **백엔드:** `PATCH /api/objects/:id` (구현 완료)

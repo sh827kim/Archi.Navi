@@ -102,7 +102,7 @@
 
 | 기능 | 백엔드 API | 프론트엔드 상태 | 해결 계획 |
 |------|-----------|---------------|----------|
-| **Smart Pipeline (LLM 3-Phase)** | `POST /api/inference/smart` ✅ | 호출하는 UI 없음 | S1-1a |
+| **Smart Pipeline (LLM 3-Phase)** | `POST /api/inference/smart` ✅ | 부분 연결 진행 중이나 요구사항과 구현이 불일치하여 재설계 필요 | S1-1a |
 | **LLM Boost (코드 의도 분석)** | `POST /api/inference/run` + `llmBoost` ✅ | `llmBoost` 파라미터 미전달 → 항상 DISABLED | S1-1b |
 | **LLM Filter (후보 평가)** | `POST /api/inference/llm-filter` ✅ | 승인 UI에서 미호출 | S1-1c |
 | **Object 수정 (PATCH)** | `PATCH /api/objects/:id` ✅ | DELETE만 연결, 수정 불가 | S1-2 |

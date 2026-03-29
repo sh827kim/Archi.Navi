@@ -23,6 +23,7 @@ import {
 } from 'lucide-react';
 import { cn, Button, Input } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { getClientAiRequestHeaders } from '@/lib/client-ai-settings';
 
 /** 예시 질문 목록 */
 const EXAMPLE_QUESTIONS = [
@@ -31,22 +32,6 @@ const EXAMPLE_QUESTIONS = [
   'user-service에서 DB까지 경로는?',
   '주문 도메인에 속하는 서비스 목록은?',
 ];
-
-/** localStorage에 저장된 AI 설정을 헤더로 전달 */
-function getAiHeaders(): Record<string, string> {
-  try {
-    const provider = localStorage.getItem('archi-navi:ai-provider');
-    const apiKey = localStorage.getItem('archi-navi:ai-api-key');
-    const model = localStorage.getItem('archi-navi:ai-model');
-    const headers: Record<string, string> = {};
-    if (provider) headers['x-ai-provider'] = provider;
-    if (apiKey) headers['x-ai-api-key'] = apiKey;
-    if (model) headers['x-ai-model'] = model;
-    return headers;
-  } catch {
-    return {};
-  }
-}
 
 /** 메시지에서 텍스트를 추출하는 헬퍼 */
 function getMessageText(msg: { parts?: Array<{ type: string; text?: string }>; content?: string }): string {
@@ -202,7 +187,7 @@ export function FloatingChat() {
   } = useChat({
     transport: new DefaultChatTransport({
       api: '/api/chat',
-      headers: getAiHeaders,
+      headers: getClientAiRequestHeaders,
       body: () => (workspaceId ? { workspaceId } : {}),
     }),
   });

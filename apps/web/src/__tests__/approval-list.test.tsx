@@ -23,6 +23,10 @@ vi.mock('lucide-react', () => ({
   Sparkles: () => null,
   Link2: () => null,
   ChevronRight: () => null,
+  Bot: () => null,
+  Zap: () => null,
+  FlaskConical: () => null,
+  Loader2: () => null,
 }));
 
 vi.mock('@archi-navi/ui', () => {
@@ -158,6 +162,7 @@ function deferredResponse() {
 describe('ApprovalList', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     toast.success.mockReset();
     toast.error.mockReset();
     toast.warning.mockReset();
@@ -489,6 +494,108 @@ describe('ApprovalList', () => {
     expect(cards[2]?.textContent).toContain('high-confidence');
   });
 
+  it('Smart 모드 실패 시 객체 에러에서도 사용자 메시지를 표시해야 한다', async () => {
+    window.localStorage.setItem('archi-navi:ai-provider', 'openai');
+    window.localStorage.setItem('archi-navi:ai-api-key', 'test-key');
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url.includes('/api/scan/paths?')) {
+        return Promise.resolve(jsonResponse({
+          paths: ['/tmp/orders-service'],
+          parentDirs: ['/tmp'],
+        }));
+      }
+      if (url === '/api/inference/smart') {
+        expect(init?.headers).toMatchObject({
+          'Content-Type': 'application/json',
+          'x-ai-provider': 'openai',
+          'x-ai-api-key': 'test-key',
+        });
+        return Promise.resolve(jsonResponse({
+          success: false,
+          error: {
+            code: 'LLM_NOT_CONFIGURED',
+            message: 'AI 제공자가 설정되지 않았습니다. 설정 > AI Settings에서 API 키를 입력해주세요.',
+          },
+        }, false));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    fireEvent.change(screen.getByLabelText('추론 모드'), {
+      target: { value: 'smart' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
+
+    await waitFor(() => {
+      expect(toast.error).toHaveBeenCalledWith(
+        'AI 제공자가 설정되지 않았습니다. 설정 > AI Settings에서 API 키를 입력해주세요.',
+      );
+    });
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/inference/smart',
+      expect.objectContaining({
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          repoRoots: ['/tmp'],
+          useServiceMetadataPaths: true,
+        }),
+      }),
+    );
+  });
+
+  it('Smart 모드가 중첩된 summary 응답도 성공 토스트로 처리해야 한다', async () => {
+    let candidateRequestCount = 0;
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        candidateRequestCount += 1;
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url.includes('/api/scan/paths?')) {
+        return Promise.resolve(jsonResponse({
+          paths: ['/tmp/orders-service'],
+          parentDirs: ['/tmp'],
+        }));
+      }
+      if (url === '/api/inference/smart') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          data: {
+            phase2: { analyzedServiceCount: 2 },
+            phase3: { analyzedServiceCount: 3, candidateCount: 4 },
+          },
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    fireEvent.change(screen.getByLabelText('추론 모드'), {
+      target: { value: 'smart' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        'Smart 추론 완료 — 후보 4개 생성 (Config LLM: 2, Code LLM: 3)',
+      );
+    });
+    expect(candidateRequestCount).toBe(2);
+    window.localStorage.removeItem('archi-navi:ai-provider');
+    window.localStorage.removeItem('archi-navi:ai-api-key');
+  });
+
   it('mixed atomic/compound 목록에서도 교차 검증 정렬 우선순서를 유지해야 한다', async () => {
     const atomicSingle = {
       ...createCandidate('cand-17', 'GET /orders'),
@@ -529,7 +636,7 @@ describe('ApprovalList', () => {
     expect(cards[1]?.textContent).toContain('GET /orders');
   });
 
-  it('approval 목록은 페이지를 넘겨 전체 후보를 가져온 뒤 정렬/필터해야 한다', async () => {
+  it('approval 목록은 더 보기로 다음 페이지를 불러온 뒤 정렬/필터해야 한다', async () => {
     const firstPage = Array.from({ length: 200 }, (_, index) =>
       createCandidate(`cand-page-${index}`, `service-${index}`),
     );
@@ -555,6 +662,10 @@ describe('ApprovalList', () => {
 
     render(<ApprovalList />);
 
+    await screen.findByText('service-0');
+    expect(screen.queryByText('late-warning')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /더 보기/ }));
     await screen.findByText('late-warning');
     fireEvent.change(screen.getByLabelText('교차 검증 필터'), {
       target: { value: 'warnings' },

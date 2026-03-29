@@ -22,6 +22,7 @@ import {
   executeSmartPipeline,
   type ConfigAnalysisResult,
   type CallExtractionResult,
+  type SmartPipelineResult,
 } from '@archi-navi/inference';
 
 // ── Zod 스키마: LLM 응답 구조 ───────────────────────
@@ -98,6 +99,14 @@ interface SmartRunRequest {
   workspaceId?: string;
   repoRoots?: string[];
   useServiceMetadataPaths?: boolean;
+}
+
+function buildSmartSummary(result: SmartPipelineResult) {
+  return {
+    candidatesCreated: result.phase3.candidateCount,
+    phase2Count: result.phase2.analyzedServiceCount,
+    phase3Count: result.phase3.analyzedServiceCount,
+  };
 }
 
 // ── 라우트 핸들러 ───────────────────────────────────
@@ -201,11 +210,14 @@ export async function POST(req: Request) {
       generateConfigAnalysis,
       generateCallExtraction,
     });
+    const summary = buildSmartSummary(pipelineResult);
 
     return NextResponse.json({
       success: true,
+      summary,
       data: {
         ...pipelineResult,
+        summary,
         model: modelInfo.modelName,
         repoRoots: validRoots,
       },

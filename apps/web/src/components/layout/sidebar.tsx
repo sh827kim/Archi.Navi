@@ -16,6 +16,7 @@ import {
   GitBranch,      // Relations
   CheckCircle,    // Approval
   Activity,       // Inference Runs
+  SearchCode,     // Query Engine
   Settings,       // Settings
   Compass,        // 로고
   Sun,
@@ -62,6 +63,12 @@ const navItems = [
     icon: Activity,
     description: '추론 실행 이력 및 상태 모니터링',
   },
+  {
+    href: '/query',
+    label: '쿼리 엔진',
+    icon: SearchCode,
+    description: '영향도/경로/사용 주체 직접 쿼리',
+  },
 ] as const;
 
 export function Sidebar() {
@@ -102,6 +109,7 @@ export function Sidebar() {
             <Link
               key={item.href}
               href={item.href}
+              prefetch={false}
               className={cn(
                 'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
                 isActive
@@ -121,6 +129,7 @@ export function Sidebar() {
         {/* 설정 링크 */}
         <Link
           href="/settings"
+          prefetch={false}
           className={cn(
             'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-all duration-200',
             pathname.startsWith('/settings')
