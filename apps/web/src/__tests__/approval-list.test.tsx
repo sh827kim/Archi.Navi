@@ -36,6 +36,7 @@ vi.mock('@archi-navi/ui', () => {
     Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
       <button type="button" {...props}>{children}</button>
     ),
+    cn: (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' '),
     Badge: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
     Spinner: () => <div>loading...</div>,
     ConfirmDialog: () => null,
@@ -560,7 +561,7 @@ describe('ApprovalList', () => {
 
     render(<ApprovalList />);
 
-    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
     fireEvent.change(screen.getByLabelText('추론 모드'), {
       target: { value: 'smart' },
     });
@@ -654,7 +655,7 @@ describe('ApprovalList', () => {
 
     render(<ApprovalList />);
 
-    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
     fireEvent.change(screen.getByLabelText('추론 모드'), {
       target: { value: 'smart' },
     });
@@ -725,7 +726,7 @@ describe('ApprovalList', () => {
 
     render(<ApprovalList />);
 
-    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
     fireEvent.change(screen.getByLabelText('추론 모드'), {
       target: { value: 'smart' },
     });
@@ -801,7 +802,7 @@ describe('ApprovalList', () => {
 
     render(<ApprovalList />);
 
-    await screen.findByText('승인 대기 중인 관계가 없습니다');
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
     fireEvent.change(screen.getByLabelText('추론 모드'), {
       target: { value: 'smart' },
     });
@@ -1055,5 +1056,21 @@ describe('ApprovalList', () => {
 
     await screen.findByText('service-llm');
     expect(screen.getByText('caller-cand-llm 이 service-llm API 를 호출합니다.')).toBeTruthy();
+  });
+
+  it('후보가 없으면 다음 행동 링크를 포함한 empty state를 표시해야 한다', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
+    expect(screen.getByRole('link', { name: 'Object 목록 열기' }).getAttribute('href')).toBe('/services');
+    expect(screen.getByRole('link', { name: '추론 이력 보기' }).getAttribute('href')).toBe('/inference-runs');
   });
 });

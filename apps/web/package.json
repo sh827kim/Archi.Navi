@@ -12,7 +12,7 @@
     "next-env.d.ts"
   ],
   "scripts": {
-    "dev": "next dev",
+    "dev": "WATCHPACK_POLLING=${WATCHPACK_POLLING:-true} PGLITE_DATA_DIR=${PGLITE_DATA_DIR:-.archi-navi/dev-data} MIGRATIONS_FOLDER=${MIGRATIONS_FOLDER:-../../packages/db/src/migrations} next dev",
     "dev:turbopack": "next dev --turbopack",
     "build": "next build",
     "start": "next start",

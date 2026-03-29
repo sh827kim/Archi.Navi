@@ -31,7 +31,7 @@
 | P2 (2-1 ~ 2-7) | ✅ 완료 | AST hybrid, Evidence Assembler, 비동기 run, Atomic 후보 생성 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
 | P4 (4-1 ~ 4-6) | ✅ 완료 | Inter-procedural AST, Cross-Validation, LLM Booster, Feedback Loop 구현 완료 |
-| **S1 (안정화)** | **🔧 진행 중** | **S1-1~S1-6 Dead Feature 완료, UX 기반/AI 고도화 항목 진행** |
+| **S1 (안정화)** | **🔧 진행 중** | **S1-1~S1-9 완료, 다음 우선순위는 S1-10~S1-15** |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, S1 이후 착수 |
 
 ---
@@ -442,27 +442,38 @@
 
 ### Phase 2: UX 기반 구축
 
-#### 🔧 S1-7. Dashboard Home
+#### ✅ S1-7. Dashboard Home (완료)
 - **현재 문제:** 워크스페이스 선택 후 바로 빈 그래프 → 사용자 이탈
-- **작업:** 대시보드 홈 화면 신규 추가
-- **표시 항목:**
-  - 총 서비스/오브젝트 수
-  - 미승인 후보 수 (관계 + 도메인)
-  - 최근 추론 실행 결과 요약
-  - 빠른 액션 (추론 실행, 코드 스캔, 승인 이동)
+- **현황:** `/home` 운영 요약 화면과 `GET /api/dashboard/summary`가 추가되었고, 워크스페이스 선택/온보딩 완료 후 기본 진입 경로가 `/home`으로 전환되었다.
+- **완료 범위:**
+  - 총 Object/서비스/도메인 수, 관계+도메인 승인 대기 수 표시
+  - 최근 추론 실행 최대 5건 요약
+  - 빠른 액션: `추론 실행`, `코드 스캔`, `승인 이동`을 포함한 주요 이동 액션
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/dashboard-home.test.tsx src/__tests__/dashboard-summary.route.test.ts` → `2 files, 4 tests passed`
 
-#### 🔧 S1-8. Empty State 가이드
+#### ✅ S1-8. Empty State 가이드 (완료)
 - **현재 문제:** 그래프/목록이 비어 있을 때 "다음에 뭘 해야 하는지" 안내 부족
-- **작업:** 주요 화면에 Empty State 액션 카드 추가
+- **현황:** 공통 empty-state 가이드 컴포넌트를 추가하고 주요 화면의 다음 행동 링크를 일관된 카드 UI로 통합했다.
 - **대상 화면:**
-  - Architecture View: "서비스를 등록하고 추론을 실행하세요" + 바로가기
-  - Mapping Graph: "코드 스캔으로 시작하기" 또는 "샘플 데이터 로드"
-  - Approval: (이미 부분 구현) 강화 — 추론 미실행 시 안내 문구
+  - Architecture View: `Object 목록`, `설정`
+  - Mapping Graph: `Object 목록`, `승인 대기`
+  - Approval: `Object 목록`, `추론 이력`
+  - Domain Approval: `Object 목록`, `홈`
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/approval-list.test.tsx src/__tests__/layered-architecture-view.test.tsx src/__tests__/rollup-graph.test.tsx` → `3 files, 29 tests passed`
 
-#### 🔧 S1-9. 사이드바 접기/펼치기
+#### ✅ S1-9. 사이드바 접기/펼치기 (완료)
 - **현재 문제:** 256px 고정 너비 → 그래프 뷰 공간 부족
-- **작업:** 아이콘 모드로 사이드바를 축소/확장하는 토글 버튼 추가
-- **기대:** 그래프 탐색 시 화면 활용도 대폭 향상
+- **현황:** 사이드바 collapse 상태를 저장하는 client store를 추가하고 홈 네비게이션/커맨드 팔레트까지 반영했다.
+- **완료 범위:**
+  - icon-only collapse/expand 토글
+  - localStorage 기반 상태 유지
+  - 홈(`/home`) 네비게이션 추가
+  - 커맨드 팔레트 홈 항목 추가
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/sidebar.test.tsx` → `1 file, 2 tests passed`
+  - `pnpm --filter @archi-navi/web lint` → 통과
 
 ### Phase 3: AI 고도화
 

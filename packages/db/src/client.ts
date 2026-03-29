@@ -12,6 +12,7 @@ export type DbClient = ReturnType<typeof createPgliteClient>;
 
 let _client: DbClient | null = null;
 let _pg: PGlite | null = null;
+let _clientPromise: Promise<DbClient> | null = null;
 let _shutdownHookInstalled = false;
 
 /**
@@ -30,6 +31,7 @@ async function closePg(): Promise<void> {
   } finally {
     _pg = null;
     _client = null;
+    _clientPromise = null;
   }
 }
 
@@ -81,23 +83,7 @@ function resetCorruptedDataDir(dataDir: string): boolean {
   }
 }
 
-/**
- * 싱글턴 DB 클라이언트 반환
- * - PGLITE_DATA_DIR 환경변수로 데이터 경로 설정
- * - 데이터 디렉토리 없으면 자동 생성
- */
-export async function getDb(): Promise<DbClient> {
-  if (_client) return _client;
-
-  const pgliteDataDir = process.env['PGLITE_DATA_DIR'] ?? '.archi-navi/data';
-
-  // PGlite는 부모 디렉토리가 있어야 함 — 없으면 자동 생성
-  try {
-    mkdirSync(pgliteDataDir, { recursive: true });
-  } catch {
-    // 이미 존재하면 무시
-  }
-
+async function initializeDb(pgliteDataDir: string): Promise<DbClient> {
   try {
     _pg = new PGlite(pgliteDataDir);
     _client = drizzlePglite(_pg, { schema });
@@ -117,4 +103,30 @@ export async function getDb(): Promise<DbClient> {
     installShutdownHook();
     return _client;
   }
+}
+
+/**
+ * 싱글턴 DB 클라이언트 반환
+ * - PGLITE_DATA_DIR 환경변수로 데이터 경로 설정
+ * - 데이터 디렉토리 없으면 자동 생성
+ */
+export async function getDb(): Promise<DbClient> {
+  if (_client) return _client;
+  if (_clientPromise) return _clientPromise;
+
+  const pgliteDataDir = process.env['PGLITE_DATA_DIR'] ?? '.archi-navi/data';
+
+  // PGlite는 부모 디렉토리가 있어야 함 — 없으면 자동 생성
+  try {
+    mkdirSync(pgliteDataDir, { recursive: true });
+  } catch {
+    // 이미 존재하면 무시
+  }
+
+  _clientPromise = initializeDb(pgliteDataDir).finally(() => {
+    if (_client) return;
+    _clientPromise = null;
+  });
+
+  return _clientPromise;
 }

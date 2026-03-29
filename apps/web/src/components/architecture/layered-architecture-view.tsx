@@ -24,6 +24,7 @@ import {
 import { cn, Input, Button, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { subscribeToRollupEvents } from '@/lib/rollup-event-source';
+import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
 
 /* ─── 타입 ─── */
 interface LayerData {
@@ -642,7 +643,7 @@ export function LayeredArchitectureView() {
         destroyTimerRef.current = null;
       }, 0);
     };
-  }, [loadData]);
+  }, [loadData, workspaceId]);
 
   /* ─── SSE: rollup 변경 시 자동 갱신 ─── */
   useEffect(() => {
@@ -788,11 +789,17 @@ export function LayeredArchitectureView() {
 
       {/* 빈 상태 오버레이 */}
       {!loading && !hasData && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center gap-4 text-muted-foreground">
-          <p className="text-sm">레이어 또는 서비스 데이터가 없습니다.</p>
-          <p className="text-xs">
-            설정 → 레이어 관리에서 계층을 추가하거나 CLI로 서비스를 스캔하세요.
-          </p>
+        <div className="absolute inset-0 z-20 flex items-center justify-center p-6">
+          <EmptyStateGuide
+            eyebrow="Architecture View"
+            title="아직 레이어드 아키텍처를 그릴 데이터가 없습니다"
+            description="레이어가 없거나 서비스가 아직 등록되지 않았습니다. 먼저 Object를 정리하거나 설정 화면에서 레이어를 추가하세요."
+            actions={[
+              { href: '/services', label: 'Object 목록 열기' },
+              { href: '/settings', label: '설정으로 이동', variant: 'outline' },
+            ]}
+            note="코드 스캔 이후에도 비어 있다면 레이어 할당 여부를 함께 확인하세요."
+          />
         </div>
       )}
 

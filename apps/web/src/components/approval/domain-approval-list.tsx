@@ -10,6 +10,7 @@ import { Check, X, Brain, Sparkles } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button, Badge, Spinner, ConfirmDialog } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
 
 /** 도메인 후보 타입 */
 interface DomainCandidate {
@@ -121,16 +122,20 @@ export function DomainApprovalList() {
 
   if (candidates.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
-        <Brain className="h-8 w-8 text-primary/60" />
-        <p className="text-sm font-medium">승인 대기 중인 도메인 후보가 없습니다</p>
-        <p className="text-xs">
-          아래 도메인 추론 실행으로 Track A/B 후보를 생성할 수 있습니다
-        </p>
+      <div className="space-y-4 py-10">
+        <EmptyStateGuide
+          eyebrow="Domain Approval"
+          title="승인 대기 중인 도메인 후보가 없습니다"
+          description="도메인 추론을 실행하거나 Object 목록에서 서비스와 도메인을 먼저 정리한 뒤 다시 확인하세요."
+          actions={[
+            { href: '/services', label: 'Object 목록 열기' },
+            { href: '/home', label: '홈으로 이동', variant: 'outline' },
+          ]}
+        />
         <Button
           onClick={() => void runDomainInference()}
           disabled={runningInference}
-          className="mt-2"
+          className="mx-auto flex"
         >
           <Sparkles className="h-3.5 w-3.5 mr-1.5" />
           {runningInference ? '도메인 추론 실행 중...' : '도메인 추론 실행'}

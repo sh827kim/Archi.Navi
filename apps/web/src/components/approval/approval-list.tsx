@@ -15,6 +15,7 @@ import {
   Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription, SheetFooter,
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
 import {
   getCrossValidationContradictionLabel,
   type CrossValidationContradiction,
@@ -1098,13 +1099,17 @@ export function ApprovalList() {
 
   if (candidates.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center py-16 gap-3 text-muted-foreground">
-        <Check className="h-8 w-8 text-green-500" />
-        <p className="text-sm font-medium">승인 대기 중인 관계가 없습니다</p>
-        <p className="text-xs">
-          먼저 코드 스캔으로 서비스 경로를 등록한 뒤, 아래 추론 실행으로 후보를 생성하세요
-        </p>
-        <div className="mt-2 flex items-center gap-2">
+      <div className="space-y-4 py-10">
+        <EmptyStateGuide
+          eyebrow="Approval"
+          title="승인 대기 중인 관계 후보가 없습니다"
+          description="먼저 코드 스캔으로 서비스 경로를 등록한 뒤 추론을 실행하면 후보가 생성됩니다. 필요하면 Object 목록과 추론 이력에서 현재 상태를 먼저 확인하세요."
+          actions={[
+            { href: '/services', label: 'Object 목록 열기' },
+            { href: '/inference-runs', label: '추론 이력 보기', variant: 'outline' },
+          ]}
+        />
+        <div className="flex items-center justify-center gap-2">
           <select
             aria-label="추론 모드"
             value={inferenceMode}

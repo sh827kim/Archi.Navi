@@ -16,7 +16,7 @@
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 추론 엔진 고도화 (P4) | ✅ | 4-1~4-6 구현 완료 |
-| **안정화 (S1)** | **🔧** | **Dead Feature 활성화, UX 기반 구축, AI 고도화 필요** |
+| **안정화 (S1)** | **🔧** | **S1-1~S1-9 완료, AI 고도화/유지보수성 항목 진행 예정** |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -95,8 +95,8 @@
 
 ## 2) ⚠️ Dead Feature — UI 연결 전환 현황
 
-> P4까지 백엔드 구현이 완료되었으나 프론트엔드에서 호출하지 않아 사용 불가능했던 기능 목록.
-> S1(안정화)에서 순차 연결 중이며, `S1-1`은 완료됐다. 상세는 `docs/03-roadmap.md` S1 섹션 참조.
+> P4까지 백엔드 구현이 완료되었으나 프론트엔드에서 호출하지 않거나 운영 UX가 부족했던 항목 목록.
+> S1(안정화)에서 순차 연결 중이며, 현재 `S1-1`~`S1-9`가 완료됐다. 상세는 `docs/03-roadmap.md` S1 섹션 참조.
 
 ### 2.1 🔴 Critical — 핵심 기능 상태
 
@@ -115,6 +115,9 @@
 | **Query Engine 직접 호출** | `POST /api/query` ✅ | `S1-4` 완료. `/query`의 `QueryClient`에서 직접 실행 가능, 회귀 테스트(`query-client.test.tsx`, `query-page.test.tsx`) 반영. 최종 검증: web `2 files, 7 tests passed` | S1-4 |
 | **추론 실행 상세 조회** | `GET /api/inference/runs/:id` ✅ | `S1-5` 완료. 목록에서 source/event 상세 확장 조회 가능, null-failure/GET route 회귀 테스트 반영. 최종 검증: web `2 files, 12 tests passed` | S1-5 |
 | **후보 목록 Pagination** | `limit/offset` 파라미터 ✅ | `S1-6` 완료. Approval 목록이 200건 단위 페이지 fetch + `더 보기` append 로드를 사용하고, 정렬/필터 흐름을 유지한다. 최종 검증: web `2 files, 29 tests passed` | S1-6 |
+| **Dashboard Home** | `GET /api/dashboard/summary` ✅ | `S1-7` 완료. `/home` 운영 요약 화면, 최근 추론 실행, `추론 실행/코드 스캔/승인 이동` 포함 빠른 액션, 워크스페이스 진입 기본 경로 전환 반영. 최종 검증: web `2 files, 4 tests passed` | S1-7 |
+| **Empty State 가이드** | 기존 화면 재사용 ✅ | `S1-8` 완료. Architecture/Mapping/Approval empty state를 공통 가이드 카드로 재정렬하고 다음 행동 링크를 추가했다. 최종 검증: web `4 files, 30 tests passed` | S1-8 |
+| **사이드바 접기/펼치기** | 클라이언트 상태 저장 ✅ | `S1-9` 완료. 홈 네비게이션 추가, icon-only collapse, localStorage 기반 상태 유지, 커맨드 팔레트 반영. 최종 검증: web `2 files, 4 tests passed`, lint 통과 | S1-9 |
 
 ### 2.3 🟢 Minor
 
@@ -154,9 +157,9 @@
 | S1-4. Query Engine 직접 호출 UI | Dead Feature | ✅ 완료 |
 | S1-5. 추론 실행 상세 조회 연결 | Dead Feature | ✅ 완료 |
 | S1-6. 후보 목록 Pagination | Dead Feature | ✅ 완료 |
-| S1-7. Dashboard Home | UX 기반 | 🔧 예정 |
-| S1-8. Empty State 가이드 | UX 기반 | 🔧 예정 |
-| S1-9. 사이드바 접기/펼치기 | UX 기반 | 🔧 예정 |
+| S1-7. Dashboard Home | UX 기반 | ✅ 완료 |
+| S1-8. Empty State 가이드 | UX 기반 | ✅ 완료 |
+| S1-9. 사이드바 접기/펼치기 | UX 기반 | ✅ 완료 |
 | S1-10. Chat Intent Router 개선 | AI 고도화 | 🔧 예정 |
 | S1-11. 도메인 해석 정확도 개선 | AI 고도화 | 🔧 예정 |
 | S1-12. Evidence Truncation 전략 | AI 고도화 | 🔧 예정 |

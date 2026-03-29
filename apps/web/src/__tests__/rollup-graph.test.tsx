@@ -276,4 +276,23 @@ describe('RollupGraph', () => {
     expect(screen.getByText('domain-latest')).toBeTruthy();
     expect(screen.queryByText('domain-stale')).toBeNull();
   });
+
+  it('현재 레벨 데이터가 없으면 다음 행동 안내를 보여야 한다', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/objects?')) return Promise.resolve(jsonResponse([]));
+        if (url.startsWith('/api/domain-affinities?')) return Promise.resolve(jsonResponse([]));
+        if (url.startsWith('/api/rollups?')) return Promise.resolve(jsonResponse({ edges: [], graphStats: [] }));
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<RollupGraph />);
+
+    await screen.findByText('현재 레벨에 표시할 Object Mapping이 없습니다');
+    expect(screen.getByRole('link', { name: 'Object 목록 열기' }).getAttribute('href')).toBe('/services');
+    expect(screen.getByRole('link', { name: '승인 대기로 이동' }).getAttribute('href')).toBe('/approval');
+  });
 });
