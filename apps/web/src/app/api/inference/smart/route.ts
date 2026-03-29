@@ -20,10 +20,18 @@ import { resolve } from 'node:path';
 import { getDb, objects } from '@archi-navi/db';
 import { and, eq } from 'drizzle-orm';
 import {
+  createInferenceRun,
   executeSmartPipeline,
+  getInferenceRunDetail,
   type ConfigAnalysisResult,
   type CallExtractionResult,
+  type SmartAtomicAgentStep,
+  type SmartAtomicAnalysisMode,
 } from '@archi-navi/inference';
+import {
+  executeQueuedSmartInferenceRun,
+  getSmartInferenceRunDetail,
+} from '@/lib/smart-inference-runs';
 
 // ── Zod 스키마: LLM 응답 구조 ───────────────────────
 
@@ -49,6 +57,37 @@ const callExtractionSchema = z.object({
     confidence: z.number().min(0).max(1),
   })),
 });
+
+const agentCallSchema = z.object({
+  targetService: z.string(),
+  httpMethod: z.string(),
+  path: z.string(),
+  sourceFile: z.string(),
+  evidence: z.string(),
+  confidence: z.number().min(0).max(1),
+});
+
+const smartAgentStepSchema = z.object({
+  action: z.enum(['search_files', 'read_file', 'list_service_endpoints', 'finish']),
+  serviceName: z.string().nullable(),
+  query: z.string().nullable(),
+  path: z.string().nullable(),
+  limit: z.number().int().positive().max(10).nullable(),
+  calls: z.array(agentCallSchema).nullable(),
+  rationale: z.string().nullable(),
+});
+
+function normalizeSmartAgentStep(step: z.infer<typeof smartAgentStepSchema>): SmartAtomicAgentStep {
+  return {
+    action: step.action,
+    ...(typeof step.serviceName === 'string' ? { serviceName: step.serviceName } : {}),
+    ...(typeof step.query === 'string' ? { query: step.query } : {}),
+    ...(typeof step.path === 'string' ? { path: step.path } : {}),
+    ...(typeof step.limit === 'number' ? { limit: step.limit } : {}),
+    ...(Array.isArray(step.calls) ? { calls: step.calls } : {}),
+    ...(typeof step.rationale === 'string' ? { rationale: step.rationale } : {}),
+  };
+}
 
 // ── AI 모델 선택 ────────────────────────────────────
 
@@ -99,6 +138,8 @@ interface SmartRunRequest {
   workspaceId?: string;
   repoRoots?: string[];
   useServiceMetadataPaths?: boolean;
+  async?: boolean;
+  analysisMode?: SmartAtomicAnalysisMode;
 }
 
 interface SmartSummarySource {
@@ -111,17 +152,30 @@ interface SmartSummarySource {
     servicePairCount?: number;
   };
   phase3: {
+    analysisMode?: SmartAtomicAnalysisMode;
     analyzedServiceCount: number;
     candidateCount: number;
     atomicCandidateCount?: number;
     serviceFallbackCount?: number;
     deepInspectionCount?: number;
+    agentEscalatedPairCount?: number;
+    agentRecoveredAtomicCount?: number;
+    agentFailedPairCount?: number;
+    agentToolUsageSummary?: {
+      searchCalls?: number;
+      readCalls?: number;
+      endpointListCalls?: number;
+      gatewayRouteCalls?: number;
+      totalCalls?: number;
+    };
     deepInspectionTrace?: {
       attemptedCount?: number;
       failureCount?: number;
       triggerBreakdown?: {
         lowConfidence?: number;
         insufficientContext?: number;
+        pathNotMatched?: number;
+        noEndpointObjects?: number;
       };
       details?: Array<{
         consumerServiceName?: string;
@@ -129,6 +183,8 @@ interface SmartSummarySource {
         trigger?: {
           lowConfidence?: boolean;
           insufficientContext?: boolean;
+          pathNotMatched?: boolean;
+          noEndpointObjects?: boolean;
         };
         status?: 'succeeded' | 'no_result' | 'failed';
         fallbackReasons?: Array<
@@ -138,12 +194,17 @@ interface SmartSummarySource {
           searchCalls?: number;
           readCalls?: number;
           endpointListCalls?: number;
+          gatewayRouteCalls?: number;
           totalCalls?: number;
         };
         recoveredCall?: {
           httpMethod?: string;
           path?: string;
         } | null;
+        recoveredCalls?: Array<{
+          httpMethod?: string;
+          path?: string;
+        }>;
       }>;
     };
     fallbackReasonBreakdown?: Partial<Record<
@@ -163,6 +224,8 @@ function buildDeepInspectionTrace(
       trigger: {
         lowConfidence: detail.trigger?.lowConfidence ?? false,
         insufficientContext: detail.trigger?.insufficientContext ?? false,
+        pathNotMatched: detail.trigger?.pathNotMatched ?? false,
+        noEndpointObjects: detail.trigger?.noEndpointObjects ?? false,
       },
       status:
         detail.status === 'failed'
@@ -182,17 +245,24 @@ function buildDeepInspectionTrace(
         searchCalls: detail.toolUsage?.searchCalls ?? 0,
         readCalls: detail.toolUsage?.readCalls ?? 0,
         endpointListCalls: detail.toolUsage?.endpointListCalls ?? 0,
+        gatewayRouteCalls: detail.toolUsage?.gatewayRouteCalls ?? 0,
         totalCalls: detail.toolUsage?.totalCalls ?? 0,
       },
-      recoveredCall:
-        detail.recoveredCall
-        && typeof detail.recoveredCall.httpMethod === 'string'
-        && typeof detail.recoveredCall.path === 'string'
-          ? {
-            httpMethod: detail.recoveredCall.httpMethod,
-            path: detail.recoveredCall.path,
-          }
-          : null,
+      recoveredCalls: Array.isArray(detail.recoveredCalls)
+        ? detail.recoveredCalls
+          .filter((call) => typeof call?.httpMethod === 'string' && typeof call?.path === 'string')
+          .map((call) => ({
+            httpMethod: call.httpMethod as string,
+            path: call.path as string,
+          }))
+        : detail.recoveredCall
+          && typeof detail.recoveredCall.httpMethod === 'string'
+          && typeof detail.recoveredCall.path === 'string'
+            ? [{
+              httpMethod: detail.recoveredCall.httpMethod,
+              path: detail.recoveredCall.path,
+            }]
+            : [],
     }))
     : [];
 
@@ -202,8 +272,22 @@ function buildDeepInspectionTrace(
     triggerBreakdown: {
       lowConfidence: trace?.triggerBreakdown?.lowConfidence ?? 0,
       insufficientContext: trace?.triggerBreakdown?.insufficientContext ?? 0,
+      pathNotMatched: trace?.triggerBreakdown?.pathNotMatched ?? 0,
+      noEndpointObjects: trace?.triggerBreakdown?.noEndpointObjects ?? 0,
     },
     details,
+  };
+}
+
+function buildToolUsageSummary(
+  toolUsage?: SmartSummarySource['phase3']['agentToolUsageSummary'],
+) {
+  return {
+    searchCalls: toolUsage?.searchCalls ?? 0,
+    readCalls: toolUsage?.readCalls ?? 0,
+    endpointListCalls: toolUsage?.endpointListCalls ?? 0,
+    gatewayRouteCalls: toolUsage?.gatewayRouteCalls ?? 0,
+    totalCalls: toolUsage?.totalCalls ?? 0,
   };
 }
 
@@ -220,11 +304,16 @@ function buildFallbackReasonBreakdown(
 
 function buildSmartSummary(result: SmartSummarySource) {
   return {
+    analysisMode: result.phase3.analysisMode ?? 'pair_pack',
     bootstrapEndpointCount: result.phase1?.bootstrapEndpointCount ?? 0,
     servicePairCount: result.phase2.servicePairCount ?? 0,
     atomicCandidateCount: result.phase3.atomicCandidateCount ?? 0,
     serviceFallbackCount: result.phase3.serviceFallbackCount ?? 0,
     deepInspectionCount: result.phase3.deepInspectionCount ?? 0,
+    agentEscalatedPairCount: result.phase3.agentEscalatedPairCount ?? 0,
+    agentRecoveredAtomicCount: result.phase3.agentRecoveredAtomicCount ?? 0,
+    agentFailedPairCount: result.phase3.agentFailedPairCount ?? 0,
+    agentToolUsageSummary: buildToolUsageSummary(result.phase3.agentToolUsageSummary),
     deepInspectionTrace: buildDeepInspectionTrace(result.phase3.deepInspectionTrace),
     fallbackReasonBreakdown: buildFallbackReasonBreakdown(result.phase3.fallbackReasonBreakdown),
     candidatesCreated: result.phase3.candidateCount,
@@ -233,7 +322,108 @@ function buildSmartSummary(result: SmartSummarySource) {
   };
 }
 
+async function collectSmartRepoRoots(
+  workspaceId: string,
+  body: SmartRunRequest,
+) {
+  const db = await getDb();
+
+  const providedRoots = (body.repoRoots ?? []).map((p) => p.trim()).filter((p) => p.length > 0);
+  const discoveredRoots: string[] = [];
+
+  if (body.useServiceMetadataPaths !== false) {
+    const services = await db
+      .select({ metadata: objects.metadata })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service')));
+
+    for (const svc of services) {
+      const meta = (svc.metadata ?? {}) as Record<string, unknown>;
+      const rawPath = meta['scanPath'];
+      if (typeof rawPath === 'string' && rawPath.trim().length > 0) {
+        discoveredRoots.push(rawPath.trim());
+      }
+    }
+  }
+
+  const allRoots = [...new Set([...providedRoots, ...discoveredRoots])];
+  const validRoots = allRoots
+    .map((repoRoot) => {
+      try {
+        return resolve(repoRoot);
+      } catch {
+        return repoRoot;
+      }
+    })
+    .filter((repoRoot) => {
+      try {
+        return existsSync(repoRoot) && statSync(repoRoot).isDirectory();
+      } catch {
+        return false;
+      }
+    });
+
+  return {
+    db,
+    providedRoots,
+    discoveredRoots,
+    validRoots,
+  };
+}
+
 // ── 라우트 핸들러 ───────────────────────────────────
+
+export async function GET(req: Request) {
+  try {
+    const url = new URL(req.url);
+    const workspaceId = url.searchParams.get('workspaceId')?.trim();
+    const runId = url.searchParams.get('runId')?.trim();
+
+    if (!workspaceId) {
+      return NextResponse.json(
+        { success: false, error: { code: 'BAD_REQUEST', message: 'workspaceId is required' } },
+        { status: 400 },
+      );
+    }
+    if (!runId) {
+      return NextResponse.json(
+        { success: false, error: { code: 'BAD_REQUEST', message: 'runId is required' } },
+        { status: 400 },
+      );
+    }
+
+    const db = await getDb();
+    const { detail, summary } = await getSmartInferenceRunDetail({ db, workspaceId, runId });
+
+    return NextResponse.json({
+      success: true,
+      summary,
+      run: detail.run,
+      sources: detail.sources,
+      events: detail.events,
+      data: summary ? { summary } : {},
+    });
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('찾을 수 없습니다')) {
+      return NextResponse.json(
+        { success: false, error: { code: 'NOT_FOUND', message: error.message } },
+        { status: 404 },
+      );
+    }
+
+    console.error('[GET /api/inference/smart]', error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: {
+          code: 'INTERNAL_ERROR',
+          message: 'Smart 추론 실행 상태 조회 중 오류가 발생했습니다.',
+        },
+      },
+      { status: 500 },
+    );
+  }
+}
 
 export async function POST(req: Request) {
   try {
@@ -261,37 +451,10 @@ export async function POST(req: Request) {
       );
     }
 
-    const db = await getDb();
-
-    // repoRoots 수집 (제공된 것 + 서비스 metadata에서 발견된 것)
-    const providedRoots = (body.repoRoots ?? []).map((p) => p.trim()).filter((p) => p.length > 0);
-    const discoveredRoots: string[] = [];
-
-    if (body.useServiceMetadataPaths !== false) {
-      const services = await db
-        .select({ metadata: objects.metadata })
-        .from(objects)
-        .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service')));
-
-      for (const svc of services) {
-        const meta = (svc.metadata ?? {}) as Record<string, unknown>;
-        const rawPath = meta['scanPath'];
-        if (typeof rawPath === 'string' && rawPath.trim().length > 0) {
-          discoveredRoots.push(rawPath.trim());
-        }
-      }
-    }
-
-    // 유효한 로컬 경로만 필터
-    const allRoots = [...new Set([...providedRoots, ...discoveredRoots])];
-    const validRoots = allRoots.filter((p) => {
-      try {
-        const resolved = resolve(p);
-        return existsSync(resolved) && statSync(resolved).isDirectory();
-      } catch {
-        return false;
-      }
-    });
+    const {
+      db,
+      validRoots,
+    } = await collectSmartRepoRoots(workspaceId, body);
 
     if (validRoots.length === 0) {
       return NextResponse.json(
@@ -327,12 +490,61 @@ export async function POST(req: Request) {
       return result.object;
     };
 
-    // Smart 파이프라인 실행
+    const generateAgentStep = async (prompt: string): Promise<SmartAtomicAgentStep> => {
+      const result = await generateObject({
+        model: modelInfo.model,
+        schema: smartAgentStepSchema,
+        prompt,
+        temperature: 0.1,
+      });
+      return normalizeSmartAgentStep(result.object);
+    };
+
+    if (body.async === true) {
+      const run = await createInferenceRun(db, {
+        workspaceId,
+        triggerType: 'SMART_PIPELINE',
+        modes: ['config', 'code'],
+        sources: validRoots.map((repoRoot) => ({ type: 'local', ref: repoRoot })),
+      });
+
+      queueMicrotask(() => {
+        void executeQueuedSmartInferenceRun({
+          db,
+          workspaceId,
+          runId: run.id,
+          repoRoots: validRoots,
+          modelName: modelInfo.modelName,
+          buildSummary: buildSmartSummary,
+          generateConfigAnalysis,
+          generateCallExtraction,
+          generateAgentStep,
+          analysisMode: body.analysisMode ?? 'agent_assisted',
+        }).catch((error) => {
+          console.error('[POST /api/inference/smart] async execute failed', error);
+        });
+      });
+
+      const detail = await getInferenceRunDetail(db, { workspaceId, runId: run.id });
+      return NextResponse.json(
+        {
+          success: true,
+          queued: true,
+          runId: run.id,
+          run: detail.run,
+          sources: detail.sources,
+        },
+        { status: 202 },
+      );
+    }
+
     const pipelineResult = await executeSmartPipeline(db, {
       workspaceId,
       repoRoots: validRoots,
       generateConfigAnalysis,
       generateCallExtraction,
+      generateAgentStep,
+      atomicAnalysisMode: body.analysisMode ?? 'pair_pack',
     });
     const summary = buildSmartSummary(pipelineResult);
 

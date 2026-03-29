@@ -390,6 +390,57 @@ public class OrderController {
     expect(codeCandidates).toHaveLength(0);
   });
 
+  it('LLM_CONFIG evidence는 config file path를 남겨야 한다', async () => {
+    const gatewayDir = join(rootDir, 'gateway');
+    const ordersDir = join(rootDir, 'orders');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(ordersDir, { recursive: true });
+
+    const gatewayConfigPath = join(gatewayDir, 'application.yml');
+    writeFileSync(
+      gatewayConfigPath,
+      [
+        'spring.application.name=gateway',
+        'eureka.client.serviceUrl.defaultZone=${DISCOVERY_URL:http://localhost:8761}/eureka',
+      ].join('\n'),
+    );
+
+    const gateway = createService(gatewayDir, 'gateway');
+    const orders = createService(ordersDir, 'orders');
+    await db.insert(objects).values([gateway, orders]);
+
+    await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'orders',
+            relationType: 'depend_on',
+            evidence: 'eureka.client.serviceUrl.defaultZone=${DISCOVERY_URL:http://localhost:8761}/eureka',
+            confidence: 1,
+          },
+        ],
+        detectedServiceName: 'gateway',
+      }),
+      generateCallExtraction: async () => ({ calls: [] }),
+    });
+
+    const configEvidences = await db
+      .select({
+        evidenceType: evidences.evidenceType,
+        filePath: evidences.filePath,
+        excerpt: evidences.excerpt,
+      })
+      .from(evidences)
+      .where(eq(evidences.workspaceId, workspaceId));
+
+    const llmConfigEvidence = configEvidences.find((evidence) => evidence.evidenceType === 'LLM_CONFIG');
+    expect(llmConfigEvidence).toBeDefined();
+    expect(llmConfigEvidence?.filePath).toBe(gatewayConfigPath);
+    expect(llmConfigEvidence?.excerpt).toContain('eureka.client.serviceUrl.defaultZone');
+  });
+
   it('endpoint 미매칭이면 service fallback 후보를 만들고 fallbackReason을 metadata에 저장해야 한다', async () => {
     const gatewayDir = join(rootDir, 'gateway');
     const ordersDir = join(rootDir, 'orders');
@@ -489,6 +540,368 @@ public class OrderController {
       'METHOD_NOT_MATCHED',
       'INSUFFICIENT_CONTEXT',
     ]).toContain(metadata['fallbackReason']);
+  });
+
+  it('Zuul 외부 경로도 provider endpoint로 route-aware 매칭해야 한다', async () => {
+    const gatewayDir = join(rootDir, 'gateway');
+    const articlesDir = join(rootDir, 'article-service');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(articlesDir, { recursive: true });
+
+    writeFileSync(
+      join(gatewayDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  prefix: /api',
+        '  routes:',
+        '    articles:',
+        '      path: /articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(gatewayDir, 'gateway.ts'),
+      'export function configureGateway() { return "article-service"; }\n',
+    );
+    writeFileSync(
+      join(gatewayDir, 'client.ts'),
+      'export async function loadArticle(articleId: string) { return fetch(`/api/articles/${articleId}`); }\n',
+    );
+
+    const gateway = createService(gatewayDir, 'api-gateway');
+    const articles = createService(articlesDir, 'article-service');
+    const endpointId = generateId();
+    await db.insert(objects).values([
+      gateway,
+      articles,
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /{id}',
+        parentId: articles.id,
+        path: `/articles/${endpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/{id}' },
+      },
+    ]);
+
+    const result = await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'article-service',
+            relationType: 'call',
+            evidence: 'api-gateway routes to article-service',
+            confidence: 0.94,
+          },
+        ],
+        detectedServiceName: 'api-gateway',
+      }),
+      generateCallExtraction: async () => ({
+        calls: [
+          {
+            targetService: 'article-service',
+            httpMethod: 'GET',
+            path: '/api/articles/123',
+            sourceFile: 'client.ts',
+            evidence: 'fetch(`/api/articles/${articleId}`)',
+            confidence: 0.9,
+          },
+        ],
+      }),
+    });
+
+    expect(result.phase3.atomicCandidateCount).toBe(1);
+    expect(result.phase3.serviceFallbackCount).toBe(0);
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    const atomicCandidate = candidates.find((candidate) => candidate.objectId === endpointId);
+    expect(atomicCandidate).toBeDefined();
+    expect(atomicCandidate?.metadata).toMatchObject({
+      targetType: 'api_endpoint',
+      targetServiceId: articles.id,
+      matchStrategy: 'route_mapping',
+      inferenceKind: 'proxy_route',
+    });
+  });
+
+  it('Zuul route와 provider 상대 endpoint를 조합해 external path atomic 후보를 생성해야 한다', async () => {
+    const gatewayDir = join(rootDir, 'api-gateway');
+    const articleDir = join(rootDir, 'article-service');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(articleDir, { recursive: true });
+
+    writeFileSync(
+      join(gatewayDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  prefix: /api',
+        '  routes:',
+        '    articles:',
+        '      path: /articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(gatewayDir, 'client.ts'),
+      'export async function loadArticle(id: string) { return fetch(`/api/articles/${id}`); }\n',
+    );
+
+    const gateway = createService(gatewayDir, 'api-gateway');
+    const articleService = createService(articleDir, 'article-service');
+    const articleEndpointId = generateId();
+    await db.insert(objects).values([
+      gateway,
+      articleService,
+      {
+        id: articleEndpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /{id}',
+        parentId: articleService.id,
+        path: `/article-service/${articleEndpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/{id}' },
+      },
+    ]);
+
+    const result = await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'article-service',
+            relationType: 'call',
+            evidence: 'gateway routes article traffic to article-service',
+            confidence: 0.92,
+          },
+        ],
+        detectedServiceName: 'api-gateway',
+      }),
+      generateCallExtraction: async () => ({
+        calls: [
+          {
+            targetService: 'article-service',
+            httpMethod: 'GET',
+            path: '/api/articles/123',
+            sourceFile: 'client.ts',
+            evidence: 'fetch(`/api/articles/${id}`)',
+            confidence: 0.9,
+          },
+        ],
+      }),
+    });
+
+    expect(result.phase3.atomicCandidateCount).toBe(1);
+    expect(result.phase3.serviceFallbackCount).toBe(0);
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    const atomicCandidate = candidates.find((candidate) => candidate.objectId === articleEndpointId);
+    expect(atomicCandidate).toBeDefined();
+    const metadata = (atomicCandidate?.metadata ?? {}) as Record<string, unknown>;
+    expect(metadata['matchStrategy']).toBe('route_mapping');
+    expect((metadata['routeInterpretation'] as Record<string, unknown>)['externalPath']).toBe('/api/articles/{*}');
+  });
+
+  it('direct callsite로 이미 매칭되는 경우에는 route mapping보다 기존 callsite 매칭을 우선해야 한다', async () => {
+    const gatewayDir = join(rootDir, 'api-gateway');
+    const articleDir = join(rootDir, 'article-service');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(articleDir, { recursive: true });
+
+    writeFileSync(
+      join(gatewayDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  prefix: /api',
+        '  routes:',
+        '    articles:',
+        '      path: /articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(gatewayDir, 'client.ts'),
+      'export async function loadArticle(id: string) { return fetch(`/api/articles/${id}`); }\n',
+    );
+
+    const gateway = createService(gatewayDir, 'api-gateway');
+    const articleService = createService(articleDir, 'article-service');
+    const externalEndpointId = generateId();
+    await db.insert(objects).values([
+      gateway,
+      articleService,
+      {
+        id: externalEndpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/articles/{id}',
+        parentId: articleService.id,
+        path: `/article-service/${externalEndpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/articles/{id}' },
+      },
+    ]);
+
+    const result = await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'article-service',
+            relationType: 'call',
+            evidence: 'gateway directly calls article-service API',
+            confidence: 0.95,
+          },
+        ],
+        detectedServiceName: 'api-gateway',
+      }),
+      generateCallExtraction: async () => ({
+        calls: [
+          {
+            targetService: 'article-service',
+            httpMethod: 'GET',
+            path: '/api/articles/123',
+            sourceFile: 'client.ts',
+            evidence: 'fetch(`/api/articles/${id}`)',
+            confidence: 0.93,
+          },
+        ],
+      }),
+    });
+
+    expect(result.phase3.atomicCandidateCount).toBe(1);
+    expect(result.phase3.serviceFallbackCount).toBe(0);
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    const atomicCandidate = candidates.find((candidate) => candidate.objectId === externalEndpointId);
+    expect(atomicCandidate).toBeDefined();
+    expect((atomicCandidate?.metadata as Record<string, unknown>)['matchStrategy']).toBe('call_path');
+    expect((atomicCandidate?.metadata as Record<string, unknown>)['routeAwareExternalPath']).toBeUndefined();
+  });
+
+  it('Zuul route로도 external path를 복원하지 못하면 기존 PATH_NOT_MATCHED fallback을 유지해야 한다', async () => {
+    const gatewayDir = join(rootDir, 'api-gateway');
+    const articleDir = join(rootDir, 'article-service');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(articleDir, { recursive: true });
+
+    writeFileSync(
+      join(gatewayDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  prefix: /api',
+        '  routes:',
+        '    articles:',
+        '      path: /articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+    );
+    writeFileSync(
+      join(gatewayDir, 'client.ts'),
+      'export async function loadArticle() { return fetch("/api/articles/missing/comments"); }\n',
+    );
+
+    const gateway = createService(gatewayDir, 'api-gateway');
+    const articleService = createService(articleDir, 'article-service');
+    const articleEndpointId = generateId();
+    await db.insert(objects).values([
+      gateway,
+      articleService,
+      {
+        id: articleEndpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /{id}',
+        parentId: articleService.id,
+        path: `/article-service/${articleEndpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/{id}' },
+      },
+    ]);
+
+    const result = await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'article-service',
+            relationType: 'call',
+            evidence: 'gateway routes article traffic to article-service',
+            confidence: 0.91,
+          },
+        ],
+        detectedServiceName: 'api-gateway',
+      }),
+      generateCallExtraction: async () => ({
+        calls: [
+          {
+            targetService: 'article-service',
+            httpMethod: 'GET',
+            path: '/api/articles/missing/comments',
+            sourceFile: 'client.ts',
+            evidence: 'fetch("/api/articles/missing/comments")',
+            confidence: 0.86,
+          },
+        ],
+      }),
+    });
+
+    expect(result.phase3.atomicCandidateCount).toBe(0);
+    expect(result.phase3.serviceFallbackCount).toBe(1);
+    expect(result.phase3.fallbackReasonBreakdown).toMatchObject({
+      PATH_NOT_MATCHED: 1,
+    });
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    const fallbackCandidate = candidates.find((candidate) => {
+      const metadata = (candidate.metadata ?? {}) as Record<string, unknown>;
+      return candidate.objectId === articleService.id && metadata['fallbackReason'] === 'PATH_NOT_MATCHED';
+    });
+    expect(fallbackCandidate).toBeDefined();
+    expect((fallbackCandidate?.metadata as Record<string, unknown>)['fallbackReason']).toBe('PATH_NOT_MATCHED');
   });
 
   it('full URL + query/hash + concrete id 경로를 templated endpoint로 매칭해야 한다', async () => {
@@ -1636,6 +2049,7 @@ public class OrderController {
         path: '/api/orders',
       },
     ]);
+    const listGatewayRoutes = vi.fn(async () => []);
 
     const result = await executeSmartPipeline(db, {
       workspaceId,
@@ -1656,6 +2070,7 @@ public class OrderController {
         searchFiles,
         readFile,
         listServiceEndpoints,
+        listGatewayRoutes,
       },
     });
 
@@ -1669,6 +2084,8 @@ public class OrderController {
       triggerBreakdown: {
         lowConfidence: 1,
         insufficientContext: 0,
+        pathNotMatched: 0,
+        noEndpointObjects: 0,
       },
     });
     expect(result.phase3.deepInspectionTrace.details).toHaveLength(1);
@@ -1743,6 +2160,7 @@ public class OrderController {
         path: '/api/orders/{id}',
       },
     ]);
+    const listGatewayRoutes = vi.fn(async () => []);
 
     const result = await executeSmartPipeline(db, {
       workspaceId,
@@ -1763,6 +2181,7 @@ public class OrderController {
         searchFiles,
         readFile,
         listServiceEndpoints,
+        listGatewayRoutes,
       },
     });
 
@@ -1776,6 +2195,118 @@ public class OrderController {
       .where(eq(relationCandidates.workspaceId, workspaceId));
     const atomicCandidate = candidates.find((candidate) => candidate.objectId === endpointId);
     expect(atomicCandidate).toBeDefined();
+  });
+
+  it('gateway route만 있어도 deepInspectionTools가 atomic 후보를 복구해야 한다', async () => {
+    const gatewayDir = join(rootDir, 'api-gateway');
+    const articlesDir = join(rootDir, 'article-service');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(articlesDir, { recursive: true });
+
+    writeFileSync(
+      join(gatewayDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  prefix: /api',
+        '  routes:',
+        '    articles:',
+        '      path: /articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+    );
+
+    const gateway = createService(gatewayDir, 'api-gateway');
+    const articles = createService(articlesDir, 'article-service');
+    const articleIdEndpoint = generateId();
+    const articleRootEndpoint = generateId();
+    await db.insert(objects).values([
+      gateway,
+      articles,
+      {
+        id: articleIdEndpoint,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /{id}',
+        parentId: articles.id,
+        path: `/articles/${articleIdEndpoint}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/{id}' },
+      },
+      {
+        id: articleRootEndpoint,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /',
+        parentId: articles.id,
+        path: `/articles/${articleRootEndpoint}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/' },
+      },
+    ]);
+
+    const listServiceEndpoints = vi.fn(async () => [
+      { method: 'GET', path: '/{id}' },
+      { method: 'GET', path: '/' },
+    ]);
+    const listGatewayRoutes = vi.fn(async () => [
+      {
+        kind: 'zuul' as const,
+        configPath: join(gatewayDir, 'application.yml'),
+        routeId: 'articles',
+        serviceName: 'article-service',
+        routePath: '/articles/**',
+        routeBasePath: '/articles',
+        prefix: '/api',
+        stripPrefix: true,
+      },
+    ]);
+
+    const result = await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'article-service',
+            relationType: 'call',
+            evidence: 'api-gateway routes to article-service',
+            confidence: 0.7,
+          },
+        ],
+        detectedServiceName: 'api-gateway',
+      }),
+      generateCallExtraction: async () => ({ calls: [] }),
+      deepInspectionTools: {
+        searchFiles: async () => [],
+        readFile: async () => null,
+        listServiceEndpoints,
+        listGatewayRoutes,
+      },
+    });
+
+    expect(result.phase3.deepInspectionCount).toBe(1);
+    expect(result.phase3.atomicCandidateCount).toBe(2);
+    expect(result.phase3.serviceFallbackCount).toBe(0);
+    expect(listGatewayRoutes).toHaveBeenCalledWith({ serviceName: 'api-gateway' });
+    expect(result.phase3.deepInspectionTrace).toMatchObject({
+      attemptedCount: 1,
+      failureCount: 0,
+      triggerBreakdown: {
+        lowConfidence: 1,
+        insufficientContext: 1,
+        pathNotMatched: 0,
+        noEndpointObjects: 0,
+      },
+    });
   });
 
   it('deepInspectionTools가 budget에 막히면 기본 fallback 결과를 유지해야 한다', async () => {
@@ -1827,6 +2358,7 @@ public class OrderController {
         path: '/api/orders',
       },
     ]);
+    const listGatewayRoutes = vi.fn(async () => []);
 
     const result = await executeSmartPipeline(db, {
       workspaceId,
@@ -1858,6 +2390,7 @@ public class OrderController {
         searchFiles,
         readFile,
         listServiceEndpoints,
+        listGatewayRoutes,
       },
       deepInspectionBudget: {
         maxTotalToolCalls: 1,
@@ -1947,6 +2480,7 @@ public class OrderController {
           searchFiles: async () => [],
           readFile: async () => null,
           listServiceEndpoints,
+          listGatewayRoutes: async () => [],
         },
       });
 
@@ -1958,6 +2492,8 @@ public class OrderController {
         triggerBreakdown: {
           lowConfidence: 1,
           insufficientContext: 0,
+          pathNotMatched: 1,
+          noEndpointObjects: 0,
         },
       });
       expect(result.phase3.deepInspectionTrace.details).toHaveLength(1);
@@ -2027,6 +2563,7 @@ public class OrderController {
     const searchFiles = vi.fn(async () => []);
     const readFile = vi.fn(async () => null);
     const listServiceEndpoints = vi.fn(async () => []);
+    const listGatewayRoutes = vi.fn(async () => []);
 
     const result = await executeSmartPipeline(db, {
       workspaceId,
@@ -2048,6 +2585,7 @@ public class OrderController {
         searchFiles,
         readFile,
         listServiceEndpoints,
+        listGatewayRoutes,
       },
     });
 
@@ -2057,5 +2595,220 @@ public class OrderController {
     expect(readFile).not.toHaveBeenCalled();
     expect(result.phase3.deepInspectionCount).toBe(1);
     expect(result.phase3.atomicCandidateCount).toBe(1);
+  });
+
+  it('agent_assisted 모드에서는 fallback pair만 agent로 승격해 atomic 후보를 복구해야 한다', async () => {
+    const gatewayDir = join(rootDir, 'gateway');
+    const ordersDir = join(rootDir, 'orders');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(ordersDir, { recursive: true });
+
+    writeFileSync(join(gatewayDir, 'application.yml'), 'spring.application.name=gateway');
+    writeFileSync(
+      join(gatewayDir, 'client.ts'),
+      [
+        'export async function loadOrders() {',
+        '  return fetch("http://orders/api/orders");',
+        '}',
+      ].join('\n'),
+    );
+
+    const gateway = createService(gatewayDir, 'gateway');
+    const orders = createService(ordersDir, 'orders');
+    const endpointId = generateId();
+    await db.insert(objects).values([
+      gateway,
+      orders,
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/orders',
+        parentId: orders.id,
+        path: `/orders/${endpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/orders' },
+      },
+    ]);
+
+    const generateAgentStep = vi
+      .fn<(_: string) => Promise<{
+        action: 'search_files' | 'read_file' | 'list_service_endpoints' | 'finish';
+        serviceName?: string;
+        query?: string;
+        path?: string;
+        limit?: number;
+        calls?: Array<{
+          targetService: string;
+          httpMethod: string;
+          path: string;
+          sourceFile: string;
+          evidence: string;
+          confidence: number;
+        }>;
+      }>>()
+      .mockResolvedValueOnce({
+        action: 'search_files',
+        serviceName: 'gateway',
+        query: 'fetch orders',
+        limit: 3,
+      })
+      .mockResolvedValueOnce({
+        action: 'read_file',
+        serviceName: 'gateway',
+        path: 'client.ts',
+      })
+      .mockResolvedValueOnce({
+        action: 'list_service_endpoints',
+        serviceName: 'orders',
+      })
+      .mockResolvedValueOnce({
+        action: 'finish',
+        calls: [
+          {
+            targetService: 'orders',
+            httpMethod: 'GET',
+            path: '/api/orders',
+            sourceFile: 'client.ts',
+            evidence: 'agent recovered fetch("http://orders/api/orders")',
+            confidence: 0.96,
+          },
+        ],
+      });
+
+    const result = await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'orders',
+            relationType: 'call',
+            evidence: 'gateway may call orders',
+            confidence: 0.71,
+          },
+        ],
+        detectedServiceName: 'gateway',
+      }),
+      generateCallExtraction: async () => ({ calls: [] }),
+      generateAgentStep,
+      atomicAnalysisMode: 'agent_assisted',
+    });
+
+    expect(generateAgentStep).toHaveBeenCalledTimes(4);
+    expect(result.phase3.analysisMode).toBe('agent_assisted');
+    expect(result.phase3.deepInspectionCount).toBe(1);
+    expect(result.phase3.agentEscalatedPairCount).toBe(1);
+    expect(result.phase3.agentRecoveredAtomicCount).toBe(1);
+    expect(result.phase3.agentFailedPairCount).toBe(0);
+    expect(result.phase3.atomicCandidateCount).toBe(1);
+    expect(result.phase3.serviceFallbackCount).toBe(0);
+    expect(result.phase3.agentToolUsageSummary).toMatchObject({
+      searchCalls: 1,
+      readCalls: 1,
+      endpointListCalls: 1,
+      totalCalls: 3,
+    });
+    expect(result.phase3.deepInspectionTrace.details[0]).toMatchObject({
+      consumerServiceName: 'gateway',
+      providerServiceName: 'orders',
+      status: 'succeeded',
+      recoveredCalls: [
+        {
+          httpMethod: 'GET',
+          path: '/api/orders',
+        },
+      ],
+    });
+  });
+
+  it('full_agent 모드에서는 pair LLM 없이 모든 atomic 판별을 agent가 수행해야 한다', async () => {
+    const gatewayDir = join(rootDir, 'gateway');
+    const ordersDir = join(rootDir, 'orders');
+    mkdirSync(gatewayDir, { recursive: true });
+    mkdirSync(ordersDir, { recursive: true });
+
+    writeFileSync(join(gatewayDir, 'application.yml'), 'spring.application.name=gateway');
+    writeFileSync(
+      join(gatewayDir, 'client.ts'),
+      [
+        'export async function loadOrders() {',
+        '  return fetch("http://orders/api/orders");',
+        '}',
+      ].join('\n'),
+    );
+
+    const gateway = createService(gatewayDir, 'gateway');
+    const orders = createService(ordersDir, 'orders');
+    const endpointId = generateId();
+    await db.insert(objects).values([
+      gateway,
+      orders,
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/orders',
+        parentId: orders.id,
+        path: `/orders/${endpointId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/orders' },
+      },
+    ]);
+
+    const generateCallExtraction = vi.fn(async () => ({ calls: [] }));
+    const generateAgentStep = vi.fn(async () => ({
+      action: 'finish' as const,
+      calls: [
+        {
+          targetService: 'orders',
+          httpMethod: 'GET',
+          path: '/api/orders',
+          sourceFile: 'client.ts',
+          evidence: 'full agent recovered fetch("http://orders/api/orders")',
+          confidence: 0.94,
+        },
+      ],
+    }));
+
+    const result = await executeSmartPipeline(db, {
+      workspaceId,
+      repoRoots: [rootDir],
+      generateConfigAnalysis: async () => ({
+        dependencies: [
+          {
+            targetService: 'orders',
+            relationType: 'call',
+            evidence: 'gateway definitely calls orders',
+            confidence: 0.95,
+          },
+        ],
+        detectedServiceName: 'gateway',
+      }),
+      generateCallExtraction,
+      generateAgentStep,
+      atomicAnalysisMode: 'full_agent',
+    });
+
+    expect(generateCallExtraction).not.toHaveBeenCalled();
+    expect(generateAgentStep).toHaveBeenCalledTimes(1);
+    expect(result.phase3.analysisMode).toBe('full_agent');
+    expect(result.phase3.analyzedServiceCount).toBe(1);
+    expect(result.phase3.deepInspectionCount).toBe(1);
+    expect(result.phase3.agentEscalatedPairCount).toBe(1);
+    expect(result.phase3.agentRecoveredAtomicCount).toBe(1);
+    expect(result.phase3.atomicCandidateCount).toBe(1);
+    expect(result.phase3.serviceFallbackCount).toBe(0);
+    expect(result.phase3.deepInspectionTrace.details[0]).toMatchObject({
+      consumerServiceName: 'gateway',
+      providerServiceName: 'orders',
+      status: 'succeeded',
+    });
   });
 });

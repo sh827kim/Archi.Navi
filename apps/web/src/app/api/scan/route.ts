@@ -14,6 +14,10 @@ import { getDb } from '@archi-navi/db';
 import { objects } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import {
+  extractCodeSignalsWithEngine,
+  inferRelationsFromCodeSignals,
+} from '@archi-navi/inference';
+import {
   generateId,
   buildPath,
 } from '@archi-navi/shared';
@@ -103,6 +107,15 @@ function checkGhAuth(): void {
 }
 
 interface GhRepo { name: string; url: string }
+
+interface ScanBootstrapSummary {
+  analyzedProjectCount: number;
+  signalCount: number;
+  candidateCount: number;
+  createdEndpointCount: number;
+  createdAtomicCount: number;
+  warnings: string[];
+}
 
 function listOrgRepos(org: string): GhRepo[] {
   try {
@@ -237,6 +250,87 @@ export async function registerProjects(
   return { registered, skipped };
 }
 
+function isRunnableLocalScanPath(pathValue: string): boolean {
+  if (/^https?:\/\//i.test(pathValue) || /^git@/i.test(pathValue)) return false;
+  try {
+    return fs.statSync(pathValue).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+export async function bootstrapScannedProjects(
+  workspaceId: string,
+  projects: DiscoveredProject[],
+  dryRun: boolean,
+  onProgress?: (message: string) => void,
+): Promise<ScanBootstrapSummary | null> {
+  if (dryRun || projects.length === 0) return null;
+
+  const repoRoots = Array.from(
+    new Set(
+      projects
+        .map((project) => project.path)
+        .filter((projectPath) => isRunnableLocalScanPath(projectPath)),
+    ),
+  );
+
+  if (repoRoots.length === 0) {
+    return null;
+  }
+
+  const db = await getDb();
+  const summary: ScanBootstrapSummary = {
+    analyzedProjectCount: 0,
+    signalCount: 0,
+    candidateCount: 0,
+    createdEndpointCount: 0,
+    createdAtomicCount: 0,
+    warnings: [],
+  };
+
+  for (let i = 0; i < repoRoots.length; i++) {
+    const repoRoot = repoRoots[i]!;
+    onProgress?.(`코드 1차 분석 중... ${path.basename(repoRoot)} (${i + 1} / ${repoRoots.length})`);
+
+    try {
+      const extracted = await extractCodeSignalsWithEngine(db, {
+        workspaceId,
+        repoRoot,
+        // 스캔 직후 bootstrap은 즉시성/안정성이 우선이므로 AST/WASM 의존성을 피한다.
+        codeEngine: 'regex',
+      });
+      const inferred = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+
+      summary.analyzedProjectCount += 1;
+      summary.signalCount += extracted.signalCount;
+      summary.candidateCount += inferred.candidateCount;
+      summary.createdEndpointCount += inferred.createdEndpointCount;
+      summary.createdAtomicCount +=
+        inferred.createdEndpointCount
+        + inferred.createdTopicCount
+        + inferred.createdQueueCount
+        + inferred.createdDatabaseCount
+        + inferred.createdDbTableCount;
+
+      if (extracted.warning) {
+        summary.warnings.push(`[${path.basename(repoRoot)}] ${extracted.warning}`);
+      }
+      if (Array.isArray(extracted.scanFailures) && extracted.scanFailures.length > 0) {
+        summary.warnings.push(
+          `[${path.basename(repoRoot)}] 파싱 실패 ${extracted.scanFailures.length}건`,
+        );
+      }
+    } catch (error) {
+      summary.warnings.push(
+        `[${path.basename(repoRoot)}] 1차 분석 실패: ${error instanceof Error ? error.message : 'unknown error'}`,
+      );
+    }
+  }
+
+  return summary;
+}
+
 /* ─── POST /api/scan (SSE 스트리밍) ─── */
 export async function POST(req: NextRequest) {
   // body 파싱 실패는 스트림 시작 전에 처리
@@ -365,7 +459,25 @@ export async function POST(req: NextRequest) {
 
         // DB 등록
         const { registered, skipped } = await registerProjects(workspaceId, projects, dryRun);
-        const result: ScanResult = { mode, target, projects, registered, skipped };
+        const bootstrap = await bootstrapScannedProjects(
+          workspaceId,
+          projects,
+          dryRun,
+          (message) => send({
+            type: 'progress',
+            current: projects.length,
+            total: projects.length,
+            message,
+          }),
+        );
+        const result: ScanResult = {
+          mode,
+          target,
+          projects,
+          registered,
+          skipped,
+          ...(bootstrap ? { bootstrap } : {}),
+        };
         send({ type: 'complete', result });
       } catch (err) {
         console.error('[POST /api/scan]', err);

@@ -7,6 +7,7 @@ import { getDb, workspaces } from '@archi-navi/db';
 import { asc } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
 import { normalizeWorkspaceName } from '@/lib/workspace-name';
+import { persistWorkspaceSnapshot } from '@/lib/workspace-snapshot';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,6 +49,7 @@ export async function POST(req: NextRequest) {
       id,
       name: normalized.name,
     });
+    await persistWorkspaceSnapshot(db);
 
     return NextResponse.json({ id, name: normalized.name }, { status: 201 });
   } catch (error) {

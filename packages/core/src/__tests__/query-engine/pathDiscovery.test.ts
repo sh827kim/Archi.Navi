@@ -38,7 +38,10 @@ describe('findPaths', () => {
 
   it('score 기준으로 정렬 후 topK만 반환해야 한다', async () => {
     const graph = new Graph({ multi: false, type: 'directed' });
-    ['svc-a', 'svc-b', 'svc-c', 'svc-d'].forEach((id) => graph.addNode(id));
+    graph.addNode('svc-a', { name: 'orders-service', displayName: 'Orders', objectType: 'service' });
+    graph.addNode('svc-b', { name: 'billing-service', displayName: 'Billing', objectType: 'service' });
+    graph.addNode('svc-c', { name: 'inventory-service', displayName: 'Inventory', objectType: 'service' });
+    graph.addNode('svc-d', { name: 'payment-service', displayName: 'Payment', objectType: 'service' });
 
     // high-score path: a -> b -> d
     graph.addDirectedEdgeWithKey('e-ab', 'svc-a', 'svc-b', {
@@ -80,6 +83,12 @@ describe('findPaths', () => {
 
     expect(result.paths).toHaveLength(1);
     expect(result.paths?.[0]?.nodeIds).toEqual(['svc-a', 'svc-b', 'svc-d']);
+    expect(result.nodes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'svc-a', name: 'orders-service', displayName: 'Orders' }),
+        expect.objectContaining({ id: 'svc-d', name: 'payment-service', displayName: 'Payment' }),
+      ]),
+    );
 
     expect(result.edges).toHaveLength(2);
     expect(result.edges.map((e) => e.subjectId)).toContain('svc-a');

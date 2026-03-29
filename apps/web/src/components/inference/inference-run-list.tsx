@@ -21,6 +21,25 @@ import {
 } from '@/actions/inference-runs';
 import { useWorkspace } from '@/contexts/workspace-context';
 
+interface RunCardSummary {
+  candidateCount: number;
+  servicePairCount: number;
+  atomicCandidateCount: number;
+  serviceFallbackCount: number;
+  agentRecoveredAtomicCount: number;
+  hasSmartSummary: boolean;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
+}
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
 /** 상태별 아이콘/색상 */
 function StatusBadge({ status }: { status: string }) {
   switch (status) {
@@ -64,6 +83,43 @@ function StatusBadge({ status }: { status: string }) {
   }
 }
 
+function SourceStatusBadge({ status }: { status: string }) {
+  switch (status) {
+    case 'SUCCEEDED':
+      return (
+        <Badge className="bg-green-600/15 text-green-600 border-green-600/30">
+          성공
+        </Badge>
+      );
+    case 'FAILED':
+      return (
+        <Badge className="bg-red-600/15 text-red-600 border-red-600/30">
+          실패
+        </Badge>
+      );
+    case 'RUNNING':
+      return (
+        <Badge className="bg-blue-600/15 text-blue-600 border-blue-600/30">
+          실행 중
+        </Badge>
+      );
+    case 'QUEUED':
+      return (
+        <Badge className="bg-yellow-600/15 text-yellow-600 border-yellow-600/30">
+          대기
+        </Badge>
+      );
+    case 'SKIPPED':
+      return (
+        <Badge className="bg-gray-600/15 text-gray-500 border-gray-500/30">
+          건너뜀
+        </Badge>
+      );
+    default:
+      return <Badge variant="outline">{status}</Badge>;
+  }
+}
+
 /** 소요 시간 포맷 */
 function formatDuration(startedAt: string | null, finishedAt: string | null): string {
   if (!startedAt) return '-';
@@ -96,13 +152,31 @@ function SourceSummary({ summary }: { summary: Record<string, number> }) {
   );
 }
 
-/** stats에서 후보 수 추출 */
-function extractCandidateCount(stats: Record<string, unknown>): number {
-  const summary = stats['summary'] as Record<string, unknown> | undefined;
-  if (summary && typeof summary['relationCandidatesCreated'] === 'number') {
-    return summary['relationCandidatesCreated'];
-  }
-  return 0;
+/** 일반 run / smart run 공통 summary 추출 */
+function extractRunCardSummary(stats: Record<string, unknown>): RunCardSummary {
+  const summary = asRecord(stats['summary']);
+  const smartSummary = asRecord(stats['smartSummary']);
+  const nestedSmartSummary = asRecord(smartSummary?.summary);
+
+  return {
+    candidateCount: asFiniteNumber(summary?.relationCandidatesCreated)
+      ?? asFiniteNumber(smartSummary?.candidatesCreated)
+      ?? asFiniteNumber(nestedSmartSummary?.candidatesCreated)
+      ?? 0,
+    servicePairCount: asFiniteNumber(smartSummary?.servicePairCount)
+      ?? asFiniteNumber(nestedSmartSummary?.servicePairCount)
+      ?? 0,
+    atomicCandidateCount: asFiniteNumber(smartSummary?.atomicCandidateCount)
+      ?? asFiniteNumber(nestedSmartSummary?.atomicCandidateCount)
+      ?? 0,
+    serviceFallbackCount: asFiniteNumber(smartSummary?.serviceFallbackCount)
+      ?? asFiniteNumber(nestedSmartSummary?.serviceFallbackCount)
+      ?? 0,
+    agentRecoveredAtomicCount: asFiniteNumber(smartSummary?.agentRecoveredAtomicCount)
+      ?? asFiniteNumber(nestedSmartSummary?.agentRecoveredAtomicCount)
+      ?? 0,
+    hasSmartSummary: Boolean(smartSummary || nestedSmartSummary),
+  };
 }
 
 export function InferenceRunList() {
@@ -114,8 +188,10 @@ export function InferenceRunList() {
   const [detailCache, setDetailCache] = useState<Record<string, DashboardInferenceRunDetail>>({});
   const [detailLoading, setDetailLoading] = useState(false);
 
-  const loadRuns = useCallback(async () => {
-    setLoading(true);
+  const loadRuns = useCallback(async (options?: { background?: boolean }) => {
+    if (!options?.background) {
+      setLoading(true);
+    }
     if (!workspaceId) {
       setRuns([]);
       setLoading(false);
@@ -127,13 +203,27 @@ export function InferenceRunList() {
     } catch {
       setRuns([]);
     } finally {
-      setLoading(false);
+      if (!options?.background) {
+        setLoading(false);
+      }
     }
   }, [workspaceId]);
+
+  const hasActiveRuns = runs.some((run) => run.status === 'RUNNING' || run.status === 'QUEUED');
 
   useEffect(() => {
     void loadRuns();
   }, [loadRuns]);
+
+  useEffect(() => {
+    if (!workspaceId || !hasActiveRuns) return undefined;
+
+    const intervalId = window.setInterval(() => {
+      void loadRuns({ background: true });
+    }, 5000);
+
+    return () => window.clearInterval(intervalId);
+  }, [workspaceId, hasActiveRuns, loadRuns]);
 
   /* 상세 보기 토글 */
   const toggleDetail = async (runId: string) => {
@@ -231,7 +321,7 @@ export function InferenceRunList() {
 
       {/* 실행 목록 */}
       {runs.map((run) => {
-        const candidateCount = extractCandidateCount(run.stats);
+        const summary = extractRunCardSummary(run.stats);
         const isActionable = run.status === 'RUNNING' || run.status === 'QUEUED' || run.status === 'FAILED';
         const isActing = actionRunId === run.id;
         const isExpanded = expandedRunId === run.id;
@@ -276,10 +366,18 @@ export function InferenceRunList() {
               </div>
 
               {/* 하단: 결과 요약 */}
-              <div className="flex items-center gap-4 text-xs text-muted-foreground">
+              <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                 <SourceSummary summary={run.sourceSummary as Record<string, number>} />
-                {run.status === 'SUCCEEDED' && candidateCount > 0 && (
-                  <span className="text-green-600">후보 {candidateCount}개 생성</span>
+                {run.status === 'SUCCEEDED' && summary.candidateCount > 0 && (
+                  <span className="text-green-600">후보 {summary.candidateCount}개 생성</span>
+                )}
+                {summary.hasSmartSummary && (
+                  <>
+                    <span>서비스 쌍 {summary.servicePairCount}개</span>
+                    <span>atomic {summary.atomicCandidateCount}개</span>
+                    <span>fallback {summary.serviceFallbackCount}개</span>
+                    <span>agent 복구 {summary.agentRecoveredAtomicCount}개</span>
+                  </>
                 )}
                 {run.attemptCount > 1 && (
                   <span>시도 {run.attemptCount}/{run.maxAttempts}</span>
@@ -358,18 +456,22 @@ export function InferenceRunList() {
                         </h4>
                         <div className="space-y-1">
                           {detail.sources.map((src) => (
-                            <div key={src.id} className="flex items-center gap-2 text-xs rounded-lg bg-muted/20 px-3 py-1.5">
+                            <div key={src.id} className="flex items-start gap-2 text-xs rounded-lg bg-muted/20 px-3 py-2">
                               <Badge variant="outline" className="text-[10px]">{src.sourceType}</Badge>
-                              <span className="font-mono truncate flex-1">{src.sourceRef}</span>
-                              <Badge
-                                className={
-                                  src.status === 'ACTIVE' ? 'bg-green-600/15 text-green-600 border-green-600/30' :
-                                  src.status === 'ERROR' ? 'bg-red-600/15 text-red-600 border-red-600/30' :
-                                  'bg-gray-600/15 text-gray-500 border-gray-500/30'
-                                }
-                              >
-                                {src.status}
-                              </Badge>
+                              <div className="min-w-0 flex-1 space-y-1">
+                                <div className="font-mono truncate">{src.sourceRef}</div>
+                                {src.resolvedRepoRoot && (
+                                  <div className="text-[11px] text-muted-foreground font-mono break-all">
+                                    repoRoot: {src.resolvedRepoRoot}
+                                  </div>
+                                )}
+                                {src.message && (
+                                  <div className="text-[11px] text-muted-foreground break-words">
+                                    메시지: {src.message}
+                                  </div>
+                                )}
+                              </div>
+                              <SourceStatusBadge status={src.status} />
                             </div>
                           ))}
                         </div>

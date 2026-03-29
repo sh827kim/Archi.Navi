@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 
 const {
   getDbMock,
@@ -742,10 +742,55 @@ describe('POST /api/inference/run', () => {
     await expect(response.json()).resolves.toEqual(
       expect.objectContaining({
         error: expect.stringContaining('config/code 추론을 실행할 로컬 repoRoot가 없습니다'),
-        repoRoots: expect.objectContaining({
-          used: [],
-          skippedDisallowed: [externalRepoRoot],
+        details: expect.objectContaining({
+          skippedDisallowedRoots: [externalRepoRoot],
         }),
+      }),
+    );
+  });
+
+  it('홈 디렉토리 하위 service.metadata.scanPath 는 fallback allowed roots로 허용해야 한다', async () => {
+    const homeRepoRoot = join(homedir(), 'workspace');
+    getDbMock.mockResolvedValue({
+      select: () => ({
+        from: () => ({
+          where: async () => [{ metadata: { scanPath: homeRepoRoot } }],
+        }),
+      }),
+    });
+    extractCodeSignalsWithEngineMock.mockResolvedValue({
+      fileCount: 1,
+      artifactCount: 1,
+      signalCount: 1,
+      skippedCount: 0,
+      engineUsed: 'hybrid',
+      fallbackUsed: false,
+      warning: null,
+      scanFailures: [],
+    });
+    inferRelationsFromCodeSignalsMock.mockResolvedValue({
+      candidateCount: 1,
+    });
+
+    const response = await POST(
+      new NextRequest('http://localhost/api/inference/run', {
+        method: 'POST',
+        body: JSON.stringify({
+          workspaceId: 'ws-1',
+          modes: ['code'],
+        }),
+      }),
+    );
+
+    expect(response.status).toBe(200);
+    expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.any(Function),
+      }),
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        repoRoot: homeRepoRoot,
+        codeEngine: 'hybrid',
       }),
     );
   });

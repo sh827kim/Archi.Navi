@@ -172,15 +172,16 @@ describe('QueryClient', () => {
         visibility: 'VISIBLE_ONLY',
       },
       params: {
-        fromObjectId: 'obj-1',
+        targetObjectId: 'obj-1',
         direction: 'DOWNSTREAM',
-        maxHops: 4,
+        maxDepth: 4,
       },
     });
 
     expect(toast.success).toHaveBeenCalledWith('노드 1개, 엣지 1개 조회됨');
     expect(screen.getByText('노드 (1)')).toBeTruthy();
-    expect(screen.getByText('엣지 (1)')).toBeTruthy();
+    expect(screen.getByText('관계 (1)')).toBeTruthy();
+    expect(screen.getByText(/Orders 기준 영향 범위를 1개 노드, 1개 관계로 찾았습니다\./)).toBeTruthy();
   });
 
   it('PATH_DISCOVERY에서 시작/도착 Object 누락 시 실행을 막아야 한다', async () => {
@@ -241,8 +242,48 @@ describe('QueryClient', () => {
       },
     });
 
-    expect(screen.getByText('경로 (1)')).toBeTruthy();
-    expect(screen.getByText(/점수:\s*0\.91/, { selector: 'span' })).toBeTruthy();
+    expect(screen.getByText('경로 후보')).toBeTruthy();
+    expect(screen.getByText(/Orders에서 Billing까지 1개의 후보 경로를 찾았습니다\./)).toBeTruthy();
+    expect(screen.getByText(/점수 0\.91/, { selector: 'span' })).toBeTruthy();
+  });
+
+  it('USAGE_DISCOVERY는 objectId payload를 사용해야 한다', async () => {
+    const { queryCalls } = createQueryFetchMock({
+      queryHandler: () => jsonResponse({
+        queryType: 'USAGE_DISCOVERY',
+        result: {
+          nodes: [
+            { id: 'obj-1', type: 'service', name: 'orders-service', displayName: 'Orders' },
+            { id: 'obj-2', type: 'service', name: 'billing-service', displayName: 'Billing' },
+          ],
+          edges: [{
+            subjectId: 'obj-2',
+            objectId: 'obj-1',
+            relationType: 'call',
+            level: 'SERVICE_TO_SERVICE',
+            edgeWeight: 1,
+            confidence: 0.88,
+          }],
+        },
+      }),
+    });
+
+    render(<QueryClient />);
+    await screen.findByText('Orders');
+
+    fireEvent.click(screen.getByRole('button', { name: '사용 주체 추적' }));
+    pickObject('대상 Object', 'Orders');
+    fireEvent.click(screen.getByRole('button', { name: '쿼리 실행' }));
+
+    await waitFor(() => {
+      expect(queryCalls).toHaveLength(1);
+    });
+
+    expect(queryCalls[0]).toMatchObject({
+      queryType: 'USAGE_DISCOVERY',
+      params: { objectId: 'obj-1' },
+    });
+    expect(screen.getByText(/Orders를 사용하는 주체를 1개 찾았습니다\./)).toBeTruthy();
   });
 
   it('DOMAIN_SUMMARY 정상 실행 시 domainId를 전송하고 요약을 렌더링해야 한다', async () => {
@@ -252,7 +293,20 @@ describe('QueryClient', () => {
         result: {
           nodes: [],
           edges: [],
-          summary: { totalDomains: 1, services: 3 },
+          summary: {
+            domainId: 'domain-1',
+            memberCount: 3,
+            avgPurity: 0.83,
+            avgAffinity: 0.76,
+            relationDensity: 0.45,
+            membersByType: { service: 3 },
+            topMembers: [
+              { id: 'obj-1', name: 'orders-service', objectType: 'service', affinity: 0.91 },
+            ],
+            externalDependencies: [
+              { domainId: 'payment-domain', relationType: 'depend_on', edgeWeight: 2, confidence: 0.72 },
+            ],
+          },
         },
       }),
     });
@@ -272,8 +326,25 @@ describe('QueryClient', () => {
       params: { domainId: 'domain-1' },
     });
 
-    expect(screen.getByText('요약')).toBeTruthy();
-    expect(screen.getByText(/"totalDomains": 1/, { selector: 'pre' })).toBeTruthy();
+    expect(screen.getByText('멤버 타입 분포')).toBeTruthy();
+    expect(screen.getByText('상위 멤버')).toBeTruthy();
+    expect(screen.getByText('외부 의존 도메인')).toBeTruthy();
+    expect(screen.getByText('orders-service')).toBeTruthy();
+    expect(screen.getByText('payment-domain')).toBeTruthy();
+  });
+
+  it('Object 검색 입력은 한글 1글자 입력 후에도 값을 유지해야 한다', async () => {
+    createQueryFetchMock({
+      queryHandler: () => jsonResponse({ queryType: 'IMPACT_ANALYSIS', result: { nodes: [], edges: [] } }),
+    });
+
+    render(<QueryClient />);
+    await screen.findByText('Orders');
+
+    const input = screen.getByPlaceholderText('Object 이름 검색...') as HTMLInputElement;
+    fireEvent.change(input, { target: { value: '주' } });
+
+    expect(input.value).toBe('주');
   });
 
   it('쿼리 실패 시 에러 토스트를 표시하고 loading 상태를 해제해야 한다', async () => {

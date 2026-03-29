@@ -30,6 +30,15 @@ import {
 } from '@archi-navi/core';
 import type { QueryScope } from '@archi-navi/shared';
 
+type ChatIntent =
+  | 'SERVICE_ENDPOINTS'
+  | 'SERVICE_OVERVIEW'
+  | 'IMPACT_ANALYSIS'
+  | 'PATH_DISCOVERY'
+  | 'USAGE_DISCOVERY'
+  | 'DOMAIN_SUMMARY'
+  | 'GENERAL';
+
 /** AI 제공자 선택 (헤더 오버라이드 → 환경변수 fallback) */
 function getModel(req: Request): LanguageModel {
   // 설정 화면에서 전달한 헤더 우선 적용
@@ -73,6 +82,16 @@ function escapeLike(value: string): string {
  * 우선순위: xxx-service > xxx-db > xxx-gateway > 일반 kebab-case
  */
 function extractMentionedNames(message: string): string[] {
+  const phraseTokens = [...message.matchAll(/([가-힣A-Za-z0-9_-]+(?:\s+[가-힣A-Za-z0-9_-]+){0,2}\s*(?:서비스|service|도메인|domain))/gi)]
+    .flatMap((m) => {
+      const raw = m[1]?.trim();
+      if (!raw) return [];
+      const cleaned = raw.replace(/\s+(서비스|service|도메인|domain)$/i, '').trim();
+      return cleaned && cleaned !== raw ? [cleaned, raw] : [raw];
+    })
+    .filter((t): t is string => !!t)
+    .map((t) => t.toLowerCase());
+
   // 하이픈 포함 영문 식별자 전체 추출 (캡처 그룹 m[1] 보장)
   const allTokens = [...message.matchAll(/\b([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)+)\b/g)]
     .map((m) => m[1])
@@ -85,7 +104,7 @@ function extractMentionedNames(message: string): string[] {
   const rest = allTokens.filter((t) => !high.includes(t));
 
   // 중복 제거 유지
-  return [...new Set([...high, ...rest])];
+  return [...new Set([...phraseTokens, ...high, ...rest])];
 }
 
 /**
@@ -100,21 +119,163 @@ async function resolveObjectId(
   if (names.length === 0) return null;
 
   // 각 이름 후보를 OR 조건으로 한 번에 조회 (LIKE 특수문자 이스케이프 적용)
-  const conditions = names.map((name) => ilike(objects.name, `%${escapeLike(name)}%`));
+  const conditions = names.map((name) => {
+    const escaped = escapeLike(name);
+    return or(ilike(objects.name, `%${escaped}%`), ilike(objects.displayName, `%${escaped}%`));
+  });
   const rows = await db
-    .select({ id: objects.id, name: objects.name })
+    .select({ id: objects.id, name: objects.name, displayName: objects.displayName })
     .from(objects)
     .where(and(eq(objects.workspaceId, workspaceId), or(...conditions)))
-    .limit(names.length);
+    .limit(names.length * 2);
 
   if (rows.length === 0) return null;
 
   // 우선순위 높은 이름부터 매칭되는 row 반환
   for (const name of names) {
-    const matched = rows.find((r) => r.name.toLowerCase().includes(name));
+    const normalizedName = name.toLowerCase();
+    const exact = rows.find(
+      (r) =>
+        r.name.toLowerCase() === normalizedName ||
+        (r.displayName?.toLowerCase() ?? '') === normalizedName,
+    );
+    if (exact) return exact.id;
+
+    const matched = rows.find(
+      (r) =>
+        r.name.toLowerCase().includes(normalizedName) ||
+        (r.displayName?.toLowerCase().includes(normalizedName) ?? false),
+    );
     if (matched) return matched.id;
   }
   return rows[0]?.id ?? null;
+}
+
+function formatObjectLabel(object: {
+  name: string;
+  displayName: string | null;
+}): string {
+  return object.displayName ? `${object.displayName} (${object.name})` : object.name;
+}
+
+function detectChatIntent(message: string): ChatIntent {
+  const normalized = message.toLowerCase();
+  const asksServiceEndpoints =
+    /(api|endpoint|엔드포인트)/i.test(message)
+    && /(어떤|뭐|무엇|목록|리스트|있지|있어|보여|알려|종류|제공)/i.test(message);
+
+  if (asksServiceEndpoints) return 'SERVICE_ENDPOINTS';
+
+  if (
+    /개요|요약|설명|역할|overview|summary/i.test(message)
+    && /(service|서비스)/i.test(message)
+  ) {
+    return 'SERVICE_OVERVIEW';
+  }
+
+  if (normalized.includes('영향') || normalized.includes('impact') || normalized.includes('의존')) {
+    return 'IMPACT_ANALYSIS';
+  }
+  if (normalized.includes('경로') || normalized.includes('path') || normalized.includes('어떻게 연결')) {
+    return 'PATH_DISCOVERY';
+  }
+  if (normalized.includes('사용') || normalized.includes('usage') || normalized.includes('호출')) {
+    return 'USAGE_DISCOVERY';
+  }
+  if (normalized.includes('도메인') || normalized.includes('domain')) {
+    return 'DOMAIN_SUMMARY';
+  }
+  return 'GENERAL';
+}
+
+async function buildServiceContext(
+  db: DbClient,
+  workspaceId: string,
+  serviceId: string,
+  mode: 'SERVICE_OVERVIEW' | 'SERVICE_ENDPOINTS',
+): Promise<string> {
+  const [service] = await db
+    .select({
+      id: objects.id,
+      name: objects.name,
+      displayName: objects.displayName,
+      description: objects.description,
+      metadata: objects.metadata,
+    })
+    .from(objects)
+    .where(and(eq(objects.workspaceId, workspaceId), eq(objects.id, serviceId)))
+    .limit(1);
+
+  if (!service) return '';
+
+  const endpointRows = await db
+    .select({
+      id: objects.id,
+      name: objects.name,
+      displayName: objects.displayName,
+      metadata: objects.metadata,
+    })
+    .from(objects)
+    .where(
+      and(
+        eq(objects.workspaceId, workspaceId),
+        eq(objects.objectType, 'api_endpoint'),
+        eq(objects.parentId, serviceId),
+      ),
+    );
+
+  const endpoints = endpointRows
+    .map((endpoint) => {
+      const metadata = (endpoint.metadata ?? {}) as Record<string, unknown>;
+      const methodValue =
+        typeof metadata['method'] === 'string'
+          ? metadata['method']
+          : typeof metadata['httpMethod'] === 'string'
+            ? metadata['httpMethod']
+            : null;
+      const pathValue = typeof metadata['path'] === 'string' ? metadata['path'] : null;
+      const label = endpoint.displayName ?? endpoint.name;
+
+      return {
+        label,
+        method: methodValue?.trim().toUpperCase() ?? null,
+        path: pathValue?.trim() ?? null,
+      };
+    })
+    .sort((a, b) => (a.path ?? a.label).localeCompare(b.path ?? b.label));
+
+  const metadata = (service.metadata ?? {}) as Record<string, unknown>;
+  const serviceLines = [
+    `[서비스 정보]`,
+    `- 서비스: ${formatObjectLabel(service)}`,
+    service.description ? `- 설명: ${service.description}` : null,
+    typeof metadata['scanPath'] === 'string' ? `- scanPath: ${metadata['scanPath']}` : null,
+  ].filter((line): line is string => !!line);
+
+  const endpointLines =
+    endpoints.length === 0
+      ? ['- 등록된 api_endpoint object가 없습니다.']
+      : endpoints.map((endpoint) => {
+          const main = endpoint.method && endpoint.path
+            ? `${endpoint.method} ${endpoint.path}`
+            : endpoint.path ?? endpoint.label;
+          return `- ${main}${endpoint.label !== main ? ` (${endpoint.label})` : ''}`;
+        });
+
+  const instruction =
+    mode === 'SERVICE_ENDPOINTS'
+      ? '아래 서비스의 child api_endpoint object 목록만을 근거로, 이 서비스가 제공하는 API를 정리해 답변하세요. 목록에 없는 API는 있다고 단정하지 마세요.'
+      : '아래 서비스 정보와 child api_endpoint object를 근거로, 서비스 개요를 간단히 설명하고 제공 API를 함께 정리하세요. 없는 정보는 없다고 답변하세요.';
+
+  return [
+    serviceLines.join('\n'),
+    '',
+    `[서비스 API 목록]`,
+    `총 ${endpoints.length}개`,
+    ...endpointLines,
+    '',
+    instruction,
+  ].join('\n');
 }
 
 /**
@@ -248,6 +409,7 @@ const SYSTEM_PROMPT = `당신은 MSA 아키텍처 전문가 어시스턴트 'Arc
 - 영향 분석: 특정 서비스 변경 시 영향받는 서비스 파악
 - 경로 탐색: A 서비스에서 B 서비스까지의 의존 경로
 - 도메인 요약: 특정 도메인에 속하는 서비스 목록
+- 서비스 개요 요약 및 제공 API 목록 정리
 
 답변 원칙:
 - Evidence 기반으로만 답변합니다
@@ -314,27 +476,29 @@ export async function POST(req: Request) {
       // 메시지에서 서비스명 추출 → Object ID 해석
       const mentionedNames = extractMentionedNames(lastUserMessage);
       const primaryId = await resolveObjectId(db, workspaceId, mentionedNames);
+      const intent = detectChatIntent(lastUserMessage);
 
-      // 경로 탐색용 두 번째 서비스: 첫 번째와 다른 ID가 나오는 이름 탐색
       let secondaryId: string | null = null;
-      for (let i = 1; i < mentionedNames.length; i++) {
-        const name = mentionedNames[i];
-        if (!name) continue;
-        const candidate = await resolveObjectId(db, workspaceId, [name]);
-        if (candidate && candidate !== primaryId) {
-          secondaryId = candidate;
-          break;
+      if (intent === 'PATH_DISCOVERY') {
+        // 경로 탐색용 두 번째 서비스: 첫 번째와 다른 ID가 나오는 이름 탐색
+        for (let i = 1; i < mentionedNames.length; i++) {
+          const name = mentionedNames[i];
+          if (!name) continue;
+          const candidate = await resolveObjectId(db, workspaceId, [name]);
+          if (candidate && candidate !== primaryId) {
+            secondaryId = candidate;
+            break;
+          }
         }
       }
-
-      // 쿼리 타입 자동 감지 (키워드 기반)
       let queryResponse = null;
 
-      if (
-        lastUserMessage.includes('영향') ||
-        lastUserMessage.includes('impact') ||
-        lastUserMessage.includes('의존')
-      ) {
+      if ((intent === 'SERVICE_ENDPOINTS' || intent === 'SERVICE_OVERVIEW') && primaryId) {
+        const serviceContext = await buildServiceContext(db, workspaceId, primaryId, intent);
+        if (serviceContext) {
+          queryContext = `\n\n${serviceContext}`;
+        }
+      } else if (intent === 'IMPACT_ANALYSIS') {
         // "영향받는" → 이 서비스에 의존하는 것 탐색 (UPSTREAM)
         // "의존하는" → 이 서비스가 의존하는 것 탐색 (DOWNSTREAM)
         const direction =
@@ -352,11 +516,7 @@ export async function POST(req: Request) {
             direction,
           },
         });
-      } else if (
-        lastUserMessage.includes('경로') ||
-        lastUserMessage.includes('path') ||
-        lastUserMessage.includes('어떻게 연결')
-      ) {
+      } else if (intent === 'PATH_DISCOVERY') {
         queryResponse = await executeQuery(db, {
           queryType: 'PATH_DISCOVERY',
           workspaceId,
@@ -366,11 +526,7 @@ export async function POST(req: Request) {
             ...(secondaryId ? { toObjectId: secondaryId } : {}),
           },
         });
-      } else if (
-        lastUserMessage.includes('사용') ||
-        lastUserMessage.includes('usage') ||
-        lastUserMessage.includes('호출')
-      ) {
+      } else if (intent === 'USAGE_DISCOVERY') {
         queryResponse = await executeQuery(db, {
           queryType: 'USAGE_DISCOVERY',
           workspaceId,
@@ -379,11 +535,7 @@ export async function POST(req: Request) {
             ...(primaryId ? { objectId: primaryId } : {}),
           },
         });
-      } else if (
-        lastUserMessage.includes('도메인') ||
-        lastUserMessage.includes('domain') ||
-        lastUserMessage.includes('도메인 요약')
-      ) {
+      } else if (intent === 'DOMAIN_SUMMARY') {
         // W-8.3: 메시지에서 도메인명 추출 → domainId 파라미터 전달
         const domainId = await resolveDomainId(db, workspaceId, lastUserMessage);
         queryResponse = await executeQuery(db, {

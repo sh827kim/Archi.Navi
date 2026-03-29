@@ -7,7 +7,7 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { existsSync, realpathSync, statSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { tmpdir } from 'node:os';
+import { homedir, tmpdir } from 'node:os';
 import { and, eq } from 'drizzle-orm';
 import { getDb, objects } from '@archi-navi/db';
 import {
@@ -120,7 +120,7 @@ function getAllowedInferenceRoots(): string[] {
     .filter((value) => value.length > 0);
 
   const fallbackRoot = process.env['ARCHI_NAVI_WORKSPACE_ROOT'] ?? process.cwd();
-  const fallbackRoots = [fallbackRoot, tmpdir()];
+  const fallbackRoots = [fallbackRoot, homedir(), tmpdir()];
   return (configuredRoots.length > 0 ? configuredRoots : fallbackRoots)
     .map((root) => resolve(root))
     .filter(isLocalDirectory)

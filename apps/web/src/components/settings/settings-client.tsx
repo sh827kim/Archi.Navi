@@ -71,6 +71,7 @@ import {
 } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { isAbsoluteScanPathPrefix } from '@/lib/scanPathPrefix';
+import { PathPickerDialog } from '@/components/shared/path-picker-dialog';
 
 /* ─── 타입 ─── */
 interface LayerItem {
@@ -1989,6 +1990,14 @@ interface ScanApiResult {
   projects: ScanProjectResult[];
   registered: number;
   skipped: number;
+  bootstrap?: {
+    analyzedProjectCount: number;
+    signalCount: number;
+    candidateCount: number;
+    createdEndpointCount: number;
+    createdAtomicCount: number;
+    warnings: string[];
+  };
 }
 
 /** SSE 스트림에서 서버가 보내는 이벤트 형식 */
@@ -2004,7 +2013,7 @@ interface DirSuggestion {
   path: string;
 }
 
-function ScanSettings({ workspaceId }: { workspaceId: string }) {
+export function ScanSettings({ workspaceId }: { workspaceId: string }) {
   const [mode, setMode] = useState<'local' | 'workspace-dir' | 'github-repo' | 'github-org'>('local');
   const [target, setTarget] = useState('');
   const [scanning, setScanning] = useState(false);
@@ -2198,7 +2207,12 @@ function ScanSettings({ workspaceId }: { workspaceId: string }) {
         if (dryRun) {
           toast.success(`${finalResult.projects.length}개 프로젝트 발견 (미리보기)`);
         } else {
-          toast.success(`${finalResult.registered}개 등록, ${finalResult.skipped}개 스킵`);
+          const bootstrapSuffix = finalResult.bootstrap && finalResult.bootstrap.createdAtomicCount > 0
+            ? `, 원자 오브젝트 ${finalResult.bootstrap.createdAtomicCount}개 bootstrap`
+            : '';
+          toast.success(
+            `${finalResult.registered}개 등록, ${finalResult.skipped}개 스킵${bootstrapSuffix}`,
+          );
         }
       }
     } catch (err) {
@@ -2318,123 +2332,136 @@ function ScanSettings({ workspaceId }: { workspaceId: string }) {
             <label className="text-sm font-medium text-foreground">
               스캔 대상
             </label>
-            <div className="relative">
-              <Input
-                ref={inputRef}
-                placeholder={selectedMode.placeholder}
-                value={target}
-                onChange={(e) => {
-                  const val = e.target.value;
-                  setTarget(val);
-                  setResult(null);
-                  setSelectedIdx(-1);
-                  if (isLocalMode) {
-                    fetchSuggestions(val);
-                    setShowSuggestions(true);
-                  }
-                }}
-                onFocus={() => {
-                  if (isLocalMode) setShowSuggestions(true);
-                }}
-                onKeyDown={(e) => {
-                  // 드롭다운 키보드 네비게이션
-                  if (showSuggestions && combinedSuggestions.length > 0) {
-                    if (e.key === 'ArrowDown') {
-                      e.preventDefault();
-                      setSelectedIdx((prev) =>
-                        prev < combinedSuggestions.length - 1 ? prev + 1 : 0,
-                      );
-                      return;
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <div className="relative flex-1">
+                <Input
+                  ref={inputRef}
+                  placeholder={selectedMode.placeholder}
+                  value={target}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    setTarget(val);
+                    setResult(null);
+                    setSelectedIdx(-1);
+                    if (isLocalMode) {
+                      fetchSuggestions(val);
+                      setShowSuggestions(true);
                     }
-                    if (e.key === 'ArrowUp') {
-                      e.preventDefault();
-                      setSelectedIdx((prev) =>
-                        prev > 0 ? prev - 1 : combinedSuggestions.length - 1,
-                      );
-                      return;
+                  }}
+                  onFocus={() => {
+                    if (isLocalMode) setShowSuggestions(true);
+                  }}
+                  onKeyDown={(e) => {
+                    // 드롭다운 키보드 네비게이션
+                    if (showSuggestions && combinedSuggestions.length > 0) {
+                      if (e.key === 'ArrowDown') {
+                        e.preventDefault();
+                        setSelectedIdx((prev) =>
+                          prev < combinedSuggestions.length - 1 ? prev + 1 : 0,
+                        );
+                        return;
+                      }
+                      if (e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        setSelectedIdx((prev) =>
+                          prev > 0 ? prev - 1 : combinedSuggestions.length - 1,
+                        );
+                        return;
+                      }
+                      if (e.key === 'Enter' && selectedIdx >= 0) {
+                        e.preventDefault();
+                        const sel = combinedSuggestions[selectedIdx];
+                        if (sel) selectSuggestion(sel.path);
+                        return;
+                      }
+                      if (e.key === 'Escape') {
+                        setShowSuggestions(false);
+                        return;
+                      }
                     }
-                    if (e.key === 'Enter' && selectedIdx >= 0) {
-                      e.preventDefault();
-                      const sel = combinedSuggestions[selectedIdx];
-                      if (sel) selectSuggestion(sel.path);
-                      return;
-                    }
-                    if (e.key === 'Escape') {
-                      setShowSuggestions(false);
-                      return;
-                    }
-                  }
-                  if (e.key === 'Enter') void executeScan(true);
-                }}
-              />
+                    if (e.key === 'Enter') void executeScan(true);
+                  }}
+                />
 
-              {/* 자동완성 드롭다운 */}
-              {showSuggestions && isLocalMode && combinedSuggestions.length > 0 && (
-                <div
-                  ref={suggestionsRef}
-                  className="absolute z-50 top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto rounded-lg border border-border bg-card shadow-lg"
-                >
-                  {/* 등록된 경로 섹션 */}
-                  {combinedSuggestions.some((s) => s.type === 'saved') && (
-                    <>
-                      <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider bg-muted/30">
-                        <History className="inline h-3 w-3 mr-1 -mt-0.5" />
-                        최근 스캔 경로
-                      </div>
-                      {combinedSuggestions
-                        .filter((s) => s.type === 'saved')
-                        .map((item, i) => {
-                          const globalIdx = combinedSuggestions.indexOf(item);
-                          return (
-                            <button
-                              key={`saved-${item.path}`}
-                              type="button"
-                              className={cn(
-                                'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-accent/50 transition-colors',
-                                globalIdx === selectedIdx && 'bg-accent/50',
-                              )}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => selectSuggestion(item.path)}
-                            >
-                              <History className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="truncate text-foreground">{item.path}</span>
-                            </button>
-                          );
-                        })}
-                    </>
-                  )}
+                {/* 자동완성 드롭다운 */}
+                {showSuggestions && isLocalMode && combinedSuggestions.length > 0 && (
+                  <div
+                    ref={suggestionsRef}
+                    className="absolute z-50 top-full left-0 right-0 mt-1 max-h-60 overflow-y-auto rounded-lg border border-border bg-card shadow-lg"
+                  >
+                    {/* 등록된 경로 섹션 */}
+                    {combinedSuggestions.some((s) => s.type === 'saved') && (
+                      <>
+                        <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider bg-muted/30">
+                          <History className="inline h-3 w-3 mr-1 -mt-0.5" />
+                          최근 스캔 경로
+                        </div>
+                        {combinedSuggestions
+                          .filter((s) => s.type === 'saved')
+                          .map((item, i) => {
+                            const globalIdx = combinedSuggestions.indexOf(item);
+                            return (
+                              <button
+                                key={`saved-${item.path}`}
+                                type="button"
+                                className={cn(
+                                  'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-accent/50 transition-colors',
+                                  globalIdx === selectedIdx && 'bg-accent/50',
+                                )}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => selectSuggestion(item.path)}
+                              >
+                                <History className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                <span className="truncate text-foreground">{item.path}</span>
+                              </button>
+                            );
+                          })}
+                      </>
+                    )}
 
-                  {/* 디렉토리 후보 섹션 */}
-                  {combinedSuggestions.some((s) => s.type === 'dir') && (
-                    <>
-                      <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider bg-muted/30">
-                        <FolderOpen className="inline h-3 w-3 mr-1 -mt-0.5" />
-                        디렉토리
-                      </div>
-                      {combinedSuggestions
-                        .filter((s) => s.type === 'dir')
-                        .map((item) => {
-                          const globalIdx = combinedSuggestions.indexOf(item);
-                          return (
-                            <button
-                              key={`dir-${item.path}`}
-                              type="button"
-                              className={cn(
-                                'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-accent/50 transition-colors',
-                                globalIdx === selectedIdx && 'bg-accent/50',
-                              )}
-                              onMouseDown={(e) => e.preventDefault()}
-                              onClick={() => selectSuggestion(item.path)}
-                            >
-                              <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
-                              <span className="truncate text-foreground">{item.label}</span>
-                              <ChevronRight className="h-3 w-3 text-muted-foreground ml-auto shrink-0" />
-                            </button>
-                          );
-                        })}
-                    </>
-                  )}
-                </div>
+                    {/* 디렉토리 후보 섹션 */}
+                    {combinedSuggestions.some((s) => s.type === 'dir') && (
+                      <>
+                        <div className="px-3 py-1.5 text-[11px] font-medium text-muted-foreground uppercase tracking-wider bg-muted/30">
+                          <FolderOpen className="inline h-3 w-3 mr-1 -mt-0.5" />
+                          디렉토리
+                        </div>
+                        {combinedSuggestions
+                          .filter((s) => s.type === 'dir')
+                          .map((item) => {
+                            const globalIdx = combinedSuggestions.indexOf(item);
+                            return (
+                              <button
+                                key={`dir-${item.path}`}
+                                type="button"
+                                className={cn(
+                                  'w-full text-left px-3 py-2 text-sm flex items-center gap-2 hover:bg-accent/50 transition-colors',
+                                  globalIdx === selectedIdx && 'bg-accent/50',
+                                )}
+                                onMouseDown={(e) => e.preventDefault()}
+                                onClick={() => selectSuggestion(item.path)}
+                              >
+                                <FolderOpen className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                                <span className="truncate text-foreground">{item.label}</span>
+                                <ChevronRight className="h-3 w-3 text-muted-foreground ml-auto shrink-0" />
+                              </button>
+                            );
+                          })}
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+              {isLocalMode && (
+                <PathPickerDialog
+                  value={target}
+                  fallbackPath={savedParentDirs[0]}
+                  onSelect={selectSuggestion}
+                  disabled={scanning}
+                  triggerLabel="폴더 선택"
+                  title="스캔 대상 폴더 선택"
+                  description="로컬 파일시스템을 탐색해 스캔 대상을 선택합니다."
+                />
               )}
             </div>
           </div>

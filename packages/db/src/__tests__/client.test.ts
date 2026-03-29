@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 
 const mockPGliteCtor = vi.fn();
 const mockDrizzle = vi.fn();
+const mockMigrate = vi.fn();
 
 vi.mock('@electric-sql/pglite', () => ({
   PGlite: function PGliteMock(this: unknown, ...args: unknown[]) {
@@ -14,6 +15,10 @@ vi.mock('@electric-sql/pglite', () => ({
 
 vi.mock('drizzle-orm/pglite', () => ({
   drizzle: vi.fn((...args: unknown[]) => mockDrizzle(...args)),
+}));
+
+vi.mock('drizzle-orm/pglite/migrator', () => ({
+  migrate: vi.fn((...args: unknown[]) => mockMigrate(...args)),
 }));
 
 function makeDbClient(executeImpl?: () => Promise<unknown>) {
@@ -29,10 +34,12 @@ async function flushMicrotasks(): Promise<void> {
 
 describe('db/client', () => {
   const oldEnv = process.env['PGLITE_DATA_DIR'];
+  const oldMigrationsFolder = process.env['MIGRATIONS_FOLDER'];
 
   beforeEach(() => {
     vi.clearAllMocks();
     vi.resetModules();
+    mockMigrate.mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -40,6 +47,12 @@ describe('db/client', () => {
       delete process.env['PGLITE_DATA_DIR'];
     } else {
       process.env['PGLITE_DATA_DIR'] = oldEnv;
+    }
+
+    if (oldMigrationsFolder === undefined) {
+      delete process.env['MIGRATIONS_FOLDER'];
+    } else {
+      process.env['MIGRATIONS_FOLDER'] = oldMigrationsFolder;
     }
   });
 
@@ -70,6 +83,25 @@ describe('db/client', () => {
     expect(first).toBe(second);
     expect(mockPGliteCtor).toHaveBeenCalledTimes(1);
     expect(dbClient.execute).toHaveBeenCalledTimes(1);
+    expect(mockMigrate).not.toHaveBeenCalled();
+  });
+
+  it('MIGRATIONS_FOLDER가 설정되면 초기화 직후 마이그레이션을 수행해야 한다', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'anavi-db-migrate-'));
+    process.env['PGLITE_DATA_DIR'] = dataDir;
+    process.env['MIGRATIONS_FOLDER'] = '/tmp/archi-navi-migrations';
+
+    mockPGliteCtor.mockImplementation(() => ({ close: vi.fn().mockResolvedValue(undefined) }));
+    const dbClient = makeDbClient();
+    mockDrizzle.mockImplementation(() => dbClient);
+
+    const { getDb } = await import('../client.js');
+    const client = await getDb();
+
+    expect(client).toBe(dbClient);
+    expect(mockMigrate).toHaveBeenCalledWith(dbClient, {
+      migrationsFolder: '/tmp/archi-navi-migrations',
+    });
   });
 
   it('동시 호출 시에도 PGlite 초기화는 한 번만 수행해야 한다', async () => {
@@ -132,6 +164,31 @@ describe('db/client', () => {
     expect(closeFirst).toHaveBeenCalled();
     expect(warnSpy).toHaveBeenCalled();
     expect(existsSync(dataDir)).toBe(true);
+    warnSpy.mockRestore();
+  });
+
+  it('stale postmaster.pid 가 있으면 초기화 전에 pid 파일만 정리하고 데이터는 보존해야 한다', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'anavi-db-stale-pid-'));
+    writeFileSync(join(dataDir, 'postmaster.pid'), '-42\n/tmp/pglite/base\n');
+    writeFileSync(join(dataDir, 'keep-me.txt'), 'workspace-data');
+    process.env['PGLITE_DATA_DIR'] = dataDir;
+
+    mockPGliteCtor.mockImplementation(() => ({ close: vi.fn().mockResolvedValue(undefined) }));
+    const dbClient = makeDbClient();
+    mockDrizzle.mockImplementation(() => dbClient);
+
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const { getDb } = await import('../client.js');
+    const client = await getDb();
+
+    expect(client).toBe(dbClient);
+    expect(mockPGliteCtor).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledWith(
+      '[archi-navi/db] stale postmaster.pid 감지, pid 파일만 정리',
+    );
+    expect(existsSync(join(dataDir, 'postmaster.pid'))).toBe(false);
+    expect(existsSync(join(dataDir, 'keep-me.txt'))).toBe(true);
     warnSpy.mockRestore();
   });
 

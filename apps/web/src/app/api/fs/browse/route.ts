@@ -1,9 +1,11 @@
 /**
  * GET /api/fs/browse — 서버 측 디렉토리 자동완성
  * prefix 경로를 받아 하위 디렉토리 목록을 반환
+ * prefix가 없으면 사용자 홈 디렉토리부터 탐색한다
  */
 import { type NextRequest, NextResponse } from 'next/server';
 import { readdirSync, statSync } from 'fs';
+import { homedir } from 'os';
 import { basename, dirname, isAbsolute, resolve, win32 } from 'path';
 
 /** 항상 무시할 디렉토리 */
@@ -26,10 +28,7 @@ function isSupportedAbsolutePath(prefix: string): boolean {
 
 export async function GET(req: NextRequest) {
     try {
-        const prefix = req.nextUrl.searchParams.get('prefix')?.trim();
-        if (!prefix) {
-            return NextResponse.json({ error: 'prefix is required' }, { status: 400 });
-        }
+        const prefix = req.nextUrl.searchParams.get('prefix')?.trim() || homedir();
 
         // 절대 경로만 허용 (보안)
         if (!isSupportedAbsolutePath(prefix)) {

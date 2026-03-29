@@ -25,4 +25,6 @@ export type {
   SmartPipelineResult,
   LlmGenerateFn,
   SmartFallbackReasonBreakdown,
+  SmartAtomicAnalysisMode,
+  SmartAtomicAgentStep,
 } from './smartPipeline';

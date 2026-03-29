@@ -16,7 +16,7 @@
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 추론 엔진 고도화 (P4) | ✅ | 4-1~4-6 구현 완료 |
-| **안정화 (S1)** | **🔧** | **S1-1~S1-9 완료, AI 고도화/유지보수성 항목 진행 예정** |
+| **안정화 (S1)** | **🔧** | **S1-1~S1-9, S1-16~S1-20 완료. 폴더 선택/스캔 bootstrap/Smart 비동기 운영 UX와 agent-assisted/full-agent atomic 분석, 추론 이력/Query/Chat UX 개선, Zuul route-aware atomic recovery 반영. 다음은 S1-10~S1-15** |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -43,6 +43,14 @@
   - `GET/POST /api/inference/runs`, `GET /api/inference/runs/:id`
   - quick run과 queued run 모두 binding/cross-validation 최종화 반영
   - 목록에서 개별 실행 상세(source/event) 확장 조회 가능, 실패 시 재시도 가능한 null-failure 처리 반영
+- ✅ 로컬 경로 폴더 선택 UX
+  - 온보딩 워크스페이스 생성의 `로컬 프로젝트` / `워크스페이스 폴더` 입력에 폴더 선택 다이얼로그 추가
+  - Settings > 코드 스캔에서도 동일한 폴더 선택 UI 재사용
+  - `/api/fs/browse`는 prefix가 없을 때 홈 디렉토리부터 탐색 가능
+- ✅ 추론/스캔 운영 UX 안정화
+  - 정적 추론 fallback allowed roots에 사용자 홈 디렉토리를 포함해 `service.metadata.scanPath` 기반 로컬 워크스페이스를 바로 실행 가능하게 조정
+  - `POST /api/scan` 완료 시 1차 코드 분석을 수행해 endpoint/topic/queue/database/db_table atomic bootstrap 요약을 함께 반환
+  - `POST /api/inference/smart`는 `async` 큐잉 모드와 상태 조회를 지원하고, Approval UI는 polling으로 완료/실패 알림과 후보 목록 자동 갱신을 수행
 - ✅ `Object Mapping` 3D 렌더러 전환
   - `3D(Force)` 단일 렌더러 제공(2D 선택 UI 제거)
   - WebGL 미지원 환경 fallback 메시지 제공
@@ -60,7 +68,8 @@
   - `SERVICE_TO_SERVICE`, `SERVICE_TO_DATABASE`, `SERVICE_TO_BROKER`, `DOMAIN_TO_DOMAIN`
   - `BUILDING → ACTIVE → ARCHIVED` generation 전환
   - 관계 승인/추가/삭제 및 `map-endpoints` 다중 승인에 대해 delta rebuild + rollup-change notification 발행
-- ✅ **Query UI 직접 호출 연결**: `/query` 페이지의 `QueryClient`가 `POST /api/query`를 직접 호출하며 `IMPACT_ANALYSIS`, `PATH_DISCOVERY`, `USAGE_DISCOVERY`, `DOMAIN_SUMMARY`를 실행할 수 있음 (S1-4 완료, 검증: web `2 files, 7 tests passed`)
+- ✅ **Query UI 직접 호출 연결**: `/query` 페이지의 `QueryClient`가 `POST /api/query`를 직접 호출하며 `IMPACT_ANALYSIS`, `PATH_DISCOVERY`, `USAGE_DISCOVERY`, `DOMAIN_SUMMARY`를 실행할 수 있음 (S1-4 완료)
+- ✅ **Query UX humanization/입력 안정화**: query type별 요약 카드, path stepper, domain summary 카드형 렌더링, `IMPACT_ANALYSIS -> targetObjectId/maxDepth`, `USAGE_DISCOVERY -> objectId`, 독립 ObjectPicker 검색 상태 반영 (S1-17, S1-18 완료, 검증: web `1 file, 8 tests passed`)
 
 ### 1.3 Inference
 
@@ -83,7 +92,15 @@
 - ✅ Evidence Assembler / Answer Composer 연동
 - ✅ LLM 후보 필터 API (`/api/inference/llm-filter`)
 - ✅ LLM Boost API (`/api/inference/run` + `llmBoost` 옵션)
+- ✅ AI 아키텍처 어시스턴트 범주 확장
+  - `service overview`, `service endpoints` intent 추가
+  - `name + displayName` 기반 object resolution
+  - 서비스 하위 `api_endpoint` object retrieval 기반 컨텍스트 제공
 - ✅ Smart Pipeline API (`/api/inference/smart`)
+  - `pair_pack` / `agent_assisted` / `full_agent` atomic 분석 모드 지원
+  - service-to-service pair는 기존 Smart 경로를 유지하고, atomic만 Agent escalation 또는 full-agent 경로로 분기
+  - 실행 요약/trace에 agent escalation, recovery, tool usage 통계 노출
+  - `Zuul`/gateway route 기반 external path를 provider endpoint로 복원하는 route-aware atomic recovery 지원
 
 ### 1.5 E2E 시나리오 테스트
 
@@ -102,7 +119,7 @@
 
 | 기능 | 백엔드 API | 프론트엔드 상태 | 해결 계획 |
 |------|-----------|---------------|----------|
-| **Smart Pipeline (LLM 3-Phase)** | `POST /api/inference/smart` ✅ | `S1-1a` 완료. Phase 1.5/bootstrap, pair-scoped evidence pack, atomic inference/fallback observability, deterministic deep inspection 1차/2차, `deepInspectionTrace.details` 기반 pair drill-down viewer, `no_result` pass-through 표시 보정까지 반영. 최종 검증: inference `1 file, 22 tests passed`, web `2 files, 25 tests passed` | S1-1a |
+| **Smart Pipeline (LLM 3-Phase)** | `POST /api/inference/smart` ✅ | `S1-1a` 완료. Phase 1.5/bootstrap, pair-scoped evidence pack, atomic inference/fallback observability, deterministic deep inspection 1차/2차, `agent_assisted`/`full_agent` atomic 분석 모드, `deepInspectionTrace.details` 기반 pair drill-down viewer, `no_result` pass-through 표시 보정까지 반영. 최종 검증: inference `1 file, 24 tests passed`, web `2 files, 30 tests passed` | S1-1a |
 | **LLM Boost (코드 의도 분석)** | `POST /api/inference/run` + `llmBoost` ✅ | `S1-1b` 완료. Approval 추론 실행 UI에서 `llm-boost` 모드로 연결됨 | S1-1b |
 | **LLM Filter (후보 평가)** | `POST /api/inference/llm-filter` ✅ | `S1-1c` 완료. 승인 UI의 `LLM 평가 실행` 버튼으로 연결됨 | S1-1c |
 | **Object 수정 (PATCH)** | `PATCH /api/objects/:id` ✅ | `S1-2` 완료. Service 상세 Sheet의 `displayName`/`description` 인라인 편집과 `visibility` 토글, 목록 카드 visibility 토글이 PATCH로 연결됨. 최종 검증: web `2 files, 7 tests passed` | S1-2 |
@@ -166,6 +183,11 @@
 | S1-13. 채팅 기록 영속화 | AI 고도화 | 🔧 예정 |
 | S1-14. 대형 컴포넌트 분할 | 유지보수성 | 🔧 예정 |
 | S1-15. Evidence 중복 제거 | 유지보수성 | 🔧 예정 |
+| S1-16. 추론 이력 운영 UX 개선 | 운영 UX | ✅ 완료 |
+| S1-17. Query 결과 Humanized Rendering | Query UX | ✅ 완료 |
+| S1-18. Query 입력 UX/계약 정합성 개선 | Query UX | ✅ 완료 |
+| S1-19. AI 아키텍처 어시스턴트 범주 확장 | AI 고도화 | ✅ 완료 |
+| S1-20. Smart Gateway/Proxy Route-Aware Atomic Recovery | AI 고도화 | ✅ 완료 |
 
 ### 4.2 P5: 개발자 생산성 기능 (v3.2+) — S1 완료 후 착수
 
