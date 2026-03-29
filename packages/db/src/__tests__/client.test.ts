@@ -72,6 +72,37 @@ describe('db/client', () => {
     expect(dbClient.execute).toHaveBeenCalledTimes(1);
   });
 
+  it('동시 호출 시에도 PGlite 초기화는 한 번만 수행해야 한다', async () => {
+    const dataDir = mkdtempSync(join(tmpdir(), 'anavi-db-concurrent-'));
+    process.env['PGLITE_DATA_DIR'] = dataDir;
+
+    const closeSpy = vi.fn().mockResolvedValue(undefined);
+    mockPGliteCtor.mockImplementation(() => ({ close: closeSpy }));
+
+    let resolveExecute: (() => void) | undefined;
+    const dbClient = makeDbClient(
+      () =>
+        new Promise((resolve) => {
+          resolveExecute = () => resolve([{ ok: 1 }]);
+        }),
+    );
+    mockDrizzle.mockImplementation(() => dbClient);
+
+    const { getDb } = await import('../client.js');
+    const firstPromise = getDb();
+    const secondPromise = getDb();
+
+    expect(mockPGliteCtor).toHaveBeenCalledTimes(1);
+    expect(dbClient.execute).toHaveBeenCalledTimes(1);
+
+    if (resolveExecute) {
+      resolveExecute();
+    }
+
+    const [first, second] = await Promise.all([firstPromise, secondPromise]);
+    expect(first).toBe(second);
+  });
+
   it('Aborted 오류 발생 시 데이터 디렉터리 재생성 후 재시도해야 한다', async () => {
     const dataDir = mkdtempSync(join(tmpdir(), 'anavi-db-recover-'));
     writeFileSync(join(dataDir, 'stale.bin'), 'corrupted');
