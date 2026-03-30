@@ -1249,10 +1249,18 @@ export function ApprovalList() {
         };
         if (!res.ok) throw new Error(payload.error ?? '일괄 처리 실패');
 
-        const succeeded = payload.updatedCount ?? 0;
-        const failed = payload.errors?.length ?? 0;
-        setCandidates((prev) => prev.filter((candidate) => !selectedCandidateIds.has(candidate.id)));
-        setSelectedCandidateIds(new Set());
+        const failedIds = new Set((payload.errors ?? []).map((error) => error.id));
+        const succeededIds = ids.filter((id) => !failedIds.has(id));
+        const succeeded = payload.updatedCount ?? succeededIds.length;
+        const failed = failedIds.size;
+        setCandidates((prev) => prev.filter((candidate) => !succeededIds.includes(candidate.id)));
+        setSelectedCandidateIds((prev) => {
+          const next = new Set(prev);
+          for (const id of succeededIds) {
+            next.delete(id);
+          }
+          return next;
+        });
 
         if (failed > 0) {
           toast.warning(`${succeeded}건 처리, ${failed}건 실패`);

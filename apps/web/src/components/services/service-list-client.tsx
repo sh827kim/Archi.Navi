@@ -99,6 +99,7 @@ const TYPE_CONFIG: Record<string, { icon: typeof Server; color: string; label: s
   service:        { icon: Server,   color: '#3b82f6', label: 'Service'   },
   api_endpoint:   { icon: Globe,    color: '#8b5cf6', label: 'API'       },
   database:       { icon: Database, color: '#10b981', label: 'Database'  },
+  db_table:       { icon: Database, color: '#14b8a6', label: 'Table'     },
   kafka_topic:    { icon: Radio,    color: '#f59e0b', label: 'Kafka'     },
   message_broker: { icon: Radio,    color: '#f59e0b', label: 'Broker'    },
   domain:         { icon: Box,      color: '#06b6d4', label: 'Domain'    },
@@ -810,15 +811,22 @@ export function ObjectListClient() {
     toast.success(`${filtered.length}개 Object를 CSV로 내보냈습니다`);
   };
 
-  /* ─── 탭 + 검색 필터링 (루트 오브젝트만: depth=0) ─── */
+  /* ─── 탭 + 검색 필터링 (루트 오브젝트만: depth=0, Database 탭은 db_table 포함) ─── */
   const filtered = useMemo(() => {
-    // 탭에 따라 depth 기준 필터 여부 결정: API 탭이면 자식도 포함
-    let list = activeTab === 'api_endpoint' ? objects : objects.filter((o) => o.depth === 0);
+    // 탭에 따라 depth 기준 필터 여부 결정: API 탭이면 자식도 포함, Database 탭은 db_table도 노출
+    let list =
+      activeTab === 'api_endpoint'
+        ? objects
+        : activeTab === 'database'
+          ? objects.filter((o) => o.depth === 0 || o.objectType === 'db_table')
+          : objects.filter((o) => o.depth === 0);
     if (activeTab !== 'all') {
       if (activeTab === 'message_broker') {
         list = list.filter((o) => o.objectType === 'message_broker' || o.objectType === 'kafka_topic');
-      } else {
+      } else if (activeTab !== 'database') {
         list = list.filter((o) => o.objectType === activeTab);
+      } else {
+        list = list.filter((o) => o.objectType === 'database' || o.objectType === 'db_table');
       }
     }
     if (searchQuery.trim()) {
@@ -835,6 +843,8 @@ export function ObjectListClient() {
       // API 탭은 전체 api_endpoint 카운트
       if (obj.objectType === 'api_endpoint') {
         counts['api_endpoint'] = (counts['api_endpoint'] ?? 0) + 1;
+      } else if (obj.objectType === 'db_table') {
+        counts['database'] = (counts['database'] ?? 0) + 1;
       } else if (obj.depth === 0) {
         const key = obj.objectType === 'kafka_topic' ? 'message_broker' : obj.objectType;
         counts[key] = (counts[key] ?? 0) + 1;
