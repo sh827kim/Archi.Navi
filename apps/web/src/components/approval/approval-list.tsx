@@ -935,7 +935,9 @@ export function ApprovalList() {
 
   // S1-1: LLM 추론 관련 상태
   const [inferenceMode, setInferenceMode] = useState<'standard' | 'llm-boost' | 'smart' | 'smart-agent' | 'smart-full-agent'>('standard');
+  const [includeDbInference, setIncludeDbInference] = useState(true);
   const [runningLlmFilter, setRunningLlmFilter] = useState(false);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
 
   // S1-6: 페이지 단위 로딩 상태
   const [hasMore, setHasMore] = useState(false);
@@ -956,6 +958,7 @@ export function ApprovalList() {
         setCandidates((prev) => [...prev, ...page]);
       } else {
         setCandidates(page);
+        setSelectedCandidateIds(new Set());
       }
       setHasMore(page.length >= CANDIDATE_PAGE_SIZE);
     } catch {
@@ -1083,7 +1086,7 @@ export function ApprovalList() {
       // S1-1b: LLM Boost 모드 또는 Standard 모드
       const body: Record<string, unknown> = {
         workspaceId,
-        modes: ['config', 'code', 'db'],
+        modes: includeDbInference ? ['config', 'code', 'db'] : ['config', 'code'],
         useServiceMetadataPaths: true,
         repoRoots,
         codeEngine: resolveCodeEngine(),
@@ -1211,6 +1214,11 @@ export function ApprovalList() {
           body: JSON.stringify({ status: action }),
         });
         setCandidates((prev) => prev.filter((c) => c.id !== id));
+        setSelectedCandidateIds((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
         toast.success(action === 'APPROVED' ? '관계 승인됨' : '관계 거부됨');
         setRejectTarget(null);
       } catch {
@@ -1218,6 +1226,44 @@ export function ApprovalList() {
       }
     });
   }
+
+  const handleBulkAction = useCallback(async (action: 'APPROVED' | 'REJECTED') => {
+    if (!workspaceId) return;
+    const ids = [...selectedCandidateIds];
+    if (ids.length === 0) {
+      toast.warning('먼저 후보를 선택하세요.');
+      return;
+    }
+
+    startTransition(async () => {
+      try {
+        const res = await fetch('/api/inference/candidates/bulk', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceId, ids, status: action }),
+        });
+        const payload = await res.json() as {
+          error?: string;
+          updatedCount?: number;
+          errors?: Array<{ id: string; message: string }>;
+        };
+        if (!res.ok) throw new Error(payload.error ?? '일괄 처리 실패');
+
+        const succeeded = payload.updatedCount ?? 0;
+        const failed = payload.errors?.length ?? 0;
+        setCandidates((prev) => prev.filter((candidate) => !selectedCandidateIds.has(candidate.id)));
+        setSelectedCandidateIds(new Set());
+
+        if (failed > 0) {
+          toast.warning(`${succeeded}건 처리, ${failed}건 실패`);
+        } else {
+          toast.success(action === 'APPROVED' ? `${succeeded}건 일괄 승인됨` : `${succeeded}건 일괄 거부됨`);
+        }
+      } catch (error) {
+        toast.error(error instanceof Error ? error.message : '일괄 처리 실패');
+      }
+    });
+  }, [selectedCandidateIds, startTransition, workspaceId]);
 
   const closeMappingSheet = useCallback(() => {
     endpointRequestSeqRef.current += 1;
@@ -1344,6 +1390,15 @@ export function ApprovalList() {
             <option value="smart-agent">Smart Agent-assisted</option>
             <option value="smart-full-agent">Smart Full-agent</option>
           </select>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={includeDbInference}
+              onChange={(event) => setIncludeDbInference(event.target.checked)}
+              className="h-3.5 w-3.5 rounded border-input"
+            />
+            DB inference 포함
+          </label>
           <Button
             onClick={() => void runInference()}
             disabled={runningInference || activeSmartRunId !== null}
@@ -1371,6 +1426,9 @@ export function ApprovalList() {
     .sort((a, b) => compareCandidates(a, b, crossValidationSort));
   const compoundCandidateCount = visibleCandidates.filter(isCompoundToCompound).length;
   const firstCompoundIndex = visibleCandidates.findIndex(isCompoundToCompound);
+  const selectableVisibleCandidates = visibleCandidates.filter((candidate) => !isCompoundToCompound(candidate));
+  const allSelectableVisibleSelected = selectableVisibleCandidates.length > 0
+    && selectableVisibleCandidates.every((candidate) => selectedCandidateIds.has(candidate.id));
 
   return (
     <>
@@ -1430,6 +1488,15 @@ export function ApprovalList() {
             <option value="smart-agent">Smart Agent-assisted</option>
             <option value="smart-full-agent">Smart Full-agent</option>
           </select>
+          <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <input
+              type="checkbox"
+              checked={includeDbInference}
+              onChange={(event) => setIncludeDbInference(event.target.checked)}
+              className="h-3.5 w-3.5 rounded border-input"
+            />
+            DB inference 포함
+          </label>
           <Button
             variant="outline"
             onClick={() => void runInference()}
@@ -1453,6 +1520,45 @@ export function ApprovalList() {
 
       {visibleCandidates.length > 0 && (
         <div className="space-y-2">
+          {selectableVisibleCandidates.length > 0 && (
+            <div className="mb-2 flex flex-wrap items-center gap-2 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+              <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={allSelectableVisibleSelected}
+                  onChange={(event) => {
+                    if (event.target.checked) {
+                      setSelectedCandidateIds(
+                        new Set(selectableVisibleCandidates.map((candidate) => candidate.id)),
+                      );
+                    } else {
+                      setSelectedCandidateIds(new Set());
+                    }
+                  }}
+                  className="h-3.5 w-3.5 rounded border-input"
+                />
+                표시 후보 전체 선택
+              </label>
+              <span className="text-xs text-muted-foreground">선택 {selectedCandidateIds.size}건</span>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={isPending || selectedCandidateIds.size === 0}
+                onClick={() => void handleBulkAction('APPROVED')}
+              >
+                선택 일괄 승인
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:bg-destructive/10"
+                disabled={isPending || selectedCandidateIds.size === 0}
+                onClick={() => void handleBulkAction('REJECTED')}
+              >
+                선택 일괄 거부
+              </Button>
+            </div>
+          )}
           {visibleCandidates.map((cand, index) => {
             const contradictionBadge = getContradictionBadge(cand);
             const badge = getCrossValidationBadge(cand);
@@ -1530,6 +1636,22 @@ export function ApprovalList() {
                     className="flex items-start justify-between rounded-xl p-4 transition-all glass-card"
                   >
                     <div className="min-w-0 flex-1">
+                      <label className="mb-2 inline-flex items-center gap-2 text-xs text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={selectedCandidateIds.has(cand.id)}
+                          onChange={(event) => {
+                            setSelectedCandidateIds((prev) => {
+                              const next = new Set(prev);
+                              if (event.target.checked) next.add(cand.id);
+                              else next.delete(cand.id);
+                              return next;
+                            });
+                          }}
+                          className="h-3.5 w-3.5 rounded border-input"
+                        />
+                        선택
+                      </label>
                       <div className="flex items-center gap-3 flex-wrap">
                         <ObjectLabel
                           name={cand.subjectName}

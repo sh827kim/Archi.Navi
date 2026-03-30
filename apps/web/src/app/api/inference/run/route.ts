@@ -148,10 +148,10 @@ function isPathWithinAllowedRoots(pathValue: string, allowedRoots: string[]): bo
 }
 
 function normalizeModes(input?: string[]): InferenceMode[] {
-  const requested = (input ?? ['config', 'db']).map((m) => m.toLowerCase().trim());
+  const requested = (input ?? ['config', 'code']).map((m) => m.toLowerCase().trim());
   const valid = requested.filter(isInferenceMode);
   const deduped = [...new Set(valid)];
-  return deduped.length > 0 ? deduped : ['config', 'db'];
+  return deduped.length > 0 ? deduped : ['config', 'code'];
 }
 
 export async function POST(req: NextRequest) {

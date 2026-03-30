@@ -637,6 +637,11 @@ export function ObjectListClient() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<ObjectItem | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [selectedObjectIds, setSelectedObjectIds] = useState<Set<string>>(new Set());
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [targetDatabaseId, setTargetDatabaseId] = useState<string>('');
+  const [migratingDbTables, setMigratingDbTables] = useState(false);
 
   /* ─── 데이터 로드 ─── */
   const loadObjects = useCallback(async () => {
@@ -651,11 +656,17 @@ export function ObjectListClient() {
       if (!res.ok) throw new Error();
       const data = (await res.json()) as ObjectItem[];
       setObjects(data);
+      setSelectedObjectIds(new Set());
     } catch { console.error('[ObjectListClient] 로드 실패'); }
     finally { setLoading(false); }
   }, [workspaceId]);
 
   useEffect(() => { void loadObjects(); }, [loadObjects]);
+  useEffect(() => {
+    if (targetDatabaseId) return;
+    const firstDatabase = objects.find((obj) => obj.objectType === 'database' && obj.depth === 0);
+    if (firstDatabase) setTargetDatabaseId(firstDatabase.id);
+  }, [objects, targetDatabaseId]);
 
   /* ─── Visibility 토글 ─── */
   const toggleVisibility = async (obj: ObjectItem) => {
@@ -683,9 +694,82 @@ export function ObjectListClient() {
       if (!res.ok) throw new Error();
       toast.success('Object 삭제됨');
       setDeleteTarget(null);
+      setSelectedObjectIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
       await loadObjects();
     } catch { toast.error('삭제 실패'); }
     finally { setDeleting(false); }
+  };
+
+  const deleteSelectedObjects = async () => {
+    if (!workspaceId || selectedObjectIds.size === 0) return;
+    setBulkDeleting(true);
+    try {
+      const ids = [...selectedObjectIds];
+      const results = await Promise.allSettled(
+        ids.map((id) => fetch(`/api/objects/${id}?workspaceId=${workspaceId}`, { method: 'DELETE' })),
+      );
+      const successCount = results.filter((result) => result.status === 'fulfilled' && result.value.ok).length;
+      const failedCount = ids.length - successCount;
+
+      setBulkDeleteOpen(false);
+      if (failedCount > 0) {
+        toast.warning(`${successCount}개 삭제, ${failedCount}개 실패`);
+      } else {
+        toast.success(`${successCount}개 Object 삭제됨`);
+      }
+      await loadObjects();
+    } catch {
+      toast.error('일괄 삭제 실패');
+    } finally {
+      setBulkDeleting(false);
+    }
+  };
+
+  const migrateSelectedDbTables = async () => {
+    if (!workspaceId || !targetDatabaseId) {
+      toast.error('대상 Database를 선택하세요.');
+      return;
+    }
+    const selectedTableIds = [...selectedObjectIds].filter((id) => {
+      const obj = objects.find((item) => item.id === id);
+      return obj?.objectType === 'db_table';
+    });
+    if (selectedTableIds.length === 0) {
+      toast.warning('이동할 db_table을 선택하세요.');
+      return;
+    }
+
+    setMigratingDbTables(true);
+    try {
+      const res = await fetch('/api/objects/db-tables/reassign', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          targetDatabaseId,
+          tableIds: selectedTableIds,
+        }),
+      });
+      const payload = await res.json() as { movedCount?: number; skippedTableIds?: string[]; error?: string };
+      if (!res.ok) throw new Error(payload.error ?? 'db_table 이동 실패');
+
+      const movedCount = payload.movedCount ?? 0;
+      const skippedCount = payload.skippedTableIds?.length ?? 0;
+      if (skippedCount > 0) {
+        toast.warning(`db_table ${movedCount}개 이동, ${skippedCount}개는 중복/동일 대상이라 건너뜀`);
+      } else {
+        toast.success(`db_table ${movedCount}개를 선택한 Database로 이동했습니다.`);
+      }
+      await loadObjects();
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'db_table 이동 실패');
+    } finally {
+      setMigratingDbTables(false);
+    }
   };
 
   /* ─── 카드 클릭 (상세 패널) ─── */
@@ -759,7 +843,26 @@ export function ObjectListClient() {
     return counts;
   }, [objects]);
 
+  const selectedObjects = useMemo(
+    () => objects.filter((obj) => selectedObjectIds.has(obj.id)),
+    [objects, selectedObjectIds],
+  );
+  const selectedDbTableCount = selectedObjects.filter((obj) => obj.objectType === 'db_table').length;
+  const databaseOptions = useMemo(
+    () => objects.filter((obj) => obj.objectType === 'database' && obj.depth === 0),
+    [objects],
+  );
+
   /* ─── 카드 렌더 ─── */
+  const toggleSelection = (id: string, checked: boolean) => {
+    setSelectedObjectIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  };
+
   const renderCard = (obj: ObjectItem) => {
     const config = getConfig(obj.objectType);
     const Icon = config.icon;
@@ -793,6 +896,16 @@ export function ObjectListClient() {
         {/* 편집 모드 오버레이 */}
         {editMode && (
           <div className="absolute top-2 right-2 flex items-center gap-1">
+            <input
+              type="checkbox"
+              checked={selectedObjectIds.has(obj.id)}
+              onChange={(e) => {
+                e.stopPropagation();
+                toggleSelection(obj.id, e.target.checked);
+              }}
+              className="h-4 w-4 rounded border-input bg-background"
+              title="선택"
+            />
             <button
               onClick={(e) => { e.stopPropagation(); void toggleVisibility(obj); }}
               className={cn('rounded-md p-1.5 transition-colors', isHidden ? 'bg-muted/50 text-muted-foreground hover:text-foreground' : 'bg-primary/10 text-primary hover:bg-primary/20')}
@@ -845,6 +958,41 @@ export function ObjectListClient() {
           <Button size="sm" variant={editMode ? 'default' : 'outline'} onClick={() => setEditMode((v) => !v)}>
             {editMode ? <><CheckCheck className="h-4 w-4 mr-1.5" />완료</> : <><Pencil className="h-4 w-4 mr-1.5" />편집</>}
           </Button>
+          {editMode && (
+            <>
+              <Button
+                size="sm"
+                variant="outline"
+                className="text-destructive hover:bg-destructive/10"
+                disabled={selectedObjectIds.size === 0}
+                onClick={() => setBulkDeleteOpen(true)}
+              >
+                <Trash2 className="h-4 w-4 mr-1.5" />
+                선택 삭제 ({selectedObjectIds.size})
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={selectedDbTableCount === 0 || migratingDbTables}
+                onClick={() => void migrateSelectedDbTables()}
+              >
+                {migratingDbTables ? <Loader2 className="h-4 w-4 mr-1.5 animate-spin" /> : <ArrowRight className="h-4 w-4 mr-1.5" />}
+                선택 테이블 DB 이동 ({selectedDbTableCount})
+              </Button>
+              <Select value={targetDatabaseId} onValueChange={setTargetDatabaseId}>
+                <SelectTrigger className="h-8 w-[220px]">
+                  <SelectValue placeholder="대상 Database 선택" />
+                </SelectTrigger>
+                <SelectContent>
+                  {databaseOptions.map((dbObj) => (
+                    <SelectItem key={dbObj.id} value={dbObj.id}>
+                      {dbObj.displayName ?? dbObj.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
           {/* 뷰 토글 */}
           <div className="flex rounded-lg border border-border">
             <button onClick={() => setViewMode('grid')} className={cn('p-2 transition-colors', viewMode === 'grid' ? 'bg-primary/15 text-primary' : 'text-muted-foreground hover:text-foreground')}>
@@ -861,7 +1009,7 @@ export function ObjectListClient() {
       {editMode && (
         <div className="flex items-center gap-2 rounded-lg bg-primary/10 border border-primary/20 px-4 py-2 text-sm text-primary">
           <Pencil className="h-4 w-4 shrink-0" />
-          <span>편집 모드 — 카드에서 눈 아이콘으로 가시성 토글, 휴지통으로 삭제</span>
+          <span>편집 모드 — 체크박스로 다중 선택 후 일괄 삭제/DB 이동, 눈 아이콘으로 가시성 토글 가능</span>
         </div>
       )}
 
@@ -965,6 +1113,16 @@ export function ObjectListClient() {
                     {editMode && (
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-1">
+                          <input
+                            type="checkbox"
+                            checked={selectedObjectIds.has(obj.id)}
+                            onChange={(e) => {
+                              e.stopPropagation();
+                              toggleSelection(obj.id, e.target.checked);
+                            }}
+                            className="h-4 w-4 rounded border-input bg-background"
+                            title="선택"
+                          />
                           <button
                             onClick={(e) => { e.stopPropagation(); void toggleVisibility(obj); }}
                             className="rounded p-1 hover:bg-muted transition-colors text-muted-foreground hover:text-foreground"
@@ -1004,6 +1162,17 @@ export function ObjectListClient() {
         destructive
         loading={deleting}
         onConfirm={() => { if (deleteTarget) void deleteObject(deleteTarget.id); }}
+      />
+
+      <ConfirmDialog
+        open={bulkDeleteOpen}
+        onOpenChange={(open) => { if (!bulkDeleting) setBulkDeleteOpen(open); }}
+        title="Object 일괄 삭제"
+        description={`선택한 ${selectedObjectIds.size}개 Object를 삭제하시겠습니까? 관련 관계도 함께 삭제됩니다.`}
+        confirmLabel="일괄 삭제"
+        destructive
+        loading={bulkDeleting}
+        onConfirm={() => void deleteSelectedObjects()}
       />
     </div>
   );
