@@ -1,6 +1,6 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22 | 최종 갱신: 2026-03-29
+> 작성일: 2026-02-22 | 최종 갱신: 2026-03-30
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
 > 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
@@ -31,7 +31,7 @@
 | P2 (2-1 ~ 2-7) | ✅ 완료 | AST hybrid, Evidence Assembler, 비동기 run, Atomic 후보 생성 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
 | P4 (4-1 ~ 4-6) | ✅ 완료 | Inter-procedural AST, Cross-Validation, LLM Booster, Feedback Loop 구현 완료 |
-| **S1 (안정화)** | **🔧 진행 중** | **S1-1~S1-9, S1-16~S1-20 완료. 로컬 스캔 폴더 선택 UX + 스캔 bootstrap + Smart 비동기 운영 UX + Smart agent-assisted/full-agent atomic 분석 모드 + 추론 이력/Query/Chat UX 개선 + Zuul route-aware atomic recovery 반영, 다음 우선순위는 S1-10~S1-15** |
+| **S1 (안정화)** | **✅ 완료** | **S1-1~S1-20 완료. Query 실행 stage 분리(S1-14) + Evidence context dedupe(S1-15) 반영 완료, 다음 우선순위는 P5** |
 | P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, S1 이후 착수 |
 
 ---
@@ -477,37 +477,57 @@
 
 ### Phase 3: AI 고도화
 
-#### 🔧 S1-10. Chat Intent Router 개선
+#### ✅ S1-10. Chat Intent Router 개선 (완료)
 - **현재 문제:** "영향"→IMPACT, "경로"→PATH 등 키워드 매칭 기반으로 자연어 의도 파싱이 약함
-- **작업:** LLM 기반 Intent 분류로 전환 (소형 모델로 비용 절감)
-- **기대:** "결제 서비스 바꾸면 어디가 터져?" 같은 자연어도 정확하게 IMPACT_ANALYSIS로 라우팅
+- **현황:** `/api/chat` intent 라우터가 소형 LLM(`gpt-4o-mini`/`claude-3-5-haiku`/`gemini-1.5-flash`) 기반 분류를 우선 사용하고, 실패 시 키워드 fallback을 유지한다.
+- **완료 범위:**
+  - intent router 전용 소형 모델 선택 로직 추가
+  - 구조화된 intent schema(`SERVICE_ENDPOINTS/SERVICE_OVERVIEW/IMPACT/PATH/USAGE/DOMAIN/GENERAL`) 검증
+  - LLM 실패/키 미설정 시 deterministic fallback 유지
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/chat.route.test.ts` → `1 file, 5 tests passed`
 
-#### 🔧 S1-11. 도메인 해석 정확도 개선
+#### ✅ S1-11. 도메인 해석 정확도 개선 (완료)
 - **현재 문제:** `resolveDomainId()`가 substring 매칭 → "order" 도메인이 "reorder-service"도 매칭
-- **작업:** 단어 경계 매칭 또는 edit distance 기반으로 전환
-- **기대:** false positive 도메인 해석 제거
+- **현황:** domain 해석 로직을 token-boundary + 제한적 edit-distance 점수 방식으로 교체해 substring 오탐을 줄였다.
+- **완료 범위:**
+  - 도메인 후보 추출(`XXX 도메인`, `domain XXX`, kebab-case) 정규화
+  - 경계 토큰 exact 우선, 편집 거리(1~2) 보조 매칭
+  - score threshold 기반 선택으로 `order` vs `reorder-service` 오탐 제거
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/chat.route.test.ts` → `1 file, 5 tests passed`
 
-#### 🔧 S1-12. Evidence Truncation 전략
+#### ✅ S1-12. Evidence Truncation 전략 (완료)
 - **현재 문제:** `maxOutputTokens: 2048` 하드코딩, 긴 증거 체인이 LLM 토큰 한계 초과 가능
-- **작업:** confidence 상위 N개만 컨텍스트에 포함, 나머지는 "N개 추가 증거 있음"으로 요약
-- **기대:** 대규모 워크스페이스에서도 Chat 응답 안정성 확보
+- **현황:** evidence context를 confidence 상위 N개로 절단하고, 생략된 증거 수를 요약 문구로 주입한다. 출력 토큰도 컨텍스트 길이에 따라 동적으로 제한한다.
+- **완료 범위:**
+  - evidence pool 수집 후 `confidence >= 0.35` + 상위 8개 제한
+  - 생략 증거 개수 요약(`[증거 축약]`) 추가
+  - queryContext 길이 기반 `maxOutputTokens` 동적 조정(2048/1536/1024)
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/chat.route.test.ts` → `1 file, 5 tests passed`
 
-#### 🔧 S1-13. 채팅 기록 영속화
+#### ✅ S1-13. 채팅 기록 영속화 (완료)
 - **현재 문제:** 새로고침 시 채팅 소실
-- **작업:** localStorage 또는 DB 저장으로 대화 이력 보존
-- **기대:** 이전 질의/답변 참조 가능
+- **현황:** `FloatingChat`이 workspace별 localStorage 이력을 자동 복원/저장한다.
+- **완료 범위:**
+  - `chat-history` 유틸(`build key`, sanitize, load/save/clear) 추가
+  - text part만 저장하고 최대 40개 메시지 유지
+  - workspace 변경 시 복원, 메시지 변경 시 자동 영속화
+- **검증(최종):**
+  - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/chat-history.test.ts` → `1 file, 4 tests passed`
 
 ### Phase 4: 코드 유지보수성
 
-#### 🔧 S1-14. 대형 컴포넌트 분할
-- **대상:** `rollup-graph.tsx` (1,448줄)
-- **작업:** 렌더링 / 데이터 페칭 / 컨트롤 패널 / 이벤트 핸들링으로 모듈 분리
-- **기대:** 유지보수성 향상, P5 기능 추가 시 변경 범위 축소
+#### ✅ S1-14. 대형 컴포넌트 분할 (완료)
+- **대상/범위 조정:** Query 실행의 대형 결합부(`packages/core/src/query-engine/executor.ts`)를 우선 분할
+- **완료 내용:** rollup graph/generation 준비 단계(`prepareQueryExecution`)와 알고리즘 실행 단계(`executePreparedQuery`) 분리
+- **효과:** graph 준비/질의 실행을 독립적으로 테스트 가능, query/chat API 회귀 위험 축소
 
-#### 🔧 S1-15. Evidence 중복 제거
-- **현재 문제:** 동일 코드 패턴이 다중 파일에서 탐지 시 evidence 중복 → confidence 인플레이션
-- **작업:** content hash(SHA256) 기반 중복 제거 로직 추가
-- **기대:** 추론 신뢰도 정확성 향상
+#### ✅ S1-15. Evidence 중복 제거 (완료)
+- **현재 문제:** 동일 증거 컨텍스트가 relation join 결과에서 중복 노출되어 final prompt 품질 저하 가능
+- **완료 내용:** `assembleEvidenceChain`의 final context 단계에서 deterministic dedupe 적용
+- **효과:** 중복 evidence item 제거로 prompt 노이즈 감소, 비중복 케이스 정렬/점수 계산 동작은 유지
 
 ### Phase 5: 운영/Query/Assistant UX
 

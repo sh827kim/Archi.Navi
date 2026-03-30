@@ -53,3 +53,4 @@ packages/inference/wasm/*.wasm
 *.tmp
 *.temp
 .idea
+.agents
