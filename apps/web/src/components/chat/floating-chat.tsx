@@ -24,6 +24,10 @@ import {
 import { cn, Button, Input } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { getClientAiRequestHeaders } from '@/lib/client-ai-settings';
+import {
+  loadPersistedChatMessages,
+  savePersistedChatMessages,
+} from '@/lib/chat-history';
 
 /** 예시 질문 목록 */
 const EXAMPLE_QUESTIONS = [
@@ -178,11 +182,13 @@ export function FloatingChat() {
   const [isOpen, setIsOpen] = useState(false);
   const [input, setInput] = useState('');
   const bottomRef = useRef<HTMLDivElement>(null);
+  const hydratedWorkspaceIdRef = useRef<string | null>(null);
   const { workspaceId } = useWorkspace();
 
   // AI SDK v6: DefaultChatTransport + sendMessage 패턴
   const {
     messages,
+    setMessages,
     sendMessage,
     status,
     error,
@@ -196,6 +202,23 @@ export function FloatingChat() {
 
   // 스트리밍 중인지 체크 (로딩 상태)
   const isStreaming = status === 'submitted' || status === 'streaming';
+
+  // workspace별 채팅 이력 복원/영속화
+  useEffect(() => {
+    if (!workspaceId) {
+      hydratedWorkspaceIdRef.current = null;
+      return;
+    }
+
+    if (hydratedWorkspaceIdRef.current !== workspaceId) {
+      const restored = loadPersistedChatMessages(workspaceId);
+      hydratedWorkspaceIdRef.current = workspaceId;
+      setMessages(restored);
+      return;
+    }
+
+    savePersistedChatMessages(workspaceId, messages);
+  }, [workspaceId, messages, setMessages]);
 
   // 새 메시지 → 스크롤 하단 이동
   useEffect(() => {
