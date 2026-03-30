@@ -7,6 +7,7 @@
  */
 import {
   streamText,
+  generateObject,
   convertToModelMessages,
   createUIMessageStream,
   createUIMessageStreamResponse,
@@ -29,6 +30,8 @@ import {
   buildDomainAnswerComposerPrompt,
 } from '@archi-navi/core';
 import type { QueryScope } from '@archi-navi/shared';
+import type { EvidenceChain } from '@archi-navi/core';
+import { z } from 'zod';
 
 type ChatIntent =
   | 'SERVICE_ENDPOINTS'
@@ -38,6 +41,38 @@ type ChatIntent =
   | 'USAGE_DISCOVERY'
   | 'DOMAIN_SUMMARY'
   | 'GENERAL';
+
+const CHAT_INTENT_VALUES = [
+  'SERVICE_ENDPOINTS',
+  'SERVICE_OVERVIEW',
+  'IMPACT_ANALYSIS',
+  'PATH_DISCOVERY',
+  'USAGE_DISCOVERY',
+  'DOMAIN_SUMMARY',
+  'GENERAL',
+] as const;
+
+const chatIntentSchema = z.object({
+  intent: z.enum(CHAT_INTENT_VALUES),
+});
+
+const EVIDENCE_CONTEXT_POOL_SIZE = 48;
+const EVIDENCE_CONTEXT_MAX_ITEMS = 8;
+const EVIDENCE_MIN_CONFIDENCE = 0.35;
+const DEFAULT_MAX_OUTPUT_TOKENS = 2048;
+
+function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
+  if (headerApiKey) return headerApiKey;
+
+  switch (provider) {
+    case 'anthropic':
+      return process.env['ANTHROPIC_API_KEY'] ?? null;
+    case 'google':
+      return process.env['GOOGLE_GENERATIVE_AI_API_KEY'] ?? null;
+    default:
+      return process.env['OPENAI_API_KEY'] ?? null;
+  }
+}
 
 /** AI 제공자 선택 (헤더 오버라이드 → 환경변수 fallback) */
 function getModel(req: Request): LanguageModel {
@@ -65,6 +100,33 @@ function getModel(req: Request): LanguageModel {
       const modelName = headerModel ?? 'gpt-4o';
       const sdk = headerApiKey ? createOpenAI({ apiKey: headerApiKey }) : openai;
       return sdk(modelName);
+    }
+  }
+}
+
+/**
+ * Intent Router 전용 소형 모델 선택.
+ * 본 응답 모델과 분리해 비용을 줄이고, 실패 시 키워드 fallback을 사용한다.
+ */
+function getIntentRouterModel(req: Request): LanguageModel | null {
+  const headerProvider = req.headers.get('x-ai-provider');
+  const headerApiKey = req.headers.get('x-ai-api-key');
+  const provider = headerProvider ?? process.env['AI_PROVIDER'] ?? 'openai';
+  const apiKey = resolveProviderApiKey(provider, headerApiKey);
+  if (!apiKey) return null;
+
+  switch (provider) {
+    case 'anthropic': {
+      const sdk = headerApiKey ? createAnthropic({ apiKey }) : anthropic;
+      return sdk('claude-3-5-haiku-20241022');
+    }
+    case 'google': {
+      const sdk = headerApiKey ? createGoogleGenerativeAI({ apiKey }) : google;
+      return sdk('gemini-1.5-flash');
+    }
+    default: {
+      const sdk = headerApiKey ? createOpenAI({ apiKey }) : openai;
+      return sdk('gpt-4o-mini');
     }
   }
 }
@@ -158,7 +220,7 @@ function formatObjectLabel(object: {
   return object.displayName ? `${object.displayName} (${object.name})` : object.name;
 }
 
-function detectChatIntent(message: string): ChatIntent {
+function detectChatIntentByKeyword(message: string): ChatIntent {
   const normalized = message.toLowerCase();
   const asksServiceEndpoints =
     /(api|endpoint|엔드포인트)/i.test(message)
@@ -186,6 +248,45 @@ function detectChatIntent(message: string): ChatIntent {
     return 'DOMAIN_SUMMARY';
   }
   return 'GENERAL';
+}
+
+async function detectChatIntentByLlm(req: Request, message: string): Promise<ChatIntent | null> {
+  const model = getIntentRouterModel(req);
+  if (!model) return null;
+  if (message.trim().length === 0) return null;
+
+  const prompt = [
+    '너는 Archi.Navi chat intent router다.',
+    '아래 사용자 질문을 정확히 하나의 intent로만 분류한다.',
+    'intent 후보:',
+    '- SERVICE_ENDPOINTS: 서비스가 제공하는 API/엔드포인트 목록 질문',
+    '- SERVICE_OVERVIEW: 서비스 역할/개요/설명 질문',
+    '- IMPACT_ANALYSIS: 변경 영향/의존 영향 범위 질문',
+    '- PATH_DISCOVERY: A에서 B까지 연결 경로/흐름 질문',
+    '- USAGE_DISCOVERY: 누가 사용/호출하는지 질문',
+    '- DOMAIN_SUMMARY: 도메인 구성/요약 질문',
+    '- GENERAL: 위 범주에 없는 일반 질문',
+    '',
+    `질문: ${message}`,
+  ].join('\n');
+
+  try {
+    const result = await generateObject({
+      model,
+      schema: chatIntentSchema,
+      prompt,
+      temperature: 0,
+    });
+    return result.object.intent;
+  } catch {
+    return null;
+  }
+}
+
+async function detectChatIntent(req: Request, message: string): Promise<ChatIntent> {
+  const routed = await detectChatIntentByLlm(req, message);
+  if (routed) return routed;
+  return detectChatIntentByKeyword(message);
 }
 
 async function buildServiceContext(
@@ -278,73 +379,126 @@ async function buildServiceContext(
   ].join('\n');
 }
 
+function normalizeTokenBoundary(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[_-]/g, ' ')
+    .replace(/[^a-z0-9가-힣\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function tokenizeTokenBoundary(value: string): string[] {
+  const normalized = normalizeTokenBoundary(value);
+  if (!normalized) return [];
+  return normalized.split(' ').filter(Boolean);
+}
+
+function extractDomainCandidates(message: string): string[] {
+  const candidates: string[] = [];
+  const patterns = [
+    /([가-힣A-Za-z0-9_-]+)\s*도메인/gi,
+    /domain\s+([가-힣A-Za-z0-9_-]+)/gi,
+  ];
+
+  for (const pattern of patterns) {
+    for (const match of message.matchAll(pattern)) {
+      const raw = match[1]?.trim();
+      if (raw && raw.length > 1) {
+        candidates.push(raw.toLowerCase());
+      }
+    }
+  }
+
+  const kebabTokens = [...message.matchAll(/\b([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)+)\b/g)]
+    .map((m) => m[1]?.toLowerCase())
+    .filter((token): token is string => !!token);
+  for (const token of kebabTokens) {
+    candidates.push(token);
+  }
+
+  return [...new Set(candidates)];
+}
+
+function levenshteinDistance(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+
+  const matrix = Array.from({ length: a.length + 1 }, () => Array<number>(b.length + 1).fill(0));
+  for (let i = 0; i <= a.length; i++) matrix[i]![0] = i;
+  for (let j = 0; j <= b.length; j++) matrix[0]![j] = j;
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[i]![j] = Math.min(
+        matrix[i - 1]![j]! + 1,
+        matrix[i]![j - 1]! + 1,
+        matrix[i - 1]![j - 1]! + cost,
+      );
+    }
+  }
+
+  return matrix[a.length]![b.length]!;
+}
+
+function scoreDomainNameMatch(candidate: string, domainName: string): number {
+  const candidateNormalized = normalizeTokenBoundary(candidate);
+  const domainNormalized = normalizeTokenBoundary(domainName);
+  if (!candidateNormalized || !domainNormalized) return 0;
+
+  if (domainNormalized === candidateNormalized) return 100;
+
+  const tokens = tokenizeTokenBoundary(domainName);
+  if (tokens.includes(candidateNormalized)) return 85;
+
+  // 오타 허용: 1~2자 이내 편집 거리만 허용해 substring false positive를 막는다.
+  if (candidateNormalized.length >= 4) {
+    const distance = levenshteinDistance(candidateNormalized, domainNormalized);
+    if (distance <= 1) return 70;
+    if (candidateNormalized.length >= 7 && distance <= 2) return 60;
+  }
+
+  return 0;
+}
+
 /**
- * 메시지에서 도메인 이름을 추출하고 DB에서 domain Object ID를 조회한다.
- * "주문 도메인", "결제 도메인" 등 한국어/영어 도메인 이름 패턴 인식.
- * W-8.3: DOMAIN_SUMMARY 쿼리에 특정 domainId를 전달하기 위해 사용.
+ * 메시지에서 도메인 이름을 추출하고 token-boundary + edit-distance 점수로 domain Object ID를 조회한다.
+ * substring 포함 매칭("order" → "reorder-service")으로 인한 false positive를 줄이기 위한 로직.
  */
 async function resolveDomainId(
   db: DbClient,
   workspaceId: string,
   message: string,
 ): Promise<string | null> {
-  // "XXX 도메인" 또는 "domain XXX" 패턴에서 도메인명 추출
-  const patterns = [
-    /(\S+)\s*도메인/g, // 한국어: "주문 도메인", "결제 도메인"
-    /domain\s+(\S+)/gi, // 영어: "domain order", "domain payment"
-  ];
-
-  const candidates: string[] = [];
-  for (const pattern of patterns) {
-    for (const match of message.matchAll(pattern)) {
-      const name = match[1]?.trim();
-      if (name && name.length > 1) {
-        candidates.push(name.toLowerCase());
-      }
-    }
-  }
-
-  // kebab-case 토큰(하이픈 포함 식별자만) 추가 — 단일 영단어는 false positive가 높으므로 제외
-  const kebabTokens = [...message.matchAll(/\b([a-zA-Z][a-zA-Z0-9]*(?:-[a-zA-Z0-9]+)+)\b/g)]
-    .map((m) => m[1]?.toLowerCase())
-    .filter((t): t is string => !!t);
-  for (const token of kebabTokens) {
-    if (!candidates.includes(token)) {
-      candidates.push(token);
-    }
-  }
-
+  const candidates = extractDomainCandidates(message);
   if (candidates.length === 0) return null;
 
-  // domain objectType인 것만 조회 (LIKE 특수문자 이스케이프 적용)
-  const conditions = candidates.map((name) => {
-    const escaped = escapeLike(name);
-    return or(ilike(objects.name, `%${escaped}%`), ilike(objects.displayName, `%${escaped}%`));
-  });
   const rows = await db
     .select({ id: objects.id, name: objects.name, displayName: objects.displayName })
     .from(objects)
-    .where(
-      and(
-        eq(objects.workspaceId, workspaceId),
-        eq(objects.objectType, 'domain'),
-        or(...conditions),
-      ),
-    )
-    .limit(candidates.length);
-
+    .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'domain')));
   if (rows.length === 0) return null;
 
-  // 후보 이름 순서대로 매칭
-  for (const name of candidates) {
-    const matched = rows.find(
-      (r) =>
-        r.name.toLowerCase().includes(name) ||
-        (r.displayName?.toLowerCase().includes(name) ?? false),
-    );
-    if (matched) return matched.id;
+  for (const candidate of candidates) {
+    let bestMatch: { id: string; score: number } | null = null;
+    for (const row of rows) {
+      const score = Math.max(
+        scoreDomainNameMatch(candidate, row.name),
+        row.displayName ? scoreDomainNameMatch(candidate, row.displayName) : 0,
+      );
+      if (!bestMatch || score > bestMatch.score) {
+        bestMatch = { id: row.id, score };
+      }
+    }
+
+    if (bestMatch && bestMatch.score >= 60) {
+      return bestMatch.id;
+    }
   }
-  return rows[0]?.id ?? null;
+
+  return null;
 }
 
 /**
@@ -417,6 +571,42 @@ const SYSTEM_PROMPT = `당신은 MSA 아키텍처 전문가 어시스턴트 'Arc
 - 구체적인 서비스 이름과 관계 타입을 포함합니다
 - 한국어로 답변합니다`;
 
+function truncateEvidenceChainForContext(
+  chain: EvidenceChain,
+  maxCount: number,
+  minConfidence: number,
+): EvidenceChain {
+  const filtered = chain.items
+    .filter((item) => item.confidence >= minConfidence)
+    .sort((a, b) => {
+      if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+      if (b.score !== a.score) return b.score - a.score;
+      if (b.edgeWeight !== a.edgeWeight) return b.edgeWeight - a.edgeWeight;
+      return a.hop - b.hop;
+    });
+  const items = filtered.slice(0, maxCount);
+  return {
+    ...chain,
+    items,
+    totalCount: filtered.length,
+    truncated: filtered.length > maxCount,
+  };
+}
+
+function buildEvidenceTruncationSummary(chain: EvidenceChain): string {
+  if (!chain.truncated) return '';
+  const omittedCount = Math.max(chain.totalCount - chain.items.length, 0);
+  if (omittedCount <= 0) return '';
+  return `\n\n[증거 축약]\nconfidence 상위 ${chain.items.length}개만 컨텍스트에 포함했고, 추가 ${omittedCount}개 증거는 요약으로 생략했습니다.`;
+}
+
+function resolveChatMaxOutputTokens(queryContext: string): number {
+  const contextLength = queryContext.length;
+  if (contextLength >= 12000) return 1024;
+  if (contextLength >= 7000) return 1536;
+  return DEFAULT_MAX_OUTPUT_TOKENS;
+}
+
 function createMockChatResponse(content: string): Response {
   const stream = createUIMessageStream({
     execute: ({ writer }) => {
@@ -473,10 +663,11 @@ export async function POST(req: Request) {
         visibility: 'VISIBLE_ONLY',
       };
 
+      const intent = await detectChatIntent(req, lastUserMessage);
+
       // 메시지에서 서비스명 추출 → Object ID 해석
       const mentionedNames = extractMentionedNames(lastUserMessage);
       const primaryId = await resolveObjectId(db, workspaceId, mentionedNames);
-      const intent = detectChatIntent(lastUserMessage);
 
       let secondaryId: string | null = null;
       if (intent === 'PATH_DISCOVERY') {
@@ -557,12 +748,20 @@ export async function POST(req: Request) {
             queryContext = `\n\n${summaryText}${composerPrompt}`;
           }
         } else {
-          // 그 외: Evidence Chain 조립 → 구조화된 텍스트 + Answer Composer 형식 지침 주입
-          const chain = await assembleEvidenceChain(db, queryResponse);
+          // 그 외: Evidence Chain 조립 후 confidence 상위 N개만 컨텍스트에 주입
+          const rawChain = await assembleEvidenceChain(db, queryResponse, {
+            maxCount: EVIDENCE_CONTEXT_POOL_SIZE,
+          });
+          const chain = truncateEvidenceChainForContext(
+            rawChain,
+            EVIDENCE_CONTEXT_MAX_ITEMS,
+            EVIDENCE_MIN_CONFIDENCE,
+          );
           const formatted = formatEvidenceChain(chain);
+          const truncationSummary = buildEvidenceTruncationSummary(chain);
           const composerPrompt = buildAnswerComposerSystemPrompt(chain);
           if (formatted) {
-            queryContext = `\n\n${formatted}${composerPrompt}`;
+            queryContext = `\n\n${formatted}${truncationSummary}${composerPrompt}`;
           }
         }
       }
@@ -593,7 +792,7 @@ export async function POST(req: Request) {
       system: SYSTEM_PROMPT + queryContext,
       // UIMessage[] → ModelMessage[] 변환 (AI SDK v6 요구사항, async 함수)
       messages: await convertToModelMessages(messages),
-      maxOutputTokens: 2048,
+      maxOutputTokens: resolveChatMaxOutputTokens(queryContext),
       temperature: 0.3,
     });
 

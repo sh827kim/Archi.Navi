@@ -404,6 +404,45 @@ describe('assembleEvidenceChain', () => {
         const mapped = chain.items.find((i) => i.sourceId === 'order-service' && i.targetId === 'payment-service');
         expect(mapped?.type).toBe('rollup');
     });
+
+    it('동일 evidence context는 dedupe되어 한 번만 포함되어야 한다', async () => {
+        const duplicateEvidenceRows = [
+            {
+                id: 'ev-1',
+                workspaceId: 'ws-1',
+                evidenceType: 'FILE',
+                filePath: 'src/OrderController.java',
+                lineStart: 120,
+                lineEnd: 145,
+                excerpt: 'restTemplate.getForObject("http://payment-service/pay", String.class)',
+                uri: null,
+                metadata: {},
+                createdAt: new Date(),
+            },
+            {
+                id: 'ev-2',
+                workspaceId: 'ws-1',
+                evidenceType: 'FILE',
+                filePath: 'src/OrderController.java',
+                lineStart: 120,
+                lineEnd: 145,
+                excerpt: 'restTemplate.getForObject("http://payment-service/pay", String.class)',
+                uri: null,
+                metadata: {},
+                createdAt: new Date(),
+            },
+        ];
+        const db = createMockDb(duplicateEvidenceRows);
+        const response = makeQueryResponse();
+
+        const chain = await assembleEvidenceChain(db, response);
+        const duplicatedContextItems = chain.items.filter(
+            (item) => item.filePath === 'src/OrderController.java' && item.lineStart === 120 && item.lineEnd === 145,
+        );
+
+        expect(duplicatedContextItems).toHaveLength(1);
+        expect(chain.totalCount).toBe(chain.items.length);
+    });
 });
 
 // ─── formatEvidenceChain 테스트 ───────────────────────────────────────────────

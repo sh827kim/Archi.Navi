@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const {
   getDbMock,
   streamTextMock,
+  generateObjectMock,
   convertToModelMessagesMock,
   executeQueryMock,
   assembleEvidenceChainMock,
@@ -15,6 +16,7 @@ const {
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
   streamTextMock: vi.fn(),
+  generateObjectMock: vi.fn(),
   convertToModelMessagesMock: vi.fn(),
   executeQueryMock: vi.fn(),
   assembleEvidenceChainMock: vi.fn(),
@@ -26,6 +28,7 @@ const {
 
 vi.mock('ai', () => ({
   streamText: streamTextMock,
+  generateObject: generateObjectMock,
   convertToModelMessages: convertToModelMessagesMock,
   createUIMessageStream: vi.fn(({ execute }: { execute: (args: { writer: { write: (chunk: unknown) => void } }) => void }) => ({
     execute,
@@ -108,6 +111,9 @@ function createRequest(message: string): Request {
 describe('POST /api/chat', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    delete process.env['OPENAI_API_KEY'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    delete process.env['GOOGLE_GENERATIVE_AI_API_KEY'];
     convertToModelMessagesMock.mockResolvedValue([]);
     streamTextMock.mockReturnValue({
       toUIMessageStreamResponse: () => new Response('ok'),
@@ -116,11 +122,19 @@ describe('POST /api/chat', () => {
     buildDomainAnswerComposerPromptMock.mockReturnValue('\nDOMAIN_PROMPT');
     formatEvidenceChainMock.mockReturnValue('formatted-chain');
     buildAnswerComposerSystemPromptMock.mockReturnValue('\nANSWER_PROMPT');
-    assembleEvidenceChainMock.mockResolvedValue({ items: [] });
+    assembleEvidenceChainMock.mockResolvedValue({
+      items: [],
+      totalCount: 0,
+      truncated: false,
+      queryType: 'IMPACT_ANALYSIS',
+    });
   });
 
   afterEach(() => {
     delete process.env['ARCHI_NAVI_CHAT_MOCK'];
+    delete process.env['OPENAI_API_KEY'];
+    delete process.env['ANTHROPIC_API_KEY'];
+    delete process.env['GOOGLE_GENERATIVE_AI_API_KEY'];
   });
 
   it('서비스 API 질문이면 서비스 컨텍스트를 system prompt에 주입하고 executeQuery를 호출하지 않아야 한다', async () => {
@@ -218,6 +232,119 @@ describe('POST /api/chat', () => {
     expect(streamTextMock).toHaveBeenCalledWith(
       expect.objectContaining({
         system: expect.stringContaining('ANSWER_PROMPT'),
+      }),
+    );
+    expect(assembleEvidenceChainMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ maxCount: 48 }),
+    );
+  });
+
+  it('LLM intent router 결과를 우선 적용해 query type을 결정해야 한다', async () => {
+    process.env['OPENAI_API_KEY'] = 'test-key';
+    generateObjectMock.mockResolvedValue({
+      object: { intent: 'PATH_DISCOVERY' },
+    });
+    getDbMock.mockResolvedValue(
+      createDbMock([
+        [
+          { id: 'svc-order', name: 'order-service', displayName: 'Order Service' },
+          { id: 'svc-payment', name: 'payment-service', displayName: 'Payment Service' },
+        ],
+        [{ id: 'svc-payment', name: 'payment-service', displayName: 'Payment Service' }],
+      ]),
+    );
+    executeQueryMock.mockResolvedValue({
+      queryType: 'PATH_DISCOVERY',
+      result: { nodes: [], edges: [] },
+    });
+
+    const response = await POST(createRequest('order-service와 payment-service 관계 분석해줘'));
+
+    expect(response.status).toBe(200);
+    expect(generateObjectMock).toHaveBeenCalled();
+    expect(executeQueryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        queryType: 'PATH_DISCOVERY',
+        params: expect.objectContaining({
+          fromObjectId: 'svc-order',
+          toObjectId: 'svc-payment',
+        }),
+      }),
+    );
+  });
+
+  it('DOMAIN_SUMMARY에서 token-boundary 매칭으로 reorder 오탐 없이 domainId를 선택해야 한다', async () => {
+    getDbMock.mockResolvedValue(
+      createDbMock([
+        [],
+        [
+          { id: 'dom-reorder', name: 'reorder-service', displayName: '재주문 도메인' },
+          { id: 'dom-order', name: 'order', displayName: '주문 도메인' },
+        ],
+      ]),
+    );
+    executeQueryMock.mockResolvedValue({
+      queryType: 'DOMAIN_SUMMARY',
+      result: { summary: {} },
+    });
+
+    const response = await POST(createRequest('order 도메인 요약해줘'));
+
+    expect(response.status).toBe(200);
+    expect(executeQueryMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        queryType: 'DOMAIN_SUMMARY',
+        params: expect.objectContaining({
+          domainId: 'dom-order',
+        }),
+      }),
+    );
+  });
+
+  it('긴 evidence 컨텍스트면 maxOutputTokens를 자동으로 줄여야 한다', async () => {
+    getDbMock.mockResolvedValue(
+      createDbMock([
+        [{ id: 'svc-1', name: 'payment-service', displayName: 'Payment Service' }],
+      ]),
+    );
+    executeQueryMock.mockResolvedValue({
+      queryType: 'IMPACT_ANALYSIS',
+      result: { nodes: [], edges: [] },
+    });
+    assembleEvidenceChainMock.mockResolvedValue({
+      queryType: 'IMPACT_ANALYSIS',
+      totalCount: 12,
+      truncated: true,
+      items: Array.from({ length: 12 }, (_, idx) => ({
+        type: 'rollup',
+        sourceId: `s-${idx}`,
+        sourceName: `s-${idx}`,
+        targetId: `t-${idx}`,
+        targetName: `t-${idx}`,
+        relationType: 'call',
+        confidence: Math.max(0.2, 0.95 - idx * 0.05),
+        edgeWeight: 1,
+        hop: 0,
+        score: 1,
+      })),
+    });
+    formatEvidenceChainMock.mockReturnValue('x'.repeat(8000));
+
+    const response = await POST(createRequest('payment-service 수정 시 영향받는 서비스는?'));
+
+    expect(response.status).toBe(200);
+    const chainArg = buildAnswerComposerSystemPromptMock.mock.calls[0]?.[0] as {
+      items: Array<{ confidence: number }>;
+    };
+    expect(chainArg.items.length).toBeLessThanOrEqual(8);
+    expect(chainArg.items.every((item) => item.confidence >= 0.35)).toBe(true);
+    expect(streamTextMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        maxOutputTokens: 1536,
       }),
     );
   });

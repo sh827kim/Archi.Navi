@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-29
+> 최종 점검일: 2026-03-30
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -16,7 +16,7 @@
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 추론 엔진 고도화 (P4) | ✅ | 4-1~4-6 구현 완료 |
-| **안정화 (S1)** | **🔧** | **S1-1~S1-9, S1-16~S1-20 완료. 폴더 선택/스캔 bootstrap/Smart 비동기 운영 UX와 agent-assisted/full-agent atomic 분석, 추론 이력/Query/Chat UX 개선, Zuul route-aware atomic recovery 반영. 다음은 S1-10~S1-15** |
+| **안정화 (S1)** | **✅** | **S1-1~S1-20 완료. Query 실행 파이프라인 stage 분리(S1-14)와 Evidence context dedupe(S1-15)까지 반영 완료. 다음은 P5 생산성 기능 우선순위 조정** |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
 
 ---
@@ -96,6 +96,11 @@
   - `service overview`, `service endpoints` intent 추가
   - `name + displayName` 기반 object resolution
   - 서비스 하위 `api_endpoint` object retrieval 기반 컨텍스트 제공
+- ✅ Chat Intent Router / Domain Resolver / Evidence Truncation / Chat History 영속화
+  - 소형 LLM 기반 intent router + 키워드 fallback
+  - domain 해석 token-boundary + edit-distance 점수 매칭
+  - confidence 상위 evidence context 절단 + 생략 개수 요약
+  - workspace별 localStorage 채팅 이력 복원/저장
 - ✅ Smart Pipeline API (`/api/inference/smart`)
   - `pair_pack` / `agent_assisted` / `full_agent` atomic 분석 모드 지원
   - service-to-service pair는 기존 Smart 경로를 유지하고, atomic만 Agent escalation 또는 full-agent 경로로 분기
@@ -113,7 +118,7 @@
 ## 2) ⚠️ Dead Feature — UI 연결 전환 현황
 
 > P4까지 백엔드 구현이 완료되었으나 프론트엔드에서 호출하지 않거나 운영 UX가 부족했던 항목 목록.
-> S1(안정화)에서 순차 연결 중이며, 현재 `S1-1`~`S1-9`가 완료됐다. 상세는 `docs/03-roadmap.md` S1 섹션 참조.
+> S1(안정화)에서 순차 연결 중이며, 현재 `S1-1`~`S1-13`이 완료됐다. 상세는 `docs/03-roadmap.md` S1 섹션 참조.
 
 ### 2.1 🔴 Critical — 핵심 기능 상태
 
@@ -177,12 +182,12 @@
 | S1-7. Dashboard Home | UX 기반 | ✅ 완료 |
 | S1-8. Empty State 가이드 | UX 기반 | ✅ 완료 |
 | S1-9. 사이드바 접기/펼치기 | UX 기반 | ✅ 완료 |
-| S1-10. Chat Intent Router 개선 | AI 고도화 | 🔧 예정 |
-| S1-11. 도메인 해석 정확도 개선 | AI 고도화 | 🔧 예정 |
-| S1-12. Evidence Truncation 전략 | AI 고도화 | 🔧 예정 |
-| S1-13. 채팅 기록 영속화 | AI 고도화 | 🔧 예정 |
-| S1-14. 대형 컴포넌트 분할 | 유지보수성 | 🔧 예정 |
-| S1-15. Evidence 중복 제거 | 유지보수성 | 🔧 예정 |
+| S1-10. Chat Intent Router 개선 | AI 고도화 | ✅ 완료 |
+| S1-11. 도메인 해석 정확도 개선 | AI 고도화 | ✅ 완료 |
+| S1-12. Evidence Truncation 전략 | AI 고도화 | ✅ 완료 |
+| S1-13. 채팅 기록 영속화 | AI 고도화 | ✅ 완료 |
+| S1-14. 대형 컴포넌트 분할 | 유지보수성 | ✅ 완료 (Query executor를 `prepare`/`execute` stage로 분리) |
+| S1-15. Evidence 중복 제거 | 유지보수성 | ✅ 완료 (final context dedupe 적용) |
 | S1-16. 추론 이력 운영 UX 개선 | 운영 UX | ✅ 완료 |
 | S1-17. Query 결과 Humanized Rendering | Query UX | ✅ 완료 |
 | S1-18. Query 입력 UX/계약 정합성 개선 | Query UX | ✅ 완료 |

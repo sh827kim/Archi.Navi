@@ -89,6 +89,47 @@ function calcScore(confidence: number, edgeWeight: number, hop: number): number 
     return (confidence * edgeWeight) / (hop + 1);
 }
 
+function makeEvidenceDedupKey(item: EvidenceItem): string {
+    return [
+        item.type,
+        item.sourceId,
+        item.targetId,
+        item.relationType,
+        item.filePath ?? '',
+        item.lineStart?.toString() ?? '',
+        item.lineEnd?.toString() ?? '',
+        item.uri ?? '',
+        item.excerpt ?? '',
+    ].join('|');
+}
+
+function dedupeEvidenceItems(items: EvidenceItem[]): EvidenceItem[] {
+    const deduped = new Map<string, EvidenceItem>();
+    for (const item of items) {
+        const key = makeEvidenceDedupKey(item);
+        const existing = deduped.get(key);
+
+        if (!existing) {
+            deduped.set(key, item);
+            continue;
+        }
+
+        // 동일 evidence key라면 점수가 더 높은 항목을 유지한다.
+        if (
+            item.score > existing.score
+            || (item.score === existing.score && item.edgeWeight > existing.edgeWeight)
+            || (
+                item.score === existing.score
+                && item.edgeWeight === existing.edgeWeight
+                && item.confidence > existing.confidence
+            )
+        ) {
+            deduped.set(key, item);
+        }
+    }
+    return [...deduped.values()];
+}
+
 // ─── 핵심 함수 ────────────────────────────────────────────────────────────────
 
 /**
@@ -262,7 +303,9 @@ export async function assembleEvidenceChain(
 
     // ─── 4. 정렬 및 slice ─────────────────────────────────────────────────────
 
-    allItems.sort((a, b) => {
+    const uniqueItems = dedupeEvidenceItems(allItems);
+
+    uniqueItems.sort((a, b) => {
         // 1차: score 내림차순
         if (b.score !== a.score) return b.score - a.score;
         // 2차: edgeWeight 내림차순
@@ -273,8 +316,8 @@ export async function assembleEvidenceChain(
         return a.hop - b.hop;
     });
 
-    const totalCount = allItems.length;
-    const items = allItems.slice(0, maxCount);
+    const totalCount = uniqueItems.length;
+    const items = uniqueItems.slice(0, maxCount);
 
     return {
         items,

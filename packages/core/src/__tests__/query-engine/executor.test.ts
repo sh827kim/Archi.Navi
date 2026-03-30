@@ -1,5 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { executeQuery } from '../../query-engine/executor';
+import {
+  executePreparedQuery,
+  executeQuery,
+  prepareQueryExecution,
+  requiresRollupGraph,
+} from '../../query-engine/executor';
 import { getOrBuildGraph } from '../../graph-index/index';
 import { findPaths } from '../../query-engine/pathDiscovery';
 import { analyzeImpact } from '../../query-engine/impactAnalysis';
@@ -30,6 +35,76 @@ vi.mock('../../query-engine/domainSummary', () => ({
 vi.mock('../../rollup/generationManager', () => ({
   getActiveGeneration: vi.fn(),
 }));
+
+describe('query execution pipeline split', () => {
+  const db = {} as Parameters<typeof executeQuery>[0];
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getOrBuildGraph).mockResolvedValue({} as never);
+    vi.mocked(findPaths).mockResolvedValue({ nodes: [], edges: [] } as never);
+    vi.mocked(analyzeImpact).mockResolvedValue({ nodes: [], edges: [] } as never);
+    vi.mocked(discoverUsage).mockResolvedValue({ nodes: [], edges: [] } as never);
+    vi.mocked(summarizeDomain).mockResolvedValue({ nodes: [], edges: [], summary: {} } as never);
+  });
+
+  it('rollup graph가 필요한 query type만 그래프 stage를 사용해야 한다', () => {
+    expect(requiresRollupGraph('PATH_DISCOVERY')).toBe(true);
+    expect(requiresRollupGraph('IMPACT_ANALYSIS')).toBe(true);
+    expect(requiresRollupGraph('USAGE_DISCOVERY')).toBe(true);
+    expect(requiresRollupGraph('DOMAIN_SUMMARY')).toBe(false);
+  });
+
+  it('prepare stage는 generationVersion 계산과 graph 빌드를 분리해 반환해야 한다', async () => {
+    vi.mocked(getActiveGeneration).mockResolvedValue(11);
+    const graph = { key: 'graph' } as never;
+    vi.mocked(getOrBuildGraph).mockResolvedValue(graph);
+
+    const prepared = await prepareQueryExecution(db, {
+      queryType: 'IMPACT_ANALYSIS',
+      workspaceId: 'ws-1',
+      scope: { level: 'SERVICE_TO_SERVICE', visibility: 'VISIBLE_ONLY' },
+      params: {},
+    });
+
+    expect(prepared).toEqual({ generationVersion: 11, graph });
+    expect(getOrBuildGraph).toHaveBeenCalledWith(db, 'ws-1', 11, 'SERVICE_TO_SERVICE');
+  });
+
+  it('prepare stage는 DOMAIN_SUMMARY에서 graph를 만들지 않아야 한다', async () => {
+    vi.mocked(getActiveGeneration).mockResolvedValue(5);
+
+    const prepared = await prepareQueryExecution(db, {
+      queryType: 'DOMAIN_SUMMARY',
+      workspaceId: 'ws-1',
+      scope: { level: 'DOMAIN_TO_DOMAIN', visibility: 'VISIBLE_ONLY' },
+      params: { domainId: 'domain-1' },
+    });
+
+    expect(prepared).toEqual({ generationVersion: 5, graph: null });
+    expect(getOrBuildGraph).not.toHaveBeenCalled();
+  });
+
+  it('execution stage는 준비된 graph만 사용해 알고리즘을 수행해야 한다', async () => {
+    const graph = { graph: true } as never;
+    await executePreparedQuery(
+      db,
+      {
+        queryType: 'PATH_DISCOVERY',
+        workspaceId: 'ws-1',
+        scope: { level: 'SERVICE_TO_SERVICE', visibility: 'VISIBLE_ONLY' },
+        params: { fromObjectId: 'a', toObjectId: 'b' },
+      },
+      { generationVersion: 2, graph },
+    );
+
+    expect(findPaths).toHaveBeenCalledWith(
+      graph,
+      expect.objectContaining({ fromObjectId: 'a', toObjectId: 'b' }),
+      expect.anything(),
+    );
+  });
+});
 
 describe('executeQuery generationVersion resolution', () => {
   const db = {} as Parameters<typeof executeQuery>[0];
