@@ -1,347 +1,246 @@
 # Archi.Navi — 시스템 아키텍처
 
 작성일: 2026-02-22
-문서 버전: v2.0
+최종 갱신: 2026-03-31
+문서 버전: v3.0
 
 ---
 
-## 1. 아키텍처 개요
+## 1. 제품 정의
 
-Archi.Navi는 **TypeScript 풀스택 모노레포** 구조로 설계한다.
-Local-first를 기본 전제로, 개발자 로컬 환경에서 단일 프로세스로 실행 가능하며,
-향후 Docker 기반 팀 배포까지 확장 가능한 구조를 갖는다.
+Archi.Navi는 단순한 그래프 뷰어가 아니라, 워크스페이스 단위로 코드/설정/스키마를 수집하고
+추론 결과를 승인 가능한 후보로 관리하며, rollup과 query/chat을 통해 구조를 탐색하는
+**local-first 아키텍처 지식 운영 시스템**이다.
 
-### 시스템 레이어
+핵심 원칙은 아래 4가지다.
 
-```
-┌─────────────────────────────────────────────────┐
-│                Presentation Layer                │
-│         Next.js 16 App Router + shadcn/ui        │
-│   (Architecture View, Object Mapping, AI Chat)   │
-├─────────────────────────────────────────────────┤
-│                   API Layer                      │
-│          Next.js 16 API Routes (REST)            │
-│      (Graph API, Query API, Inference API)       │
-├─────────────────────────────────────────────────┤
-│               Core Engine Layer                  │
-│  ┌──────────┐ ┌──────────┐ ┌──────────────────┐ │
-│  │ Query    │ │ Rollup   │ │ Inference        │ │
-│  │ Engine   │ │ Engine   │ │ Engine           │ │
-│  │(BFS/DFS) │ │(Materialize)│ │(Relation/Domain)│ │
-│  └──────────┘ └──────────┘ └──────────────────┘ │
-├─────────────────────────────────────────────────┤
-│               AI Reasoning Layer                 │
-│   Query Router → Evidence Assembler → LLM        │
-│          (Vercel AI SDK: 멀티 프로바이더)          │
-├─────────────────────────────────────────────────┤
-│                  Data Layer                      │
-│        PostgreSQL / PGlite + Drizzle ORM         │
-│     (Objects, Relations, Rollups, Evidence)       │
-├─────────────────────────────────────────────────┤
-│                  CLI Layer                        │
-│            Commander.js + tsx                     │
-│   (up, scan, infer, rebuild-rollup, export)      │
-└─────────────────────────────────────────────────┘
-```
+| 원칙 | 설명 |
+|------|------|
+| **Workspace 중심** | 모든 데이터는 `workspace_id` 기준으로 격리된다. |
+| **승인 게이트** | 자동 추론 결과는 후보로만 저장하고, 승인 후에만 확정 관계/도메인에 반영한다. |
+| **결정론 우선** | 그래프 계산과 query 결과는 deterministic engine이 담당하고, LLM은 보조 레이어로 사용한다. |
+| **운영 가시성 포함** | inference run 상태, source 해석, 이벤트 로그, rollup 갱신을 제품의 1급 기능으로 다룬다. |
 
 ---
 
-## 2. 기술스택
+## 2. 런타임 레이어
 
-### 2.1 핵심 기술
-
-| 계층 | 기술 | 버전 | 근거 |
-|------|------|------|------|
-| **프론트엔드** | Next.js + React + TypeScript | 16.x + 19.x | 최신 App Router 기반, RSC 지원 |
-| **UI 라이브러리** | TailwindCSS + shadcn/ui | 4.x | 유틸리티 기반 스타일링, 접근성 보장 컴포넌트 |
-| **백엔드 API** | Next.js API Routes (App Router) | 16.x | 별도 서버 불필요, 단일 프로세스 배포 |
-| **DB** | PostgreSQL + PGlite | 17.x + latest | Local-first 핵심. PGlite는 Node.js/WASM 네이티브 |
-| **ORM** | Drizzle ORM | latest | TypeScript 네이티브, 경량, PGlite 호환, 타입 안전 |
-| **그래프 알고리즘** | graphology | latest | BFS/DFS, 커뮤니티 탐지(Louvain/Leiden), 경로 탐색 |
-| **그래프 시각화** | Cytoscape.js + 3d-force-graph | latest | 레이어드 뷰(Cytoscape) + 매핑 그래프(3D Force) |
-| **AI/LLM** | Vercel AI SDK (`ai`) | latest | OpenAI, Claude, Gemini 멀티 프로바이더 지원, 스트리밍 |
-| **상태관리** | Zustand | latest | 경량, TypeScript 친화, 보일러플레이트 최소 |
-| **CLI** | Commander.js + tsx | latest | npm 배포 가능, TypeScript 직접 실행 |
-| **모노레포** | Turborepo + pnpm | latest | 빌드 캐싱, 워크스페이스 관리 |
-| **테스트** | Vitest + Playwright | latest | 단위 테스트 + E2E 테스트 |
-| **린터/포맷터** | ESLint + Prettier | latest | 코드 품질 + 일관된 포맷팅 |
-
-### 2.2 보조 라이브러리
-
-| 용도 | 라이브러리 | 설명 |
-|------|-----------|------|
-| 유효성 검증 | zod | 런타임 스키마 검증, API 요청/응답 검증 |
-| 날짜 처리 | date-fns | 경량 날짜 유틸리티 |
-| UUID 생성 | uuid (v7) | 시간순 정렬 가능한 UUID |
-| CSV Export | papaparse | Service List CSV 내보내기 |
-| 코드 파싱(AST) | tree-sitter | Java/Kotlin/TS/JS/Python AST 추출 |
-
----
-
-## 3. 모노레포 구조
-
-```
-archi-navi/
-├── apps/
-│   └── web/                          # Next.js 16 앱 (프론트엔드 + API)
-│       ├── src/
-│       │   ├── app/                  # App Router
-│       │   │   ├── (dashboard)/      # 메인 대시보드 레이아웃
-│       │   │   ├── api/              # API Routes
-│       │   │   ├── layout.tsx
-│       │   │   └── page.tsx
-│       │   ├── components/           # 앱 전용 컴포넌트
-│       │   ├── contexts/             # 워크스페이스/전역 컨텍스트
-│       │   ├── lib/                  # 앱 전용 유틸리티
-│       │   └── stores/               # Zustand 스토어
-│       └── package.json
-│
-├── packages/
-│   ├── core/                         # 핵심 엔진
-│   │   ├── src/
-│   │   │   ├── graph-store/          # DB 접근 (Rollup/Relation/Evidence)
-│   │   │   ├── graph-index/          # Adjacency 캐시 빌더
-│   │   │   ├── query-engine/         # BFS/DFS/경로/랭킹
-│   │   │   ├── query-dsl/            # QueryRequest/Response 스키마
-│   │   │   └── rollup/               # Rollup 계산/재빌드
-│   │   └── package.json
-│   │
-│   ├── inference/                    # 추론 엔진
-│   │   ├── src/
-│   │   │   ├── relation/             # Relation 추론
-│   │   │   ├── domain/               # Domain 추론 (Track A/B)
-│   │   │   ├── code/                 # Code Signal 추출 (Regex/AST)
-│   │   │   ├── db/                   # DB Signal 추출
-│   │   │   └── llm/                  # 후보 LLM 필터링
-│   │   └── package.json
-│   │
-│   ├── db/                           # DB 스키마 + 마이그레이션
-│   │   ├── src/
-│   │   │   ├── schema/               # Drizzle 스키마 정의
-│   │   │   ├── migrations/           # 마이그레이션 파일
-│   │   │   └── client.ts             # DB 클라이언트 (PGlite/PostgreSQL)
-│   │   └── package.json
-│   │
-│   ├── cli/                          # CLI 도구
-│   │   ├── src/
-│   │   │   ├── commands/             # up, scan, infer, rebuild, export, snapshot
-│   │   │   └── index.ts              # CLI 엔트리포인트
-│   │   └── package.json
-│   │
-│   ├── shared/                       # 공유 타입/유틸리티
-│   │   ├── src/
-│   │   │   ├── types/                # 공용 TypeScript 타입
-│   │   │   ├── constants/            # 상수 (Object Type, Relation Type 등)
-│   │   │   └── utils/                # 공용 유틸리티
-│   │   └── package.json
-│   │
-│   └── ui/                           # 공유 UI 컴포넌트
-│       ├── src/
-│       │   └── components/           # shadcn 기반 공유 컴포넌트
-│       └── package.json
-│
-├── docs/                             # 설계 문서
-├── turbo.json                        # Turborepo 설정
-├── pnpm-workspace.yaml               # pnpm 워크스페이스
-├── package.json                      # 루트 package.json
-├── tsconfig.base.json                # 공유 TypeScript 설정
-└── apps/web/.env.local               # 앱 환경변수 (로컬 전용)
+```text
+┌──────────────────────────────────────────────────────────────┐
+│ Presentation                                                 │
+│ Next.js App Router pages                                     │
+│ - Dashboard / Approval / Architecture / Mapping / Query      │
+│ - Chat / Settings / Inference Runs / Workspaces              │
+├──────────────────────────────────────────────────────────────┤
+│ Application Adapters                                         │
+│ Next.js Route Handlers + Server Actions                      │
+│ - scan / objects / relations / rollups / query / chat        │
+│ - inference(run, runs, smart, candidates, domain-run)        │
+├──────────────────────────────────────────────────────────────┤
+│ Domain Engines                                               │
+│ packages/core       : query-engine, rollup, graph-index      │
+│ packages/inference  : relation/domain inference, orchestration│
+│ packages/db         : schema, client, migrations             │
+├──────────────────────────────────────────────────────────────┤
+│ Persistence / Integration                                    │
+│ PostgreSQL or PGlite + Drizzle ORM                           │
+│ Local FS / optional GitHub source resolution / SSE           │
+└──────────────────────────────────────────────────────────────┘
 ```
 
----
+### 2.1 계층별 책임
 
-## 4. 패키지별 책임
-
-### 4.1 `apps/web` — Next.js 앱
-
-- **책임**: UI 렌더링, API 라우트, 사용자 인터랙션
-- **기술**: Next.js 16 App Router, React 19, TailwindCSS, shadcn/ui, Zustand
-- **주요 페이지**:
-  - Architecture View: 레이어드 아키텍처 시각화 (Cytoscape)
-  - Object Mapping View: 타입 필터 + drill-down/roll-down
-  - Service List: 서비스 목록 + CSV Export
-  - Approval: 추론 후보 승인/반려
-  - AI Chat: 구조 질의 + Evidence 기반 응답
-  - Settings: 워크스페이스 관리, 추론 프로필 설정
-
-### 4.2 `packages/core` — 핵심 엔진
-
-- **책임**: 그래프 연산, 쿼리 처리, Rollup 계산
-- **모듈**:
-  - `graph-store`: DB에서 Rollup/Relation/Evidence 조회
-  - `graph-index`: Adjacency list 인메모리 캐시 빌더
-  - `query-engine`: BFS/DFS 기반 경로 탐색, 영향도 분석, 랭킹
-  - `query-dsl`: QueryRequest/QueryResponse 스키마 + zod 검증
-  - `rollup`: Materialized Roll-up 계산, Generation 관리
-
-### 4.3 `packages/inference` — 추론 엔진
-
-- **책임**: Relation 추론, Domain 추론 (Track A/B)
-- **모듈**:
-  - `relation`: 설정 파일 기반 관계 후보 생성 + 후보 승인 시 확정 관계 승격
-  - `domain`: Seed 기반 Affinity 계산 + Seed-less Discovery + 후보 승인 처리
-  - `code`: 코드 신호 추출(Regex 기본, `code/ast`에 AST 파서 모듈)
-  - `db`: DB 스키마 신호(FK/implicit) 추출 및 후보/근거 저장
-  - `llm`: 후보 후처리(필터링/배치) 모듈
-- **디렉토리 정합 메모(2026-03-01)**:
-  - 실제 구현 파일은 `src/relation`, `src/domain`, `src/code`, `src/db`, `src/llm`에 위치
-  - `src/signals`, `src/ast` 디렉토리는 현재 placeholder 상태(실행 모듈 없음)
-
-### 4.4 `packages/db` — 데이터베이스
-
-- **책임**: 스키마 정의, 마이그레이션, DB 클라이언트
-- **특징**: PGlite(로컬)와 PostgreSQL(서버) 모두 지원하는 듀얼 클라이언트
-
-### 4.5 `packages/cli` — CLI 도구
-
-- **책임**: 터미널 기반 조작
-- **명령어**:
-  - `anavi up` — 웹 앱 실행 (모노레포 또는 설치된 web 패키지 자동 탐색)
-  - `anavi scan` — 소스코드/설정 스캔
-  - `anavi infer` — 도메인 추론 실행 (Track A/B)
-  - `anavi rebuild-rollup` — Roll-up 전체 재빌드
-  - `anavi export` — 데이터 내보내기 (JSON/DOT)
-  - `anavi snapshot` — 현재 상태 스냅샷 저장
-
-### 4.6 `packages/shared` — 공유 코드
-
-- **책임**: 패키지 간 공유 타입, 상수, 유틸리티
-- **내용**: Object Type Enum, Relation Type Enum, Query Type Enum, 공용 타입 정의
-
-### 4.7 `packages/ui` — 공유 UI
-
-- **책임**: shadcn/ui 기반 공유 컴포넌트
-- **내용**: Button, Dialog, DataTable, Badge 등 재사용 컴포넌트
+| 계층 | 책임 | 구현 포인트 |
+|------|------|------------------|
+| UI | 운영/탐색 화면 제공 | `apps/web/src/app/(dashboard)/*`, `components/*` |
+| Application Adapter | HTTP 계약, 입력 검증, thin orchestration 연결 | `apps/web/src/app/api/**` |
+| Core Engine | rollup, graph cache, query, evidence composition | `packages/core/src/*` |
+| Inference Engine | code/config/db/openapi 신호 수집, 후보 생성, smart pipeline, run orchestration | `packages/inference/src/*` |
+| Data Layer | 스키마, DB 클라이언트, migration | `packages/db/src/*` |
+| Shared/CLI | 공통 타입/상수/ID 생성, CLI 진입점 | `packages/shared`, `packages/cli` |
 
 ---
 
-## 5. 배포 전략
+## 3. 주요 런타임 플로우
 
-### 5.1 Local-first (기본)
+## 3.1 스캔 및 워크스페이스 등록
+
+```text
+사용자
+  → Workspaces / Settings
+  → /api/workspaces, /api/scan, /api/scan/paths, /api/fs/browse
+  → service/object 등록 + scan path 저장
+```
+
+- 로컬 경로 선택과 워크스페이스 생성은 UI에서 처리한다.
+- 스캔 결과는 `objects`와 관련 metadata에 반영된다.
+- 이후 inference는 직접 전달된 source 또는 service metadata path를 재사용할 수 있다.
+
+## 3.2 표준 추론 실행
+
+```text
+Approval / API / CLI
+  → quick run: /api/inference/run
+  → async run: /api/inference/runs
+  → code/config/db inference
+  → relation/domain candidates 저장
+  → run stats / warnings / events 기록
+```
+
+- quick run은 즉시성 있는 실행 경로다.
+- async run은 운영 기록, source 상태, event log를 포함한 실행 경로다.
+- remote source는 `githubRepo` / `githubOrg` 타입으로 해석 후 local clone 경로로 변환된다.
+
+## 3.3 Smart 추론 실행
+
+```text
+Approval UI
+  → /api/inference/smart
+  → OpenAPI import
+  → code expose bootstrap
+  → config 기반 service pair 탐지
+  → pair-scoped atomic inference
+  → fallback/deep inspection trace 저장
+```
+
+- Smart는 제품에서 별도 inference 모드로 취급한다.
+- 출력은 단순 후보 목록이 아니라 `servicePairCount`, `atomicCandidateCount`,
+  `serviceFallbackCount`, `agentRecoveredAtomicCount` 등 운영 통계를 포함한다.
+
+## 3.4 승인과 rollup 반영
+
+```text
+Approval / manual relation mutation
+  → candidate approve / reject
+  → object_relations, object_domain_affinities 반영
+  → delta rollup 적용
+  → SSE notification
+  → Architecture / Mapping / Layered View refetch
+```
+
+- 후보 승인 후 즉시 전체 rebuild를 강제하지 않는다.
+- 기본 경로는 `applyRollupChanges` 기반의 증분 반영과 SSE 알림이다.
+
+## 3.5 Query 와 Chat
+
+```text
+Query Page
+  → /api/query
+  → deterministic engine
+
+Chat Page
+  → /api/chat
+  → intent routing
+  → deterministic query 또는 object retrieval
+  → evidence assembly + LLM formatting
+```
+
+- query page는 엔진 계약을 직접 드러내는 운영 UI다.
+- chat은 자연어 진입점이지만, 계산 자체는 가능한 한 deterministic 결과를 재사용한다.
+
+---
+
+## 4. 실제 모노레포 구조와 책임
+
+## 4.1 앱 레이어
+
+| 경로 | 책임 |
+|------|------|
+| `apps/web/src/app/(dashboard)` | 대시보드, 승인, 아키텍처, 매핑, 쿼리, 채팅, 설정, 추론 이력 |
+| `apps/web/src/app/api` | route handlers 전반 |
+| `apps/web/src/components` | 승인/그래프/채팅/설정/워크스페이스 UI |
+| `apps/web/src/lib` | rollup SSE, smart run helper, query/chat 보조 로직 |
+
+### 주요 페이지
+
+- `/home`: 운영 요약과 빠른 액션
+- `/approval`: 표준 추론, Smart 추론, 후보 승인/반려, fallback 힌트
+- `/architecture`: 레이어드 구조 시각화
+- `/mapping-graph`: 3D rollup 그래프, contributor 패널, hub 제어
+- `/query`: deterministic query 실행 UI
+- `/chat`: AI architecture assistant
+- `/settings`: 워크스페이스/스캔/기본 설정
+- `/inference-runs`: 비동기 추론 실행 운영 화면
+- `/workspaces`, `/workspaces/new`: 워크스페이스 온보딩
+
+## 4.2 패키지 레이어
+
+| 패키지 | 책임 | 핵심 모듈 |
+|--------|------|-----------|
+| `packages/core` | 그래프 조회와 계산 | `query-engine`, `rollup`, `graph-index`, `graph-store`, `ai` |
+| `packages/inference` | 추론과 실행 orchestration | `relation`, `domain`, `code`, `db`, `openapi`, `llm`, `orchestration` |
+| `packages/db` | 스키마와 클라이언트 | `schema/core`, `schema/rollup`, `schema/domain`, `schema/code`, `schema/audit`, `schema/layers` |
+| `packages/shared` | 타입/상수/유틸리티 | query/request 타입, enum, `generateId`, path/URN 유틸 |
+| `packages/ui` | 공유 UI primitive | button, badge, input, select, spinner 등 |
+| `packages/cli` | CLI 진입점 | `scan`, `infer`, `rebuild-rollup`, `snapshot`, `up`, `export` |
+
+---
+
+## 5. API 표면
+
+App Router 기준 주요 API 그룹은 아래와 같다.
+
+| 그룹 | 주요 라우트 |
+|------|-------------|
+| Workspace/Scan | `/api/workspaces`, `/api/scan`, `/api/scan/paths`, `/api/fs/browse` |
+| Object/Relation | `/api/objects`, `/api/relations`, `/api/tags`, `/api/object-tags` |
+| Inference | `/api/inference/run`, `/api/inference/runs`, `/api/inference/smart`, `/api/inference/candidates`, `/api/inference/domain-run` |
+| Rollup/Mapping | `/api/rollups`, `/api/rollup-events`, `/api/mapping/contributors` |
+| Query/Chat | `/api/query`, `/api/chat` |
+| Dashboard/Architecture | `/api/dashboard/summary`, `/api/layers`, `/api/domain-affinities`, `/api/domains` |
+
+설계 원칙은 동일하다.
+
+- route는 얇게 유지한다.
+- 비즈니스 로직은 `packages/core`, `packages/inference`, `packages/db`로 내린다.
+- UI는 API 계약이나 server action을 통해 상태를 읽고, 운영 화면은 run/event 단위로 추적 가능해야 한다.
+
+---
+
+## 6. 설계 방향
+
+## 6.1 유지하는 방향
+
+- **결정론 엔진 + AI 보조**: LLM이 시스템의 기준 진실을 대체하지 않는다.
+- **비동기 운영 모델 강화**: inference는 실행 기록과 source 상태를 포함한 운영 기능으로 다룬다.
+- **원자 관계 우선 저장**: 상위 관계는 rollup으로 파생하고, 증거 추적 체인을 유지한다.
+- **실시간 반영은 refetch 기반**: edge delta를 직접 푸시하기보다 SSE notification + refetch로 정합성을 유지한다.
+- **UI는 progressive disclosure**: 대규모 그래프는 hub collapse, domain-first, contributor drill-down으로 점진 노출한다.
+
+## 6.2 의도적으로 하지 않는 것
+
+- 별도 장기 실행 백엔드 서버 분리
+- WebSocket 기반 복잡한 collaborative graph editing
+- LLM이 후보를 자동 승인하는 무감독 운영
+- query/chat을 완전 agent형 planner로 재구성
+
+---
+
+## 7. 실행 환경과 배포
+
+## 7.1 기본 개발 환경
 
 ```bash
-# 웹 앱 실행
 pnpm install
 pnpm dev
-
-# 필요 시 CLI 실행
-pnpm --filter @archi-navi/cli exec anavi --help
 ```
 
-- PGlite를 내장 DB로 사용 (별도 DB 설치 불필요)
-- 단일 프로세스로 Next.js 앱 + API 실행
-- 데이터는 `PGLITE_DATA_DIR` 기준 경로에 저장 (기본: `.archi-navi/data`)
+- 기본 개발 경로는 Next.js 앱 단일 실행이다.
+- 로컬 기본 DB는 `PGLITE_DATA_DIR` 기반 PGlite 저장소를 사용한다.
+- migration 경로는 `packages/db/src/migrations`를 기준으로 한다.
 
-### 5.2 Docker (팀 배포)
+## 7.2 확장 실행 환경
 
-```yaml
-# docker-compose.yml
-services:
-  app:
-    image: archi-navi:latest
-    ports:
-      - "3000:3000"
-    environment:
-      - DATABASE_URL=postgresql://postgres:password@db:5432/archinavi
-    depends_on:
-      - db
-
-  db:
-    image: postgres:17
-    environment:
-      - POSTGRES_DB=archinavi
-      - POSTGRES_PASSWORD=password
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-
-volumes:
-  pgdata:
-```
-
-### 5.3 환경별 DB 전략
-
-| 환경 | DB | 설명 |
-|------|-----|------|
-| **로컬 개발** | PGlite (내장) | 설치 불필요, `~/.archi-navi/data/` 저장 |
-| **팀 배포** | PostgreSQL 17 | Docker Compose로 실행, 외부 접속 가능 |
-| **향후 클라우드** | Managed PostgreSQL | Neon, Supabase 등 연동 가능 |
+- PostgreSQL 연결 시 `DATABASE_URL` 기반 Drizzle 클라이언트를 사용한다.
+- remote GitHub source inference는 `gh` CLI 인증 상태를 사용한다.
+- rollup 실시간 반영은 SSE를 기본으로 하고, 브라우저/연결 상태에 따라 polling fallback을 사용한다.
 
 ---
 
-## 6. API 설계 원칙
+## 8. 관련 문서
 
-### 6.1 RESTful API 구조
-
-```
-/api/workspaces                    # 워크스페이스 CRUD
-/api/objects                       # Object CRUD + 검색
-/api/objects/:id                   # Object 상세/수정/삭제
-/api/objects/:id/tags              # Object 태그 연결
-/api/relations                     # Relation CRUD
-/api/inference/candidates          # 관계 후보 조회
-/api/inference/candidates/:id      # 관계 후보 승인/거부
-/api/rollups                       # Rollup 그래프 조회
-/api/query                         # Deterministic Query Engine
-/api/inference/run                 # 추론 실행
-/api/inference/domain-candidates   # 도메인 후보 조회
-/api/inference/domain-candidates/:id # 도메인 후보 승인/거부
-/api/domains                       # Domain 조회
-/api/chat                          # AI Chat (스트리밍)
-/api/scan                          # 프로젝트 스캔 + 서비스 등록
-```
-
-### 6.2 공통 응답 형식
-
-```typescript
-interface ApiResponse<T> {
-  success: boolean;
-  data: T;
-  meta?: {
-    total?: number;
-    page?: number;
-    generationVersion?: number;
-  };
-  error?: {
-    code: string;
-    message: string;
-  };
-}
-```
-
----
-
-## 7. 보안 및 설정
-
-### 7.1 환경변수
-
-```env
-# DB
-DATABASE_URL=postgresql://...       # PostgreSQL URL (팀 배포)
-PGLITE_DATA_DIR=~/.archi-navi/data  # PGlite 데이터 디렉토리
-
-# AI
-AI_PROVIDER=openai                  # openai | anthropic | google
-OPENAI_API_KEY=sk-...               # OpenAI 사용 시
-# ANTHROPIC_API_KEY=sk-ant-...      # Anthropic 사용 시
-# GOOGLE_GENERATIVE_AI_API_KEY=...  # Google 사용 시
-
-# App
-NODE_ENV=development
-PORT=3000
-```
-
-### 7.2 v1 보안 범위
-
-- v1은 Local-first 단일 사용자 전제
-- 인증/인가 시스템 미포함 (Out of Scope)
-- API 키는 환경변수로 관리
-
----
-
-## 관련 문서
-
-| 문서 | 설명 |
-|------|------|
-| [00-overview.md](../00-overview.md) | 프로젝트 개요, 범위, 원칙 |
-| [02-data-model.md](./02-data-model.md) | Object/Relation 모델, DB 스키마 |
-| [01-development-guide.md](../01-development-guide.md) | 개발 환경 설정, 컨벤션 |
+- [02-data-model.md](./02-data-model.md)
+- [03-inference-engine.md](./03-inference-engine.md)
+- [04-query-engine.md](./04-query-engine.md)
+- [05-rollup-and-graph.md](./05-rollup-and-graph.md)
+- [06-compound-view.md](./06-compound-view.md)

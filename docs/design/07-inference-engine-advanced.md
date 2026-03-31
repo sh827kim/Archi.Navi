@@ -1,16 +1,18 @@
 # Archi.Navi — 추론 엔진 고도화
 
 작성일: 2026-03-08
-문서 버전: v1.0
+최종 갱신: 2026-03-31
+문서 버전: v1.1
+상태: Extension / Partially Shipped
 
-> 기존 추론 엔진(`docs/design/03-inference-engine.md` v3.0)의 확장 설계.
+> 기존 추론 엔진(`docs/design/03-inference-engine.md` v4.0)의 확장 설계.
 > 본 문서는 추론 정밀도·품질을 구조적으로 끌어올리기 위한 5가지 핵심 개선을 다룬다.
 
 ---
 
 ## 1. 설계 목표
 
-| 목표 | 현재 | 개선 후 |
+| 목표 | 기준 상태 | 개선 후 |
 |------|------|---------|
 | 코드 시그널 정밀도 | 파일 단위 AST (변수 추적 제한) | Inter-procedural 분석 + 프로퍼티 전파 |
 | 시그널 간 정합성 | 독립 수집 → 독립 후보 | 교차 검증으로 신뢰도 동적 조정 |
@@ -24,9 +26,9 @@
 
 ## 2. Inter-procedural AST 분석 (기존 2-1 확장)
 
-### 2.1 현재 한계
+### 2.1 한계
 
-현재 AST 분석은 **파일 단위(intra-file)** 분석에 그친다.
+AST 분석은 **파일 단위(intra-file)** 분석에 그친다.
 
 | 한계 | 예시 | 영향 |
 |------|------|------|
@@ -38,7 +40,7 @@
 ### 2.2 아키텍처
 
 ```
-Phase 1 (현재)                     Phase 2 (확장)
+Phase 1 (기본)                     Phase 2 (확장)
 ┌────────────────┐                ┌────────────────────────────┐
 │ 파일 단위 AST  │                │ Multi-file Symbol Table    │
 │ - 어노테이션   │                │ - 클래스/인터페이스 계보   │
@@ -147,7 +149,7 @@ interface MethodSymbol {
 
 ### 3.1 핵심 아이디어
 
-현재 config, code, db 시그널 수집기가 독립적으로 후보를 생성한다.
+config, code, db 시그널 수집기는 독립적으로 후보를 생성한다.
 **같은 관계를 여러 시그널이 지지하면 신뢰도를 올리고, 모순되면 내린다.**
 
 ### 3.2 Validation Matrix
@@ -312,7 +314,7 @@ LLM 출력: { "suggestedName": "주문 관리", "suggestedEnglishName": "Order M
 
 ## 5. 프레임워크 플러그인 시스템
 
-### 5.1 현재 문제
+### 5.1 문제
 
 새 프레임워크(gRPC, GraphQL, tRPC) 지원을 추가하려면 `packages/inference/src/code/scanners/` 하드코딩 수정 필요.
 
@@ -362,7 +364,7 @@ interface SignalPattern {
 
 ### 6.1 핵심 아이디어
 
-피드백 루프는 relation과 domain을 같은 저장소/초기화 경로로 섞지 않는다. 현재 relation feedback 구현 축은 유지하되, 이번 closure에서는 **domain feedback를 Track A 전용 계약으로 분리**하고, 그 결과를 **다음 domain run부터만** 반영하도록 고정한다.
+피드백 루프는 relation과 domain을 같은 저장소/초기화 경로로 섞지 않는다. relation feedback 구현 축은 유지하되, 이번 closure에서는 **domain feedback를 Track A 전용 계약으로 분리**하고, 그 결과를 **다음 domain run부터만** 반영하도록 고정한다.
 
 ### 6.2 피드백 수집
 
@@ -464,10 +466,10 @@ function applyFeedbackAdjustment(base: number, feedback: FeedbackStats): number 
 
 | 문서 | 설명 |
 |------|------|
-| [03-inference-engine.md](./03-inference-engine.md) | 기존 추론 엔진 설계 v3.0 |
+| [03-inference-engine.md](./03-inference-engine.md) | 추론 엔진 기준 문서 v4.0 |
 | [04-query-engine.md](./04-query-engine.md) | 쿼리 엔진 (추론 결과 활용) |
-| [spec/18-inter-procedural-ast-spec.md](../spec/18-inter-procedural-ast-spec.md) | Inter-procedural AST SPEC |
-| [spec/19-cross-signal-validation-spec.md](../spec/19-cross-signal-validation-spec.md) | Cross-Signal Validation SPEC |
-| [spec/20-llm-inference-boost-spec.md](../spec/20-llm-inference-boost-spec.md) | LLM 추론 부스터 SPEC |
-| [spec/21-framework-plugin-system-spec.md](../spec/21-framework-plugin-system-spec.md) | 프레임워크 플러그인 SPEC |
-| [spec/22-inference-feedback-loop-spec.md](../spec/22-inference-feedback-loop-spec.md) | 피드백 루프 SPEC |
+| [../spec/17-inter-procedural-ast-spec.md](../spec/17-inter-procedural-ast-spec.md) | Inter-procedural AST SPEC |
+| [../spec/18-cross-signal-validation-spec.md](../spec/18-cross-signal-validation-spec.md) | Cross-Signal Validation SPEC |
+| [../spec/19-llm-inference-boost-spec.md](../spec/19-llm-inference-boost-spec.md) | LLM 추론 부스터 SPEC |
+| [../spec/20-framework-plugin-system-spec.md](../spec/20-framework-plugin-system-spec.md) | 프레임워크 플러그인 SPEC |
+| [../spec/22-inference-feedback-loop-spec.md](../spec/22-inference-feedback-loop-spec.md) | 피드백 루프 SPEC |
