@@ -1,397 +1,284 @@
-# Archi.Navi — Deterministic Query Engine + AI Reasoning
+# Archi.Navi — Query Engine + AI Assistant
 
 작성일: 2026-02-22
-문서 버전: v2.0
+최종 갱신: 2026-03-31
+문서 버전: v3.0
 
 ---
 
 ## 1. 설계 원칙
 
-Archi.Navi의 구조 질의는 **LLM 없이도 결정론적으로 계산**한다.
-LLM은 결과를 **설명/요약하는 표현 레이어**로만 사용한다.
+Archi.Navi의 구조 질의는 **결정론 엔진 우선** 원칙을 따른다.
+LLM은 query 결과를 대체하지 않고, 자연어 진입점과 응답 표현을 보강한다.
 
 | 원칙 | 설명 |
 |------|------|
-| **재현 가능성** | 동일 입력 → 동일 출력 (결정론) |
-| **Evidence 중심** | 모든 edge/node는 근거 추적 가능 |
-| **Roll-up 기본** | 기본은 Rollup 그래프, 필요 시 Drill-down |
-| **역할 분리** | 엔진 = 계산/랭킹/추적, LLM = 표현/문장화 |
-| **스냅샷 기반** | `workspace_id` 격리 + `generation_version` 기준 조회 |
+| **Deterministic First** | 동일 입력은 동일한 query 결과를 돌려준다. |
+| **Generation Consistency** | query는 active generation 또는 명시한 generation 기준으로 실행된다. |
+| **Evidence Traceability** | rollup edge에서 base relation과 evidence까지 추적 가능해야 한다. |
+| **Two Entry Points** | 운영자는 `/query`, 일반 탐색은 `/chat`을 사용한다. |
+| **LLM is a Formatter or Router** | LLM은 intent 분류, 문장화, 설명 보강에 참여한다. |
 
 ---
 
-## 2. 데이터 소스
+## 2. 지원 질의 타입
 
-### 2.1 빠른 그래프 (기본)
+`packages/shared` 기준 query type은 아래 4개다.
 
-- `object_rollups` (현재 ACTIVE generation_version)
-- `object_graph_stats` (degree 정보)
+| 타입 | 설명 | 기본 데이터 경로 |
+|------|------|------------------|
+| `IMPACT_ANALYSIS` | 특정 object 변경 영향 범위 분석 | rollup graph |
+| `PATH_DISCOVERY` | 두 object 간 경로 탐색 | rollup graph |
+| `USAGE_DISCOVERY` | 특정 object 사용 주체 추적 | rollup graph + relation lookup |
+| `DOMAIN_SUMMARY` | 도메인 구조 요약 | DB 집계 + optional AI formatting |
 
-### 2.2 상세/근거 (Drill-down)
-
-- `object_relations` (원자 관계)
-- `relation_evidences` → `evidences` (근거 체인)
-- `relation_candidates` (선택 — 미승인 후보 포함 조회)
-
----
-
-## 3. Query Type Enum
-
-| 타입 | 설명 | 알고리즘 |
-|------|------|---------|
-| `IMPACT_ANALYSIS` | 변경 영향도 (Upstream/Downstream) | bounded BFS/DFS |
-| `PATH_DISCOVERY` | A→B 경로 탐색 (최단 + Top-K) | BFS + 랭킹 |
-| `USAGE_DISCOVERY` | 특정 객체 사용 주체 추적 | 직접 조회 + Rollup 조회 |
-| `DOMAIN_SUMMARY` | 도메인 요약 (결정론 집계 + LLM 문장화) | 집계 + LLM |
-
-### 확장 예정
-
-- `DEPENDENCY_OVERVIEW`: 전체 의존성 개요
-- `DRIFT_CHECK`: 설계 의도와 실제 구조 차이 탐지
+query page는 이 4개를 직접 노출하고 있다.
 
 ---
 
-## 4. Query DSL
+## 3. 실행 구조
 
-### 4.1 QueryRequest
+## 3.1 요청 계약
 
-```typescript
+공용 계약은 `packages/shared/src/types/index.ts`의 `QueryRequest`, `QueryResponse`를 따른다.
+
+```ts
 interface QueryRequest {
-  workspaceId: string;              // UUID
-  generationVersion?: number;       // 미지정 시 ACTIVE 사용
+  workspaceId: string;
+  generationVersion?: number;
   queryType: QueryType;
-  scope: QueryScope;
-  params: QueryParams;
-}
-
-interface QueryScope {
-  level: RollupLevel;               // SERVICE_TO_SERVICE, DOMAIN_TO_DOMAIN, ...
-  relationTypes?: string[];         // 관계 타입 필터
-  visibility: 'VISIBLE_ONLY' | 'INCLUDE_HIDDEN';
-  tagIds?: string[];                // 태그 필터 (선택)
-  objectTypes?: string[];           // 노드 타입 제한 (선택)
-}
-
-interface QueryParams {
-  // PATH_DISCOVERY
-  fromObjectId?: string;
-  toObjectId?: string;
-  maxHops?: number;                 // 기본 6
-  topK?: number;                    // 기본 3
-
-  // IMPACT_ANALYSIS
-  targetObjectId?: string;
-  direction?: 'UPSTREAM' | 'DOWNSTREAM' | 'BOTH';
-  maxDepth?: number;                // 기본 6
-
-  // USAGE_DISCOVERY
-  objectId?: string;
-
-  // DOMAIN_SUMMARY
-  domainId?: string;
-}
-```
-
-### 4.2 QueryResponse
-
-```typescript
-interface QueryResponse {
-  queryType: QueryType;
-  result: QueryResult;
-  meta: QueryMeta;
-}
-
-interface QueryResult {
-  nodes: QueryNode[];
-  edges: QueryEdge[];
-  paths?: QueryPath[];              // PATH_DISCOVERY 전용
-  summary?: Record<string, unknown>; // DOMAIN_SUMMARY 전용
-}
-
-interface QueryNode {
-  id: string;
-  type: string;                     // object_type
-  name: string;
-  displayName?: string;
-  depth?: number;                   // 탐색 깊이
-  metadata?: Record<string, unknown>;
-}
-
-interface QueryEdge {
-  subjectId: string;
-  objectId: string;
-  relationType: string;
-  level: string;                    // rollup_level
-  edgeWeight: number;
-  confidence: number;
-  provenance: {
-    rollupId: string;
-    baseRelationIds: string[];
+  scope: {
+    level: RollupLevel;
+    relationTypes?: RelationType[];
+    visibility: 'VISIBLE_ONLY' | 'INCLUDE_HIDDEN';
+    tagIds?: string[];
+    objectTypes?: ObjectType[];
+  };
+  params: {
+    fromObjectId?: string;
+    toObjectId?: string;
+    targetObjectId?: string;
+    objectId?: string;
+    domainId?: string;
+    direction?: 'UPSTREAM' | 'DOWNSTREAM' | 'BOTH';
+    maxHops?: number;
+    maxDepth?: number;
+    topK?: number;
   };
 }
-
-interface QueryPath {
-  pathId: string;
-  nodeIds: string[];
-  score: number;
-}
-
-interface QueryMeta {
-  generationVersion: number;
-  computedAt: string;               // ISO-8601
-  executionMs: number;
-  truncated: boolean;               // 결과 제한으로 잘렸는지
-}
 ```
+
+## 3.2 실행 준비
+
+`packages/core/src/query-engine/executor.ts` 기준 실행 흐름은 아래와 같다.
+
+```text
+request 수신
+  ↓
+generationVersion 확정
+  ↓
+query type이 rollup graph 필요 여부 판정
+  ↓
+필요 시 graph-index에서 generation별 graph 확보
+  ↓
+query type별 알고리즘 실행
+  ↓
+result + meta 반환
+```
+
+### rollup graph를 사용하는 질의
+
+- `PATH_DISCOVERY`
+- `IMPACT_ANALYSIS`
+- `USAGE_DISCOVERY`
+
+### rollup graph 없이 실행하는 질의
+
+- `DOMAIN_SUMMARY`
 
 ---
 
-## 5. 질의별 알고리즘 (결정론)
+## 4. 알고리즘 레이어
 
-### 5.1 PATH_DISCOVERY
+## 4.1 Path Discovery
 
-**그래프**: `object_rollups` adjacency list
-**알고리즘**: BFS (최단 거리 경로 수집)
-**Top-K**: 최단 경로 집합 내에서 score 기준 정렬
+- 구현: `pathDiscovery.ts`
+- 방식:
+  - bounded BFS
+  - shortest-path 우선
+  - 경로 score 정렬
 
-**Score 계산 (고정 룰):**
+기본값:
 
-```
-score = avg(edge.confidence) × log(1 + min(edgeWeight)) ÷ hops_penalty
+- `maxHops = 6`
+- `topK = 3`
+- `maxVisited = 20_000`
 
-hops_penalty = 1 + (hops - 1) × 0.1
-```
+## 4.2 Impact Analysis
 
-**제한:**
-- maxHops: 6 (기본)
-- maxVisited: 20,000 노드
-- timeout: 2초
+- 구현: `impactAnalysis.ts`
+- 방식:
+  - downstream / upstream / both
+  - bounded traversal + depth 기반 정렬
 
-### 5.2 IMPACT_ANALYSIS
+query UI는 `targetObjectId`, `direction`, `maxDepth`를 계약에 맞춰 전송한다.
 
-**모드**: Downstream / Upstream / Both
-**알고리즘**: bounded BFS/DFS + maxDepth
-**랭킹**: depth 우선, 동일 depth면 confidence/edgeWeight 우선
+## 4.3 Usage Discovery
 
-```
-// Downstream: subject_object_id 기준 outbound 탐색
-// Upstream: object_id 기준 inbound 탐색
-```
+- 구현: `usageDiscovery.ts`
+- 방식:
+  - 상위 레벨은 rollup graph 우선
+  - 상세 추적은 relation lookup 병행
 
-### 5.3 USAGE_DISCOVERY
+## 4.4 Domain Summary
 
-**원자 객체** (topic/db_table/api_endpoint):
-- `object_relations` 직접 조회가 정확
-
-**상위 객체** (database/broker/service):
-- `object_rollups` 우선 조회
-
-### 5.4 DOMAIN_SUMMARY
-
-**결정론 집계 생성:**
-- 도메인 소속 서비스 수
-- Object type별 카운트
-- 핵심 관계/토픽/테이블 목록
-- 평균 purity
-- 주요 외부 의존 도메인
-
-**LLM 문장화:**
-- 집계 결과를 입력으로 자연어 요약 생성
-- 근거 링크 포함
+- 구현: `domainSummary.ts`
+- 방식:
+  - 도메인 구성/멤버/외부 연결/통계 집계
+  - chat에서는 optional formatting을 추가 적용
 
 ---
 
-## 6. Evidence / Provenance 체인
+## 5. Query UI 의 역할
 
-Explainable 결과를 위해 아래 체인을 끊지 않는다.
+`/query`는 엔진 디버깅 화면이 아니라 **운영자가 직접 구조 질의를 실행하는 화면**이다.
 
-```
-Rollup Edge
-    → rollup_provenance (domain_rollup_provenances)
-        → Base Relations (object_relations)
-            → relation_evidences
-                → evidences (file/line/excerpt/uri)
-```
+UX 방향:
 
-**원칙**: 어떤 결론이든 Evidence까지 추적 가능해야 한다.
+- query type별 목적 중심 입력 문구 제공
+- object picker를 독립 상태로 유지
+- 결과를 raw JSON이 아니라 사람이 읽기 쉬운 카드/리스트/stepper로 변환
 
----
+humanized 결과 예시는 아래와 같다.
 
-## 7. 성능 / 캐싱
+| 질의 | UI 표현 |
+|------|---------|
+| `IMPACT_ANALYSIS` | 직접 영향 / 간접 영향 / 총 노드 수 카드 |
+| `PATH_DISCOVERY` | 단계형 경로(stepper/timeline) |
+| `USAGE_DISCOVERY` | “누가 사용 중인지” 우선 목록 |
+| `DOMAIN_SUMMARY` | 멤버/외부 연결/핵심 통계 카드 |
 
-### 7.1 Adjacency Cache
-
-- `generation_version`별 인메모리 adjacency list 구성
-- Generation 변경 시 캐시 무효화 + 재구성
-- graphology 그래프 인스턴스로 관리
-
-### 7.2 Query 결과 캐시
-
-- LRU 캐시 (선택)
-- 캐시 키: `(workspace_id, generation_version, visibility, tagIds, queryType, params)`
-- Generation 변경 시 자동 무효화
-
-### 7.3 성능 제한
-
-| 제한 | 기본값 | 설명 |
-|------|--------|------|
-| maxDepth | 6 | 탐색 깊이 제한 |
-| maxVisited | 20,000 | 방문 노드 수 제한 |
-| timeout | 2초 | 질의 타임아웃 |
+즉, `/query`는 deterministic contract를 그대로 유지하되,
+출력은 사람이 빠르게 이해할 수 있도록 번역한다.
 
 ---
 
-## 8. AI Reasoning 레이어
+## 6. AI Assistant (`/chat`)와의 관계
 
-### 8.1 컴포넌트 구성
+chat은 query engine의 대체물이 아니라 **자연어 진입 레이어**다.
 
-```
+## 6.1 intent 범주
+
+`/api/chat`은 아래 intent를 지원한다.
+
+- `SERVICE_ENDPOINTS`
+- `SERVICE_OVERVIEW`
+- `IMPACT_ANALYSIS`
+- `PATH_DISCOVERY`
+- `USAGE_DISCOVERY`
+- `DOMAIN_SUMMARY`
+- `GENERAL`
+
+## 6.2 라우팅 구조
+
+```text
 사용자 질문
-      ↓
-[Query Router]        → QueryRequest 생성
-      ↓
-[Deterministic Engine] → 그래프 계산
-      ↓
-[Evidence Assembler]   → 근거 묶음 구성
-      ↓
-[Answer Composer]      → 구조화된 답변 골격
-      ↓
-[LLM Formatter]        → 자연어 정리
-      ↓
-최종 응답 (evidence + confidence + deep-link)
+  ↓
+intent router
+  - LLM classify 우선
+  - 실패 시 keyword fallback
+  ↓
+분기
+  - query-engine 경로
+  - service overview / endpoints 직접 조회 경로
+  - general answer 경로
+  ↓
+evidence/context assembly
+  ↓
+LLM formatting (streaming)
 ```
 
-### 8.2 Query Router
+### query-engine 경로
 
-질문 유형을 분류한다.
+- 영향 분석
+- 경로 탐색
+- 사용 주체 추적
+- 도메인 요약
 
-- **1차**: Rule-based (키워드 매칭, 패턴 인식)
-- **2차**: LLM 보조 (애매한 경우에만)
+### direct retrieval 경로
 
-```typescript
-// 예시 분류 규칙
-"영향" | "변경" | "impact" → IMPACT_ANALYSIS
-"경로" | "path" | "어떻게 연결" → PATH_DISCOVERY
-"누가 사용" | "어디서 쓰" → USAGE_DISCOVERY
-"도메인 요약" | "어떤 도메인" → DOMAIN_SUMMARY
-```
+- 서비스 개요
+- 서비스 API 목록
 
-### 8.3 Evidence Assembler
-
-**최대 10개** evidence 선택, 우선순위:
-
-1. confidence 높은 순
-2. edge_weight 높은 순
-3. hop 가까운 순
-4. 최신 valid_from 우선
-
-### 8.4 Answer Composer
-
-**응답 형식 강제:**
-
-```
-1. 결론 (데이터 기반)
-2. Confidence (수치)
-3. Evidence 목록 (provenance 포함)
-4. 경로/영향 요약
-5. Deep-link (그래프 뷰 링크)
-```
-
-**예시:**
-
-```
-결론: 주문 서비스는 결제 서비스를 호출합니다.
-Confidence: 0.91
-Evidence:
-  - Rollup edge (edge_weight=7)
-  - Base relation: OrderController.java:120-145
-Deep-link: /mapping?path=p1
-```
-
-### 8.5 LLM Formatter
-
-LLM은 **주어진 데이터만 문장화**한다.
-
-**금지 사항:**
-- 새로운 사실 추가 금지
-- confidence 변경 금지
-- evidence 삭제 금지
-
-**멀티 프로바이더 지원 (Vercel AI SDK):**
-
-```typescript
-import { generateText } from 'ai';
-import { openai } from '@ai-sdk/openai';
-import { anthropic } from '@ai-sdk/anthropic';
-import { google } from '@ai-sdk/google';
-
-// 설정에 따라 프로바이더 선택
-const provider = getConfiguredProvider(); // openai | anthropic | google
-
-const { text } = await generateText({
-  model: provider(modelId),
-  system: FORMATTER_SYSTEM_PROMPT,
-  prompt: composedAnswer,
-});
-```
-
-### 8.6 부족 근거 처리
-
-근거가 부족하면:
-
-- "확정 불가" 명시
-- 부족한 근거 유형 안내
-- 필요한 데이터 제안
-
-### 8.7 모드 설계
-
-| 모드 | 설명 | v1 |
-|------|------|-----|
-| **Strict Mode** | Evidence 없는 결론 금지 | 기본 |
-| **Explore Mode** | 가설 허용 (UI에 "Hypothesis" 라벨 표기) | 선택 |
+즉, chat은 “모든 질문을 query type으로 강제”하지 않는다.
+서비스 설명형 질문은 object/objectRelations/object children 조회를 직접 사용할 수 있다.
 
 ---
 
-## 9. 모듈 구조
+## 7. Evidence 체인
 
+query와 chat 모두 동일한 explainability 원칙을 따른다.
+
+```text
+Query Result / Chat Answer
+  ↓
+Rollup edge
+  ↓
+object_rollup_provenances
+  ↓
+object_relations
+  ↓
+relation_evidences
+  ↓
+evidences
 ```
-packages/core/src/
-├── graph-store/          # DB 접근 (Rollup/Relation/Evidence 조회)
-│   ├── rollupStore.ts
-│   ├── relationStore.ts
-│   └── evidenceStore.ts
-├── graph-index/          # Adjacency 캐시 빌더
-│   ├── adjacencyBuilder.ts
-│   └── cacheManager.ts
-├── query-engine/         # BFS/DFS/Path/Ranking
-│   ├── pathDiscovery.ts
-│   ├── impactAnalysis.ts
-│   ├── usageDiscovery.ts
-│   └── domainSummary.ts
-├── query-dsl/            # Request/Response 스키마
-│   ├── schema.ts         # zod 스키마
-│   └── types.ts          # TypeScript 타입
-└── rollup/               # Rollup 계산 (별도 문서 참조)
-```
+
+LLM이 응답을 정리하더라도, 기반 데이터는 반드시 이 체인을 통해 역추적 가능해야 한다.
 
 ---
 
-## 10. v1 구현 우선순위
+## 8. AI 응답 레이어
 
-| 순서 | 항목 | 설명 |
-|------|------|------|
-| 1 | PATH_DISCOVERY | service-to-service call 경로 탐색 |
-| 2 | IMPACT_ANALYSIS | downstream/upstream 영향도 |
-| 3 | USAGE_DISCOVERY | topic/table 사용 주체 추적 |
-| 4 | DOMAIN_SUMMARY | 결정론 집계 + LLM 문장화 |
-| 5 | AI Chat 통합 | Strict Mode 먼저, Explore Mode 이후 |
+`packages/core/src/ai`와 `/api/chat`이 함께 담당하는 역할은 아래와 같다.
 
----
-
-## 관련 문서
-
-| 문서 | 설명 |
+| 구성 | 역할 |
 |------|------|
-| [02-data-model.md](./02-data-model.md) | Query Engine이 조회하는 테이블 구조 |
-| [05-rollup-and-graph.md](./05-rollup-and-graph.md) | Rollup 데이터 생성 방식 |
-| [03-inference-engine.md](./03-inference-engine.md) | 추론 결과가 Query 대상이 됨 |
+| `evidence-assembler` | 관련 evidence chain을 수집하고 정리 |
+| `answer-composer` | 답변 골격과 system prompt를 구성 |
+| `domain-summary-formatter` | 도메인 요약 응답 보강 |
+| `/api/chat` | provider/model 선택, intent routing, streaming response |
+
+provider 전략:
+
+- OpenAI
+- Anthropic
+- Google
+
+헤더 기반으로 provider/model/API key를 오버라이드할 수 있다.
+
+---
+
+## 9. 설계 방향
+
+## 9.1 유지하는 방향
+
+- `/query`는 계약 중심의 운영 도구로 유지한다.
+- `/chat`은 자연어 해석과 설명형 응답을 담당하되, 계산은 가능한 한 query engine을 재사용한다.
+- query type을 무리하게 늘리기보다, direct retrieval 경로와 조합해 assistant 범위를 확장한다.
+- evidence pool과 confidence threshold를 두어 chat 응답도 근거 기반으로 유지한다.
+
+## 9.2 아직 하지 않는 것
+
+- 완전한 자연어 planner/agent
+- 멀티턴 장기 메모리 저장
+- query export 중심의 별도 분석 워크벤치
+- LLM이 rollup graph를 직접 계산하는 경로
+
+---
+
+## 10. 관련 문서
+
+- [05-rollup-and-graph.md](./05-rollup-and-graph.md)
+- [../spec/44-query-engine-humanized-results-spec.md](../spec/44-query-engine-humanized-results-spec.md)
+- [../spec/45-query-engine-input-usability-spec.md](../spec/45-query-engine-input-usability-spec.md)
+- [../spec/46-ai-architecture-assistant-scope-expansion-spec.md](../spec/46-ai-architecture-assistant-scope-expansion-spec.md)

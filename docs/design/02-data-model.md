@@ -43,7 +43,7 @@ const OBJECT_TYPES = [
 
 | 속성 | 설명 |
 |------|------|
-| **UUID** | 내부 고유 식별자 (v7, 시간순 정렬) |
+| **UUID** | 애플리케이션 생성 ID는 주로 UUID v7을 사용하고, DB 기본값은 random UUID를 허용한다. |
 | **URN** | 가독성/외부참조용 식별자: `urn:{workspace}:{category}:{type}:{normalized_path}` |
 | **parent_id** | 상위 집합체 Object ID (무한 계층) |
 | **path** | Materialized path (예: `/{db_id}/{table_id}`) — 조회 성능용 |
@@ -535,18 +535,15 @@ create index ix_ddm_ws_object on domain_discovery_memberships(workspace_id, obje
 create index ix_ddm_ws_domain on domain_discovery_memberships(workspace_id, domain_id);
 ```
 
-#### domain_rollup_provenances
+#### object_rollup_provenances
 
 ```sql
-create table domain_rollup_provenances (
+create table object_rollup_provenances (
   id uuid primary key,
   workspace_id uuid not null references workspaces(id) on delete cascade,
   generation_version bigint not null,
-  domain_rollup_id uuid not null,
-  source_service_rollup_id uuid not null,
-  factor real not null,
-  contributed_weight real not null,
-  contributed_confidence real,
+  rollup_id uuid not null references object_rollups(id) on delete cascade,
+  base_relation_id uuid not null references object_relations(id) on delete cascade,
   created_at timestamptz default now()
 );
 ```
@@ -669,7 +666,7 @@ create index ix_changelog_ws_time on change_logs(workspace_id, created_at desc);
 | | `domain_candidate_evidences` | 도메인 후보-근거 |
 | | `domain_discovery_runs` | Discovery 실행 스냅샷 |
 | | `domain_discovery_memberships` | Discovery 멤버십 |
-| | `domain_rollup_provenances` | Domain Rollup 근거 |
+| | `object_rollup_provenances` | Rollup edge 근거 |
 | **Code** | `code_artifacts` | 코드 파일 메타 |
 | | `code_import_edges` | Import 그래프 |
 | | `code_call_edges` | Call 그래프 |

@@ -1,10 +1,13 @@
 # Archi.Navi — 개발자 생산성 기능
 
 작성일: 2026-03-08
-문서 버전: v1.0
+최종 갱신: 2026-03-31
+문서 버전: v1.1
+상태: Extension / Roadmap
 
-> Archi.Navi의 핵심 비전인 "개인 업무 생산성 향상"을 극대화하기 위한 기능 설계.
-> 추론 엔진이 수집한 아키텍처 지식을 **일상 개발 워크플로우에 직접 연결**한다.
+> Archi.Navi의 핵심 비전인 "개인 업무 생산성 향상"을 확장하기 위한 문서다.
+> 제품에 일부 기반 기능은 존재하지만, 본 문서는 shipped 기준 문서가 아니라
+> 중장기 확장 방향을 정리하는 로드맵 성격의 설계다.
 
 ---
 
@@ -79,7 +82,7 @@ git diff (또는 PR diff)
 ### 3.3 비교 알고리즘
 
 기존 `rollup_generations` + `valid_from`/`valid_to` 활용.
-현재 ACTIVE vs 직전 ARCHIVED generation을 diff하여 변화를 산출.
+ACTIVE vs 직전 ARCHIVED generation을 diff하여 변화를 산출.
 
 ---
 
@@ -162,7 +165,7 @@ CREATE TABLE object_notes (
 ### 7.1 서비스 레이어 분리
 
 ```
-현재: API route에 비즈니스 로직 직접 포함
+기준 상태: API route에 비즈니스 로직 직접 포함
 개선: packages/inference/src/orchestration/inferenceService.ts (비즈니스)
       apps/web/src/app/api/inference/run/route.ts (thin HTTP 어댑터)
       packages/cli/src/commands/infer.ts (thin CLI 어댑터)
@@ -194,8 +197,8 @@ anavi watch --workspace <id> --path /path/to/repos
 | 문서 | 설명 |
 |------|------|
 | [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) | 추론 엔진 고도화 설계 |
-| [spec/24-change-impact-preview-spec.md](../spec/24-change-impact-preview-spec.md) | Change Impact SPEC |
-| [spec/25-architecture-drift-detection-spec.md](../spec/25-architecture-drift-detection-spec.md) | Drift Detection SPEC |
-| [spec/26-personal-architecture-journal-spec.md](../spec/26-personal-architecture-journal-spec.md) | Journal SPEC |
-| [spec/27-api-contract-diff-spec.md](../spec/27-api-contract-diff-spec.md) | API Contract Diff SPEC |
-| [spec/28-architecture-health-score-spec.md](../spec/28-architecture-health-score-spec.md) | Health Score SPEC |
+| [../spec/23-change-impact-preview-spec.md](../spec/23-change-impact-preview-spec.md) | Change Impact SPEC |
+| [../spec/24-architecture-drift-detection-spec.md](../spec/24-architecture-drift-detection-spec.md) | Drift Detection SPEC |
+| [../spec/25-personal-architecture-journal-spec.md](../spec/25-personal-architecture-journal-spec.md) | Journal SPEC |
+| [../spec/26-api-contract-diff-spec.md](../spec/26-api-contract-diff-spec.md) | API Contract Diff SPEC |
+| [../spec/27-architecture-health-score-spec.md](../spec/27-architecture-health-score-spec.md) | Health Score SPEC |
