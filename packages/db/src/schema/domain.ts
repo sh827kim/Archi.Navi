@@ -20,6 +20,64 @@ import {
 import { workspaces, objects } from './core';
 import { evidences } from './evidence';
 
+const DEFAULT_PROOF_CONFIDENCE_CONFIG = {
+  name: 'intent-proof-default',
+  version: 'v1',
+  weights: {
+    summaryQuality: 0.45,
+    slotCompleteness: 0.25,
+    corroborationPerSignal: 0.05,
+    corroborationCap: 0.2,
+    contradictionPenaltyPerItem: 0.2,
+    contradictionPenaltyCap: 0.6,
+  },
+  slotWeights: {
+    http: {
+      method: 0.2,
+      externalPath: 0.2,
+      internalPath: 0.2,
+      providerService: 0.2,
+      targetObject: 0.2,
+    },
+    db: {
+      action: 0.25,
+      table: 0.25,
+      schema: 0.15,
+      datasource: 0.1,
+      targetObject: 0.25,
+    },
+    message: {
+      channel: 0.4,
+      broker: 0.2,
+      objectType: 0.15,
+      targetObject: 0.25,
+    },
+  },
+} as const;
+
+const DEFAULT_SMART_PROOF_CONFIG = {
+  enabled: false,
+  categories: {
+    preResolutionEnhancement: false,
+    frontierResolution: true,
+    ambiguityResolution: false,
+    crossProofCorrelation: false,
+    contradictionDetection: false,
+  },
+  budget: {
+    maxLlmCallsPerRun: 100,
+    maxLlmCallsPerIntent: 5,
+    maxInputTokensPerCall: 4000,
+    maxTotalTokensPerRun: 500000,
+  },
+  thresholds: {
+    autoAcceptConfidence: 0.8,
+    reviewConfidence: 0.5,
+    skipConfidence: 0.3,
+  },
+  temperature: 0.1,
+} as const;
+
 // 확정된 도메인 소속 분포 (Affinity Distribution)
 export const objectDomainAffinities = pgTable(
   'object_domain_affinities',
@@ -100,6 +158,8 @@ export const domainInferenceProfiles = pgTable(
       boostFactor: 0.3,
       penaltyFactor: 0.85,
     }),
+    proofConfidenceConfig: jsonb('proof_confidence_config').default(DEFAULT_PROOF_CONFIDENCE_CONFIG),
+    smartProofConfig: jsonb('smart_proof_config').default(DEFAULT_SMART_PROOF_CONFIG),
 
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),

@@ -4,8 +4,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { join } from 'path';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import {
   evidences,
   objectRelations,
@@ -19,12 +18,8 @@ import { and, eq } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
 import { approveRelationCandidate } from '@/relation/approveRelationCandidate';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

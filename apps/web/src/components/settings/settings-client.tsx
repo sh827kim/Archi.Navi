@@ -338,7 +338,7 @@ export function SettingsClient() {
                 <div>
                   <div className="font-medium text-muted-foreground mb-1">DB 타입</div>
                   <div className="rounded-lg bg-muted/50 px-3 py-2 text-xs font-mono">
-                    PGlite (Local-first)
+                    Embedded PostgreSQL / PostgreSQL
                   </div>
                 </div>
                 <div>
@@ -1946,13 +1946,6 @@ function WeightSlider({
 /** 스캔 모드 옵션 */
 const SCAN_MODES = [
   {
-    value: 'local' as const,
-    label: '로컬 디렉토리',
-    description: '단일 프로젝트 폴더를 스캔합니다',
-    icon: FolderSearch,
-    placeholder: '/path/to/your-project',
-  },
-  {
     value: 'workspace-dir' as const,
     label: '워크스페이스 폴더',
     description: '폴더 하위의 모든 프로젝트를 자동 감지합니다',
@@ -1960,18 +1953,25 @@ const SCAN_MODES = [
     placeholder: '/path/to/workspace',
   },
   {
-    value: 'github-repo' as const,
-    label: 'GitHub 레포',
-    description: '단일 GitHub 레포를 클론하여 스캔합니다',
-    icon: Github,
-    placeholder: 'owner/repo',
-  },
-  {
     value: 'github-org' as const,
     label: 'GitHub Org',
     description: 'Organization의 모든 레포를 스캔합니다',
     icon: Building,
     placeholder: 'my-organization',
+  },
+  {
+    value: 'local' as const,
+    label: '로컬 디렉토리',
+    description: '단일 프로젝트 폴더를 스캔합니다',
+    icon: FolderSearch,
+    placeholder: '/path/to/your-project',
+  },
+  {
+    value: 'github-repo' as const,
+    label: 'GitHub 레포',
+    description: '단일 GitHub 레포를 클론하여 스캔합니다',
+    icon: Github,
+    placeholder: 'owner/repo',
   },
 ] as const;
 
@@ -2014,7 +2014,9 @@ interface DirSuggestion {
 }
 
 export function ScanSettings({ workspaceId }: { workspaceId: string }) {
-  const [mode, setMode] = useState<'local' | 'workspace-dir' | 'github-repo' | 'github-org'>('local');
+  const [mode, setMode] = useState<'local' | 'workspace-dir' | 'github-repo' | 'github-org'>(
+    'workspace-dir',
+  );
   const [target, setTarget] = useState('');
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<ScanApiResult | null>(null);
@@ -2455,12 +2457,12 @@ export function ScanSettings({ workspaceId }: { workspaceId: string }) {
               {isLocalMode && (
                 <PathPickerDialog
                   value={target}
-                  fallbackPath={savedParentDirs[0]}
                   onSelect={selectSuggestion}
                   disabled={scanning}
                   triggerLabel="폴더 선택"
                   title="스캔 대상 폴더 선택"
                   description="로컬 파일시스템을 탐색해 스캔 대상을 선택합니다."
+                  {...(savedParentDirs[0] ? { fallbackPath: savedParentDirs[0] } : {})}
                 />
               )}
             </div>

@@ -72,7 +72,7 @@ describe('GET /api/inference/candidates', () => {
       {
         id: 'cand-1',
         subjectObjectId: 'svc-1',
-        objectId: 'svc-2',
+        objectId: 'ep-2',
         relationType: 'call',
         confidence: 0.82,
         status: 'PENDING',
@@ -102,6 +102,14 @@ describe('GET /api/inference/candidates', () => {
         granularity: 'COMPOUND',
         parentId: null,
         objectType: 'service',
+      },
+      {
+        id: 'ep-2',
+        displayName: 'payment-service',
+        name: 'payment-service',
+        granularity: 'ATOMIC',
+        parentId: 'svc-2',
+        objectType: 'api_endpoint',
       },
     ];
     const evidenceRows = [
@@ -250,7 +258,7 @@ describe('GET /api/inference/candidates', () => {
       {
         id: 'cand-3',
         subjectObjectId: 'svc-1',
-        objectId: 'svc-2',
+        objectId: 'ep-2',
         relationType: 'call',
         confidence: 0.7,
         status: 'PENDING',
@@ -282,6 +290,14 @@ describe('GET /api/inference/candidates', () => {
         granularity: 'COMPOUND',
         parentId: null,
         objectType: 'service',
+      },
+      {
+        id: 'ep-2',
+        displayName: 'billing-service',
+        name: 'billing-service',
+        granularity: 'ATOMIC',
+        parentId: 'svc-2',
+        objectType: 'api_endpoint',
       },
     ];
     const evidenceRows = [{ candidateId: 'cand-3', evidenceType: 'FILE' }];
@@ -342,7 +358,7 @@ describe('GET /api/inference/candidates', () => {
       {
         id: 'cand-4',
         subjectObjectId: 'svc-1',
-        objectId: 'svc-2',
+        objectId: 'ep-2',
         relationType: 'call',
         confidence: 0.9,
         status: 'PENDING',
@@ -373,6 +389,14 @@ describe('GET /api/inference/candidates', () => {
         granularity: 'COMPOUND',
         parentId: null,
         objectType: 'service',
+      },
+      {
+        id: 'ep-2',
+        displayName: 'billing-service',
+        name: 'billing-service',
+        granularity: 'ATOMIC',
+        parentId: 'svc-2',
+        objectType: 'api_endpoint',
       },
     ];
     const evidenceRows = [
@@ -432,7 +456,7 @@ describe('GET /api/inference/candidates', () => {
       {
         id: 'cand-5',
         subjectObjectId: 'svc-1',
-        objectId: 'svc-2',
+        objectId: 'ep-2',
         relationType: 'call',
         confidence: 0.76,
         status: 'PENDING',
@@ -467,6 +491,14 @@ describe('GET /api/inference/candidates', () => {
         granularity: 'COMPOUND',
         parentId: null,
         objectType: 'service',
+      },
+      {
+        id: 'ep-2',
+        displayName: 'billing-service',
+        name: 'billing-service',
+        granularity: 'ATOMIC',
+        parentId: 'svc-2',
+        objectType: 'api_endpoint',
       },
     ];
 
@@ -522,7 +554,7 @@ describe('GET /api/inference/candidates', () => {
     expect(payload[0].feedback).not.toHaveProperty('signalKind');
   });
 
-  it('Smart fallback 후보는 UI에 필요한 최소 metadata만 응답에 포함해야 한다', async () => {
+  it('service-level proof 후보는 응답에서 제외해야 한다', async () => {
     const candidates = [
       {
         id: 'cand-smart-fallback',
@@ -604,35 +636,10 @@ describe('GET /api/inference/candidates', () => {
 
     expect(response.status).toBe(200);
     const payload = await response.json();
-    expect(payload).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'cand-smart-fallback',
-        metadata: {
-          feedback: {
-            key: 'CALL:code:call:spring_boot:java',
-            applied: false,
-            sampleCount: 0,
-            adjustment: 0,
-          },
-          targetType: 'service',
-          analysisMode: 'pair_pack',
-          fallbackReason: 'PATH_NOT_MATCHED',
-          fallbackContext: {
-            attemptedMethod: 'GET',
-            attemptedPath: '/api/orders/missing',
-            evidenceSummary: 'fetch("http://orders/api/orders/missing")',
-          },
-        },
-      }),
-    ]));
-    expect(payload[0].metadata).not.toHaveProperty('targetServiceId');
-    expect(payload[0].metadata).not.toHaveProperty('pairEvidenceSummary');
-    expect(payload[0].metadata).not.toHaveProperty('httpMethod');
-    expect(payload[0].metadata).not.toHaveProperty('path');
-    expect(payload[0].metadata).not.toHaveProperty('evidence');
+    expect(payload).toEqual([]);
   });
 
-  it('Smart fallback 후보에 method/path가 없으면 fallbackContext를 합성하지 않아야 한다', async () => {
+  it('service-level proof 후보는 legacy fallback metadata가 있어도 응답에서 제외해야 한다', async () => {
     const candidates = [
       {
         id: 'cand-smart-fallback-no-context',
@@ -704,18 +711,7 @@ describe('GET /api/inference/candidates', () => {
 
     expect(response.status).toBe(200);
     const payload = await response.json();
-    expect(payload).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        id: 'cand-smart-fallback-no-context',
-        metadata: {
-          targetType: 'service',
-          analysisMode: 'pair_pack',
-          fallbackReason: 'INSUFFICIENT_CONTEXT',
-        },
-      }),
-    ]));
-    expect(payload[0].metadata).not.toHaveProperty('fallbackContext');
-    expect(payload[0].metadata).not.toHaveProperty('evidence');
+    expect(payload).toEqual([]);
   });
 
   it('limit/offset query를 후보 조회에 반영해야 한다', async () => {

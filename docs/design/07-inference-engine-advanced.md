@@ -3,10 +3,12 @@
 작성일: 2026-03-08
 최종 갱신: 2026-03-31
 문서 버전: v1.1
-상태: Extension / Partially Shipped
+상태: Extension / Partially Shipped / Partially Deprecated
 
 > 기존 추론 엔진(`docs/design/03-inference-engine.md` v4.0)의 확장 설계.
 > 본 문서는 추론 정밀도·품질을 구조적으로 끌어올리기 위한 5가지 핵심 개선을 다룬다.
+>
+> **Note (2026-04-05)**: 섹션 4(LLM 추론 부스터)와 섹션 7(전체 파이프라인 통합 뷰)은 Intent-Centric Proof Engine + Smart Proof Engine으로 대체되어 deprecated 처리되었다. 섹션 2(Inter-procedural AST), 3(Cross-Signal Validation), 5(프레임워크 플러그인), 6(피드백 루프)은 여전히 유효하다.
 
 ---
 
@@ -239,76 +241,11 @@ final_confidence = clamp(prior + boost - (1 - penalty), 0.1, 0.99)
 
 ---
 
-## 4. LLM 추론 부스터 (기존 LLM 필터 확장)
+## 4. LLM 추론 부스터
 
-### 4.1 기존 vs 확장
-
-| 구분 | 기존 (후보 필터링) | 확장 (추론 부스터) |
-|------|-------------------|-------------------|
-| 실행 시점 | 후보 생성 후 | 후보 생성 전/후 모두 |
-| 역할 | 후보 타당성 판정 | 의도 분석 + 설명 생성 + 라벨 정제 |
-| 입력 | 후보 + evidence | 코드 컨텍스트 + 후보 + 프로젝트 구조 |
-| 출력 | accept/reject | 관계 설명, 도메인 라벨, 보완 후보 |
-
-### 4.2 LLM 부스터 기능 3가지
-
-#### 4.2.1 코드 의도 분석 (Pre-inference LLM)
-
-Regex/AST로 잡기 어려운 패턴을 LLM이 보완한다.
-
-**대상 패턴:**
-- 동적 URL 구성: `baseUrl + "/" + serviceName + "/api/orders"`
-- 리플렉션 기반 호출
-- 커스텀 HTTP 클라이언트 래퍼
-
-**실행 방식:**
-```
-1. AST 분석에서 "미확정" 시그널 수집 (confidence < 0.5)
-       ↓
-2. 해당 파일의 관련 코드 컨텍스트 추출 (±30 lines)
-       ↓
-3. LLM 호출 → 보완 후보 생성
-   - confidence: 0.5~0.7 (LLM 기반이므로 중간 수준)
-   - metadata.source: "LLM_BOOST"
-```
-
-#### 4.2.2 관계 설명 자동 생성
-
-각 relation_candidate에 "왜 이 관계가 존재하는가"를 자연어로 생성.
-
-```
-입력: subject, object, relationType, evidences
-LLM 출력: "order-service는 주문 결제 시 payment-service의 charge API를 호출합니다."
-저장: relation_candidates.metadata.llmExplanation
-```
-
-#### 4.2.3 도메인 라벨 정제
-
-Track B Discovery의 label_candidates를 자연스러운 이름으로 변환.
-
-```
-입력: cluster members + label_candidates + table/topic prefixes
-LLM 출력: { "suggestedName": "주문 관리", "suggestedEnglishName": "Order Management" }
-저장: domain_discovery_memberships.metadata.llmLabel
-```
-
-### 4.3 배치 최적화
-
-```
-기존: 후보 1건씩 개별 LLM 호출
-개선: 같은 subject 서비스의 후보들을 그룹화 → 맥락 포함 배치 호출
-배치 크기: 5~10 후보/호출 (토큰 제한 고려)
-```
-
-### 4.4 비용 제어
-
-| 파라미터 | 기본값 | 설명 |
-|---------|--------|------|
-| `llm_boost_enabled` | false | LLM 부스터 활성화 여부 |
-| `llm_boost_threshold` | 0.5 | 이 confidence 미만 시그널만 LLM 분석 |
-| `llm_explanation_enabled` | true | 관계 설명 생성 여부 |
-| `llm_label_enabled` | true | 도메인 라벨 정제 여부 |
-| `llm_max_calls_per_run` | 50 | 추론 1회당 최대 LLM 호출 수 |
+> **Deprecated (2026-04-05)**: 이 섹션은 Smart Proof Engine의 Category A/B로 대체되었다.
+> 레거시 원본: [deprecated/07-llm-boost-and-pipeline-view-legacy.md](./deprecated/07-llm-boost-and-pipeline-view-legacy.md)
+> 현행 설계: [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md)
 
 ---
 
@@ -415,49 +352,16 @@ function applyFeedbackAdjustment(base: number, feedback: FeedbackStats): number 
 
 ## 7. 전체 파이프라인 통합 뷰
 
+> **Deprecated (2026-04-05)**: 기존 Signal→Feedback→Cross-validation→Candidate→LLM Filter 흐름은 Intent-Centric Proof Engine의 intent→proof→candidate 흐름으로 대체되었다.
+> 레거시 원본: [deprecated/07-llm-boost-and-pipeline-view-legacy.md](./deprecated/07-llm-boost-and-pipeline-view-legacy.md)
+> 현행 실행 순서: [12-intent-centric-proof-engine-adoption-plan.md](./12-intent-centric-proof-engine-adoption-plan.md)
+
+현행 파이프라인:
+
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    Enhanced Pipeline                         │
-│                                                             │
-│  ① Signal Collection (기존 + 확장)                          │
-│  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────────┐   │
-│  │ Code     │ │ Config   │ │ DB Schema│ │ LLM Boost    │   │
-│  │ (Inter-  │ │ Signals  │ │ Signals  │ │ (미확정 시그널│   │
-│  │ procedural)│          │ │          │ │  보완)       │   │
-│  └────┬─────┘ └────┬─────┘ └────┬─────┘ └──────┬───────┘   │
-│       │             │            │               │          │
-│       ▼             ▼            ▼               ▼          │
-│  ② Feedback Adjustment (relation/domain 분리)              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ relation/domain별 독립 feedback adjustment           │   │
-│  └───────────────────────┬──────────────────────────────┘   │
-│                          │                                  │
-│                          ▼                                  │
-│  ③ Cross-Signal Validation                                  │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ 동일 관계 그룹화 → 지지/모순 판정 → 신뢰도 재계산    │   │
-│  └───────────────────────┬──────────────────────────────┘   │
-│                          │                                  │
-│                          ▼                                  │
-│  ④ Candidate Generation + LLM Explanation                   │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ relation_candidates + 자연어 설명 + 교차 검증 정보    │   │
-│  └───────────────────────┬──────────────────────────────┘   │
-│                          │                                  │
-│                          ▼                                  │
-│  ⑤ LLM Candidate Filter (기존)                              │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ 배치 그룹화 → 맥락 포함 평가 → accept/reject         │   │
-│  └───────────────────────┬──────────────────────────────┘   │
-│                          │                                  │
-│                          ▼                                  │
-│  ⑥ Approval + Feedback Loop                                 │
-│  ┌──────────────────────────────────────────────────────┐   │
-│  │ 승인 UI → 확정 → rollup rebuild                       │   │
-│  │       → relation/domain 분리 집계                     │   │
-│  │       → 다음 run부터만 반영                           │   │
-│  └──────────────────────────────────────────────────────┘   │
-└─────────────────────────────────────────────────────────────┘
+extraction → cache update → intent creation → proof resolution
+  → frontier/projection → optional agent → optional Smart escalation
+  → proof re-run → candidate projection → approval
 ```
 
 ---
@@ -467,9 +371,8 @@ function applyFeedbackAdjustment(base: number, feedback: FeedbackStats): number 
 | 문서 | 설명 |
 |------|------|
 | [03-inference-engine.md](./03-inference-engine.md) | 추론 엔진 기준 문서 v4.0 |
-| [04-query-engine.md](./04-query-engine.md) | 쿼리 엔진 (추론 결과 활용) |
+| [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md) | Smart Proof Engine 설계 (LLM 부스터 후속) |
 | [../spec/17-inter-procedural-ast-spec.md](../spec/17-inter-procedural-ast-spec.md) | Inter-procedural AST SPEC |
 | [../spec/18-cross-signal-validation-spec.md](../spec/18-cross-signal-validation-spec.md) | Cross-Signal Validation SPEC |
-| [../spec/19-llm-inference-boost-spec.md](../spec/19-llm-inference-boost-spec.md) | LLM 추론 부스터 SPEC |
 | [../spec/20-framework-plugin-system-spec.md](../spec/20-framework-plugin-system-spec.md) | 프레임워크 플러그인 SPEC |
 | [../spec/22-inference-feedback-loop-spec.md](../spec/22-inference-feedback-loop-spec.md) | 피드백 루프 SPEC |

@@ -1,0 +1,12 @@
+{
+  "version": "intent-proof-benchmark-baseline-v1",
+  "thresholds": {
+    "minScenarioPassRate": 1,
+    "minCandidateExpectationRate": 1,
+    "minFrontierExpectationRate": 1,
+    "minRejectedExpectationRate": 1,
+    "minAcceptedPatchRate": 1,
+    "minRejectedPatchRate": 1,
+    "maxFailureCount": 0
+  }
+}

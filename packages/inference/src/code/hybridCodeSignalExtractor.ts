@@ -11,6 +11,7 @@ import type {
 import { scanMyBatisXml } from './scanners/javaKotlin';
 import { detectPlugins } from './plugins/pluginRegistry';
 import { scanFileWithHybridPlugins } from './plugins/runtime';
+import { resolveSignalOwnerMetadata } from './ownerResolution';
 import {
   findJavaKotlinFiles,
   findMyBatisXmlFiles,
@@ -47,6 +48,7 @@ interface ProcessFileContext {
   repoRoot: string;
   allServices: { id: string; name: string }[];
   forceRescan: boolean;
+  ownerFunctionCache: Map<string, string>;
 }
 
 interface ProcessFileResult {
@@ -96,6 +98,7 @@ async function deleteArtifactEdgesAndEvidences(
 
 async function processFile(
   filePath: string,
+  content: string,
   scanResult: FileScanResult,
   ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
@@ -118,17 +121,18 @@ async function processFile(
   let artifactId: string;
   let isNew = false;
 
+  const ownerObjectId = findOwnerServiceByPath(filePath, allServices);
+
   if (existingArtifact) {
     await deleteArtifactEdgesAndEvidences(db, workspaceId, existingArtifact.id);
     await db
       .update(codeArtifacts)
-      .set({ sha256: scanResult.sha256, updatedAt: new Date() })
+      .set({ sha256: scanResult.sha256, ownerObjectId, updatedAt: new Date() })
       .where(eq(codeArtifacts.id, existingArtifact.id));
     artifactId = existingArtifact.id;
   } else {
     isNew = true;
     artifactId = generateId();
-    const ownerObjectId = findOwnerServiceByPath(filePath, allServices);
     await db.insert(codeArtifacts).values({
       id: artifactId,
       workspaceId,
@@ -143,6 +147,16 @@ async function processFile(
 
   for (const signal of scanResult.signals) {
     const evidenceId = generateId();
+    const metadata = await resolveSignalOwnerMetadata(db, {
+      workspaceId,
+      serviceId: ownerObjectId,
+      filePath,
+      language: scanResult.language,
+      content,
+      signalLine: signal.lineStart,
+      metadata: signal.metadata,
+      cache: ctx.ownerFunctionCache,
+    });
     await db.insert(evidences).values({
       id: evidenceId,
       workspaceId,
@@ -156,7 +170,7 @@ async function processFile(
         confidence: signal.confidence,
         language: scanResult.language,
         extractionMode: 'hybrid',
-        ...signal.metadata,
+        ...metadata,
       },
     });
 
@@ -193,7 +207,14 @@ export async function extractHybridCodeSignals(
     .from(objects)
     .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service')));
 
-  const ctx: ProcessFileContext = { db, workspaceId, repoRoot, allServices, forceRescan };
+  const ctx: ProcessFileContext = {
+    db,
+    workspaceId,
+    repoRoot,
+    allServices,
+    forceRescan,
+    ownerFunctionCache: new Map(),
+  };
   const result: CodeSignalResult = {
     fileCount: 0,
     artifactCount: 0,
@@ -227,7 +248,7 @@ export async function extractHybridCodeSignals(
         continue;
       }
 
-      const fileResult = await processFile(filePath, scanResult, ctx);
+      const fileResult = await processFile(filePath, content, scanResult, ctx);
       if (fileResult.skipped) {
         result.skippedCount++;
       } else {

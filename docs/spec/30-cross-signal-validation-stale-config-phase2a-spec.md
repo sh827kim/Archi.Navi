@@ -3,7 +3,7 @@
 상태: Implemented
 작성일: 2026-03-20
 상위 SPEC: `docs/spec/18-cross-signal-validation-spec.md`
-선행 SPEC: `docs/spec/29-cross-signal-validation-phase1-spec.md`
+선행 SPEC: `docs/spec/18-cross-signal-validation-spec.md`
 
 ## 1. 목적
 

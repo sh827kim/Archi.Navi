@@ -6,7 +6,7 @@
 
 ## 1. 문제 정의
 
-1. PGlite 데이터 디렉터리 복구 후 빈 DB가 생성되더라도 마이그레이션이 즉시 재적용되지 않을 수 있다.
+1. 로컬 DB 데이터 디렉터리 복구 후 빈 DB가 생성되더라도 마이그레이션이 즉시 재적용되지 않을 수 있다.
 2. 이 경우 `/api/workspaces` 같은 초기 API가 `relation "workspaces" does not exist`로 실패한다.
 
 ## 2. 목표
@@ -26,7 +26,7 @@
 
 ## 5. 수용 기준
 
-1. PGlite 복구 또는 신규 초기화 후 `MIGRATIONS_FOLDER`가 설정되어 있으면 마이그레이션이 자동 적용된다.
+1. embedded postgres 복구 또는 신규 초기화 후 `MIGRATIONS_FOLDER`가 설정되어 있으면 마이그레이션이 자동 적용된다.
 2. 워크스페이스 생성/조회 API가 빈 데이터 디렉터리에서도 `workspaces` 테이블 부재로 실패하지 않는다.
 
 ## 6. 검증

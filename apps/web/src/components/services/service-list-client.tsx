@@ -533,10 +533,18 @@ function ObjectDetailSheet({
 
             {/* Outbound 관계 */}
             <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                <ArrowRight className="h-3.5 w-3.5" />
-                Outbound ({outboundVisible.length})
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <ArrowRight className="h-3.5 w-3.5" />
+                  Outbound ({outboundVisible.length})
+                </h3>
+                <a
+                  href={`/approval?workspaceId=${encodeURIComponent(workspaceId)}&focusObjectId=${encodeURIComponent(detail.id)}&drill=proof-chain`}
+                  className="text-[11px] text-primary hover:underline"
+                >
+                  proof chain drill-down
+                </a>
+              </div>
               {outboundVisible.length === 0 ? (
                 <p className="text-xs text-muted-foreground">없음</p>
               ) : (
@@ -560,10 +568,18 @@ function ObjectDetailSheet({
 
             {/* Inbound 관계 */}
             <section className="space-y-2">
-              <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
-                <ArrowLeft className="h-3.5 w-3.5" />
-                Inbound ({detail.inbound.length})
-              </h3>
+              <div className="flex items-center justify-between">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
+                  <ArrowLeft className="h-3.5 w-3.5" />
+                  Inbound ({detail.inbound.length})
+                </h3>
+                <a
+                  href={`/approval?workspaceId=${encodeURIComponent(workspaceId)}&focusObjectId=${encodeURIComponent(detail.id)}&drill=proof-chain`}
+                  className="text-[11px] text-primary hover:underline"
+                >
+                  proof chain drill-down
+                </a>
+              </div>
               {detail.inbound.length === 0 ? (
                 <p className="text-xs text-muted-foreground">없음</p>
               ) : (

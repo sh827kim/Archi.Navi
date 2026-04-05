@@ -225,6 +225,65 @@ zuul:
     expect(result.routeServiceIds).toEqual(['article-service', 'author-service']);
   });
 
+  it('spring cloud gateway Path predicate의 URI template 세그먼트를 유지해야 한다', () => {
+    const yaml = `
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: order-detail
+          uri: lb://order-service
+          predicates:
+            - Path=/orders/{id}
+`;
+    const result = parseApplicationYml('/app/application.yml', yaml);
+
+    expect(result.springCloudGatewayRoutes).toHaveLength(1);
+    expect(result.springCloudGatewayRoutes[0]).toMatchObject({
+      routeKey: 'order-detail',
+      path: '/orders/{id}',
+      uri: 'lb://order-service',
+    });
+  });
+
+  it('spring cloud gateway object-form predicates와 filters도 파싱해야 한다', () => {
+    const yaml = `
+spring:
+  cloud:
+    gateway:
+      routes:
+        - id: order-detail
+          uri: lb://order-service
+          predicates:
+            - name: Path
+              args:
+                pattern: /orders/{id}
+          filters:
+            - name: StripPrefix
+              args:
+                parts: 1
+            - name: PrefixPath
+              args:
+                prefix: /internal
+            - name: RewritePath
+              args:
+                regexp: /orders/(?<id>.*)
+                replacement: /internal/orders/$\\{id}
+`;
+    const result = parseApplicationYml('/app/application.yml', yaml);
+
+    expect(result.springCloudGatewayRoutes).toHaveLength(1);
+    expect(result.springCloudGatewayRoutes[0]).toMatchObject({
+      routeKey: 'order-detail',
+      path: '/orders/{id}',
+      stripPrefixCount: 1,
+      prefixPath: '/internal',
+      rewriteRegex: '/orders/(?<id>.*)',
+      rewriteReplacement: '/internal/orders/$\\{id}',
+      uri: 'lb://order-service',
+    });
+  });
+
   // ─── 엣지 케이스 ─────────────────────────────────────────────────────────────
 
   it('spring.profiles.active가 있어도 동일 파일의 설정은 정상 파싱해야 한다', () => {

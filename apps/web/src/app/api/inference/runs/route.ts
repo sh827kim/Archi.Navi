@@ -2,26 +2,34 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
 import { getDb, objects } from '@archi-navi/db';
 import {
+  buildEmptyProofEngineSummary,
   createInferenceRun,
   executeInferenceRun,
   listInferenceRuns,
+  normalizeSmartProofConfig,
   normalizeInferenceRunModes,
   type InferenceSourceType,
+  type SmartProofConfig,
 } from '@archi-navi/inference';
 
 interface InferenceRunRequestBody {
   workspaceId?: string;
   modes?: string[];
+  transports?: string[];
   codeEngine?: string;
   incremental?: boolean;
+  forceRescan?: boolean;
   triggerType?: string;
   maxAttempts?: number;
   idempotencyKey?: string;
   repoRoots?: string[];
   githubRepo?: string;
   githubOrg?: string;
-  sources?: Array<{ type?: string; ref?: string; metadata?: Record<string, unknown> }>;
+  sources?: Array<{ type?: string; path?: string; ref?: string; metadata?: Record<string, unknown> }>;
   useServiceMetadataPaths?: boolean;
+  enableAgentPatches?: boolean;
+  maxAgentFrontiers?: number;
+  smartProof?: boolean | SmartProofConfig;
 }
 
 function authorizeInferenceRunsRequest(req: NextRequest): NextResponse | null {
@@ -56,9 +64,10 @@ async function collectSources(
 
   const fromBody = body.sources ?? [];
   for (const source of fromBody) {
-    if (!source?.type || !source?.ref) continue;
+    const sourceRef = source?.ref ?? source?.path;
+    if (!source?.type || !sourceRef) continue;
     if (!isSourceType(source.type)) continue;
-    const ref = source.ref.trim();
+    const ref = sourceRef.trim();
     if (ref.length === 0) continue;
     sourceMap.set(`${source.type}:${ref}`, {
       type: source.type,
@@ -105,6 +114,27 @@ async function collectSources(
   return Array.from(sourceMap.values());
 }
 
+function normalizeRunModes(body: InferenceRunRequestBody) {
+  if (Array.isArray(body.modes) && body.modes.length > 0) {
+    return normalizeInferenceRunModes(body.modes);
+  }
+
+  const transportModes = new Set<string>();
+  for (const transport of body.transports ?? []) {
+    const normalized = transport.trim().toLowerCase();
+    if (normalized === 'db') {
+      transportModes.add('db');
+      continue;
+    }
+    if (normalized === 'http' || normalized === 'message') {
+      transportModes.add('config');
+      transportModes.add('code');
+    }
+  }
+
+  return normalizeInferenceRunModes(Array.from(transportModes));
+}
+
 export async function POST(req: NextRequest) {
   try {
     const authError = authorizeInferenceRunsRequest(req);
@@ -116,7 +146,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'workspaceId is required' }, { status: 400 });
     }
 
-    const modes = normalizeInferenceRunModes(body.modes);
+    const modes = normalizeRunModes(body);
     const sources = await collectSources(workspaceId, body);
 
     const requiresRunnableSource = modes.includes('config') || modes.includes('code');
@@ -138,10 +168,17 @@ export async function POST(req: NextRequest) {
       workspaceId,
       modes,
       ...(body.codeEngine != null ? { codeEngine: body.codeEngine } : {}),
-      ...(body.incremental != null ? { incremental: body.incremental } : {}),
-      ...(body.triggerType != null ? { triggerType: body.triggerType } : {}),
+      incremental: body.forceRescan === true ? false : body.incremental !== false,
+      triggerType: body.triggerType ?? 'INTENT_PROOF_ENGINE',
+      ...(body.smartProof !== undefined ? { smartProof: body.smartProof } : {}),
       ...(body.maxAttempts != null ? { maxAttempts: body.maxAttempts } : {}),
       ...(body.idempotencyKey != null ? { idempotencyKey: body.idempotencyKey } : {}),
+      ...(body.enableAgentPatches !== undefined
+        ? { enableAgentPatches: body.enableAgentPatches === true }
+        : {}),
+      ...(typeof body.maxAgentFrontiers === 'number'
+        ? { maxAgentFrontiers: body.maxAgentFrontiers }
+        : {}),
       sources,
     });
 
@@ -151,13 +188,44 @@ export async function POST(req: NextRequest) {
       });
     });
 
+    const requestedSmartProof = normalizeSmartProofConfig(body.smartProof);
+    const proofSummary = {
+      ...buildEmptyProofEngineSummary(),
+      smartMode: {
+        ...buildEmptyProofEngineSummary().smartMode,
+        enabled: requestedSmartProof.enabled,
+      },
+    };
+    const requestedAgentPatches = {
+      enabled: body.enableAgentPatches === true,
+      maxFrontiers: typeof body.maxAgentFrontiers === 'number' ? body.maxAgentFrontiers : null,
+    };
+    const frontierAgent = {
+      attemptedFrontierCount: 0,
+      proposedPatchCount: 0,
+      appliedPatchCount: 0,
+      rejectedPatchCount: 0,
+      skippedReason: requestedAgentPatches.enabled ? 'PENDING_RUN' : 'DISABLED',
+    };
+
     return NextResponse.json(
       {
         ok: true,
+        engine: proofSummary.engine,
         runId: run.id,
         status: run.status,
         requestedModes: run.requestedModes,
         sourceSummary: run.sourceSummary,
+        summary: proofSummary,
+        results: {
+          config: null,
+          code: null,
+          db: null,
+          proofResolution: null,
+          frontierAgent,
+          requestedAgentPatches,
+          requestedSmartProof,
+        },
       },
       { status: 202 },
     );

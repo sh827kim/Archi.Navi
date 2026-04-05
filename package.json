@@ -37,7 +37,8 @@
     "onlyBuiltDependencies": [
       "esbuild",
       "sharp",
-      "unrs-resolver"
+      "unrs-resolver",
+      "@embedded-postgres/darwin-arm64"
     ],
     "overrides": {
       "drizzle-orm": "^0.45.1"

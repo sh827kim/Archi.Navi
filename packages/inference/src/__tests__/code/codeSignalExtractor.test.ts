@@ -1,24 +1,19 @@
 /**
  * codeSignalExtractor.ts 통합 테스트
- * PGlite 인메모리 DB + 임시 파일 시스템으로 실제 추출 흐름 검증
+ * embedded postgres 테스트 DB + 임시 파일 시스템으로 실제 추출 흐름 검증
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects, workspaces } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { extractCodeSignals } from '@/code/codeSignalExtractor';
 import { generateId } from '@archi-navi/shared';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-    const db = createPgliteClient();
-    await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-    return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

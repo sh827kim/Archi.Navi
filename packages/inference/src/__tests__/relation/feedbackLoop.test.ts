@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import {
-  createPgliteClient,
+  createTestDb as createEmbeddedTestDb,
   domainInferenceProfiles,
   evidences,
   objects,
@@ -19,13 +18,8 @@ import {
 } from '@/relation/feedbackLoop';
 import { saveRelationCandidate } from '@/relation/candidateStore';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-const workspaceId = '00000000-0000-0000-0000-000000000081';
-
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

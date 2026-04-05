@@ -20,6 +20,7 @@ import { scanFileWithAstPlugins } from '../plugins/runtime';
 import { buildProjectSymbolTable } from './symbolTable';
 import { AstRuntimeError } from './wasmParser';
 import { buildAstPropertyResolver } from './propertyResolver';
+import { resolveSignalOwnerMetadata } from '../ownerResolution';
 import {
   findJavaKotlinFiles,
   findPythonFiles,
@@ -62,6 +63,7 @@ interface ProcessFileContext {
     allServices: { id: string; name: string }[];
     forceRescan: boolean;
     disableShaSkip: boolean;
+    ownerFunctionCache: Map<string, string>;
 }
 
 interface ProcessFileResult {
@@ -72,6 +74,7 @@ interface ProcessFileResult {
 
 async function processFile(
     filePath: string,
+    content: string,
     scanResult: FileScanResult,
     ctx: ProcessFileContext,
 ): Promise<ProcessFileResult> {
@@ -98,19 +101,20 @@ async function processFile(
     let artifactId: string;
     let isNew = false;
 
+    const ownerObjectId = findOwnerServiceByPath(filePath, allServices);
+
     if (existingArtifact) {
         await db
             .delete(codeCallEdges)
             .where(eq(codeCallEdges.callerArtifactId, existingArtifact.id));
         await db
             .update(codeArtifacts)
-            .set({ sha256: scanResult.sha256, updatedAt: new Date() })
+            .set({ sha256: scanResult.sha256, ownerObjectId, updatedAt: new Date() })
             .where(eq(codeArtifacts.id, existingArtifact.id));
         artifactId = existingArtifact.id;
     } else {
         isNew = true;
         artifactId = generateId();
-        const ownerObjectId = findOwnerServiceByPath(filePath, allServices);
         await db.insert(codeArtifacts).values({
             id: artifactId,
             workspaceId,
@@ -125,6 +129,16 @@ async function processFile(
 
     for (const signal of scanResult.signals) {
         const evidenceId = generateId();
+        const metadata = await resolveSignalOwnerMetadata(db, {
+            workspaceId,
+            serviceId: ownerObjectId,
+            filePath,
+            language: scanResult.language,
+            content,
+            signalLine: signal.lineStart,
+            metadata: signal.metadata,
+            cache: ctx.ownerFunctionCache,
+        });
         await db.insert(evidences).values({
             id: evidenceId,
             workspaceId,
@@ -139,7 +153,7 @@ async function processFile(
                 language: scanResult.language,
                 phase: 2,
                 extractionMode: 'ast',
-                ...signal.metadata,
+                ...metadata,
             },
         });
 
@@ -204,6 +218,7 @@ export async function extractAstCodeSignals(
         allServices,
         forceRescan,
         disableShaSkip: options.interProcedural === true || options.resolveProperties === true,
+        ownerFunctionCache: new Map(),
     };
     const scanFailures: ScanFailureDetail[] = [];
     const result: CodeSignalResult = {
@@ -257,7 +272,7 @@ export async function extractAstCodeSignals(
                 continue;
             }
 
-            const fileResult = await processFile(filePath, scanResult, ctx);
+            const fileResult = await processFile(filePath, content, scanResult, ctx);
             if (fileResult.skipped) {
                 result.skippedCount++;
             } else {

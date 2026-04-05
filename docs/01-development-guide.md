@@ -325,12 +325,13 @@ test(core): Rollup 계산 단위 테스트 추가
 
 ```env
 # === DB ===
-# Local-first (PGlite) - 기본값, 설정 불필요
-# PostgreSQL 사용 시 아래 설정
+# Local embedded postgres - 기본값
+# 외부 PostgreSQL 사용 시 아래 설정
 # DATABASE_URL=postgresql://postgres:password@localhost:5432/archinavi
 
-# PGlite 데이터 디렉토리 (기본: ~/.archi-navi/data)
-# PGLITE_DATA_DIR=~/.archi-navi/data
+# embedded postgres 데이터 디렉토리 (기본: ~/.archi-navi/db)
+# ARCHI_NAVI_DB_DATA_DIR=~/.archi-navi/db
+# ARCHI_NAVI_DB_PORT=54329
 
 # === AI ===
 # 프로바이더: openai | anthropic | google

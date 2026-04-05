@@ -9,9 +9,7 @@ interface WorkspaceSnapshotRow {
 }
 
 function getWorkspaceSnapshotPath(): string | null {
-  const dataDir = process.env['PGLITE_DATA_DIR'] ?? '.archi-navi/data';
-  if (dataDir.startsWith('memory://')) return null;
-
+  const dataDir = process.env['ARCHI_NAVI_DB_DATA_DIR'] ?? '.archi-navi/dev-db';
   const resolvedDataDir = resolve(process.cwd(), dataDir);
   return resolve(dirname(resolvedDataDir), 'workspaces.snapshot.json');
 }

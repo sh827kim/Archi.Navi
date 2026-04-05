@@ -1,11 +1,10 @@
 /**
  * DB 스키마 신호 추출 통합 테스트
- * PGlite 인메모리 DB로 FK/컬럼 패턴 추출 및 dbScore 계산 검증
+ * embedded postgres 테스트 DB로 FK/컬럼 패턴 추출 및 dbScore 계산 검증
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { join } from 'path';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import {
     objects,
     workspaces,
@@ -21,12 +20,8 @@ import { extractDbSchemaSignals, computeDbScores, extractTablePrefix, matchDomai
 import { runSeedBasedInference } from '@/domain/seedBased';
 import { domainCandidates } from '@archi-navi/db';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-    const db = createPgliteClient();
-    await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-    return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

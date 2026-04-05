@@ -2,36 +2,19 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
-import { mkdtempSync } from 'node:fs';
-import { join } from 'node:path';
-import { homedir, tmpdir } from 'node:os';
 
 const {
   getDbMock,
-  inferRelationsFromConfigMock,
-  inferRelationsFromCodeSignalsMock,
-  bindConfigToCodeEndpointsMock,
-  extractCodeSignalsWithEngineMock,
-  extractDbSchemaSignalsMock,
-  normalizeCodeSignalEngineMock,
-  crossValidatePendingRelationCandidatesMock,
-  generateBoostCandidatesMock,
+  createInferenceRunMock,
+  executeInferenceRunMock,
   getInferenceModelMock,
-  createGenerateBoostSuggestionFnMock,
-  resolveMaxCallsMock,
+  createGenerateSmartResolutionFnMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
-  inferRelationsFromConfigMock: vi.fn(),
-  inferRelationsFromCodeSignalsMock: vi.fn(),
-  bindConfigToCodeEndpointsMock: vi.fn(),
-  extractCodeSignalsWithEngineMock: vi.fn(),
-  extractDbSchemaSignalsMock: vi.fn(),
-  normalizeCodeSignalEngineMock: vi.fn(() => 'hybrid'),
-  crossValidatePendingRelationCandidatesMock: vi.fn(),
-  generateBoostCandidatesMock: vi.fn(),
+  createInferenceRunMock: vi.fn(),
+  executeInferenceRunMock: vi.fn(),
   getInferenceModelMock: vi.fn(),
-  createGenerateBoostSuggestionFnMock: vi.fn(),
-  resolveMaxCallsMock: vi.fn((value?: number) => value ?? 50),
+  createGenerateSmartResolutionFnMock: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('@archi-navi/db', async () => {
@@ -46,21 +29,14 @@ vi.mock('@archi-navi/inference', async () => {
   const actual = await vi.importActual<typeof import('@archi-navi/inference')>('@archi-navi/inference');
   return {
     ...actual,
-    inferRelationsFromConfig: inferRelationsFromConfigMock,
-    inferRelationsFromCodeSignals: inferRelationsFromCodeSignalsMock,
-    bindConfigToCodeEndpoints: bindConfigToCodeEndpointsMock,
-    extractCodeSignalsWithEngine: extractCodeSignalsWithEngineMock,
-    extractDbSchemaSignals: extractDbSchemaSignalsMock,
-    normalizeCodeSignalEngine: normalizeCodeSignalEngineMock,
-    crossValidatePendingRelationCandidates: crossValidatePendingRelationCandidatesMock,
-    generateBoostCandidates: generateBoostCandidatesMock,
+    createInferenceRun: createInferenceRunMock,
+    executeInferenceRun: executeInferenceRunMock,
   };
 });
 
 vi.mock('@/lib/inference-llm', () => ({
   getInferenceModel: getInferenceModelMock,
-  createGenerateBoostSuggestionFn: createGenerateBoostSuggestionFnMock,
-  resolveMaxCalls: resolveMaxCallsMock,
+  createGenerateSmartResolutionFn: createGenerateSmartResolutionFnMock,
 }));
 
 import { POST } from '@/app/api/inference/run/route';
@@ -68,759 +44,280 @@ import { POST } from '@/app/api/inference/run/route';
 describe('POST /api/inference/run', () => {
   afterEach(() => {
     vi.clearAllMocks();
-    vi.unstubAllEnvs();
   });
 
-  it('llmBoost.codeIntentAnalysis가 활성화되면 code 추론 이후 LLM boost 후보 생성을 호출해야 한다', async () => {
-    const boostGenerateFn = vi.fn();
-    getDbMock.mockResolvedValue({});
-    getInferenceModelMock.mockReturnValue({
-      model: { provider: 'mock' },
-      modelName: 'mock-model',
-    });
-    createGenerateBoostSuggestionFnMock.mockReturnValue(boostGenerateFn);
-    resolveMaxCallsMock.mockReturnValue(2);
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-    generateBoostCandidatesMock.mockResolvedValue({
-      scannedCount: 3,
-      generatedCount: 1,
-      skippedCount: 2,
-      callCount: 2,
-      errorCount: 0,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-          llmBoost: {
-            enabled: true,
-            codeIntentAnalysis: true,
-            generateExplanations: true,
-            maxCalls: 5,
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(resolveMaxCallsMock).toHaveBeenCalledWith(5);
-    expect(createGenerateBoostSuggestionFnMock).toHaveBeenCalledWith(
-      { provider: 'mock' },
-      'mock-model',
-    );
-    expect(generateBoostCandidatesMock).toHaveBeenCalledWith(
-      {},
-      boostGenerateFn,
-      {
-        workspaceId: 'ws-1',
-        repoRoots: [process.cwd()],
-        maxCalls: 2,
-      },
-    );
-
-    await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({
-        ok: true,
-        results: expect.objectContaining({
-          llmBoost: expect.objectContaining({
-            request: {
-              enabled: true,
-              codeIntentAnalysis: true,
-              generateExplanations: true,
-              requestedMaxCalls: 5,
-            },
-            modelConfigured: true,
-            effectiveMaxCalls: 2,
-            skippedReason: null,
-            codeIntentAnalysis: {
-              scannedCount: 3,
-              generatedCount: 1,
-              skippedCount: 2,
-              callCount: 2,
-              errorCount: 0,
-            },
-          }),
-        }),
-        summary: expect.objectContaining({
-          relationCandidatesCreated: 2,
-        }),
-      }),
-    );
-  });
-
-  it('llmBoost.enabled=false 또는 codeIntentAnalysis=false 면 LLM boost를 호출하지 않아야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-          llmBoost: {
-            enabled: true,
-            codeIntentAnalysis: false,
-            maxCalls: 5,
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(getInferenceModelMock).not.toHaveBeenCalled();
-    expect(generateBoostCandidatesMock).not.toHaveBeenCalled();
-    await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({
-        results: expect.objectContaining({
-          llmBoost: expect.objectContaining({
-            skippedReason: 'CODE_INTENT_ANALYSIS_DISABLED',
-          }),
-        }),
-      }),
-    );
-  });
-
-  it('LLM 모델이 설정되지 않으면 graceful degradation으로 200을 반환해야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    getInferenceModelMock.mockReturnValue(null);
-    resolveMaxCallsMock.mockReturnValue(4);
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-          llmBoost: {
-            enabled: true,
-            codeIntentAnalysis: true,
-            maxCalls: 4,
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(generateBoostCandidatesMock).not.toHaveBeenCalled();
-    await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({
-        warnings: expect.arrayContaining([
-          'LLM 부스터(code intent analysis)를 건너뜁니다: AI 제공자 설정이 없습니다.',
-        ]),
-        results: expect.objectContaining({
-          llmBoost: expect.objectContaining({
-            modelConfigured: false,
-            effectiveMaxCalls: 4,
-            skippedReason: 'LLM_NOT_CONFIGURED',
-            codeIntentAnalysis: null,
-          }),
-        }),
-      }),
-    );
-  });
-
-  it('LLM boost 생성 실패도 기존 code 결과를 유지한 채 warning으로 강등해야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    getInferenceModelMock.mockReturnValue({
-      model: { provider: 'mock' },
-      modelName: 'mock-model',
-    });
-    createGenerateBoostSuggestionFnMock.mockReturnValue(vi.fn());
-    resolveMaxCallsMock.mockReturnValue(3);
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-    generateBoostCandidatesMock.mockRejectedValue(new Error('llm failure'));
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-          llmBoost: {
-            enabled: true,
-            codeIntentAnalysis: true,
-            maxCalls: 3,
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({
-        warnings: expect.arrayContaining([
-          'LLM 부스터(code intent analysis) 실패: llm failure',
-        ]),
-        results: expect.objectContaining({
-          code: expect.objectContaining({
-            candidateCount: 1,
-          }),
-          llmBoost: expect.objectContaining({
-            modelConfigured: true,
-            effectiveMaxCalls: 3,
-            skippedReason: 'FAILED',
-            codeIntentAnalysis: null,
-          }),
-        }),
-        summary: expect.objectContaining({
-          relationCandidatesCreated: 1,
-        }),
-      }),
-    );
-  });
-
-  it('단일 mode 실행이면 cross validation을 호출하지 않아야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    extractDbSchemaSignalsMock.mockResolvedValue({
-      tableCount: 0,
-      fkCandidateCount: 0,
-      implicitFkCandidateCount: 0,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['db'],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('code mode 없이 config+db 실행이면 cross validation을 호출하지 않아야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    inferRelationsFromConfigMock.mockResolvedValue({
-      candidateCount: 1,
-      objectCount: 0,
-      fileCount: 1,
-      processedFileCount: 1,
-      skippedFileCount: 0,
-    });
-    extractDbSchemaSignalsMock.mockResolvedValue({
-      tableCount: 0,
-      fkCandidateCount: 0,
-      implicitFkCandidateCount: 0,
-    });
-    crossValidatePendingRelationCandidatesMock.mockResolvedValue({
-      candidateCount: 1,
-      validatedCount: 1,
-      skippedSingleSourceCount: 0,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['config', 'db'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('code mode가 포함된 다중 mode 실행이면 cross validation을 호출해야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-    extractDbSchemaSignalsMock.mockResolvedValue({
-      tableCount: 0,
-      fkCandidateCount: 0,
-      implicitFkCandidateCount: 0,
-    });
-    crossValidatePendingRelationCandidatesMock.mockResolvedValue({
-      candidateCount: 1,
-      validatedCount: 1,
-      skippedSingleSourceCount: 0,
-      contradictionCount: 0,
-      staleConfigCount: 0,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code', 'db'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(crossValidatePendingRelationCandidatesMock).toHaveBeenCalledWith(
-      {},
-      { workspaceId: 'ws-1', repoRoots: [process.cwd()], includeSchemaCandidates: true },
-    );
-  });
-
-  it('codeOptions가 주어지면 code 추출기에 interProcedural 옵션을 전달해야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    normalizeCodeSignalEngineMock.mockReturnValueOnce('ast');
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'ast',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-          codeEngine: 'ast',
-          codeOptions: {
-            interProcedural: true,
-            maxCallChainDepth: 3,
-            resolveProperties: true,
-          },
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(
-      {},
-      expect.objectContaining({
-        workspaceId: 'ws-1',
-        repoRoot: process.cwd(),
-        codeEngine: 'ast',
-        interProcedural: true,
-        maxCallChainDepth: 3,
-        resolveProperties: true,
-      }),
-    );
-  });
-
-  it('config+code 실행에서 config 추론이 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    inferRelationsFromConfigMock.mockRejectedValue(new Error('config failed'));
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['config', 'code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(bindConfigToCodeEndpointsMock).not.toHaveBeenCalled();
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('code mode가 포함되어도 code 추론이 실패하면 cross validation을 호출하지 않아야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    inferRelationsFromConfigMock.mockResolvedValue({
-      candidateCount: 1,
-      objectCount: 0,
-      fileCount: 1,
-      processedFileCount: 1,
-      skippedFileCount: 0,
-    });
-    extractCodeSignalsWithEngineMock.mockRejectedValue(new Error('parser failed'));
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['config', 'code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('code 신호 추출은 성공해도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    inferRelationsFromConfigMock.mockResolvedValue({
-      candidateCount: 1,
-      objectCount: 0,
-      fileCount: 1,
-      processedFileCount: 1,
-      skippedFileCount: 0,
-    });
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockRejectedValue(new Error('relation inference failed'));
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['config', 'code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(bindConfigToCodeEndpointsMock).not.toHaveBeenCalled();
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('선택한 code root 중 일부라도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
-    const repoA = process.cwd();
-    const repoB = `${process.cwd()}/src`;
-    getDbMock.mockResolvedValue({});
-    inferRelationsFromConfigMock.mockResolvedValue({
-      candidateCount: 1,
-      objectCount: 0,
-      fileCount: 1,
-      processedFileCount: 1,
-      skippedFileCount: 0,
-    });
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock
-      .mockResolvedValueOnce({ candidateCount: 1 })
-      .mockRejectedValueOnce(new Error('relation inference failed'));
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['config', 'code'],
-          repoRoots: [repoA, repoB],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(bindConfigToCodeEndpointsMock).not.toHaveBeenCalled();
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('code+db 실행에서 db 추론이 실패하면 cross validation을 호출하지 않아야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-    extractDbSchemaSignalsMock.mockRejectedValue(new Error('db failed'));
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code', 'db'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('config+code+db 실행에서 db 추론이 실패해도 binding은 수행하고 cross validation은 건너뛰어야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    inferRelationsFromConfigMock.mockResolvedValue({
-      candidateCount: 1,
-      objectCount: 0,
-      fileCount: 1,
-      processedFileCount: 1,
-      skippedFileCount: 0,
-    });
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-    extractDbSchemaSignalsMock.mockRejectedValue(new Error('db failed'));
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['config', 'code', 'db'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
-      }),
-    );
-
-    expect(response.status).toBe(200);
-    expect(bindConfigToCodeEndpointsMock).toHaveBeenCalledWith(
-      {},
-      { workspaceId: 'ws-1', repoRoots: [process.cwd()] },
-    );
-    expect(crossValidatePendingRelationCandidatesMock).not.toHaveBeenCalled();
-  });
-
-  it('service.metadata.scanPath 에서 발견한 경로도 allowed root 검증을 적용해야 한다', async () => {
-    const externalRepoRoot = mkdtempSync(join(tmpdir(), 'archi-navi-external-repo-'));
-    vi.stubEnv('ARCHI_NAVI_ALLOWED_INFERENCE_ROOTS', process.cwd());
-    getDbMock.mockResolvedValue({
-      select: () => ({
-        from: () => ({
-          where: async () => [{ metadata: { scanPath: externalRepoRoot } }],
-        }),
-      }),
-    });
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
-    });
-
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-        }),
-      }),
-    );
+  it('workspaceId가 없으면 400을 반환해야 한다', async () => {
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }));
 
     expect(response.status).toBe(400);
-    expect(extractCodeSignalsWithEngineMock).not.toHaveBeenCalled();
-    await expect(response.json()).resolves.toEqual(
-      expect.objectContaining({
-        error: expect.stringContaining('config/code 추론을 실행할 로컬 repoRoot가 없습니다'),
-        details: expect.objectContaining({
-          skippedDisallowedRoots: [externalRepoRoot],
-        }),
-      }),
-    );
   });
 
-  it('홈 디렉토리 하위 service.metadata.scanPath 는 fallback allowed roots로 허용해야 한다', async () => {
-    const homeRepoRoot = join(homedir(), 'workspace');
-    getDbMock.mockResolvedValue({
-      select: () => ({
-        from: () => ({
-          where: async () => [{ metadata: { scanPath: homeRepoRoot } }],
-        }),
-      }),
+  it('proof-engine sync run으로 정규화해 실행하고 summary를 반환해야 한다', async () => {
+    getDbMock.mockResolvedValue({ db: 'mock' });
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
     });
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
+    createInferenceRunMock.mockResolvedValue({
+      id: 'run-1',
+      status: 'QUEUED',
     });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
-      candidateCount: 1,
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-1',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 3,
+            gatewayRouteSeedCount: 1,
+            derivedEndpointProofCount: 2,
+            proofClosedAtomicCount: 2,
+            proofFrontierCount: 1,
+            routeFamilyFrontierCount: 1,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 2,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 1,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: { HOST_ALIAS_UNRESOLVED: 1 },
+            targetBreakdown: { api_endpoint: 2 },
+          },
+          config: { repoCount: 1, aliasBindingCount: 2, routeTransformCount: 1 },
+          code: { repoCount: 1, enginesUsed: ['hybrid'], fallbackCount: 0, scanFailures: [] },
+          db: null,
+          proofResolution: { intentCount: 3, closedAtomicCount: 2, frontierCount: 1, rejectedCount: 0 },
+          frontierAgent: {
+            attemptedFrontierCount: 1,
+            proposedPatchCount: 1,
+            appliedPatchCount: 0,
+            rejectedPatchCount: 1,
+            skippedReason: null,
+          },
+          requestedAgentPatches: {
+            enabled: true,
+            maxFrontiers: 7,
+          },
+        },
+        warnings: [],
+        errors: [],
+      },
+      sources: [],
+      events: [],
     });
 
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-        }),
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        transports: ['http'],
+        repoRoots: ['/repo/root'],
+        useServiceMetadataPaths: false,
+        enableAgentPatches: true,
+        maxAgentFrontiers: 7,
+        llmBoost: {
+          enabled: true,
+          codeIntentAnalysis: true,
+          generateExplanations: true,
+          maxCalls: 5,
+        },
       }),
-    );
+    }));
 
     expect(response.status).toBe(200);
-    expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        select: expect.any(Function),
-      }),
+    expect(createInferenceRunMock).toHaveBeenCalledWith(
+      { db: 'mock' },
       expect.objectContaining({
         workspaceId: 'ws-1',
-        repoRoot: homeRepoRoot,
-        codeEngine: 'hybrid',
+        modes: ['config', 'code'],
+        triggerType: 'INTENT_PROOF_ENGINE',
+        enableAgentPatches: true,
+        maxAgentFrontiers: 7,
+        sources: [{ type: 'local', ref: '/repo/root' }],
+      }),
+    );
+
+    await expect(response.json()).resolves.toMatchObject({
+      ok: true,
+      engine: 'intent_proof',
+      runId: 'run-1',
+      summary: {
+        engine: 'intent_proof',
+        intentCount: 3,
+        gatewayRouteSeedCount: 1,
+        derivedEndpointProofCount: 2,
+        smartMode: {
+          enabled: false,
+        },
+        routeFamilyFrontierCount: 1,
+        projectedCandidateCount: 2,
+        serviceTargetProjectionCount: 0,
+      },
+      results: {
+        code: { enginesUsed: ['hybrid'] },
+        proofResolution: { intentCount: 3, frontierCount: 1 },
+        frontierAgent: { attemptedFrontierCount: 1, rejectedPatchCount: 1 },
+        requestedAgentPatches: { enabled: true, maxFrontiers: 7 },
+        requestedSmartProof: { enabled: false },
+      },
+      llmBoost: {
+        skippedReason: 'DISABLED_IN_PROOF_ENGINE',
+        codeIntentAnalysis: {
+          generatedCount: 0,
+        },
+      },
+    });
+    expect(createGenerateSmartResolutionFnMock).not.toHaveBeenCalled();
+  });
+
+  it('smartProof=true 이면 모델이 있을 때 smartGenerateFn을 실행 입력으로 전달해야 한다', async () => {
+    getDbMock.mockResolvedValue({ db: 'mock' });
+    const smartGenerateFn = vi.fn();
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
+    });
+    createGenerateSmartResolutionFnMock.mockReturnValue(smartGenerateFn);
+    createInferenceRunMock.mockResolvedValue({
+      id: 'run-smart-1',
+      status: 'QUEUED',
+    });
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-smart-1',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 0,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 0,
+            proofFrontierCount: 0,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 0,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 0,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {},
+            targetBreakdown: {},
+            smartMode: { enabled: true },
+          },
+        },
+        warnings: [],
+        errors: [],
+      },
+      sources: [],
+      events: [],
+    });
+
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        modes: ['config'],
+        repoRoots: ['/repo/root'],
+        useServiceMetadataPaths: false,
+        smartProof: true,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createGenerateSmartResolutionFnMock).toHaveBeenCalledWith(
+      { provider: 'openai' },
+      'gpt-4o',
+    );
+    expect(executeInferenceRunMock).toHaveBeenCalledWith(
+      { db: 'mock' },
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        runId: 'run-smart-1',
+        smartGenerateFn,
       }),
     );
   });
 
-  it('code-only 실행에서 relation inference가 전부 실패하면 500을 반환해야 한다', async () => {
-    getDbMock.mockResolvedValue({});
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockRejectedValue(new Error('relation inference failed'));
+  it('smartProof=true 인데 모델이 없으면 run을 만들지 않고 400을 반환해야 한다', async () => {
+    getInferenceModelMock.mockReturnValue(null);
 
-    const response = await POST(
-      new NextRequest('http://localhost/api/inference/run', {
-        method: 'POST',
-        body: JSON.stringify({
-          workspaceId: 'ws-1',
-          modes: ['code'],
-          repoRoots: [process.cwd()],
-          useServiceMetadataPaths: false,
-        }),
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        modes: ['config'],
+        repoRoots: ['/repo/root'],
+        useServiceMetadataPaths: false,
+        smartProof: true,
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(createInferenceRunMock).not.toHaveBeenCalled();
+    expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'smartProof가 활성화되었지만 사용할 LLM 모델이 설정되지 않았습니다.',
+    });
+  });
+
+  it('nested local repoRoots는 ancestor root만 남기도록 정규화해야 한다', async () => {
+    getDbMock.mockResolvedValue({ db: 'mock' });
+    createInferenceRunMock.mockResolvedValue({
+      id: 'run-2',
+      status: 'QUEUED',
+    });
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-2',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 0,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 0,
+            proofFrontierCount: 0,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 0,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 0,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {},
+            targetBreakdown: {},
+          },
+          config: { repoCount: 1, fileCount: 1, processedFileCount: 1, skippedFileCount: 0 },
+          code: { repoCount: 1, enginesUsed: ['hybrid'], fallbackCount: 0, scanFailures: [] },
+          db: null,
+          proofResolution: { intentCount: 0, closedAtomicCount: 0, frontierCount: 0, rejectedCount: 0 },
+        },
+        warnings: [],
+        errors: [],
+      },
+      sources: [],
+      events: [],
+    });
+
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        modes: ['config', 'code'],
+        repoRoots: ['/repo/root', '/repo/root/orders-service'],
+        useServiceMetadataPaths: false,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createInferenceRunMock).toHaveBeenCalledWith(
+      { db: 'mock' },
+      expect.objectContaining({
+        sources: [{ type: 'local', ref: '/repo/root' }],
       }),
     );
-
-    expect(response.status).toBe(500);
   });
 });

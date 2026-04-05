@@ -22,12 +22,28 @@ import {
 import { useWorkspace } from '@/contexts/workspace-context';
 
 interface RunCardSummary {
-  candidateCount: number;
-  servicePairCount: number;
-  atomicCandidateCount: number;
-  serviceFallbackCount: number;
-  agentRecoveredAtomicCount: number;
-  hasSmartSummary: boolean;
+  projectedCandidateCount: number;
+  atomicProjectedCandidateCount: number;
+  gatewayRouteSeedCount: number;
+  derivedEndpointProofCount: number;
+  intentCount: number;
+  proofClosedAtomicCount: number;
+  proofFrontierCount: number;
+  routeFamilyFrontierCount: number;
+  proofRejectedCount: number;
+  serviceTargetProjectionCount: number;
+  hasProjectionInvariantViolation: boolean;
+  hasProofSummary: boolean;
+}
+
+interface FrontierAgentSummary {
+  requestedEnabled: boolean;
+  requestedMaxFrontiers: number | null;
+  attemptedFrontierCount: number;
+  proposedPatchCount: number;
+  appliedPatchCount: number;
+  rejectedPatchCount: number;
+  skippedReason: string | null;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -38,6 +54,47 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value : null;
+}
+
+function formatValue(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (value === null) return 'null';
+  if (Array.isArray(value)) {
+    return value.map((item) => formatValue(item)).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  return '-';
+}
+
+function extractFrontierAgentSummary(stats: Record<string, unknown>): FrontierAgentSummary {
+  const requested = asRecord(stats['requestedAgentPatches']);
+  const frontierAgent = asRecord(stats['frontierAgent']);
+
+  return {
+    requestedEnabled: requested?.['enabled'] === true,
+    requestedMaxFrontiers: asFiniteNumber(requested?.['maxFrontiers']),
+    attemptedFrontierCount: asFiniteNumber(frontierAgent?.['attemptedFrontierCount']) ?? 0,
+    proposedPatchCount:
+      asFiniteNumber(frontierAgent?.['proposedPatchCount'])
+      ?? asFiniteNumber(frontierAgent?.['proposalCount'])
+      ?? 0,
+    appliedPatchCount:
+      asFiniteNumber(frontierAgent?.['appliedPatchCount'])
+      ?? asFiniteNumber(frontierAgent?.['acceptedCount'])
+      ?? 0,
+    rejectedPatchCount:
+      asFiniteNumber(frontierAgent?.['rejectedPatchCount'])
+      ?? asFiniteNumber(frontierAgent?.['rejectedCount'])
+      ?? 0,
+    skippedReason: asString(frontierAgent?.['skippedReason']),
+  };
 }
 
 /** 상태별 아이콘/색상 */
@@ -154,29 +211,44 @@ function SourceSummary({ summary }: { summary: Record<string, number> }) {
 
 /** 일반 run / smart run 공통 summary 추출 */
 function extractRunCardSummary(stats: Record<string, unknown>): RunCardSummary {
-  const summary = asRecord(stats['summary']);
-  const smartSummary = asRecord(stats['smartSummary']);
-  const nestedSmartSummary = asRecord(smartSummary?.summary);
+  const summary = asRecord(stats['summary']) ?? asRecord(stats['proofSummary']);
+  const hasProofSummary = Boolean(summary?.['engine']) || asFiniteNumber(summary?.['intentCount']) !== null;
+  const projectedCandidateCount = asFiniteNumber(summary?.projectedCandidateCount) ?? 0;
+  const serviceTargetProjectionCount = asFiniteNumber(summary?.serviceTargetProjectionCount) ?? 0;
+  const hasProjectionInvariantViolation = serviceTargetProjectionCount > 0;
 
   return {
-    candidateCount: asFiniteNumber(summary?.relationCandidatesCreated)
-      ?? asFiniteNumber(smartSummary?.candidatesCreated)
-      ?? asFiniteNumber(nestedSmartSummary?.candidatesCreated)
-      ?? 0,
-    servicePairCount: asFiniteNumber(smartSummary?.servicePairCount)
-      ?? asFiniteNumber(nestedSmartSummary?.servicePairCount)
-      ?? 0,
-    atomicCandidateCount: asFiniteNumber(smartSummary?.atomicCandidateCount)
-      ?? asFiniteNumber(nestedSmartSummary?.atomicCandidateCount)
-      ?? 0,
-    serviceFallbackCount: asFiniteNumber(smartSummary?.serviceFallbackCount)
-      ?? asFiniteNumber(nestedSmartSummary?.serviceFallbackCount)
-      ?? 0,
-    agentRecoveredAtomicCount: asFiniteNumber(smartSummary?.agentRecoveredAtomicCount)
-      ?? asFiniteNumber(nestedSmartSummary?.agentRecoveredAtomicCount)
-      ?? 0,
-    hasSmartSummary: Boolean(smartSummary || nestedSmartSummary),
+    projectedCandidateCount,
+    atomicProjectedCandidateCount: Math.max(projectedCandidateCount - serviceTargetProjectionCount, 0),
+    gatewayRouteSeedCount: asFiniteNumber(summary?.gatewayRouteSeedCount) ?? 0,
+    derivedEndpointProofCount: asFiniteNumber(summary?.derivedEndpointProofCount) ?? 0,
+    intentCount: asFiniteNumber(summary?.intentCount) ?? 0,
+    proofClosedAtomicCount: asFiniteNumber(summary?.proofClosedAtomicCount) ?? 0,
+    proofFrontierCount: asFiniteNumber(summary?.proofFrontierCount) ?? 0,
+    routeFamilyFrontierCount: asFiniteNumber(summary?.routeFamilyFrontierCount) ?? 0,
+    proofRejectedCount: asFiniteNumber(summary?.proofRejectedCount) ?? 0,
+    serviceTargetProjectionCount,
+    hasProjectionInvariantViolation,
+    hasProofSummary,
   };
+}
+
+function RecordGrid({ data }: { data: Record<string, unknown> }) {
+  const entries = Object.entries(data);
+  if (entries.length === 0) {
+    return <div className="text-[11px] text-muted-foreground">세부 정보 없음</div>;
+  }
+
+  return (
+    <div className="grid gap-1 sm:grid-cols-2">
+      {entries.map(([key, value]) => (
+        <div key={key} className="rounded-md bg-muted/20 px-2 py-1.5">
+          <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{key}</div>
+          <div className="mt-1 break-words font-mono text-[11px]">{formatValue(value)}</div>
+        </div>
+      ))}
+    </div>
+  );
 }
 
 export function InferenceRunList() {
@@ -322,6 +394,7 @@ export function InferenceRunList() {
       {/* 실행 목록 */}
       {runs.map((run) => {
         const summary = extractRunCardSummary(run.stats);
+        const frontierAgent = extractFrontierAgentSummary(run.stats);
         const isActionable = run.status === 'RUNNING' || run.status === 'QUEUED' || run.status === 'FAILED';
         const isActing = actionRunId === run.id;
         const isExpanded = expandedRunId === run.id;
@@ -368,15 +441,32 @@ export function InferenceRunList() {
               {/* 하단: 결과 요약 */}
               <div className="flex items-center gap-4 text-xs text-muted-foreground flex-wrap">
                 <SourceSummary summary={run.sourceSummary as Record<string, number>} />
-                {run.status === 'SUCCEEDED' && summary.candidateCount > 0 && (
-                  <span className="text-green-600">후보 {summary.candidateCount}개 생성</span>
+                {run.status === 'SUCCEEDED' && !summary.hasProjectionInvariantViolation && summary.atomicProjectedCandidateCount > 0 && (
+                  <span className="text-green-600">후보 {summary.atomicProjectedCandidateCount}개 생성</span>
                 )}
-                {summary.hasSmartSummary && (
+                {run.status === 'SUCCEEDED' && summary.hasProjectionInvariantViolation && (
+                  <span className="text-amber-600">
+                    불변식 위반: service target projection {summary.serviceTargetProjectionCount}개 감지
+                  </span>
+                )}
+                {summary.hasProofSummary && (
                   <>
-                    <span>서비스 쌍 {summary.servicePairCount}개</span>
-                    <span>atomic {summary.atomicCandidateCount}개</span>
-                    <span>fallback {summary.serviceFallbackCount}개</span>
-                    <span>agent 복구 {summary.agentRecoveredAtomicCount}개</span>
+                    <span>intent {summary.intentCount}개</span>
+                    {summary.gatewayRouteSeedCount > 0 && <span>route-family seed {summary.gatewayRouteSeedCount}개</span>}
+                    {summary.derivedEndpointProofCount > 0 && <span>derived endpoint proof {summary.derivedEndpointProofCount}개</span>}
+                    <span>closed {summary.proofClosedAtomicCount}개</span>
+                    <span>frontier {summary.proofFrontierCount}개</span>
+                    {summary.routeFamilyFrontierCount > 0 && <span>route-family frontier {summary.routeFamilyFrontierCount}개</span>}
+                    <span>rejected {summary.proofRejectedCount}개</span>
+                  </>
+                )}
+                {frontierAgent.requestedEnabled && (
+                  <>
+                    <span>agent 시도 {frontierAgent.attemptedFrontierCount}개</span>
+                    <span>agent 적용 {frontierAgent.appliedPatchCount}개</span>
+                    {frontierAgent.proposedPatchCount > frontierAgent.appliedPatchCount && (
+                      <span>agent 보류 {frontierAgent.proposedPatchCount - frontierAgent.appliedPatchCount}개</span>
+                    )}
                   </>
                 )}
                 {run.attemptCount > 1 && (
@@ -447,6 +537,137 @@ export function InferenceRunList() {
 
                 {detail && (
                   <>
+                    <div className="space-y-2">
+                      <h4 className="text-xs font-semibold text-muted-foreground">Proof/Frontier 요약</h4>
+                      <div className="grid gap-2 md:grid-cols-2">
+                        <div className="rounded-lg bg-muted/20 px-3 py-2 text-xs space-y-1">
+                          <div>intent {summary.intentCount}개</div>
+                          <div>closed {summary.proofClosedAtomicCount}개</div>
+                          <div>frontier {summary.proofFrontierCount}개</div>
+                          <div>rejected {summary.proofRejectedCount}개</div>
+                          {summary.routeFamilyFrontierCount > 0 && <div>route-family frontier {summary.routeFamilyFrontierCount}개</div>}
+                        </div>
+                        <div className="rounded-lg bg-muted/20 px-3 py-2 text-xs space-y-1">
+                          <div>agent patches: {frontierAgent.requestedEnabled ? 'enabled' : 'disabled'}</div>
+                          <div>frontier pass 시도 {frontierAgent.attemptedFrontierCount}개</div>
+                          <div>patch 제안 {frontierAgent.proposedPatchCount}개</div>
+                          <div>patch 적용 {frontierAgent.appliedPatchCount}개</div>
+                          {frontierAgent.rejectedPatchCount > 0 && <div>patch 거절 {frontierAgent.rejectedPatchCount}개</div>}
+                          {frontierAgent.requestedMaxFrontiers !== null && <div>max frontier {frontierAgent.requestedMaxFrontiers}</div>}
+                          {frontierAgent.skippedReason && <div>skip reason: {frontierAgent.skippedReason}</div>}
+                        </div>
+                      </div>
+                    </div>
+
+                    {detail.proofs.length > 0 && (
+                      <div className="space-y-2">
+                        <h4 className="text-xs font-semibold text-muted-foreground">
+                          Proof lineage ({detail.proofs.length})
+                        </h4>
+                        <div className="space-y-2">
+                          {detail.proofs.map((proof) => (
+                            <details
+                              key={proof.id}
+                              className="rounded-lg border border-border/30 bg-muted/10 px-3 py-2"
+                            >
+                              <summary className="cursor-pointer list-none text-xs font-medium">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <Badge variant="outline">{proof.status}</Badge>
+                                  <span>{proof.intentType}</span>
+                                  <span className="text-muted-foreground">{proof.sourceServiceName ?? 'unknown source'}</span>
+                                  <span className="text-muted-foreground">→</span>
+                                  <span>{proof.targetObjectName ?? 'unresolved target'}</span>
+                                  <span className="text-muted-foreground">confidence {proof.confidence.toFixed(2)}</span>
+                                </div>
+                              </summary>
+                              <div className="mt-3 space-y-3 text-xs">
+                                <div className="grid gap-2 md:grid-cols-2">
+                                  <div className="rounded-md bg-muted/20 px-3 py-2 space-y-1">
+                                    <div>source service: {proof.sourceServiceName ?? '-'}</div>
+                                    <div>source function: {proof.sourceFunctionName ?? '-'}</div>
+                                    <div>provider service: {proof.providerServiceName ?? '-'}</div>
+                                    <div>target: {proof.targetObjectName ?? '-'}{proof.targetObjectType ? ` (${proof.targetObjectType})` : ''}</div>
+                                    <div>proof type: {proof.proofType}</div>
+                                    <div>parent proof: {proof.parentProofStateId ?? '-'}</div>
+                                    <div>child proofs: {proof.childProofStateIds.length > 0 ? proof.childProofStateIds.join(', ') : '-'}</div>
+                                  </div>
+                                  <div className="rounded-md bg-muted/20 px-3 py-2 space-y-1">
+                                    <div>method: {proof.methodResolved ?? '-'}</div>
+                                    <div>external path: {proof.externalPathResolved ?? '-'}</div>
+                                    <div>internal path: {proof.internalPathResolved ?? '-'}</div>
+                                    <div>route chain: {proof.routeChain.length > 0 ? proof.routeChain.join(' -> ') : '-'}</div>
+                                    <div>ambiguity: {proof.ambiguityCount}</div>
+                                    <div>contradiction: {proof.contradictionCount}</div>
+                                    {proof.rejectedReason && <div>rejected reason: {proof.rejectedReason}</div>}
+                                  </div>
+                                </div>
+
+                                <div>
+                                  <div className="mb-1 text-[11px] font-semibold text-muted-foreground">
+                                    Confidence breakdown
+                                  </div>
+                                  <RecordGrid data={proof.confidenceBreakdown} />
+                                </div>
+
+                                {proof.frontier && (
+                                  <div>
+                                    <div className="mb-1 text-[11px] font-semibold text-muted-foreground">
+                                      Frontier
+                                    </div>
+                                    <div className="rounded-md bg-amber-500/5 px-3 py-2 space-y-1">
+                                      <div>reason: {proof.frontier.frontierReason}</div>
+                                      <div>class: {proof.frontier.frontierClass}</div>
+                                      <div>retry: {proof.frontier.retryStrategy}</div>
+                                      <div>priority: {proof.frontier.priority}</div>
+                                      <RecordGrid data={proof.frontier.detail} />
+                                    </div>
+                                  </div>
+                                )}
+
+                                {proof.steps.length > 0 && (
+                                  <div>
+                                    <div className="mb-1 text-[11px] font-semibold text-muted-foreground">
+                                      Proof steps
+                                    </div>
+                                    <div className="space-y-2">
+                                      {proof.steps.map((step) => (
+                                        <details
+                                          key={step.id}
+                                          className="rounded-md border border-border/20 px-2 py-1.5"
+                                        >
+                                          <summary className="cursor-pointer list-none">
+                                            <div className="flex flex-wrap items-center gap-2">
+                                              <Badge variant="outline">{step.status}</Badge>
+                                              <span>{step.stepOrder}. {step.stepType}</span>
+                                              {step.message && <span className="text-muted-foreground">{step.message}</span>}
+                                            </div>
+                                          </summary>
+                                          <div className="mt-2 grid gap-2 md:grid-cols-2">
+                                            <div>
+                                              <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                                input
+                                              </div>
+                                              <RecordGrid data={step.inputSnapshot} />
+                                            </div>
+                                            <div>
+                                              <div className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+                                                output
+                                              </div>
+                                              <RecordGrid data={step.outputSnapshot} />
+                                            </div>
+                                          </div>
+                                        </details>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            </details>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
                     {/* 소스 정보 */}
                     {detail.sources.length > 0 && (
                       <div className="space-y-2">
@@ -498,17 +719,30 @@ export function InferenceRunList() {
                               >
                                 {evt.level}
                               </Badge>
+                              <Badge variant="outline" className="shrink-0">{evt.eventType}</Badge>
                               <span className="text-muted-foreground shrink-0">
                                 {new Date(evt.createdAt).toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                               </span>
-                              <span className="flex-1">{evt.message}</span>
+                              <div className="flex-1 space-y-1">
+                                <div>{evt.message}</div>
+                                {Object.keys(evt.payload).length > 0 && (
+                                  <details className="rounded-md bg-muted/20 px-2 py-1">
+                                    <summary className="cursor-pointer list-none text-[11px] text-muted-foreground">
+                                      payload
+                                    </summary>
+                                    <div className="mt-2">
+                                      <RecordGrid data={evt.payload} />
+                                    </div>
+                                  </details>
+                                )}
+                              </div>
                             </div>
                           ))}
                         </div>
                       </div>
                     )}
 
-                    {detail.sources.length === 0 && detail.events.length === 0 && (
+                    {detail.sources.length === 0 && detail.events.length === 0 && detail.proofs.length === 0 && (
                       <p className="text-xs text-muted-foreground text-center py-4">상세 정보가 없습니다</p>
                     )}
                   </>

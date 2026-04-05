@@ -7,34 +7,50 @@ import { tmpdir } from 'node:os';
 
 const {
   getDbMock,
-  executeSmartPipelineMock,
   createInferenceRunMock,
+  executeInferenceRunMock,
   getInferenceRunDetailMock,
-  getSmartInferenceRunDetailMock,
-  executeQueuedSmartInferenceRunMock,
+  buildEmptyProofEngineSummaryMock,
+  getInferenceModelMock,
+  createGenerateSmartResolutionFnMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
-  executeSmartPipelineMock: vi.fn(),
   createInferenceRunMock: vi.fn(),
+  executeInferenceRunMock: vi.fn(),
   getInferenceRunDetailMock: vi.fn(),
-  getSmartInferenceRunDetailMock: vi.fn(),
-  executeQueuedSmartInferenceRunMock: vi.fn(),
-}));
-
-vi.mock('ai', () => ({
-  generateObject: vi.fn(),
-}));
-
-vi.mock('@ai-sdk/openai', () => ({
-  createOpenAI: vi.fn(() => () => ({ provider: 'openai' })),
-}));
-
-vi.mock('@ai-sdk/anthropic', () => ({
-  createAnthropic: vi.fn(() => () => ({ provider: 'anthropic' })),
-}));
-
-vi.mock('@ai-sdk/google', () => ({
-  createGoogleGenerativeAI: vi.fn(() => () => ({ provider: 'google' })),
+  buildEmptyProofEngineSummaryMock: vi.fn(() => ({
+    engine: 'intent_proof',
+    intentCount: 0,
+    gatewayRouteSeedCount: 0,
+    derivedEndpointProofCount: 0,
+    proofClosedAtomicCount: 0,
+    proofFrontierCount: 0,
+    routeFamilyFrontierCount: 0,
+    proofRejectedCount: 0,
+    projectedCandidateCount: 0,
+    serviceTargetProjectionCount: 0,
+    agentFrontierCount: 0,
+    agentPatchedFrontierCount: 0,
+    frontierBreakdown: {},
+    targetBreakdown: {},
+    smartMode: {
+      enabled: false,
+      llmCallCount: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      estimatedCostUsd: 0,
+      frontierResolvedByLlm: 0,
+      summaryEnhancedByLlm: 0,
+      contradictionsChallenged: 0,
+      autoAcceptedCount: 0,
+      pendingReviewCount: 0,
+      skippedCount: 0,
+      resolutionByCategory: {},
+      resolutionByFrontierReason: {},
+    },
+  })),
+  getInferenceModelMock: vi.fn(),
+  createGenerateSmartResolutionFnMock: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('@archi-navi/db', async () => {
@@ -49,472 +65,198 @@ vi.mock('@archi-navi/inference', async () => {
   const actual = await vi.importActual<typeof import('@archi-navi/inference')>('@archi-navi/inference');
   return {
     ...actual,
-    executeSmartPipeline: executeSmartPipelineMock,
     createInferenceRun: createInferenceRunMock,
+    executeInferenceRun: executeInferenceRunMock,
     getInferenceRunDetail: getInferenceRunDetailMock,
+    buildEmptyProofEngineSummary: buildEmptyProofEngineSummaryMock,
   };
 });
 
-vi.mock('@/lib/smart-inference-runs', () => ({
-  getSmartInferenceRunDetail: getSmartInferenceRunDetailMock,
-  executeQueuedSmartInferenceRun: executeQueuedSmartInferenceRunMock,
+vi.mock('@/lib/inference-llm', () => ({
+  getInferenceModel: getInferenceModelMock,
+  createGenerateSmartResolutionFn: createGenerateSmartResolutionFnMock,
 }));
 
 import { GET, POST } from '@/app/api/inference/smart/route';
 
-describe('POST /api/inference/smart', () => {
+function createDbMock(serviceScanPaths: string[] = []) {
+  return {
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue(
+          serviceScanPaths.map((scanPath) => ({ metadata: { scanPath } })),
+        ),
+      })),
+    })),
+  };
+}
+
+describe('/api/inference/smart', () => {
   afterEach(() => {
     vi.clearAllMocks();
-    delete process.env['OPENAI_API_KEY'];
-    delete process.env['ANTHROPIC_API_KEY'];
-    delete process.env['GOOGLE_GENERATIVE_AI_API_KEY'];
-    delete process.env['AI_PROVIDER'];
+    vi.unstubAllGlobals();
   });
 
-  it('선택된 provider 의 API 키가 없으면 LLM_NOT_CONFIGURED 를 반환해야 한다', async () => {
-    process.env['OPENAI_API_KEY'] = 'openai-key-only';
-
+  it('POST는 legacy analysisMode 계약을 거부해야 한다', async () => {
     const response = await POST(new Request('http://localhost/api/inference/smart', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-ai-provider': 'anthropic',
-      },
-      body: JSON.stringify({ workspaceId: 'ws-1' }),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        analysisMode: 'pair_pack',
+      }),
     }));
 
     expect(response.status).toBe(400);
     await expect(response.json()).resolves.toMatchObject({
       success: false,
-      error: { code: 'LLM_NOT_CONFIGURED' },
+      error: {
+        code: 'BAD_REQUEST',
+      },
     });
   });
 
-  it('성공 시 프론트가 바로 사용할 수 있는 summary 필드를 함께 반환해야 한다', async () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-route-'));
-    process.env['OPENAI_API_KEY'] = 'test-key';
-    getDbMock.mockResolvedValue({
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([]),
-        })),
-      })),
+  it('POST는 proof engine run을 생성하고 summary를 반환해야 한다', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-sync-'));
+    getDbMock.mockResolvedValue(createDbMock());
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
     });
-    executeSmartPipelineMock.mockResolvedValue({
-      phase1: {
-        openApi: { imported: 1, failed: 0, importedServices: ['orders'] },
-        bootstrapEndpointCount: 2,
-      },
-      phase2: {
-        analyzedServiceCount: 2,
-        compoundDependencyCount: 3,
-        consumerServiceIds: ['svc-a'],
-        servicePairCount: 3,
-      },
-      phase3: {
-        analysisMode: 'agent_assisted',
-        analyzedServiceCount: 4,
-        endpointCallCount: 5,
-        candidateCount: 6,
-        atomicCandidateCount: 4,
-        serviceFallbackCount: 2,
-        deepInspectionCount: 2,
-        agentEscalatedPairCount: 2,
-        agentRecoveredAtomicCount: 1,
-        agentFailedPairCount: 1,
-        agentToolUsageSummary: {
-          searchCalls: 3,
-          readCalls: 2,
-          endpointListCalls: 2,
-          totalCalls: 7,
-        },
-        deepInspectionTrace: {
-          attemptedCount: 2,
-          failureCount: 1,
-          triggerBreakdown: {
-            lowConfidence: 1,
-            insufficientContext: 1,
-          },
-          details: [
-            {
-              consumerServiceName: 'gateway',
-              providerServiceName: 'orders',
-              trigger: {
-                lowConfidence: true,
-                insufficientContext: false,
-              },
-              status: 'succeeded',
-              fallbackReasons: ['PATH_NOT_MATCHED'],
-              toolUsage: {
-                searchCalls: 2,
-                readCalls: 1,
-                endpointListCalls: 1,
-                totalCalls: 4,
-              },
-              recoveredCalls: [
-                {
-                  httpMethod: 'GET',
-                  path: '/api/orders/{id}',
-                },
-              ],
+    createInferenceRunMock.mockResolvedValue({
+      id: 'run-proof-1',
+      status: 'QUEUED',
+    });
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-proof-1',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 5,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 3,
+            proofFrontierCount: 1,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 1,
+            projectedCandidateCount: 3,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 1,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {
+              PATH_NOT_MATCHED: 1,
             },
-          ],
-        },
-        fallbackReasonBreakdown: {
-          NO_ENDPOINT_OBJECTS: 1,
-          PATH_NOT_MATCHED: 1,
-          METHOD_NOT_MATCHED: 0,
-          INSUFFICIENT_CONTEXT: 0,
+            targetBreakdown: {
+              api_endpoint: 3,
+            },
+          },
         },
       },
-      totalDurationMs: 123,
+      sources: [{ sourceRef: repoRoot }],
+      events: [],
     });
 
     const response = await POST(new Request('http://localhost/api/inference/smart', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-ai-provider': 'openai',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         workspaceId: 'ws-1',
         repoRoots: [repoRoot],
         useServiceMetadataPaths: false,
+        enableAgentPatches: true,
+        maxAgentFrontiers: 4,
       }),
     }));
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      success: true,
-      summary: {
-        analysisMode: 'agent_assisted',
-        bootstrapEndpointCount: 2,
-        servicePairCount: 3,
-        atomicCandidateCount: 4,
-        serviceFallbackCount: 2,
-        deepInspectionCount: 2,
-        agentEscalatedPairCount: 2,
-        agentRecoveredAtomicCount: 1,
-        agentFailedPairCount: 1,
-        agentToolUsageSummary: {
-          searchCalls: 3,
-          readCalls: 2,
-          endpointListCalls: 2,
-          totalCalls: 7,
-        },
-        deepInspectionTrace: {
-          attemptedCount: 2,
-          failureCount: 1,
-          triggerBreakdown: {
-            lowConfidence: 1,
-            insufficientContext: 1,
-          },
-          details: [
-            {
-              consumerServiceName: 'gateway',
-              providerServiceName: 'orders',
-              trigger: {
-                lowConfidence: true,
-                insufficientContext: false,
-              },
-              status: 'succeeded',
-              fallbackReasons: ['PATH_NOT_MATCHED'],
-              toolUsage: {
-                searchCalls: 2,
-                readCalls: 1,
-                endpointListCalls: 1,
-                totalCalls: 4,
-              },
-              recoveredCalls: [
-                {
-                  httpMethod: 'GET',
-                  path: '/api/orders/{id}',
-                },
-              ],
-            },
-          ],
-        },
-        fallbackReasonBreakdown: {
-          NO_ENDPOINT_OBJECTS: 1,
-          PATH_NOT_MATCHED: 1,
-          METHOD_NOT_MATCHED: 0,
-          INSUFFICIENT_CONTEXT: 0,
-        },
-        candidatesCreated: 6,
-        phase2Count: 2,
-        phase3Count: 4,
-      },
-      data: {
-        summary: {
-          analysisMode: 'agent_assisted',
-          bootstrapEndpointCount: 2,
-          servicePairCount: 3,
-          atomicCandidateCount: 4,
-          serviceFallbackCount: 2,
-          deepInspectionCount: 2,
-          agentEscalatedPairCount: 2,
-          agentRecoveredAtomicCount: 1,
-          agentFailedPairCount: 1,
-          agentToolUsageSummary: {
-            searchCalls: 3,
-            readCalls: 2,
-            endpointListCalls: 2,
-            totalCalls: 7,
-          },
-          deepInspectionTrace: {
-            attemptedCount: 2,
-            failureCount: 1,
-            triggerBreakdown: {
-              lowConfidence: 1,
-              insufficientContext: 1,
-            },
-            details: [
-              {
-                consumerServiceName: 'gateway',
-                providerServiceName: 'orders',
-                trigger: {
-                  lowConfidence: true,
-                  insufficientContext: false,
-                },
-                status: 'succeeded',
-                fallbackReasons: ['PATH_NOT_MATCHED'],
-                toolUsage: {
-                  searchCalls: 2,
-                  readCalls: 1,
-                  endpointListCalls: 1,
-                  totalCalls: 4,
-                },
-                recoveredCalls: [
-                  {
-                    httpMethod: 'GET',
-                    path: '/api/orders/{id}',
-                  },
-                ],
-              },
-            ],
-          },
-          fallbackReasonBreakdown: {
-            NO_ENDPOINT_OBJECTS: 1,
-            PATH_NOT_MATCHED: 1,
-            METHOD_NOT_MATCHED: 0,
-            INSUFFICIENT_CONTEXT: 0,
-          },
-          candidatesCreated: 6,
-          phase2Count: 2,
-          phase3Count: 4,
-        },
-      },
-    });
-    expect(executeSmartPipelineMock).toHaveBeenCalledWith(
+    expect(createInferenceRunMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
         workspaceId: 'ws-1',
-        repoRoots: [repoRoot],
-        atomicAnalysisMode: 'pair_pack',
-        generateAgentStep: expect.any(Function),
+        triggerType: 'INTENT_PROOF_ENGINE',
+        modes: ['config', 'code'],
+        incremental: true,
+        smartProof: true,
+        enableAgentPatches: true,
+        maxAgentFrontiers: 4,
+        sources: [{ type: 'local', ref: repoRoot }],
       }),
     );
-  });
-
-  it('새 observability 필드가 없더라도 summary 에 기본값을 안전하게 채워야 한다', async () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-route-defaults-'));
-    process.env['OPENAI_API_KEY'] = 'test-key';
-    getDbMock.mockResolvedValue({
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([]),
-        })),
-      })),
-    });
-    executeSmartPipelineMock.mockResolvedValue({
-      phase1: {
-        openApi: { imported: 1, failed: 0, importedServices: ['orders'] },
-      },
-      phase2: {
-        analyzedServiceCount: 1,
-        compoundDependencyCount: 1,
-        consumerServiceIds: ['svc-a'],
-      },
-      phase3: {
-        analyzedServiceCount: 1,
-        endpointCallCount: 1,
-        candidateCount: 1,
-      },
-      totalDurationMs: 25,
-    });
-
-    const response = await POST(new Request('http://localhost/api/inference/smart', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-ai-provider': 'openai',
-      },
-      body: JSON.stringify({
+    expect(executeInferenceRunMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
         workspaceId: 'ws-1',
-        repoRoots: [repoRoot],
-        useServiceMetadataPaths: false,
+        runId: 'run-proof-1',
       }),
-    }));
-
-    expect(response.status).toBe(200);
+    );
+    expect(createGenerateSmartResolutionFnMock).toHaveBeenCalledWith(
+      { provider: 'openai' },
+      'gpt-4o',
+    );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
+      engine: 'intent_proof',
+      runId: 'run-proof-1',
       summary: {
-        analysisMode: 'pair_pack',
-        bootstrapEndpointCount: 0,
-        servicePairCount: 0,
-        atomicCandidateCount: 0,
-        serviceFallbackCount: 0,
-        deepInspectionCount: 0,
-        agentEscalatedPairCount: 0,
-        agentRecoveredAtomicCount: 0,
-        agentFailedPairCount: 0,
-        agentToolUsageSummary: {
-          searchCalls: 0,
-          readCalls: 0,
-          endpointListCalls: 0,
-          totalCalls: 0,
+        engine: 'intent_proof',
+        intentCount: 5,
+        gatewayRouteSeedCount: 0,
+        derivedEndpointProofCount: 0,
+        proofClosedAtomicCount: 3,
+        proofFrontierCount: 1,
+        routeFamilyFrontierCount: 0,
+        proofRejectedCount: 1,
+        projectedCandidateCount: 3,
+        serviceTargetProjectionCount: 0,
+        smartMode: {
+          enabled: true,
         },
-        deepInspectionTrace: {
-          attemptedCount: 0,
-          failureCount: 0,
-          triggerBreakdown: {
-            lowConfidence: 0,
-            insufficientContext: 0,
-          },
-          details: [],
+        frontierBreakdown: {
+          PATH_NOT_MATCHED: 1,
         },
-        fallbackReasonBreakdown: {
-          NO_ENDPOINT_OBJECTS: 0,
-          PATH_NOT_MATCHED: 0,
-          METHOD_NOT_MATCHED: 0,
-          INSUFFICIENT_CONTEXT: 0,
-        },
-        candidatesCreated: 1,
-        phase2Count: 1,
-        phase3Count: 1,
-      },
-    });
-  });
-
-  it('deepInspectionTrace detail status 의 no_result 를 그대로 반환해야 한다', async () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-route-no-result-'));
-    process.env['OPENAI_API_KEY'] = 'test-key';
-    getDbMock.mockResolvedValue({
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([]),
-        })),
-      })),
-    });
-    executeSmartPipelineMock.mockResolvedValue({
-      phase1: {
-        openApi: { imported: 1, failed: 0, importedServices: ['orders'] },
-      },
-      phase2: {
-        analyzedServiceCount: 1,
-        compoundDependencyCount: 1,
-        consumerServiceIds: ['svc-a'],
-        servicePairCount: 1,
-      },
-      phase3: {
-        analyzedServiceCount: 1,
-        endpointCallCount: 0,
-        candidateCount: 0,
-        deepInspectionCount: 1,
-        deepInspectionTrace: {
-          attemptedCount: 1,
-          failureCount: 0,
-          triggerBreakdown: {
-            lowConfidence: 1,
-            insufficientContext: 0,
-          },
-          details: [
-            {
-              consumerServiceName: 'gateway',
-              providerServiceName: 'orders',
-              trigger: {
-                lowConfidence: true,
-                insufficientContext: false,
-              },
-              status: 'no_result',
-              fallbackReasons: ['INSUFFICIENT_CONTEXT'],
-              toolUsage: {
-                searchCalls: 1,
-                readCalls: 1,
-                endpointListCalls: 1,
-                totalCalls: 3,
-              },
-              recoveredCall: null,
-            },
-          ],
-        },
-      },
-      totalDurationMs: 40,
-    });
-
-    const response = await POST(new Request('http://localhost/api/inference/smart', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-ai-provider': 'openai',
-      },
-      body: JSON.stringify({
-        workspaceId: 'ws-1',
-        repoRoots: [repoRoot],
-        useServiceMetadataPaths: false,
-      }),
-    }));
-
-    expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({
-      success: true,
-      summary: {
-        deepInspectionTrace: {
-          details: [
-            {
-              consumerServiceName: 'gateway',
-              providerServiceName: 'orders',
-              status: 'no_result',
-            },
-          ],
+        targetBreakdown: {
+          api_endpoint: 3,
         },
       },
       data: {
-        summary: {
-          deepInspectionTrace: {
-            details: [
-              {
-                consumerServiceName: 'gateway',
-                providerServiceName: 'orders',
-                status: 'no_result',
-              },
-            ],
-          },
-        },
+        repoRoots: [repoRoot],
       },
     });
   });
 
-  it('async=true 이면 smart run을 큐잉하고 202를 반환해야 한다', async () => {
-    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-route-async-'));
-    process.env['OPENAI_API_KEY'] = 'test-key';
-    getDbMock.mockResolvedValue({
-      select: vi.fn(() => ({
-        from: vi.fn(() => ({
-          where: vi.fn().mockResolvedValue([]),
-        })),
-      })),
+  it('POST async=true는 proof engine run을 큐잉하고 202를 반환해야 한다', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-async-'));
+    getDbMock.mockResolvedValue(createDbMock([repoRoot]));
+    const smartGenerateFn = vi.fn();
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
     });
+    createGenerateSmartResolutionFnMock.mockReturnValue(smartGenerateFn);
     createInferenceRunMock.mockResolvedValue({
-      id: 'smart-run-1',
+      id: 'run-proof-async',
       status: 'QUEUED',
     });
-    executeQueuedSmartInferenceRunMock.mockResolvedValue(undefined);
     getInferenceRunDetailMock.mockResolvedValue({
       run: {
-        id: 'smart-run-1',
+        id: 'run-proof-async',
         status: 'QUEUED',
+        stats: {},
+      },
+      sources: [{ sourceRef: repoRoot }],
+      events: [],
+    });
+
+    vi.stubGlobal('queueMicrotask', (callback: () => void) => {
+      callback();
+    });
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-proof-async',
+        status: 'SUCCEEDED',
+        stats: {},
       },
       sources: [],
       events: [],
@@ -522,16 +264,11 @@ describe('POST /api/inference/smart', () => {
 
     const response = await POST(new Request('http://localhost/api/inference/smart', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-ai-provider': 'openai',
-      },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         workspaceId: 'ws-1',
-        repoRoots: [repoRoot],
-        useServiceMetadataPaths: false,
+        useServiceMetadataPaths: true,
         async: true,
-        analysisMode: 'full_agent',
       }),
     }));
 
@@ -539,70 +276,144 @@ describe('POST /api/inference/smart', () => {
     expect(createInferenceRunMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
-        workspaceId: 'ws-1',
-        triggerType: 'SMART_PIPELINE',
-        modes: ['config', 'code'],
+        smartProof: true,
         sources: [{ type: 'local', ref: repoRoot }],
       }),
     );
-    expect(executeQueuedSmartInferenceRunMock).toHaveBeenCalledWith(
+    expect(executeInferenceRunMock).toHaveBeenCalledWith(
+      expect.anything(),
       expect.objectContaining({
         workspaceId: 'ws-1',
-        runId: 'smart-run-1',
-        repoRoots: [repoRoot],
-        analysisMode: 'full_agent',
-        generateAgentStep: expect.any(Function),
+        runId: 'run-proof-async',
+        smartGenerateFn,
       }),
     );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
+      engine: 'intent_proof',
       queued: true,
-      runId: 'smart-run-1',
+      runId: 'run-proof-async',
+      summary: {
+        engine: 'intent_proof',
+        intentCount: 0,
+        smartMode: {
+          enabled: true,
+        },
+      },
     });
   });
 
-  it('GET 상태 조회는 smart run summary를 반환해야 한다', async () => {
-    process.env['OPENAI_API_KEY'] = 'test-key';
+  it('POST는 유효한 repo root가 없으면 NO_REPO_ROOTS를 반환해야 한다', async () => {
+    getDbMock.mockResolvedValue(createDbMock());
+
+    const response = await POST(new Request('http://localhost/api/inference/smart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        repoRoots: ['/path/does/not/exist'],
+        useServiceMetadataPaths: false,
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: {
+        code: 'NO_REPO_ROOTS',
+      },
+    });
+  });
+
+  it('POST는 smart generator가 없으면 run을 생성하지 않고 BAD_REQUEST를 반환해야 한다', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-no-model-'));
+    getDbMock.mockResolvedValue(createDbMock());
+    getInferenceModelMock.mockReturnValue(null);
+
+    const response = await POST(new Request('http://localhost/api/inference/smart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        repoRoots: [repoRoot],
+        useServiceMetadataPaths: false,
+        smartProof: true,
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(createInferenceRunMock).not.toHaveBeenCalled();
+    expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: {
+        code: 'SMART_MODEL_NOT_CONFIGURED',
+      },
+    });
+  });
+
+  it('GET은 proof summary를 우선 반환해야 한다', async () => {
     getDbMock.mockResolvedValue({});
-    getSmartInferenceRunDetailMock.mockResolvedValue({
-      detail: {
-        run: {
-          id: 'smart-run-1',
-          triggerType: 'SMART_PIPELINE',
-          status: 'SUCCEEDED',
-          stats: {
-            smartSummary: {
-              candidatesCreated: 3,
-              phase2Count: 1,
-              phase3Count: 2,
+    getInferenceRunDetailMock.mockResolvedValue({
+      run: {
+        id: 'run-proof-1',
+        status: 'SUCCEEDED',
+        triggerType: 'INTENT_PROOF_ENGINE',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 4,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 2,
+            proofFrontierCount: 2,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 2,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 1,
+            agentPatchedFrontierCount: 1,
+            frontierBreakdown: {
+              PATH_NOT_MATCHED: 2,
+            },
+            targetBreakdown: {
+              api_endpoint: 2,
             },
           },
         },
-        sources: [],
-        events: [],
       },
-      summary: {
-        candidatesCreated: 3,
-        phase2Count: 1,
-        phase3Count: 2,
-      },
+      sources: [],
+      events: [],
     });
 
     const response = await GET(
-      new Request('http://localhost/api/inference/smart?workspaceId=ws-1&runId=smart-run-1'),
+      new Request('http://localhost/api/inference/smart?workspaceId=ws-1&runId=run-proof-1'),
     );
 
     expect(response.status).toBe(200);
     await expect(response.json()).resolves.toMatchObject({
       success: true,
+      engine: 'intent_proof',
       summary: {
-        candidatesCreated: 3,
-        phase2Count: 1,
-        phase3Count: 2,
+        engine: 'intent_proof',
+        intentCount: 4,
+        gatewayRouteSeedCount: 0,
+        derivedEndpointProofCount: 0,
+        proofClosedAtomicCount: 2,
+        proofFrontierCount: 2,
+        routeFamilyFrontierCount: 0,
+        projectedCandidateCount: 2,
+        serviceTargetProjectionCount: 0,
+        smartMode: {
+          enabled: true,
+        },
       },
-      run: {
-        id: 'smart-run-1',
-        status: 'SUCCEEDED',
+      data: {
+        summary: {
+          frontierBreakdown: {
+            PATH_NOT_MATCHED: 2,
+          },
+        },
       },
     });
   });

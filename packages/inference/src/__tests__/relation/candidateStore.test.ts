@@ -1,9 +1,8 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { migrate } from 'drizzle-orm/pglite/migrator';
 import { and, eq } from 'drizzle-orm';
 import {
-  createPgliteClient,
+  createTestDb as createEmbeddedTestDb,
   evidences,
   objectRelations,
   objects,
@@ -14,13 +13,10 @@ import {
 import { generateId } from '@archi-navi/shared';
 import { saveRelationCandidate } from '@/relation/candidateStore';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
 const workspaceId = '00000000-0000-0000-0000-000000000071';
 
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 describe('saveRelationCandidate', () => {

@@ -2,10 +2,9 @@
 
 import { beforeEach, describe, expect, it } from 'vitest';
 import { join } from 'node:path';
-import { migrate } from 'drizzle-orm/pglite/migrator';
 import { and, eq } from 'drizzle-orm';
 import {
-  createPgliteClient,
+  createTestDb as createEmbeddedTestDb,
   domainInferenceProfiles,
   objects,
   relationCandidates,
@@ -15,13 +14,10 @@ import { generateId } from '@archi-navi/shared';
 import { approveRelationCandidate } from '../../../../packages/inference/src/relation/approveRelationCandidate';
 import { applyFeedbackToRelationCandidateInput } from '../../../../packages/inference/src/relation/feedbackLoop';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../../packages/db/src/migrations');
-const workspaceId = '00000000-0000-0000-0000-000000000091';
+const workspaceId = '00000000-0000-0000-0000-000000000083';
 
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 describe('relation feedback contract', () => {

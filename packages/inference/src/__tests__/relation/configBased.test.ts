@@ -1,13 +1,12 @@
 /**
  * configBased.ts 통합 테스트
- * PGlite 인메모리 DB + 임시 파일 시스템으로 실제 추론 흐름 검증
+ * embedded postgres 테스트 DB + 임시 파일 시스템으로 실제 추론 흐름 검증
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import { objects, relationCandidates, objectRelations, evidences, workspaces, codeArtifacts } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { inferRelationsFromConfig } from '@/relation/configBased';
@@ -15,13 +14,8 @@ import { generateId, buildUrn } from '@archi-navi/shared';
 
 // vitest는 package 루트(packages/inference/)에서 실행됨
 // 따라서 migrations 폴더는 ../db/src/migrations 로 상대 참조 가능
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
-/** 테스트용 DB 초기화 (PGlite 메모리 + 마이그레이션 실행) */
 async function createTestDb() {
-  const db = createPgliteClient(); // memory://
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

@@ -28,25 +28,10 @@ interface RelationFeedbackHint {
   adjustedConfidence?: number;
 }
 
-interface SmartFallbackContext {
-  attemptedMethod: string;
-  attemptedPath: string;
-  evidenceSummary?: string;
-}
-
-type SmartFallbackReason =
-  | 'NO_ENDPOINT_OBJECTS'
-  | 'PATH_NOT_MATCHED'
-  | 'METHOD_NOT_MATCHED'
-  | 'INSUFFICIENT_CONTEXT';
-
-interface CandidateMetadataSummary {
+type CandidateMetadataSummary = Record<string, unknown> & {
   feedback?: RelationFeedbackHint;
-  targetType?: 'api_endpoint' | 'service';
-  analysisMode?: string;
-  fallbackReason?: SmartFallbackReason;
-  fallbackContext?: SmartFallbackContext;
-}
+  targetType?: 'api_endpoint' | 'db_table' | 'topic' | 'queue';
+};
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value)
@@ -93,73 +78,36 @@ function asRelationFeedbackHint(value: unknown): RelationFeedbackHint | null {
   return hint;
 }
 
-function isSmartFallbackReason(value: unknown): value is SmartFallbackReason {
-  return value === 'NO_ENDPOINT_OBJECTS'
-    || value === 'PATH_NOT_MATCHED'
-    || value === 'METHOD_NOT_MATCHED'
-    || value === 'INSUFFICIENT_CONTEXT';
-}
-
-function asTrimmedString(value: unknown): string | null {
-  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
-}
-
-function summarizeEvidence(value: unknown): string | undefined {
-  const evidence = asTrimmedString(value);
-  if (!evidence) return undefined;
-
-  const collapsed = evidence.replace(/\s+/g, ' ');
-  return collapsed.length > 160
-    ? `${collapsed.slice(0, 157).trimEnd()}...`
-    : collapsed;
-}
-
-function buildSmartFallbackContext(record: Record<string, unknown>): SmartFallbackContext | undefined {
-  const attemptedMethod = asTrimmedString(record['httpMethod']);
-  const attemptedPath = asTrimmedString(record['path']);
-  if (!attemptedMethod || !attemptedPath) {
-    return undefined;
-  }
-
-  const evidenceSummary = summarizeEvidence(record['evidence']);
-
-  return {
-    attemptedMethod,
-    attemptedPath,
-    ...(evidenceSummary ? { evidenceSummary } : {}),
-  };
-}
-
 function asCandidateMetadataSummary(value: unknown): CandidateMetadataSummary | null {
   const record = asRecord(value);
   if (!record) return null;
 
   const feedback = asRelationFeedbackHint(record['feedback']);
-  const targetType = record['targetType'] === 'api_endpoint' || record['targetType'] === 'service'
+  const targetType = record['targetType'] === 'api_endpoint'
+    || record['targetType'] === 'db_table'
+    || record['targetType'] === 'topic'
+    || record['targetType'] === 'queue'
     ? record['targetType']
     : undefined;
-  const analysisMode = typeof record['analysisMode'] === 'string' && record['analysisMode'].trim().length > 0
-    ? record['analysisMode'].trim()
-    : undefined;
-  const fallbackReason = isSmartFallbackReason(record['fallbackReason'])
-    ? record['fallbackReason']
-    : undefined;
-  const fallbackContext =
-    targetType === 'service' && analysisMode === 'pair_pack' && fallbackReason
-      ? buildSmartFallbackContext(record)
-      : undefined;
+  const normalized: CandidateMetadataSummary = { ...record };
 
-  if (!feedback && !targetType && !analysisMode && !fallbackReason && !fallbackContext) {
+  if (feedback) {
+    normalized.feedback = feedback;
+  } else {
+    delete normalized.feedback;
+  }
+
+  if (targetType) {
+    normalized.targetType = targetType;
+  } else {
+    delete normalized.targetType;
+  }
+
+  if (Object.keys(normalized).length === 0) {
     return null;
   }
 
-  return {
-    ...(feedback ? { feedback } : {}),
-    ...(targetType ? { targetType } : {}),
-    ...(analysisMode ? { analysisMode } : {}),
-    ...(fallbackReason ? { fallbackReason } : {}),
-    ...(fallbackContext ? { fallbackContext } : {}),
-  };
+  return normalized;
 }
 
 function isCrossValidationRuleId(value: unknown): value is CrossValidationContradiction['ruleId'] {
@@ -325,7 +273,7 @@ export async function GET(req: NextRequest) {
     );
 
     // 응답 변환 (granularity, parent 정보 포함)
-    const result = candidates.map((c: typeof candidates[0]) => {
+    const result = candidates.flatMap((c: typeof candidates[0]) => {
       const meta = c.metadata as Record<string, unknown> | null;
       const llmAssessment = meta?.llmAssessment ?? null;
       const llmExplanation =
@@ -346,12 +294,17 @@ export async function GET(req: NextRequest) {
 
       const subjectObj = objMap.get(c.subjectObjectId);
       const objectObj = objMap.get(c.objectId);
+      const rawTargetType = typeof meta?.targetType === 'string' ? meta.targetType : null;
+
+      if (objectObj?.objectType === 'service' || rawTargetType === 'service') {
+        return [];
+      }
 
       // ATOMIC인 경우 parent(COMPOUND) 이름 조회
       const subjectParent = subjectObj?.parentId ? objMap.get(subjectObj.parentId) : null;
       const objectParent = objectObj?.parentId ? objMap.get(objectObj.parentId) : null;
 
-      return {
+      return [{
         id: c.id,
         subjectName: subjectObj?.displayName ?? subjectObj?.name ?? c.subjectObjectId,
         subjectGranularity: subjectObj?.granularity ?? 'ATOMIC',
@@ -372,7 +325,7 @@ export async function GET(req: NextRequest) {
         ...(source ? { source } : {}),
         ...(llmAssessment ? { llmAssessment } : {}),
         ...(llmExplanation ? { llmExplanation } : {}),
-      };
+      }];
     });
 
     return NextResponse.json(result);

@@ -40,6 +40,7 @@ type Candidate = {
       attemptedPath: string;
       evidenceSummary?: string;
     };
+    [key: string]: unknown;
   };
 };
 
@@ -138,7 +139,7 @@ test('S1-6: approval pagination은 더 보기 append 후 경고 필터를 유지
 
   await page.goto('/approval');
 
-  await expect(page.getByRole('heading', { name: '승인 대기' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: '승인 대기', exact: true })).toBeVisible();
   await expect(page.getByTestId('approval-candidate-card')).toHaveCount(200);
   await expect(
     page.locator('[data-testid="approval-candidate-card"][data-candidate-id="cand-late-warning"]'),
@@ -192,7 +193,7 @@ test('S1-1b: llm-boost 모드에서 /api/inference/run body에 llmBoost.enabled=
 
   await page.goto('/approval');
 
-  await expect(page.getByText('승인 대기 중인 관계가 없습니다')).toBeVisible();
+  await expect(page.getByText('현재 필터 조건에 맞는 승인 후보가 없습니다.')).toBeVisible();
   await page.getByLabel('추론 모드').selectOption('llm-boost');
   await page.getByRole('button', { name: '추론 실행' }).click();
 
@@ -243,7 +244,7 @@ test('S1-1c: LLM 평가가 /api/inference/llm-filter를 호출하고 설명이 �
   expect(llmFilterCallCount).toBe(1);
 });
 
-test('S1-1a: Smart 모드가 /api/inference/smart를 호출하고 trace viewer와 fallback hint를 노출한다', async ({ page }) => {
+test('S1-1a: Smart 모드가 /api/inference/smart를 호출하고 proof summary viewer와 fallback hint를 노출한다', async ({ page }) => {
   let smartRequestBody: Record<string, unknown> | null = null;
   let candidatePayload: Candidate[] = [];
 
@@ -254,13 +255,40 @@ test('S1-1a: Smart 모드가 /api/inference/smart를 호출하고 trace viewer�
     await fulfillJson(route, candidatePayload);
   });
 
+  await page.route('**/api/inference/smart?*', async (route) => {
+    await fulfillJson(route, {
+      success: true,
+      run: {
+        id: 'smart-run-1',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 3,
+            proofClosedAtomicCount: 0,
+            proofFrontierCount: 1,
+            proofRejectedCount: 2,
+            projectedCandidateCount: 0,
+            agentFrontierCount: 1,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {
+              PATH_NOT_MATCHED: 1,
+            },
+            targetBreakdown: {
+              service: 1,
+            },
+          },
+        },
+      },
+    });
+  });
+
   await page.route('**/api/inference/smart', async (route) => {
     smartRequestBody = route.request().postDataJSON() as Record<string, unknown>;
     candidatePayload = [
       createCandidate('cand-smart-fallback', 'orders-service', {
         metadata: {
           targetType: 'service',
-          analysisMode: 'pair_pack',
           fallbackReason: 'PATH_NOT_MATCHED',
           fallbackContext: {
             attemptedMethod: 'GET',
@@ -272,62 +300,26 @@ test('S1-1a: Smart 모드가 /api/inference/smart를 호출하고 trace viewer�
     ];
     await fulfillJson(route, {
       success: true,
-      data: {
-        phase2: { analyzedServiceCount: 2, servicePairCount: 3 },
-        phase3: {
-          analyzedServiceCount: 3,
-          candidateCount: 1,
-          atomicCandidateCount: 0,
-          serviceFallbackCount: 1,
-          deepInspectionCount: 1,
-          deepInspectionTrace: {
-            attemptedCount: 1,
-            failureCount: 0,
-            triggerBreakdown: {
-              lowConfidence: 1,
-              insufficientContext: 0,
-            },
-            details: [
-              {
-                consumerServiceName: 'gateway',
-                providerServiceName: 'orders',
-                trigger: {
-                  lowConfidence: true,
-                  insufficientContext: false,
-                },
-                status: 'no_result',
-                fallbackReasons: ['PATH_NOT_MATCHED'],
-                toolUsage: {
-                  searchCalls: 1,
-                  readCalls: 1,
-                  endpointListCalls: 1,
-                  totalCalls: 3,
-                },
-                recoveredCall: null,
-              },
-            ],
-          },
-          fallbackReasonBreakdown: {
-            NO_ENDPOINT_OBJECTS: 0,
-            PATH_NOT_MATCHED: 1,
-            METHOD_NOT_MATCHED: 0,
-            INSUFFICIENT_CONTEXT: 0,
-          },
-        },
+      queued: true,
+      runId: 'smart-run-1',
+      run: {
+        id: 'smart-run-1',
+        status: 'QUEUED',
       },
     });
   });
 
   await page.goto('/approval');
 
-  await expect(page.getByText('승인 대기 중인 관계가 없습니다')).toBeVisible();
+  await expect(page.getByRole('heading', { name: '승인 대기', exact: true })).toBeVisible();
   await page.getByLabel('추론 모드').selectOption('smart');
   await page.getByRole('button', { name: '추론 실행' }).click();
 
   await expect(page.getByTestId('smart-trace-viewer')).toBeVisible();
-  await expect(page.getByTestId('smart-trace-viewer')).toContainText('Smart Deep Inspection Trace');
-  await expect(page.getByTestId('smart-trace-viewer')).toContainText('gateway -> orders');
-  await expect(page.getByTestId('smart-trace-viewer')).toContainText('fallback 경로 불일치');
+  await expect(page.getByTestId('smart-trace-viewer')).toContainText('Intent Proof Summary');
+  await expect(page.getByTestId('smart-trace-viewer')).toContainText('intent 3개');
+  await expect(page.getByTestId('smart-trace-viewer')).toContainText('frontier 1개');
+  await expect(page.getByTestId('smart-trace-viewer')).toContainText('Frontier breakdown: PATH_NOT_MATCHED 1개');
 
   const fallbackCard = page.locator(
     '[data-testid="approval-candidate-card"][data-candidate-id="cand-smart-fallback"]',
@@ -340,5 +332,54 @@ test('S1-1a: Smart 모드가 /api/inference/smart를 호출하고 trace viewer�
     workspaceId: WORKSPACE_ID,
     repoRoots: ['/mock/repo'],
     useServiceMetadataPaths: true,
+    async: true,
   });
+  expect(smartRequestBody).not.toHaveProperty('analysisMode');
+});
+
+test('S1-7: approval 화면에서 proof chain drill-down과 frontier queue를 노출한다', async ({ page }) => {
+  const candidatePayload: Candidate[] = [
+    createCandidate('cand-proof-chain', 'provider-orders', {
+      metadata: {
+        proof: {
+          sourceService: 'gateway',
+          sourceFunction: 'OrderController.getOrders',
+          resolvedProviderEndpoint: { method: 'GET', path: '/orders' },
+          routeChain: ['gateway', 'orders'],
+          supportingEvidence: ['gateway.ts:42'],
+          contradictions: [{ type: 'STALE_CONFIG' }],
+          proofSteps: [
+            { stepType: 'resolve_alias', status: 'ok' },
+            { stepType: 'match_endpoint', status: 'ok' },
+          ],
+          frontierHistory: [
+            {
+              frontierReason: 'PATH_NOT_MATCHED',
+              missingSlots: ['provider_path'],
+              relevantSnippets: ['routes/order.ts'],
+              lastResolutionStep: 'match_endpoint',
+              retryable: true,
+              hasAgentPatch: true,
+            },
+          ],
+          patchHistory: [{ patchType: 'route_patch', status: 'APPLIED' }],
+        },
+      },
+    }),
+  ];
+
+  await bootstrapWorkspace(page);
+  await installApprovalBaseRoutes(page);
+  await page.route('**/api/inference/candidates?*', async (route) => {
+    await fulfillJson(route, candidatePayload);
+  });
+
+  await page.goto('/approval');
+
+  await expect(page.getByTestId('frontier-queue')).toBeVisible();
+  await expect(page.getByText('Frontier Queue (1)')).toBeVisible();
+  await page.getByText('Proof chain drill-down').click();
+  await expect(page.getByText('source function: OrderController.getOrders')).toBeVisible();
+  await expect(page.getByText('resolved provider endpoint: GET /orders')).toBeVisible();
+  await expect(page.getByText('frontier history: PATH_NOT_MATCHED')).toBeVisible();
 });

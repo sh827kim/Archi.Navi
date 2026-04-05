@@ -6,8 +6,15 @@
 import { eq, sql } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
+import { normalizeSmartProofConfig, type SmartProofConfig } from '@archi-navi/inference';
 
 const DEFAULT_PROFILE_NAME = 'default';
+
+function extractQueryRows<Row>(result: { rows?: Row[] } | Row[]): Row[] {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result.rows)) return result.rows;
+  return [];
+}
 
 interface CrossValidationConfig {
   enabled: boolean;
@@ -15,10 +22,88 @@ interface CrossValidationConfig {
   penaltyFactor: number;
 }
 
+interface ProofConfidenceWeights {
+  summaryQuality: number;
+  slotCompleteness: number;
+  corroborationPerSignal: number;
+  corroborationCap: number;
+  contradictionPenaltyPerItem: number;
+  contradictionPenaltyCap: number;
+}
+
+interface HttpProofSlotWeights {
+  method: number;
+  externalPath: number;
+  internalPath: number;
+  providerService: number;
+  targetObject: number;
+}
+
+interface DbProofSlotWeights {
+  action: number;
+  table: number;
+  schema: number;
+  datasource: number;
+  targetObject: number;
+}
+
+interface MessageProofSlotWeights {
+  channel: number;
+  broker: number;
+  objectType: number;
+  targetObject: number;
+}
+
+interface ProofConfidenceConfig {
+  name: string;
+  version: string;
+  weights: ProofConfidenceWeights;
+  slotWeights: {
+    http: HttpProofSlotWeights;
+    db: DbProofSlotWeights;
+    message: MessageProofSlotWeights;
+  };
+}
+
 const DEFAULT_CROSS_VALIDATION_CONFIG: CrossValidationConfig = {
   enabled: true,
   boostFactor: 0.3,
   penaltyFactor: 0.85,
+};
+
+const DEFAULT_PROOF_CONFIDENCE: ProofConfidenceConfig = {
+  name: 'intent-proof-default',
+  version: 'v1',
+  weights: {
+    summaryQuality: 0.45,
+    slotCompleteness: 0.25,
+    corroborationPerSignal: 0.05,
+    corroborationCap: 0.2,
+    contradictionPenaltyPerItem: 0.2,
+    contradictionPenaltyCap: 0.6,
+  },
+  slotWeights: {
+    http: {
+      method: 0.2,
+      externalPath: 0.2,
+      internalPath: 0.2,
+      providerService: 0.2,
+      targetObject: 0.2,
+    },
+    db: {
+      action: 0.25,
+      table: 0.25,
+      schema: 0.15,
+      datasource: 0.1,
+      targetObject: 0.25,
+    },
+    message: {
+      channel: 0.4,
+      broker: 0.2,
+      objectType: 0.15,
+      targetObject: 0.25,
+    },
+  },
 };
 
 interface FeedbackConfig {
@@ -76,6 +161,8 @@ interface ProfileResponse {
   edgeWMsg: number | null;
   enabledLayers: unknown;
   crossValidation?: unknown;
+  proofConfidence?: unknown;
+  smartProofConfig?: unknown;
   feedbackConfig?: unknown;
   feedbackAdjustments?: unknown;
   domainFeedbackConfig?: unknown;
@@ -113,6 +200,15 @@ interface UpdateProfileBody {
   edgeWMsg?: number;
   enabledLayers?: string[];
   crossValidation?: Partial<CrossValidationConfig>;
+  proofConfidence?: Partial<ProofConfidenceConfig> & {
+    weights?: Partial<ProofConfidenceWeights>;
+    slotWeights?: {
+      http?: Partial<HttpProofSlotWeights>;
+      db?: Partial<DbProofSlotWeights>;
+      message?: Partial<MessageProofSlotWeights>;
+    };
+  };
+  smartProofConfig?: boolean | Partial<SmartProofConfig>;
   relationFeedbackConfig?: Partial<FeedbackConfig>;
   domainFeedbackConfig?: Partial<FeedbackConfig>;
   resetRelationFeedback?: boolean;
@@ -147,6 +243,106 @@ function asCrossValidationConfig(value: unknown): CrossValidationConfig {
     penaltyFactor: isFiniteNumber(record['penaltyFactor'])
       ? clamp(record['penaltyFactor'], 0, 1)
       : DEFAULT_CROSS_VALIDATION_CONFIG.penaltyFactor,
+  };
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function normalizeWeight(value: unknown, fallback: number): number {
+  return isFiniteNumber(value) ? clamp(value, 0, 1) : fallback;
+}
+
+function asProofConfidenceConfig(value: unknown): ProofConfidenceConfig {
+  const record = asRecord(value);
+  const weights = asRecord(record['weights']);
+  const slotWeights = asRecord(record['slotWeights']);
+  const http = asRecord(slotWeights['http']);
+  const db = asRecord(slotWeights['db']);
+  const message = asRecord(slotWeights['message']);
+
+  return {
+    name: asString(record['name']) ?? DEFAULT_PROOF_CONFIDENCE.name,
+    version: asString(record['version']) ?? DEFAULT_PROOF_CONFIDENCE.version,
+    weights: {
+      summaryQuality: normalizeWeight(
+        weights['summaryQuality'],
+        DEFAULT_PROOF_CONFIDENCE.weights.summaryQuality,
+      ),
+      slotCompleteness: normalizeWeight(
+        weights['slotCompleteness'],
+        DEFAULT_PROOF_CONFIDENCE.weights.slotCompleteness,
+      ),
+      corroborationPerSignal: normalizeWeight(
+        weights['corroborationPerSignal'],
+        DEFAULT_PROOF_CONFIDENCE.weights.corroborationPerSignal,
+      ),
+      corroborationCap: normalizeWeight(
+        weights['corroborationCap'],
+        DEFAULT_PROOF_CONFIDENCE.weights.corroborationCap,
+      ),
+      contradictionPenaltyPerItem: normalizeWeight(
+        weights['contradictionPenaltyPerItem'],
+        DEFAULT_PROOF_CONFIDENCE.weights.contradictionPenaltyPerItem,
+      ),
+      contradictionPenaltyCap: normalizeWeight(
+        weights['contradictionPenaltyCap'],
+        DEFAULT_PROOF_CONFIDENCE.weights.contradictionPenaltyCap,
+      ),
+    },
+    slotWeights: {
+      http: {
+        method: normalizeWeight(http['method'], DEFAULT_PROOF_CONFIDENCE.slotWeights.http.method),
+        externalPath: normalizeWeight(
+          http['externalPath'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.http.externalPath,
+        ),
+        internalPath: normalizeWeight(
+          http['internalPath'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.http.internalPath,
+        ),
+        providerService: normalizeWeight(
+          http['providerService'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.http.providerService,
+        ),
+        targetObject: normalizeWeight(
+          http['targetObject'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.http.targetObject,
+        ),
+      },
+      db: {
+        action: normalizeWeight(db['action'], DEFAULT_PROOF_CONFIDENCE.slotWeights.db.action),
+        table: normalizeWeight(db['table'], DEFAULT_PROOF_CONFIDENCE.slotWeights.db.table),
+        schema: normalizeWeight(db['schema'], DEFAULT_PROOF_CONFIDENCE.slotWeights.db.schema),
+        datasource: normalizeWeight(
+          db['datasource'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.db.datasource,
+        ),
+        targetObject: normalizeWeight(
+          db['targetObject'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.db.targetObject,
+        ),
+      },
+      message: {
+        channel: normalizeWeight(
+          message['channel'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.message.channel,
+        ),
+        broker: normalizeWeight(
+          message['broker'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.message.broker,
+        ),
+        objectType: normalizeWeight(
+          message['objectType'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.message.objectType,
+        ),
+        targetObject: normalizeWeight(
+          message['targetObject'],
+          DEFAULT_PROOF_CONFIDENCE.slotWeights.message.targetObject,
+        ),
+      },
+    },
   };
 }
 
@@ -272,6 +468,8 @@ function toPublicProfile(
   options?: { includeFeedbackEntries?: boolean },
 ) {
   const crossValidation = asCrossValidationConfig(row.crossValidation);
+  const proofConfidence = asProofConfidenceConfig(row.proofConfidence);
+  const smartProofConfig = normalizeSmartProofConfig(row.smartProofConfig as boolean | SmartProofConfig | null | undefined);
   const relationFeedbackConfig = asFeedbackConfig(row.feedbackConfig);
   const relationFeedbackAdjustments = asFeedbackAdjustments(
     row.feedbackAdjustments,
@@ -309,6 +507,8 @@ function toPublicProfile(
       ? (row.enabledLayers as unknown[]).filter((v): v is string => typeof v === 'string')
       : ['call', 'db', 'msg', 'code'],
     crossValidation,
+    proofConfidence,
+    smartProofConfig,
     relationFeedbackConfig,
     relationFeedbackSummary,
     domainFeedbackConfig,
@@ -333,6 +533,8 @@ async function selectProfileJsonState(
   profileId: string,
 ): Promise<{
   crossValidation: unknown;
+  proofConfidence: unknown;
+  smartProofConfig: unknown;
   feedbackConfig: unknown;
   feedbackAdjustments: unknown;
   domainFeedbackConfig: unknown;
@@ -341,6 +543,8 @@ async function selectProfileJsonState(
   try {
     const state = await db.execute<{
       cross_validation: unknown;
+      proof_confidence_config: unknown;
+      smart_proof_config: unknown;
       feedback_config: unknown;
       feedback_adjustments: unknown;
       domain_feedback_config: unknown;
@@ -348,6 +552,8 @@ async function selectProfileJsonState(
     }>(sql`
       select
         cross_validation,
+        proof_confidence_config,
+        smart_proof_config,
         feedback_config,
         feedback_adjustments,
         domain_feedback_config,
@@ -356,16 +562,24 @@ async function selectProfileJsonState(
       where id = ${profileId}
       limit 1
     `);
+    const rows = extractQueryRows(state);
 
     return {
-      crossValidation: state.rows[0]?.cross_validation,
-      feedbackConfig: state.rows[0]?.feedback_config,
-      feedbackAdjustments: state.rows[0]?.feedback_adjustments,
-      domainFeedbackConfig: state.rows[0]?.domain_feedback_config,
-      domainFeedbackAdjustments: state.rows[0]?.domain_feedback_adjustments,
+      crossValidation: rows[0]?.cross_validation,
+      proofConfidence: rows[0]?.proof_confidence_config,
+      smartProofConfig: rows[0]?.smart_proof_config,
+      feedbackConfig: rows[0]?.feedback_config,
+      feedbackAdjustments: rows[0]?.feedback_adjustments,
+      domainFeedbackConfig: rows[0]?.domain_feedback_config,
+      domainFeedbackAdjustments: rows[0]?.domain_feedback_adjustments,
     };
   } catch (error) {
-    if (!isMissingColumnError(error, ['domain_feedback_config', 'domain_feedback_adjustments'])) {
+    if (!isMissingColumnError(error, [
+      'proof_confidence_config',
+      'smart_proof_config',
+      'domain_feedback_config',
+      'domain_feedback_adjustments',
+    ])) {
       throw error;
     }
   }
@@ -373,52 +587,73 @@ async function selectProfileJsonState(
   try {
     const relationState = await db.execute<{
       cross_validation: unknown;
+      proof_confidence_config: unknown;
+      smart_proof_config: unknown;
       feedback_config: unknown;
       feedback_adjustments: unknown;
     }>(sql`
       select
         cross_validation,
+        proof_confidence_config,
+        smart_proof_config,
         feedback_config,
         feedback_adjustments
       from ${domainInferenceProfiles}
       where id = ${profileId}
       limit 1
     `);
+    const rows = extractQueryRows(relationState);
 
     return {
-      crossValidation: relationState.rows[0]?.cross_validation,
-      feedbackConfig: relationState.rows[0]?.feedback_config,
-      feedbackAdjustments: relationState.rows[0]?.feedback_adjustments,
+      crossValidation: rows[0]?.cross_validation,
+      proofConfidence: rows[0]?.proof_confidence_config,
+      smartProofConfig: rows[0]?.smart_proof_config,
+      feedbackConfig: rows[0]?.feedback_config,
+      feedbackAdjustments: rows[0]?.feedback_adjustments,
       domainFeedbackConfig: undefined,
       domainFeedbackAdjustments: undefined,
     };
   } catch (error) {
-    if (!isMissingColumnError(error, ['feedback_config', 'feedback_adjustments'])) {
+    if (!isMissingColumnError(error, [
+      'proof_confidence_config',
+      'smart_proof_config',
+      'feedback_config',
+      'feedback_adjustments',
+    ])) {
       throw error;
     }
   }
 
   try {
-    const crossValidation = await db.execute<{ cross_validation: unknown }>(sql`
-      select cross_validation
+    const crossValidation = await db.execute<{
+      cross_validation: unknown;
+      proof_confidence_config: unknown;
+      smart_proof_config: unknown;
+    }>(sql`
+      select cross_validation, proof_confidence_config, smart_proof_config
       from ${domainInferenceProfiles}
       where id = ${profileId}
       limit 1
     `);
+    const rows = extractQueryRows(crossValidation);
 
     return {
-      crossValidation: crossValidation.rows[0]?.cross_validation,
+      crossValidation: rows[0]?.cross_validation,
+      proofConfidence: rows[0]?.proof_confidence_config,
+      smartProofConfig: rows[0]?.smart_proof_config,
       feedbackConfig: undefined,
       feedbackAdjustments: undefined,
       domainFeedbackConfig: undefined,
       domainFeedbackAdjustments: undefined,
     };
   } catch (error) {
-    if (!isMissingColumnError(error, ['cross_validation'])) {
+    if (!isMissingColumnError(error, ['cross_validation', 'proof_confidence_config', 'smart_proof_config'])) {
       throw error;
     }
     return {
       crossValidation: undefined,
+      proofConfidence: undefined,
+      smartProofConfig: undefined,
       feedbackConfig: undefined,
       feedbackAdjustments: undefined,
       domainFeedbackConfig: undefined,
@@ -477,7 +712,7 @@ async function selectProfileBaseRow(
       limit 1
     `);
 
-  const row = baseRows.rows[0];
+  const row = extractQueryRows(baseRows)[0];
   return row ? toProfileResponseRow(row) : null;
 }
 
@@ -491,6 +726,8 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
   return {
     ...row,
     crossValidation: state.crossValidation,
+    proofConfidence: state.proofConfidence,
+    smartProofConfig: state.smartProofConfig,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
     domainFeedbackConfig: state.domainFeedbackConfig,
@@ -508,6 +745,8 @@ async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | 
   return {
     ...row,
     crossValidation: state.crossValidation,
+    proofConfidence: state.proofConfidence,
+    smartProofConfig: state.smartProofConfig,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
     domainFeedbackConfig: state.domainFeedbackConfig,
@@ -633,6 +872,58 @@ export async function PUT(req: NextRequest) {
         ? clamp(crossValidationInput.penaltyFactor, 0, 1)
         : currentCrossValidation.penaltyFactor,
     };
+    const currentProofConfidence = asProofConfidenceConfig(current.proofConfidence);
+    const proofConfidenceInput = body.proofConfidence ?? {};
+    const proofConfidence = asProofConfidenceConfig({
+      ...currentProofConfidence,
+      ...proofConfidenceInput,
+      name: asString(proofConfidenceInput.name) ?? currentProofConfidence.name,
+      version: asString(proofConfidenceInput.version) ?? currentProofConfidence.version,
+      weights: {
+        ...currentProofConfidence.weights,
+        ...(proofConfidenceInput.weights ?? {}),
+      },
+      slotWeights: {
+        http: {
+          ...currentProofConfidence.slotWeights.http,
+          ...(proofConfidenceInput.slotWeights?.http ?? {}),
+        },
+        db: {
+          ...currentProofConfidence.slotWeights.db,
+          ...(proofConfidenceInput.slotWeights?.db ?? {}),
+        },
+        message: {
+          ...currentProofConfidence.slotWeights.message,
+          ...(proofConfidenceInput.slotWeights?.message ?? {}),
+        },
+      },
+    });
+    const currentSmartProofConfig = normalizeSmartProofConfig(
+      current.smartProofConfig as boolean | SmartProofConfig | null | undefined,
+    );
+    const smartProofConfigInput = body.smartProofConfig;
+    const smartProofConfig = normalizeSmartProofConfig(
+      smartProofConfigInput === undefined
+        ? currentSmartProofConfig
+        : smartProofConfigInput === true || smartProofConfigInput === false
+          ? { ...currentSmartProofConfig, enabled: smartProofConfigInput }
+          : {
+              ...currentSmartProofConfig,
+              ...smartProofConfigInput,
+              categories: {
+                ...currentSmartProofConfig.categories,
+                ...(smartProofConfigInput.categories ?? {}),
+              },
+              budget: {
+                ...currentSmartProofConfig.budget,
+                ...(smartProofConfigInput.budget ?? {}),
+              },
+              thresholds: {
+                ...currentSmartProofConfig.thresholds,
+                ...(smartProofConfigInput.thresholds ?? {}),
+              },
+            },
+    );
     const resetRelationFeedback = body.resetRelationFeedback === true;
     const resetDomainFeedback = body.resetDomainFeedback === true;
     const currentRelationFeedbackConfig = asFeedbackConfig(current.feedbackConfig);
@@ -694,6 +985,30 @@ export async function PUT(req: NextRequest) {
         set cross_validation = ${JSON.stringify(crossValidation)}::jsonb
         where id = ${current.id}
       `);
+
+      try {
+        await tx.execute(sql`
+          update ${domainInferenceProfiles}
+          set proof_confidence_config = ${JSON.stringify(proofConfidence)}::jsonb
+          where id = ${current.id}
+        `);
+      } catch (error) {
+        if (!isMissingColumnError(error, ['proof_confidence_config'])) {
+          throw error;
+        }
+      }
+
+      try {
+        await tx.execute(sql`
+          update ${domainInferenceProfiles}
+          set smart_proof_config = ${JSON.stringify(smartProofConfig)}::jsonb
+          where id = ${current.id}
+        `);
+      } catch (error) {
+        if (!isMissingColumnError(error, ['smart_proof_config'])) {
+          throw error;
+        }
+      }
 
       try {
         if (resetRelationFeedback) {

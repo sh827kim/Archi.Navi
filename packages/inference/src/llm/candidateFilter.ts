@@ -95,7 +95,7 @@ async function loadEvidencesForCandidates(
 ): Promise<Map<string, EvidenceSummary[]>> {
   const map = new Map<string, EvidenceSummary[]>();
 
-  // 각 candidateId에 대해 개별 쿼리 (PGlite에서 inArray 호환성)
+  // candidate별로 개별 조회해 driver별 array binding 차이를 피한다.
   for (const cid of candidateIds) {
     const links = await db
       .select({ evidenceId: relationCandidateEvidences.evidenceId })

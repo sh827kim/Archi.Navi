@@ -2,10 +2,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 import {
-  createPgliteClient,
+  createTestDb as createEmbeddedTestDb,
   domainInferenceProfiles,
   objects,
   relationCandidates,
@@ -15,13 +14,8 @@ import { generateId } from '@archi-navi/shared';
 import { inferRelationsFromConfig } from '@/relation/configBased';
 import { createInferenceRun, executeInferenceRun } from '@/orchestration/inferenceRuns';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-const workspaceId = '00000000-0000-0000-0000-000000000082';
-
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

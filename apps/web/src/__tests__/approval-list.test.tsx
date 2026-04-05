@@ -97,7 +97,7 @@ interface RelationCandidate {
       applied: boolean;
       sampleCount: number;
     };
-    targetType?: 'api_endpoint' | 'service';
+    targetType?: 'api_endpoint' | 'db_table' | 'topic' | 'queue';
     analysisMode?: string;
     fallbackReason?: 'NO_ENDPOINT_OBJECTS' | 'PATH_NOT_MATCHED' | 'METHOD_NOT_MATCHED' | 'INSUFFICIENT_CONTEXT';
     fallbackContext?: {
@@ -105,6 +105,7 @@ interface RelationCandidate {
       attemptedPath: string;
       evidenceSummary?: string;
     };
+    [key: string]: unknown;
   };
 }
 
@@ -308,6 +309,71 @@ describe('ApprovalList', () => {
     expect(screen.queryByRole('button', { name: /승인/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /세부 매핑/ }));
     await screen.findByText('/service-2/dependency');
+  });
+
+  it('proof chain과 frontier queue 정보를 렌더링해야 한다', async () => {
+    const candidate = createCandidate('cand-proof', 'service-proof', 'call', undefined, {
+      summary: 'proof trace available',
+    });
+    candidate.metadata = {
+      feedback: {
+        key: 'call:gateway:service-proof',
+        baseConfidence: 0.72,
+        adjustment: 0.08,
+        adjustedConfidence: 0.8,
+        applied: true,
+        sampleCount: 4,
+      },
+      targetType: 'api_endpoint',
+      proof: {
+        sourceService: 'gateway',
+        sourceFunction: 'OrderController.getOrders',
+        resolvedProviderEndpoint: { method: 'GET', path: '/orders' },
+        routeChain: ['gateway', 'orders'],
+        supportingEvidence: ['gateway.ts:42'],
+        contradictions: [{ type: 'STALE_CONFIG' }],
+        proofSteps: [
+          { id: 's1', stepType: 'resolve_alias', status: 'ok' },
+          { id: 's2', stepType: 'match_endpoint', status: 'ok' },
+        ],
+        frontierHistory: [
+          {
+            id: 'f1',
+            frontierReason: 'PATH_NOT_MATCHED',
+            missingSlots: ['provider_path'],
+            relevantSnippets: ['routes/order.ts'],
+            lastResolutionStep: 'match_endpoint',
+            hasAgentPatch: true,
+            retryable: true,
+          },
+        ],
+        patchHistory: [
+          { id: 'p1', patchType: 'route_patch', status: 'APPLIED' },
+        ],
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([candidate]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('service-proof');
+    expect(screen.getByTestId('frontier-queue')).toBeTruthy();
+    expect(screen.getByText(/Frontier Queue/)).toBeTruthy();
+    expect(screen.getByText(/reason PATH_NOT_MATCHED/)).toBeTruthy();
+
+    fireEvent.click(screen.getByText('Proof chain drill-down'));
+    await screen.findByText('source function: OrderController.getOrders');
+    await screen.findByText('resolved provider endpoint: GET /orders');
+    await screen.findByText('route chain: gateway -> orders');
+    await screen.findByText('frontier history: PATH_NOT_MATCHED');
+    await screen.findByText('patch history: route_patch(APPLIED)');
   });
 
   it('교차 검증 배지를 후보별로 표시해야 한다', async () => {
@@ -527,7 +593,7 @@ describe('ApprovalList', () => {
     expect(cards[2]?.textContent).toContain('high-confidence');
   });
 
-  it('Smart 모드 실패 시 객체 에러에서도 사용자 메시지를 표시해야 한다', async () => {
+  it('Smart 모드 실패 시 proof engine 요청 body를 유지하고 사용자 메시지를 표시해야 한다', async () => {
     window.localStorage.setItem('archi-navi:ai-provider', 'openai');
     window.localStorage.setItem('archi-navi:ai-api-key', 'test-key');
     const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
@@ -550,8 +616,8 @@ describe('ApprovalList', () => {
         return Promise.resolve(jsonResponse({
           success: false,
           error: {
-            code: 'LLM_NOT_CONFIGURED',
-            message: 'AI 제공자가 설정되지 않았습니다. 설정 > AI Settings에서 API 키를 입력해주세요.',
+            code: 'BAD_REQUEST',
+            message: 'analysisMode is no longer supported',
           },
         }, false));
       }
@@ -568,25 +634,22 @@ describe('ApprovalList', () => {
     fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
 
     await waitFor(() => {
-      expect(toast.error).toHaveBeenCalledWith(
-        'AI 제공자가 설정되지 않았습니다. 설정 > AI Settings에서 API 키를 입력해주세요.',
-      );
+      expect(toast.error).toHaveBeenCalledWith('analysisMode is no longer supported');
     });
     expect(fetchMock).toHaveBeenCalledWith(
       '/api/inference/smart',
       expect.objectContaining({
         body: JSON.stringify({
           workspaceId: 'ws-1',
-          repoRoots: ['/tmp'],
+          repoRoots: ['/tmp', '/tmp/orders-service'],
           useServiceMetadataPaths: true,
           async: true,
-          analysisMode: 'pair_pack',
         }),
       }),
     );
   });
 
-  it('Smart 모드가 중첩된 summary 응답도 성공 토스트로 처리해야 한다', async () => {
+  it('Smart 모드는 proof summary 응답을 성공 토스트와 viewer에 반영해야 한다', async () => {
     let candidateRequestCount = 0;
 
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
@@ -610,6 +673,22 @@ describe('ApprovalList', () => {
             id: 'smart-run-1',
             status: 'QUEUED',
           },
+          summary: {
+            engine: 'intent_proof',
+            intentCount: 0,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 0,
+            proofFrontierCount: 0,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 0,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 0,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {},
+            targetBreakdown: {},
+          },
           sources: [],
         }, true));
       }
@@ -620,62 +699,26 @@ describe('ApprovalList', () => {
             id: 'smart-run-1',
             status: 'SUCCEEDED',
             errorMessage: null,
-          },
-          data: {
-            phase2: { analyzedServiceCount: 2, servicePairCount: 3 },
-            phase3: {
-              analyzedServiceCount: 3,
-              candidateCount: 4,
-              atomicCandidateCount: 2,
-              serviceFallbackCount: 1,
-              deepInspectionCount: 2,
-              deepInspectionTrace: {
-                attemptedCount: 2,
-                failureCount: 1,
-                triggerBreakdown: {
-                  lowConfidence: 1,
-                  insufficientContext: 1,
+            stats: {
+              proofSummary: {
+                engine: 'intent_proof',
+                intentCount: 6,
+                gatewayRouteSeedCount: 2,
+                derivedEndpointProofCount: 4,
+                proofClosedAtomicCount: 4,
+                proofFrontierCount: 1,
+                routeFamilyFrontierCount: 1,
+                proofRejectedCount: 1,
+                projectedCandidateCount: 4,
+                serviceTargetProjectionCount: 0,
+                agentFrontierCount: 1,
+                agentPatchedFrontierCount: 1,
+                frontierBreakdown: {
+                  PATH_NOT_MATCHED: 1,
                 },
-                details: [
-                  {
-                    consumerServiceName: 'gateway',
-                    providerServiceName: 'orders',
-                    trigger: {
-                      lowConfidence: true,
-                      insufficientContext: false,
-                    },
-                    status: 'succeeded',
-                    fallbackReasons: ['PATH_NOT_MATCHED'],
-                    toolUsage: {
-                      searchCalls: 2,
-                      readCalls: 1,
-                      endpointListCalls: 1,
-                      totalCalls: 4,
-                    },
-                    recoveredCalls: [
-                      {
-                        httpMethod: 'GET',
-                        path: '/api/orders/{id}',
-                      },
-                    ],
-                  },
-                ],
-              },
-              analysisMode: 'agent_assisted',
-              agentEscalatedPairCount: 2,
-              agentRecoveredAtomicCount: 1,
-              agentFailedPairCount: 1,
-              agentToolUsageSummary: {
-                searchCalls: 3,
-                readCalls: 2,
-                endpointListCalls: 2,
-                totalCalls: 7,
-              },
-              fallbackReasonBreakdown: {
-                NO_ENDPOINT_OBJECTS: 1,
-                PATH_NOT_MATCHED: 0,
-                METHOD_NOT_MATCHED: 0,
-                INSUFFICIENT_CONTEXT: 0,
+                targetBreakdown: {
+                  api_endpoint: 4,
+                },
               },
             },
           },
@@ -694,148 +737,23 @@ describe('ApprovalList', () => {
 
     await waitFor(() => {
       expect(toast.success).toHaveBeenCalledWith(
-        'Smart 추론 완료 — 후보 4개 생성 (Agent-assisted, Config LLM 2회, Pair LLM 3회, 서비스 쌍 3개, 원자 후보 2개, 서비스 fallback 1개 (엔드포인트 객체 없음 1개), Deep inspect 2회 (저신뢰 1개, 컨텍스트 부족 1개, 실패 1개), Agent pair 2개, Agent atomic 복구 1개, Agent 실패 1개)',
+        'Smart 추론 완료 — intent 6개, route-family seed 2개, derived endpoint proof 4개, closed 4개, frontier 1개, rejected 1개, atomic candidate 4개, route-family frontier 1개, agent 대상 frontier 1개, agent patch 반영 1개',
       );
     });
     const viewer = await screen.findByTestId('smart-trace-viewer');
-    expect(viewer.textContent).toContain('Smart Deep Inspection Trace');
-    expect(viewer.textContent).toContain('Agent-assisted');
-    expect(viewer.textContent).toContain('Agent pair 2개');
-    expect(viewer.textContent).toContain('gateway -> orders');
-    expect(viewer.textContent).toContain('트리거 저신뢰');
-    expect(viewer.textContent).toContain('상태 성공');
-    expect(viewer.textContent).toContain('도구 사용 search/read/endpoint/total = 2/1/1/4');
-    expect(viewer.textContent).toContain('복구 호출 GET /api/orders/{id}');
+    expect(viewer.textContent).toContain('Intent Proof Summary');
+    expect(viewer.textContent).toContain('intent 6개');
+    expect(viewer.textContent).toContain('route-family seed 2개');
+    expect(viewer.textContent).toContain('derived endpoint proof 4개');
+    expect(viewer.textContent).toContain('closed 4개');
+    expect(viewer.textContent).toContain('frontier 1개');
+    expect(viewer.textContent).toContain('route-family frontier 1개');
+    expect(viewer.textContent).toContain('Frontier breakdown: PATH_NOT_MATCHED 1개');
+    expect(viewer.textContent).toContain('Target breakdown: api_endpoint 4개');
     expect(candidateRequestCount).toBe(2);
-    if (typeof window.localStorage?.removeItem === 'function') {
-      window.localStorage.removeItem('archi-navi:ai-provider');
-      window.localStorage.removeItem('archi-navi:ai-api-key');
-    }
   });
 
-  it('Smart Full-agent 모드는 full_agent analysisMode로 비동기 실행을 요청해야 한다', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
-      const url = String(input);
-      if (url.includes('/api/inference/candidates?')) {
-        return Promise.resolve(jsonResponse([]));
-      }
-      if (url.includes('/api/scan/paths?')) {
-        return Promise.resolve(jsonResponse({
-          paths: ['/tmp/orders-service'],
-          parentDirs: ['/tmp'],
-        }));
-      }
-      if (url === '/api/inference/smart') {
-        return Promise.resolve(jsonResponse({
-          success: true,
-          queued: true,
-          runId: 'smart-run-full-agent',
-          run: {
-            id: 'smart-run-full-agent',
-            status: 'QUEUED',
-          },
-          sources: [],
-        }));
-      }
-      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-full-agent')) {
-        return Promise.resolve(jsonResponse({
-          success: true,
-          run: {
-            id: 'smart-run-full-agent',
-            status: 'RUNNING',
-          },
-        }));
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(<ApprovalList />);
-
-    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
-    fireEvent.change(screen.getByLabelText('추론 모드'), {
-      target: { value: 'smart-full-agent' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/inference/smart',
-        expect.objectContaining({
-          body: JSON.stringify({
-            workspaceId: 'ws-1',
-            repoRoots: ['/tmp'],
-            useServiceMetadataPaths: true,
-            async: true,
-            analysisMode: 'full_agent',
-          }),
-        }),
-      );
-    });
-  });
-
-  it('Smart Agent-assisted 모드는 agent_assisted analysisMode로 비동기 실행을 요청해야 한다', async () => {
-    const fetchMock = vi.fn((input: RequestInfo | URL) => {
-      const url = String(input);
-      if (url.includes('/api/inference/candidates?')) {
-        return Promise.resolve(jsonResponse([]));
-      }
-      if (url.includes('/api/scan/paths?')) {
-        return Promise.resolve(jsonResponse({
-          paths: ['/tmp/orders-service'],
-          parentDirs: ['/tmp'],
-        }));
-      }
-      if (url === '/api/inference/smart') {
-        return Promise.resolve(jsonResponse({
-          success: true,
-          queued: true,
-          runId: 'smart-run-agent-assisted',
-          run: {
-            id: 'smart-run-agent-assisted',
-            status: 'QUEUED',
-          },
-          sources: [],
-        }));
-      }
-      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-agent-assisted')) {
-        return Promise.resolve(jsonResponse({
-          success: true,
-          run: {
-            id: 'smart-run-agent-assisted',
-            status: 'RUNNING',
-          },
-        }));
-      }
-      throw new Error(`Unexpected fetch: ${url}`);
-    });
-    vi.stubGlobal('fetch', fetchMock);
-
-    render(<ApprovalList />);
-
-    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
-    fireEvent.change(screen.getByLabelText('추론 모드'), {
-      target: { value: 'smart-agent' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
-
-    await waitFor(() => {
-      expect(fetchMock).toHaveBeenCalledWith(
-        '/api/inference/smart',
-        expect.objectContaining({
-          body: JSON.stringify({
-            workspaceId: 'ws-1',
-            repoRoots: ['/tmp'],
-            useServiceMetadataPaths: true,
-            async: true,
-            analysisMode: 'agent_assisted',
-          }),
-        }),
-      );
-    });
-  });
-
-  it('Smart trace detail 필드가 없어도 viewer를 안전하게 렌더링해야 한다', async () => {
+  it('Smart trace viewer는 breakdown 정보가 없어도 안전하게 렌더링해야 한다', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/inference/candidates?')) {
@@ -866,28 +784,22 @@ describe('ApprovalList', () => {
             id: 'smart-run-2',
             status: 'SUCCEEDED',
             errorMessage: null,
-          },
-          data: {
-            phase2: { analyzedServiceCount: 1, servicePairCount: 1 },
-            phase3: {
-              analyzedServiceCount: 1,
-              candidateCount: 0,
-              atomicCandidateCount: 0,
-              serviceFallbackCount: 1,
-              deepInspectionCount: 1,
-              deepInspectionTrace: {
-                attemptedCount: 1,
-                failureCount: 0,
-                triggerBreakdown: {
-                  lowConfidence: 1,
-                  insufficientContext: 0,
-                },
-              },
-              fallbackReasonBreakdown: {
-                NO_ENDPOINT_OBJECTS: 0,
-                PATH_NOT_MATCHED: 1,
-                METHOD_NOT_MATCHED: 0,
-                INSUFFICIENT_CONTEXT: 0,
+            stats: {
+              proofSummary: {
+                engine: 'intent_proof',
+                intentCount: 1,
+                gatewayRouteSeedCount: 1,
+                derivedEndpointProofCount: 0,
+                proofClosedAtomicCount: 0,
+                proofFrontierCount: 1,
+                routeFamilyFrontierCount: 1,
+                proofRejectedCount: 0,
+                projectedCandidateCount: 0,
+                serviceTargetProjectionCount: 0,
+                agentFrontierCount: 0,
+                agentPatchedFrontierCount: 0,
+                frontierBreakdown: {},
+                targetBreakdown: {},
               },
             },
           },
@@ -904,12 +816,16 @@ describe('ApprovalList', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
 
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Smart 추론 완료 — atomic 후보 0개 (intent 1개, route-family seed 1개, frontier 1개, rejected 0개, route-family frontier 1개)',
+      );
+    });
     const viewer = await screen.findByTestId('smart-trace-viewer');
-    expect(viewer.textContent).toContain('Deep inspect 1회');
-    expect(viewer.textContent).toContain('pair 상세 정보 없음');
+    expect(viewer.textContent).toContain('이번 실행에서 추가 breakdown 정보가 없습니다.');
   });
 
-  it('Smart trace viewer가 no_result 상태를 결과 없음으로 표시해야 한다', async () => {
+  it('정적 분석 0건이라도 config artifact가 있으면 설정 파일 없음 오진 토스트를 띄우지 않아야 한다', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/inference/candidates?')) {
@@ -921,68 +837,29 @@ describe('ApprovalList', () => {
           parentDirs: ['/tmp'],
         }));
       }
-      if (url === '/api/inference/smart') {
+      if (url === '/api/inference/run') {
         return Promise.resolve(jsonResponse({
-          success: true,
-          queued: true,
-          runId: 'smart-run-3',
-          run: {
-            id: 'smart-run-3',
-            status: 'QUEUED',
-          },
-          sources: [],
-        }));
-      }
-      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-3')) {
-        return Promise.resolve(jsonResponse({
-          success: true,
-          run: {
-            id: 'smart-run-3',
-            status: 'SUCCEEDED',
-            errorMessage: null,
-          },
-          data: {
-            phase2: { analyzedServiceCount: 1, servicePairCount: 1 },
-            phase3: {
-              analyzedServiceCount: 1,
-              candidateCount: 0,
-              atomicCandidateCount: 0,
-              serviceFallbackCount: 1,
-              deepInspectionCount: 1,
-              deepInspectionTrace: {
-                attemptedCount: 1,
-                failureCount: 0,
-                triggerBreakdown: {
-                  lowConfidence: 1,
-                  insufficientContext: 0,
-                },
-                details: [
-                  {
-                    consumerServiceName: 'gateway',
-                    providerServiceName: 'orders',
-                    trigger: {
-                      lowConfidence: true,
-                      insufficientContext: false,
-                    },
-                    status: 'no_result',
-                    fallbackReasons: ['INSUFFICIENT_CONTEXT'],
-                    toolUsage: {
-                      searchCalls: 1,
-                      readCalls: 1,
-                      endpointListCalls: 1,
-                      totalCalls: 3,
-                    },
-                    recoveredCall: null,
-                  },
-                ],
-              },
-              fallbackReasonBreakdown: {
-                NO_ENDPOINT_OBJECTS: 0,
-                PATH_NOT_MATCHED: 0,
-                METHOD_NOT_MATCHED: 0,
-                INSUFFICIENT_CONTEXT: 1,
-              },
+          summary: { relationCandidatesCreated: 0 },
+          results: {
+            config: {
+              fileCount: 1,
+              processedFileCount: 0,
+              skippedFileCount: 0,
+              aliasBindingCount: 2,
+              routeTransformCount: 1,
+              interactionIntentCount: 1,
             },
+            code: {
+              signalCount: 0,
+              enginesUsed: ['hybrid'],
+              fallbackCount: 0,
+              scanFailures: [],
+            },
+          },
+          warnings: [],
+          llmBoost: {
+            skippedReason: 'DISABLED',
+            codeIntentAnalysis: { generatedCount: 0 },
           },
         }));
       }
@@ -992,16 +869,35 @@ describe('ApprovalList', () => {
     render(<ApprovalList />);
 
     await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
-    fireEvent.change(screen.getByLabelText('추론 모드'), {
-      target: { value: 'smart' },
-    });
     fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
 
-    const viewer = await screen.findByTestId('smart-trace-viewer');
-    expect(viewer.textContent).toContain('gateway -> orders');
-    expect(viewer.textContent).toContain('상태 결과 없음');
-    expect(viewer.textContent).toContain('fallback 컨텍스트 부족');
-    expect(viewer.textContent).not.toContain('상태 성공');
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith('추론 실행 완료 — 신규 관계 후보가 생성되지 않았습니다.');
+    });
+    expect(toast.warning).not.toHaveBeenCalledWith(
+      '후보 0개 — 처리된 설정 파일이 없습니다. repoRoot/scanPath를 확인하세요.',
+    );
+  });
+
+  it('추론 모드 선택은 현재 지원되는 standard/smart 두 옵션만 노출해야 한다', async () => {
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
+    const selectors = screen.getAllByLabelText('추론 모드') as HTMLSelectElement[];
+    for (const selector of selectors) {
+      const optionValues = Array.from(selector.options).map((option) => option.value);
+      const optionLabels = Array.from(selector.options).map((option) => option.textContent);
+      expect(optionValues).toEqual(['standard', 'smart']);
+      expect(optionLabels).toEqual(['정적 분석', 'Smart Proof Engine']);
+    }
   });
 
   it('mixed atomic/compound 목록에서도 교차 검증 정렬 우선순서를 유지해야 한다', async () => {
@@ -1073,8 +969,10 @@ describe('ApprovalList', () => {
     await screen.findByText('service-0');
     expect(screen.queryByText('late-warning')).toBeNull();
 
-    fireEvent.click(screen.getByRole('button', { name: /더 보기/ }));
-    await screen.findByText('late-warning');
+    fireEvent.click(await screen.findByRole('button', { name: /더 보기/ }));
+    await waitFor(() => {
+      expect(screen.getByText('late-warning')).toBeTruthy();
+    }, { timeout: 10000 });
     fireEvent.change(screen.getByLabelText('교차 검증 필터'), {
       target: { value: 'warnings' },
     });
@@ -1143,8 +1041,7 @@ describe('ApprovalList', () => {
 
     render(<ApprovalList />);
 
-    await screen.findByText('GET /orders');
-    const cards = screen.getAllByTestId('approval-candidate-card');
+    const cards = await screen.findAllByTestId('approval-candidate-card');
     const appliedCard = cards.find((card) => card.textContent?.includes('GET /orders'));
     const insufficientCard = cards.find((card) => card.textContent?.includes('GET /payments'));
     const noStatsCard = cards.find((card) => card.textContent?.includes('GET /inventory'));
@@ -1190,38 +1087,78 @@ describe('ApprovalList', () => {
     expect(card.textContent).toContain('실제 승인/거절은 세부 매핑 후 생성되는 atomic 후보에서 진행됩니다.');
   });
 
-  it('Smart service fallback 후보는 fallback reason hint를 카드에 표시해야 한다', async () => {
-    const fallbackCandidate = {
-      ...createCandidate('cand-smart-fallback', 'orders-service'),
-      metadata: {
-        targetType: 'service' as const,
-        analysisMode: 'pair_pack',
-        fallbackReason: 'PATH_NOT_MATCHED' as const,
-        fallbackContext: {
-          attemptedMethod: 'GET',
-          attemptedPath: '/api/orders/missing',
-          evidenceSummary: 'fetch("http://orders/api/orders/missing")',
-        },
-      },
-    };
-
+  it('Smart summary에 service target projection이 남으면 성공이 아니라 불변식 위반 경고를 표시해야 한다', async () => {
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/inference/candidates?')) {
-        return Promise.resolve(jsonResponse([fallbackCandidate]));
+        return Promise.resolve(jsonResponse([]));
+      }
+      if (url.includes('/api/scan/paths?')) {
+        return Promise.resolve(jsonResponse({
+          paths: ['/tmp/orders-service'],
+          parentDirs: ['/tmp'],
+        }));
+      }
+      if (url === '/api/inference/smart') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          queued: true,
+          runId: 'smart-run-invariant',
+          run: {
+            id: 'smart-run-invariant',
+            status: 'QUEUED',
+          },
+          sources: [],
+        }));
+      }
+      if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-invariant')) {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          run: {
+            id: 'smart-run-invariant',
+            status: 'SUCCEEDED',
+            errorMessage: null,
+            stats: {
+              proofSummary: {
+                engine: 'intent_proof',
+                intentCount: 3,
+                gatewayRouteSeedCount: 1,
+                derivedEndpointProofCount: 2,
+                proofClosedAtomicCount: 2,
+                proofFrontierCount: 0,
+                routeFamilyFrontierCount: 0,
+                proofRejectedCount: 0,
+                projectedCandidateCount: 2,
+                serviceTargetProjectionCount: 2,
+                agentFrontierCount: 0,
+                agentPatchedFrontierCount: 0,
+                frontierBreakdown: {},
+                targetBreakdown: {
+                  api_endpoint: 2,
+                },
+              },
+            },
+          },
+        }));
       }
       throw new Error(`Unexpected fetch: ${url}`);
     }));
 
     render(<ApprovalList />);
 
-    await screen.findByText('orders-service');
-    const card = screen.getByTestId('approval-candidate-card');
-    expect(card.textContent).toContain('Smart fallback');
-    expect(card.textContent).toContain('경로 불일치');
-    expect(card.textContent).toContain('호출 경로와 일치하는 endpoint를 찾지 못해 서비스 레벨 후보로 남았습니다.');
-    expect(card.textContent).toContain('시도 호출 GET /api/orders/missing');
-    expect(card.textContent).toContain('근거 fetch("http://orders/api/orders/missing")');
+    await screen.findByText('승인 대기 중인 관계 후보가 없습니다');
+    fireEvent.change(screen.getByLabelText('추론 모드'), {
+      target: { value: 'smart' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /추론 실행/ }));
+
+    await waitFor(() => {
+      expect(toast.warning).toHaveBeenCalledWith(
+        'Smart 추론 경고 — service target projection 불변식 위반 (intent 3개, route-family seed 1개, derived endpoint proof 2개, closed 2개, frontier 0개, rejected 0개, atomic candidate 0개, service target projection 2개)',
+      );
+    });
+    const viewer = await screen.findByTestId('smart-trace-viewer');
+    expect(viewer.textContent).toContain('불변식 위반 service target projection 2개');
   });
 
   it('LLM 설명이 있으면 후보 카드에 표시해야 한다', async () => {

@@ -100,7 +100,7 @@ archi-navi/
 | UI Library | TailwindCSS 4 + shadcn/ui |
 | Graph Visualization | Cytoscape.js + 3d-force-graph + React Flow |
 | State Management | Zustand |
-| Database | PGlite (local) / PostgreSQL 17 (team deploy) |
+| Database | Embedded PostgreSQL (local) / PostgreSQL 17 (team deploy) |
 | ORM | Drizzle ORM |
 | AI / LLM | Vercel AI SDK (OpenAI, Anthropic, Google) |
 | Monorepo | Turborepo + pnpm |
@@ -134,12 +134,13 @@ mkdir -p apps/web
 ### Environment Variables
 
 ```env
-# DB — PGlite is used by default (no separate install needed)
-# Uncomment below to use PostgreSQL instead
+# DB — embedded postgres is used by default for local development
+# Uncomment below to use an external PostgreSQL server instead
 # DATABASE_URL=postgresql://postgres:password@localhost:5432/archinavi
 
-# PGlite data directory (default: .archi-navi/data)
-PGLITE_DATA_DIR=.archi-navi/data
+# Embedded postgres data directory (default: .archi-navi/dev-db)
+ARCHI_NAVI_DB_DATA_DIR=.archi-navi/dev-db
+ARCHI_NAVI_DB_PORT=54329
 
 # AI provider: openai | anthropic | google
 AI_PROVIDER=openai

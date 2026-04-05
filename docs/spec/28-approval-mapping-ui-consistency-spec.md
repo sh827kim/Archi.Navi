@@ -1,5 +1,12 @@
 # 28. Approval Mapping UI Consistency SPEC
 
+상태: Implemented
+최종 정합화: 2026-04-05
+
+현행 메모:
+- 이 문서는 Approval 목록의 endpoint 매핑 시트 일관성 계약을 고정한다.
+- 관련 구현과 회귀 테스트는 `apps/web/src/components/approval/approval-list.tsx`, `apps/web/src/__tests__/approval-list.test.tsx`, `apps/web/src/__tests__/map-endpoints.route.test.ts`를 기준으로 본다.
+
 ## 배경
 - Approval 화면의 COMPOUND→COMPOUND 후보는 세부 매핑 시트를 통해 endpoint 단위로 분해 승인한다.
 - 이 흐름은 비동기 endpoint 조회와 부분 성공/0건 성공 응답을 모두 처리해야 한다.

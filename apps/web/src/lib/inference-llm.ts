@@ -10,12 +10,17 @@ import type {
   GenerateBoostSuggestionFn,
   GenerateDomainLabelFn,
   GenerateExplanationFn,
+  GenerateSmartResolutionFn,
   LlmAssessment,
   LlmBoostContext,
   LlmBoostSuggestion,
   LlmExplanation,
   DomainLabelContext,
   DomainLabelSuggestion,
+  SmartPatchProposal,
+  SmartContradictionChallengeProposal,
+  SmartProviderServiceSelectionProposal,
+  SmartSummaryEnhancementProposal,
 } from '@archi-navi/inference';
 
 const assessmentSchema = z.object({
@@ -46,6 +51,115 @@ const domainLabelSchema = z.object({
   ko: z.string(),
   en: z.string(),
 });
+
+const smartAliasBindingProposalSchema = z.object({
+  patchType: z.literal('alias_binding'),
+  resolved: z.boolean(),
+  selectedServiceId: z.string().nullable(),
+  selectedServiceName: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  aliasBinding: z.object({
+    aliasKey: z.string(),
+    aliasValue: z.string(),
+    bindingKind: z.enum(['base_url', 'service_discovery', 'gateway_target', 'property_alias']),
+  }).nullable(),
+});
+
+const smartRouteTransformProposalSchema = z.object({
+  patchType: z.literal('route_transform_patch'),
+  resolved: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  routeTransform: z.object({
+    gatewayKind: z.string().nullable(),
+    matchPath: z.string().nullable(),
+    targetServiceHint: z.string().nullable(),
+    targetHostAlias: z.string().nullable(),
+    priority: z.number().int().nullable(),
+  }).nullable(),
+});
+
+const smartEndpointDisambiguationProposalSchema = z.object({
+  patchType: z.literal('endpoint_disambiguation'),
+  resolved: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  endpointSelection: z.object({
+    endpointId: z.string().nullable(),
+    method: z.string().nullable(),
+    path: z.string().nullable(),
+  }).nullable(),
+});
+
+const smartMethodPathHintProposalSchema = z.object({
+  patchType: z.literal('method_path_hint'),
+  resolved: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  methodPathHint: z.object({
+    method: z.string().nullable(),
+    externalPath: z.string().nullable(),
+  }).nullable(),
+});
+
+const smartProviderServiceSelectionProposalSchema = z.object({
+  patchType: z.literal('provider_service_selection'),
+  resolved: z.boolean(),
+  selectedServiceId: z.string().nullable(),
+  selectedServiceName: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  ranking: z.array(z.object({
+    serviceId: z.string(),
+    serviceName: z.string().nullable(),
+    score: z.number().min(0).max(1).nullable(),
+    reasoning: z.string().nullable(),
+  })).nullable().optional(),
+});
+
+const smartSummaryEnhancementProposalSchema = z.object({
+  patchType: z.literal('function_summary_patch'),
+  resolved: z.boolean(),
+  functionId: z.string(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  summaryKind: z.enum(['http', 'db', 'message', 'mixed']).nullable().optional(),
+  serviceId: z.string().nullable().optional(),
+  outboundHttp: z.record(z.string(), z.unknown()).nullable().optional(),
+  outboundDb: z.record(z.string(), z.unknown()).nullable().optional(),
+  outboundMessage: z.record(z.string(), z.unknown()).nullable().optional(),
+  callChainHints: z.array(z.string()).nullable().optional(),
+  aliasHints: z.array(z.string()).nullable().optional(),
+  signalSources: z.array(z.string()).nullable().optional(),
+  provenanceEvidenceIds: z.array(z.string()).nullable().optional(),
+  extractionStrategy: z.string().nullable().optional(),
+  unresolvedReasons: z.array(z.string()).nullable().optional(),
+  summaryCompleteness: z.number().min(0).max(1).nullable().optional(),
+  flags: z.record(z.string(), z.unknown()).nullable().optional(),
+  confidenceScore: z.number().min(0).max(1).nullable().optional(),
+  evidenceIds: z.array(z.string()).nullable().optional(),
+  patchRationale: z.string().nullable().optional(),
+});
+
+const smartContradictionChallengeProposalSchema = z.object({
+  patchType: z.literal('contradiction_challenge'),
+  shouldChallenge: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  challengeReasons: z.array(z.string()),
+  expectedAction: z.enum(['reopen_frontier']).nullable(),
+});
+
+const smartPatchProposalSchema = z.discriminatedUnion('patchType', [
+  smartAliasBindingProposalSchema,
+  smartRouteTransformProposalSchema,
+  smartEndpointDisambiguationProposalSchema,
+  smartMethodPathHintProposalSchema,
+  smartProviderServiceSelectionProposalSchema,
+  smartSummaryEnhancementProposalSchema,
+  smartContradictionChallengeProposalSchema,
+]);
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
   if (headerApiKey) return headerApiKey;
@@ -201,5 +315,30 @@ export function createGenerateDomainLabelFn(
     });
 
     return result.object;
+  };
+}
+
+export function createGenerateSmartResolutionFn(
+  aiModel: LanguageModel,
+  modelName: string,
+): GenerateSmartResolutionFn<
+  SmartPatchProposal | SmartSummaryEnhancementProposal | SmartProviderServiceSelectionProposal
+> {
+  return async (prompt: string) => {
+    const result = await generateObject({
+      model: aiModel,
+      schema: smartPatchProposalSchema,
+      prompt,
+      temperature: 0.1,
+    });
+
+    const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+
+    return {
+      model: modelName,
+      promptTokens: usage?.inputTokens ?? 0,
+      completionTokens: usage?.outputTokens ?? 0,
+      object: result.object,
+    };
   };
 }

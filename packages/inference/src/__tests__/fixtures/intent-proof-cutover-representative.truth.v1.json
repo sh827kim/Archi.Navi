@@ -1,0 +1,10 @@
+{
+  "version": "intent-proof-cutover-representative-truth-v1",
+  "relations": [
+    {
+      "subject": "service:/gateway",
+      "relationType": "call",
+      "object": "api_endpoint:GET /api/orders"
+    }
+  ]
+}

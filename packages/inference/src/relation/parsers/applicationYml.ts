@@ -40,6 +40,34 @@ export interface AppYmlSignal {
   kafka: KafkaInfo | null;
   /** zuul.routes.*.serviceId 목록 */
   routeServiceIds: string[];
+  /** zuul route 공통 IR 추출용 원시 route */
+  zuulRoutes: Array<{
+    routeKey: string;
+    path: string;
+    serviceId: string | null;
+    url: string | null;
+    stripPrefix: boolean | null;
+    prefix: string | null;
+    host: string | null;
+    rewriteRegex: string | null;
+    rewriteReplacement: string | null;
+  }>;
+  /** flatten된 config key/value */
+  propertyEntries: Array<{
+    key: string;
+    value: string;
+    source: 'bootstrap' | 'application';
+  }>;
+  /** spring.cloud.gateway.routes */
+  springCloudGatewayRoutes: Array<{
+    routeKey: string;
+    path: string;
+    stripPrefixCount: number | null;
+    prefixPath: string | null;
+    rewriteRegex: string | null;
+    rewriteReplacement: string | null;
+    uri: string | null;
+  }>;
   /** server.port */
   serverPort: number | null;
   /** server.servlet.context-path */
@@ -109,6 +137,39 @@ function extractTopics(topics: unknown): string[] {
   return [];
 }
 
+function collectStringEntries(
+  value: unknown,
+  prefix: string,
+  output: AppYmlSignal['propertyEntries'],
+  source: 'bootstrap' | 'application',
+) {
+  if (typeof value === 'string') {
+    const normalized = value.trim();
+    if (normalized.length > 0) {
+      output.push({ key: prefix, value: normalized, source });
+    }
+    return;
+  }
+
+  if (Array.isArray(value)) {
+    const serialized = value
+      .map((entry) => (typeof entry === 'string' ? entry.trim() : String(entry).trim()))
+      .filter((entry) => entry.length > 0)
+      .join(',');
+    if (serialized.length > 0) {
+      output.push({ key: prefix, value: serialized, source });
+    }
+    return;
+  }
+
+  if (!value || typeof value !== 'object') return;
+
+  for (const [key, nestedValue] of Object.entries(value as Record<string, unknown>)) {
+    const nextPrefix = prefix.length > 0 ? `${prefix}.${key}` : key;
+    collectStringEntries(nestedValue, nextPrefix, output, source);
+  }
+}
+
 /**
  * application.yml 파싱
  * @param filePath - 원본 파일 경로 (evidence 저장용)
@@ -116,12 +177,19 @@ function extractTopics(topics: unknown): string[] {
  * @returns 파싱된 신호, 파싱 실패 시 빈 신호 반환
  */
 export function parseApplicationYml(filePath: string, content: string): AppYmlSignal {
+  const propertyEntries: AppYmlSignal['propertyEntries'] = [];
+  const propertySource = filePath.toLowerCase().includes('bootstrap')
+    ? 'bootstrap'
+    : 'application';
   // 기본 빈 결과 (파싱 실패 시 반환)
   const empty: AppYmlSignal = {
     serviceName: null,
     datasource: null,
     kafka: null,
     routeServiceIds: [],
+    zuulRoutes: [],
+    springCloudGatewayRoutes: [],
+    propertyEntries,
     serverPort: null,
     contextPath: null,
     filePath,
@@ -140,6 +208,7 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
   if (!config || typeof config !== 'object') return empty;
 
   const root = config as Record<string, unknown>;
+  collectStringEntries(root, '', propertyEntries, propertySource);
 
   // spring 설정 파싱
   const spring = root['spring'] as Record<string, unknown> | null | undefined;
@@ -202,17 +271,115 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
 
   // zuul.routes.*.serviceId
   const routeServiceIds: string[] = [];
+  const zuulRoutes: AppYmlSignal['zuulRoutes'] = [];
   const zuul = root['zuul'] as Record<string, unknown> | null | undefined;
   const routes = zuul?.['routes'] as Record<string, unknown> | null | undefined;
   if (routes && typeof routes === 'object') {
-    for (const routeValue of Object.values(routes)) {
+    for (const [routeKey, routeValue] of Object.entries(routes)) {
       if (!routeValue || typeof routeValue !== 'object') continue;
       const routeObj = routeValue as Record<string, unknown>;
       const serviceId = routeObj['serviceId'] ?? routeObj['service-id'];
-      if (typeof serviceId !== 'string') continue;
-      const normalized = serviceId.trim();
-      if (normalized.length === 0) continue;
-      if (!routeServiceIds.includes(normalized)) routeServiceIds.push(normalized);
+      const normalizedServiceId = typeof serviceId === 'string' && serviceId.trim().length > 0
+        ? serviceId.trim()
+        : null;
+      if (normalizedServiceId && !routeServiceIds.includes(normalizedServiceId)) {
+        routeServiceIds.push(normalizedServiceId);
+      }
+
+      const pathValue = routeObj['path'];
+      if (typeof pathValue === 'string' && pathValue.trim().length > 0) {
+        zuulRoutes.push({
+          routeKey,
+          path: pathValue.trim(),
+          serviceId: normalizedServiceId,
+          url: typeof routeObj['url'] === 'string' ? routeObj['url'].trim() : null,
+          stripPrefix:
+            typeof routeObj['stripPrefix'] === 'boolean'
+              ? routeObj['stripPrefix']
+              : typeof routeObj['strip-prefix'] === 'boolean'
+                ? routeObj['strip-prefix']
+                : null,
+          prefix:
+            typeof routeObj['prefix'] === 'string'
+              ? routeObj['prefix'].trim()
+              : typeof zuul?.['prefix'] === 'string'
+                ? zuul['prefix'].trim()
+                : null,
+          host:
+            typeof routeObj['host'] === 'string'
+              ? routeObj['host'].trim()
+              : null,
+          rewriteRegex:
+            typeof routeObj['rewriteRegex'] === 'string'
+              ? routeObj['rewriteRegex'].trim()
+              : typeof routeObj['rewrite-regex'] === 'string'
+                ? routeObj['rewrite-regex'].trim()
+                : null,
+          rewriteReplacement:
+            typeof routeObj['rewriteReplacement'] === 'string'
+              ? routeObj['rewriteReplacement'].trim()
+              : typeof routeObj['rewrite-replacement'] === 'string'
+                ? routeObj['rewrite-replacement'].trim()
+                : null,
+        });
+      }
+    }
+  }
+
+  const springCloudGatewayRoutes: AppYmlSignal['springCloudGatewayRoutes'] = [];
+  const cloud = toRecord(spring?.['cloud']);
+  const gateway = toRecord(cloud?.['gateway']);
+  const gatewayRoutes = gateway?.['routes'];
+  const gatewayRoutePredicateEntries = gatewayRoutes && typeof gatewayRoutes === 'object' && !Array.isArray(gatewayRoutes)
+    ? gatewayRoutes as Record<string, unknown>
+    : null;
+
+  if (Array.isArray(gatewayRoutes)) {
+    for (const gatewayRouteValue of gatewayRoutes) {
+      const routeObj = toRecord(gatewayRouteValue);
+      if (!routeObj) continue;
+
+      const routeKey = toStringValue(routeObj['id']);
+      const uri = toStringValue(routeObj['uri']);
+      const normalizedPredicates = normalizeSpringCloudGatewayEntries(routeObj['predicates']);
+      const normalizedFilters = normalizeSpringCloudGatewayEntries(routeObj['filters']);
+      const path = parseSpringCloudGatewayPathPredicate(normalizedPredicates);
+      if (!routeKey || !uri || !uri.startsWith('lb://') || !path) {
+        continue;
+      }
+
+      springCloudGatewayRoutes.push({
+        routeKey,
+        path,
+        stripPrefixCount: parseSpringCloudGatewayStripPrefix(normalizedFilters),
+        prefixPath: parseSpringCloudGatewayPrefixPath(normalizedFilters),
+        rewriteRegex: parseSpringCloudGatewayRewriteRegex(normalizedFilters),
+        rewriteReplacement: parseSpringCloudGatewayRewriteReplacement(normalizedFilters),
+        uri,
+      });
+    }
+  } else if (gatewayRoutePredicateEntries) {
+    for (const [routeKey, routeValue] of Object.entries(gatewayRoutePredicateEntries)) {
+      const routeObj = toRecord(routeValue);
+      if (!routeObj) continue;
+
+      const uri = toStringValue(routeObj['uri']);
+      const normalizedPredicates = normalizeSpringCloudGatewayEntries(routeObj['predicates']);
+      const normalizedFilters = normalizeSpringCloudGatewayEntries(routeObj['filters']);
+      const path = parseSpringCloudGatewayPathPredicate(normalizedPredicates);
+      if (!uri || !uri.startsWith('lb://') || !path) {
+        continue;
+      }
+
+      springCloudGatewayRoutes.push({
+        routeKey,
+        path,
+        stripPrefixCount: parseSpringCloudGatewayStripPrefix(normalizedFilters),
+        prefixPath: parseSpringCloudGatewayPrefixPath(normalizedFilters),
+        rewriteRegex: parseSpringCloudGatewayRewriteRegex(normalizedFilters),
+        rewriteReplacement: parseSpringCloudGatewayRewriteReplacement(normalizedFilters),
+        uri,
+      });
     }
   }
 
@@ -230,5 +397,153 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
       ? servletSection['context-path']
       : null;
 
-  return { serviceName, datasource, kafka, routeServiceIds, serverPort, contextPath, filePath };
+  return {
+    serviceName,
+    datasource,
+    kafka,
+    routeServiceIds,
+    zuulRoutes,
+    springCloudGatewayRoutes,
+    propertyEntries,
+    serverPort,
+    contextPath,
+    filePath,
+  };
+}
+
+function toRecord(value: unknown): Record<string, unknown> | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  return value as Record<string, unknown>;
+}
+
+function toStringValue(value: unknown): string | null {
+  if (typeof value !== 'string') {
+    return null;
+  }
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
+}
+
+function toStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => (typeof entry === 'string' ? entry : String(entry))).filter((entry) => entry.trim().length > 0);
+}
+
+function normalizeSpringCloudGatewayEntries(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const normalizedEntries: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      const normalized = entry.trim();
+      if (normalized.length > 0) {
+        normalizedEntries.push(normalized);
+      }
+      continue;
+    }
+
+    const objectEntry = toRecord(entry);
+    const name = toStringValue(objectEntry?.['name']);
+    const args = toRecord(objectEntry?.['args']);
+    if (!name || !args) {
+      const fallback = String(entry).trim();
+      if (fallback.length > 0) {
+        normalizedEntries.push(fallback);
+      }
+      continue;
+    }
+
+    const argumentValues = Object.values(args)
+      .map((argValue) => {
+        if (typeof argValue === 'string' || typeof argValue === 'number') {
+          return String(argValue).trim();
+        }
+        return null;
+      })
+      .filter((argValue): argValue is string => argValue !== null && argValue.length > 0);
+
+    if (argumentValues.length === 0) continue;
+
+    if (name === 'Path') {
+      normalizedEntries.push(`Path=${argumentValues[0]}`);
+      continue;
+    }
+    if (name === 'StripPrefix') {
+      normalizedEntries.push(`StripPrefix=${argumentValues[0]}`);
+      continue;
+    }
+    if (name === 'PrefixPath') {
+      normalizedEntries.push(`PrefixPath=${argumentValues[0]}`);
+      continue;
+    }
+    if (name === 'RewritePath' && argumentValues.length >= 2) {
+      normalizedEntries.push(`RewritePath=${argumentValues[0]}, ${argumentValues[1]}`);
+      continue;
+    }
+
+    normalizedEntries.push(`${name}=${argumentValues.join(',')}`);
+  }
+
+  return normalizedEntries;
+}
+
+function parseSpringCloudGatewayPathPredicate(predicates: string[]): string | null {
+  for (const predicate of predicates) {
+    const normalized = predicate.trim();
+    if (!normalized.startsWith('Path=')) continue;
+    const path = normalized.slice('Path='.length).trim();
+    if (!path) continue;
+    return path;
+  }
+  return null;
+}
+
+function parseSpringCloudGatewayFilters(filters: string[]): string[] {
+  return filters.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+}
+
+function parseSpringCloudGatewayStripPrefix(filters: string[]): number | null {
+  for (const filter of parseSpringCloudGatewayFilters(filters)) {
+    if (!filter.startsWith('StripPrefix=')) continue;
+    const value = toStringValue(filter.slice('StripPrefix='.length));
+    if (!value) continue;
+    const parsed = Number.parseInt(value, 10);
+    if (Number.isNaN(parsed) || parsed < 0) continue;
+    return parsed;
+  }
+  return null;
+}
+
+function parseSpringCloudGatewayPrefixPath(filters: string[]): string | null {
+  for (const filter of parseSpringCloudGatewayFilters(filters)) {
+    if (!filter.startsWith('PrefixPath=')) continue;
+    const value = toStringValue(filter.slice('PrefixPath='.length));
+    if (!value) continue;
+    return value;
+  }
+  return null;
+}
+
+function parseSpringCloudGatewayRewriteRegex(filters: string[]): string | null {
+  return parseSpringCloudGatewayRewrite(filters)?.regex ?? null;
+}
+
+function parseSpringCloudGatewayRewriteReplacement(filters: string[]): string | null {
+  return parseSpringCloudGatewayRewrite(filters)?.replacement ?? null;
+}
+
+function parseSpringCloudGatewayRewrite(filters: string[]): { regex: string; replacement: string } | null {
+  for (const filter of parseSpringCloudGatewayFilters(filters)) {
+    if (!filter.startsWith('RewritePath=')) continue;
+    const raw = filter.slice('RewritePath='.length).trim();
+    const commaIndex = raw.indexOf(',');
+    if (commaIndex <= 0) continue;
+    const regex = toStringValue(raw.slice(0, commaIndex));
+    const replacement = toStringValue(raw.slice(commaIndex + 1));
+    if (!regex || !replacement) continue;
+    return { regex, replacement };
+  }
+  return null;
 }

@@ -183,53 +183,26 @@ relation_candidates 저장
 
 ---
 
-## 6. Smart 추론 파이프라인
+## 6. Smart 추론
 
-shipped Smart 설계는 “서비스 후보 요약”이 아니라
-**service pair 단위 atomic inference**를 중심으로 한다.
+> **Note (2026-04-05)**: 기존 pair-first Smart 파이프라인은 Intent-Centric Proof Engine 도입 이후 deprecated 되었다. 레거시 설계는 [deprecated/03-smart-pipeline-legacy.md](./deprecated/03-smart-pipeline-legacy.md)를 참조한다.
 
-## 6.1 단계
+현재 Smart 추론은 **proof engine 위의 LLM escalation 레이어**로 동작한다.
 
 ```text
-Phase 1   OpenAPI import
-Phase 1.5 Code expose 기반 endpoint bootstrap
-Phase 2   Config → LLM → candidate service pairs
-Phase 2.5 Pair-scoped evidence pack assembly
-Phase 3   Pair → LLM → atomic relation inference
-Phase 3.5 Optional deep inspection
+Static Mode:  Intent → [결정론적 8단계 파이프라인] → [결정론적 Agent] → 결과
+Smart Mode:   Intent → [결정론적 8단계 파이프라인] → [결정론적 Agent] → [LLM 개입] → 결과
 ```
 
-## 6.2 Phase별 역할
+핵심 원칙:
 
-| 단계 | 역할 |
-|------|------|
-| `Phase 1` | provider endpoint를 OpenAPI에서 확보 |
-| `Phase 1.5` | OpenAPI가 부족한 서비스에 code expose 기반 endpoint bootstrap 적용 |
-| `Phase 2` | config 파일로 서비스 쌍과 힌트를 추출 |
-| `Phase 2.5` | consumer/provider 양쪽 파일과 endpoint 정보를 pair pack으로 구성 |
-| `Phase 3` | pair 단위로 `service -> api_endpoint` 후보를 생성 |
-| `Phase 3.5` | 낮은 confidence 또는 부족한 맥락에 대해서만 deep inspection 수행 |
+- 결정론적 파이프라인은 항상 먼저 실행한다
+- LLM은 결정론적 엔진이 실패한 지점(frontier)에서만 개입한다
+- LLM 제안도 기존 deterministic validator를 통과해야 한다
+- LLM은 판사가 아닌 구조화 patch 제안자로만 동작한다
 
-## 6.3 Smart 후보 metadata의 의미
-
-Smart 후보는 일반 후보와 달리 아래 정보를 함께 가진다.
-
-- `signalKind = smart_pair_atomic`
-- `targetType = api_endpoint | service`
-- `targetServiceId`
-- `analysisMode = pair_pack | agent_assisted | full_agent`
-- `fallbackReason?`
-- `fallbackContext?`
-
-### fallback reason
-
-- `NO_ENDPOINT_OBJECTS`
-- `PATH_NOT_MATCHED`
-- `METHOD_NOT_MATCHED`
-- `INSUFFICIENT_CONTEXT`
-
-즉, Smart가 service-level fallback을 만들더라도
-“왜 atomic으로 승격되지 못했는지”를 운영자가 추적할 수 있어야 한다.
+상세 설계: [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md)
+제품 계약: [53-smart-proof-engine-escalation-spec.md](../spec/53-smart-proof-engine-escalation-spec.md)
 
 ---
 
@@ -314,7 +287,7 @@ inference는 실행 운영성이 중요하므로, 아래 데이터가 핵심이�
 ## 10.1 유지하는 방향
 
 - **Atomic relation 우선**: 상위 관계는 가능한 rollup으로 파생한다.
-- **Pair-scoped Smart 보강**: Smart는 서비스 목록 요약이 아니라 atomic 후보 정확도를 올리는 경로다.
+- **Proof engine 기반 Smart escalation**: Smart는 proof engine 위의 frontier-local LLM escalation으로 atomic 후보 정확도를 올리는 경로다.
 - **실행 상태 표면화**: run/source/event를 제품 UI에서 읽을 수 있어야 한다.
 - **승인 친화적 metadata**: fallback reason, evidence summary, cross validation 결과를 검토에 활용한다.
 
@@ -329,10 +302,12 @@ inference는 실행 운영성이 중요하므로, 아래 데이터가 핵심이�
 
 ## 11. 관련 문서
 
-- [07-inference-engine-advanced.md](./07-inference-engine-advanced.md)
+- [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) — 추론 고도화 (Inter-procedural AST, Cross-Signal, 플러그인, 피드백 루프)
+- [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md) — Intent-Centric Proof Engine 개요
+- [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md) — Smart Proof Engine LLM escalation 설계
 - [../spec/12-inference-run-orchestration-spec.md](../spec/12-inference-run-orchestration-spec.md)
-- [../spec/37-smart-pipeline-atomic-redesign-spec.md](../spec/37-smart-pipeline-atomic-redesign-spec.md)
 - [../spec/40-inference-scan-smart-async-spec.md](../spec/40-inference-scan-smart-async-spec.md)
-- [../spec/42-agent-assisted-smart-atomic-spec.md](../spec/42-agent-assisted-smart-atomic-spec.md)
 - [../spec/43-inference-run-ops-ux-spec.md](../spec/43-inference-run-ops-ux-spec.md)
-- [../spec/47-zuul-route-aware-smart-atomic-spec.md](../spec/47-zuul-route-aware-smart-atomic-spec.md)
+- [../spec/48-intent-centric-proof-engine-spec.md](../spec/48-intent-centric-proof-engine-spec.md)
+- [../spec/50-intent-centric-proof-engine-resolution-pipeline-spec.md](../spec/50-intent-centric-proof-engine-resolution-pipeline-spec.md)
+- [../spec/53-smart-proof-engine-escalation-spec.md](../spec/53-smart-proof-engine-escalation-spec.md)

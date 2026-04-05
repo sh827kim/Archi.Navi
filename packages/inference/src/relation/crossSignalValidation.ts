@@ -59,6 +59,12 @@ export const DEFAULT_CROSS_VALIDATION_CONFIG: CrossValidationConfig = {
 const SOURCE_ORDER: CrossValidationSource[] = ['config', 'code', 'db'];
 const CONFIG_ENDPOINT_SOURCES = new Set(['application_yml', 'docker_compose', 'k8s_manifest']);
 
+function extractQueryRows<Row>(result: { rows?: Row[] } | Row[]): Row[] {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result.rows)) return result.rows;
+  return [];
+}
+
 function normalizeEvidenceType(type: string): CrossValidationSource | null {
   if (type === 'CONFIG') return 'config';
   if (type === 'LLM_CONFIG') return 'config';
@@ -310,7 +316,9 @@ export async function crossValidatePendingRelationCandidates(
         and is_default = true
       limit 1
     `);
-  const config = normalizeCrossValidationConfig(profileRows.rows[0]?.cross_validation);
+  const config = normalizeCrossValidationConfig(
+    extractQueryRows(profileRows)[0]?.cross_validation,
+  );
   if (!config.enabled) {
     await clearStoredCrossValidationState(db, allCandidates);
     return {

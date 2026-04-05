@@ -597,10 +597,10 @@ export function QueryClient() {
             {(queryType === 'IMPACT_ANALYSIS' || queryType === 'PATH_DISCOVERY') && (
               <ObjectPicker
                 label="시작 Object"
-                value={fromObjectId}
+                value={fromObjectId ?? ''}
                 onChange={setFromObjectId}
                 objects={objects}
-                searchValue={searchByField.from}
+                searchValue={searchByField.from ?? ''}
                 onSearchChange={(value) => setSearchValue('from', value)}
               />
             )}
@@ -608,10 +608,10 @@ export function QueryClient() {
             {queryType === 'PATH_DISCOVERY' && (
               <ObjectPicker
                 label="도착 Object"
-                value={toObjectId}
+                value={toObjectId ?? ''}
                 onChange={setToObjectId}
                 objects={objects}
-                searchValue={searchByField.to}
+                searchValue={searchByField.to ?? ''}
                 onSearchChange={(value) => setSearchValue('to', value)}
               />
             )}
@@ -619,10 +619,10 @@ export function QueryClient() {
             {queryType === 'USAGE_DISCOVERY' && (
               <ObjectPicker
                 label="대상 Object"
-                value={usageObjectId}
+                value={usageObjectId ?? ''}
                 onChange={setUsageObjectId}
                 objects={objects}
-                searchValue={searchByField.usage}
+                searchValue={searchByField.usage ?? ''}
                 onSearchChange={(value) => setSearchValue('usage', value)}
               />
             )}
@@ -630,10 +630,10 @@ export function QueryClient() {
             {queryType === 'DOMAIN_SUMMARY' && (
               <ObjectPicker
                 label="도메인 Object"
-                value={domainId}
+                value={domainId ?? ''}
                 onChange={setDomainId}
                 objects={objects}
-                searchValue={searchByField.domain}
+                searchValue={searchByField.domain ?? ''}
                 onSearchChange={(value) => setSearchValue('domain', value)}
                 objectTypeFilter="domain"
               />
