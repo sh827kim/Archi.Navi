@@ -23,6 +23,7 @@ import {
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { stableHash } from '@/extraction/shared';
 import * as codeSignalEngineModule from '@/code/codeSignalEngine';
 import * as frontierAgentModule from '@/agent/frontierAgent';
 import * as intentProofCutoverReportModule from '@/orchestration/intentProofCutoverReport';
@@ -848,7 +849,7 @@ describe('inference orchestration runs', () => {
       targetHostAlias: null,
       targetPathBaseHint: '/orders',
       priority: 100,
-      evidenceIds: ['config_repo:legacy-repo', 'config:application.yml#orders'],
+      evidenceIds: [`config_repo:${stableHash([tempDir])}`, 'config:application.yml#orders'],
     });
 
     writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');

@@ -22,6 +22,7 @@ import {
   extractInteractionIntentsFromCodeSignals,
   extractInteractionIntentsFromConfigRoutes,
 } from '@/extraction/intents';
+import { stableHash } from '@/extraction/shared';
 import { extractAstCodeSignals } from '@/code/ast/extractAstCodeSignals';
 import { extractRouteTransformsFromConfig } from '@/extraction/routeTransforms';
 import type { GatewayRouteTransformPlugin } from '@/extraction/routeTransforms';
@@ -398,7 +399,10 @@ describe('proof extraction', () => {
     expect(transforms[0]?.routeMountPrefix).toBeNull();
     expect(transforms[0]?.targetServiceHint).toBe('order-service');
     expect(transforms[0]?.targetPathBaseHint).toBe('/orders');
-    expect(transforms[0]?.evidenceIds).toEqual([expect.stringMatching(/config:.*application\.yml#orders$/)]);
+    expect(transforms[0]?.evidenceIds).toEqual([
+      `config_repo:${stableHash([repoRoot])}`,
+      expect.stringMatching(/config:.*application\.yml#orders$/),
+    ]);
   });
 
   it('SCG config도 Path/StripPrefix/PrefixPath/RewritePath/lb 형식을 IR로 정규화해야 한다', async () => {
@@ -448,7 +452,10 @@ describe('proof extraction', () => {
     expect(transforms[0]?.targetPathBaseHint).toBe('/orders');
     expect(transforms[0]?.targetHostAlias).toBeNull();
     expect(transforms[0]?.ownerServiceId).toBe(gatewayServiceId);
-    expect(transforms[0]?.evidenceIds).toEqual([expect.stringMatching(/config:.*application\.yml#orders$/)]);
+    expect(transforms[0]?.evidenceIds).toEqual([
+      `config_repo:${stableHash([repoRoot])}`,
+      expect.stringMatching(/config:.*application\.yml#orders$/),
+    ]);
   });
 
   it('alias binding 재추출 시 동일 alias key의 이전 ACTIVE binding을 SUPERSEDED로 전환해야 한다', async () => {
