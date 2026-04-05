@@ -1,6 +1,6 @@
 name = "spec_manager"
 description = "로드맵, 구현 현황, 스펙/디자인 문서를 읽고 다음 작업을 추천하는 에이전트."
-model = "gpt-5.4"
+model = "gpt-5.4-mini"
 model_reasoning_effort = "high"
 sandbox_mode = "read-only"
 nickname_candidates = ["Atlas", "Compass", "Beacon"]

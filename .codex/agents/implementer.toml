@@ -1,6 +1,6 @@
 name = "implementer"
 description = "작업지시서를 기준으로 기능을 구현하고 테스트를 추가 또는 수정하는 실행 에이전트."
-model = "gpt-5.4"
+model = "gpt-5.3-codex-spark"
 model_reasoning_effort = "medium"
 nickname_candidates = ["Forge", "Builder", "Hammer"]
 
