@@ -31,22 +31,22 @@ const SUMMARY_CARDS = [
   {
     key: 'objects',
     label: '총 Object',
-    accent: 'from-primary/18 via-primary/5 to-transparent',
+    accent: 'from-primary/14 via-primary/4 to-transparent',
   },
   {
     key: 'services',
     label: '서비스',
-    accent: 'from-secondary/18 via-secondary/5 to-transparent',
+    accent: 'from-secondary/14 via-secondary/4 to-transparent',
   },
   {
     key: 'domains',
     label: '도메인',
-    accent: 'from-emerald-500/18 via-emerald-500/5 to-transparent',
+    accent: 'from-emerald-500/14 via-emerald-500/4 to-transparent',
   },
   {
     key: 'pending',
     label: '승인 대기',
-    accent: 'from-amber-500/18 via-amber-500/5 to-transparent',
+    accent: 'from-amber-500/14 via-amber-500/4 to-transparent',
   },
 ] as const;
 
@@ -151,7 +151,10 @@ export function DashboardHomeClient() {
   return (
     <div className="min-h-full p-6">
       <section className="relative overflow-hidden rounded-[28px] border border-border/70 bg-card/80 px-6 py-7 shadow-sm">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(139,92,246,0.18),transparent_42%),radial-gradient(circle_at_top_right,rgba(6,182,212,0.16),transparent_38%)]" />
+        <div
+          data-testid="dashboard-hero-surface"
+          className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(45,212,191,0.14),transparent_42%),radial-gradient(circle_at_top_right,rgba(217,119,87,0.14),transparent_38%)]"
+        />
         <div className="relative flex flex-col gap-8">
           <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
             <div className="max-w-2xl space-y-2">
@@ -179,8 +182,9 @@ export function DashboardHomeClient() {
             {SUMMARY_CARDS.map((card) => (
               <div
                 key={card.key}
+                data-testid={`dashboard-summary-card-${card.key}`}
                 className={cn(
-                  'rounded-2xl border border-border/60 bg-background/75 px-4 py-4 shadow-sm',
+                  'rounded-2xl border border-border/60 bg-background/82 px-4 py-4 shadow-sm',
                   'bg-gradient-to-br',
                   card.accent,
                 )}

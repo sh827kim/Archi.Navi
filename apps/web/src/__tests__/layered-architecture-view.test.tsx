@@ -1,10 +1,19 @@
 import React from 'react';
 import { act, cleanup, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import cytoscape from 'cytoscape';
 import { LayeredArchitectureView } from '@/components/architecture/layered-architecture-view';
+
+const { themeState } = vi.hoisted(() => ({
+  themeState: { resolvedTheme: 'dark' as 'dark' | 'light' | undefined },
+}));
 
 vi.mock('@/contexts/workspace-context', () => ({
   useWorkspace: () => ({ workspaceId: 'ws-1' }),
+}));
+
+vi.mock('next-themes', () => ({
+  useTheme: () => themeState,
 }));
 
 vi.mock('lucide-react', () => ({
@@ -34,6 +43,7 @@ vi.mock('cytoscape', () => ({
         style: vi.fn(() => collection),
         removeClass: vi.fn(() => collection),
         addClass: vi.fn(() => collection),
+        remove: vi.fn(() => collection),
         filter: vi.fn(() => createCollection()),
         connectedEdges: vi.fn(() => createCollection()),
         neighborhood: vi.fn(() => createCollection()),
@@ -126,6 +136,14 @@ function createFetchMock() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -163,6 +181,7 @@ class FakeEventSource {
 describe('LayeredArchitectureView SSE refresh', () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
+    themeState.resolvedTheme = 'dark';
   });
 
   afterEach(() => {
@@ -216,5 +235,132 @@ describe('LayeredArchitectureView SSE refresh', () => {
     await screen.findByText('아직 레이어드 아키텍처를 그릴 데이터가 없습니다');
     expect(screen.getByRole('link', { name: 'Object 목록 열기' }).getAttribute('href')).toBe('/services');
     expect(screen.getByRole('link', { name: '설정으로 이동' }).getAttribute('href')).toBe('/settings');
+  });
+
+  it('라이트 모드에서는 레이어 제목과 태그가 밝은 테마 팔레트를 사용해야 한다', async () => {
+    themeState.resolvedTheme = 'light';
+    vi.stubGlobal('fetch', createFetchMock().fetchMock);
+
+    render(<LayeredArchitectureView />);
+
+    await waitFor(() => {
+      expect(vi.mocked(cytoscape).mock.calls.length).toBeGreaterThan(0);
+    });
+
+    const initOptions = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as {
+      style: Array<{ selector: string; css: Record<string, unknown> }>;
+    };
+    const layerTitleStyle = initOptions.style.find(
+      (item) => item.selector === 'node[nodeType="layer-title"]',
+    );
+    const tagStyle = initOptions.style.find(
+      (item) => item.selector === 'node[nodeType="tag"]',
+    );
+
+    expect(layerTitleStyle?.css.color).toBe('#334155');
+    expect(tagStyle?.css['background-color']).toBe('#f4ede2');
+  });
+
+  it('초기 mount 직후 theme가 light로 결정되면 graph build를 다시 실행해야 한다', async () => {
+    const { fetchMock, getObjectFetchCount } = createFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(<LayeredArchitectureView />);
+
+    await waitFor(() => {
+      expect(getObjectFetchCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    const before = getObjectFetchCount();
+    themeState.resolvedTheme = 'light';
+    rerender(<LayeredArchitectureView />);
+
+    await waitFor(() => {
+      expect(getObjectFetchCount()).toBeGreaterThan(before);
+    });
+  });
+
+  it('초기 graph load가 진행 중일 때 theme가 바뀌면 완료 직후 재로드를 큐잉해야 한다', async () => {
+    const firstObjectsResponse = deferred<Response>();
+    let objectFetchCount = 0;
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/layers?')) {
+        return Promise.resolve(jsonResponse([
+          {
+            id: 'layer-1',
+            name: 'application',
+            displayName: 'Application',
+            color: '#3b82f6',
+            sortOrder: 0,
+            isEnabled: true,
+          },
+        ]));
+      }
+      if (url.startsWith('/api/layers/assignments?')) {
+        return Promise.resolve(jsonResponse([{ objectId: 'svc-1', layerId: 'layer-1' }]));
+      }
+      if (url.startsWith('/api/objects?')) {
+        objectFetchCount += 1;
+        if (objectFetchCount === 1) {
+          return firstObjectsResponse.promise;
+        }
+        return Promise.resolve(jsonResponse([
+          {
+            id: 'svc-1',
+            name: 'orders',
+            displayName: 'Orders',
+            objectType: 'service',
+            granularity: 'COMPOUND',
+            parentId: null,
+            depth: 0,
+          },
+        ]));
+      }
+      if (url.startsWith('/api/object-tags?')) {
+        return Promise.resolve(jsonResponse({}));
+      }
+      if (url.startsWith('/api/rollups?')) {
+        return Promise.resolve(jsonResponse({ edges: [] }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    const { rerender } = render(<LayeredArchitectureView />);
+
+    await waitFor(() => {
+      expect(objectFetchCount).toBe(1);
+    });
+
+    themeState.resolvedTheme = 'light';
+    rerender(<LayeredArchitectureView />);
+
+    await act(async () => {
+      firstObjectsResponse.resolve(jsonResponse([
+        {
+          id: 'svc-1',
+          name: 'orders',
+          displayName: 'Orders',
+          objectType: 'service',
+          granularity: 'COMPOUND',
+          parentId: null,
+          depth: 0,
+        },
+      ]));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(objectFetchCount).toBeGreaterThan(1);
+    });
+
+    const lastInitOptions = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as {
+      style: Array<{ selector: string; css: Record<string, unknown> }>;
+    };
+    const layerTitleStyle = lastInitOptions.style.find(
+      (item) => item.selector === 'node[nodeType="layer-title"]',
+    );
+    expect(layerTitleStyle?.css.color).toBe('#334155');
   });
 });

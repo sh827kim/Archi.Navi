@@ -94,15 +94,29 @@ interface TagInfo {
   color: string | null;
 }
 
+interface LayerInfo {
+  id: string;
+  name: string;
+  displayName: string | null;
+  color: string | null;
+  sortOrder: number;
+  isEnabled: boolean;
+}
+
+interface LayerAssignment {
+  objectId: string;
+  layerId: string;
+}
+
 /** objectType → 아이콘 + 색상 맵핑 */
 const TYPE_CONFIG: Record<string, { icon: typeof Server; color: string; label: string }> = {
-  service:        { icon: Server,   color: '#3b82f6', label: 'Service'   },
-  api_endpoint:   { icon: Globe,    color: '#8b5cf6', label: 'API'       },
-  database:       { icon: Database, color: '#10b981', label: 'Database'  },
-  db_table:       { icon: Database, color: '#14b8a6', label: 'Table'     },
-  kafka_topic:    { icon: Radio,    color: '#f59e0b', label: 'Kafka'     },
-  message_broker: { icon: Radio,    color: '#f59e0b', label: 'Broker'    },
-  domain:         { icon: Box,      color: '#06b6d4', label: 'Domain'    },
+  service:        { icon: Server,   color: '#4f7e93', label: 'Service'   },
+  api_endpoint:   { icon: Globe,    color: '#c7774d', label: 'API'       },
+  database:       { icon: Database, color: '#4b8b74', label: 'Database'  },
+  db_table:       { icon: Database, color: '#67a58d', label: 'Table'     },
+  kafka_topic:    { icon: Radio,    color: '#b88a34', label: 'Kafka'     },
+  message_broker: { icon: Radio,    color: '#b88a34', label: 'Broker'    },
+  domain:         { icon: Box,      color: '#7f9363', label: 'Domain'    },
 };
 
 function getConfig(type: string) {
@@ -111,13 +125,13 @@ function getConfig(type: string) {
 
 /** 관계 타입 → Badge 색상 */
 const RELATION_COLORS: Record<string, string> = {
-  call:       'bg-blue-500/15 text-blue-400',
-  expose:     'bg-purple-500/15 text-purple-400',
-  read:       'bg-green-500/15 text-green-400',
-  write:      'bg-green-500/15 text-green-400',
-  produce:    'bg-amber-500/15 text-amber-400',
-  consume:    'bg-amber-500/15 text-amber-400',
-  depend_on:  'bg-gray-500/15 text-gray-400',
+  call:       'bg-sky-500/15 text-sky-500',
+  expose:     'bg-orange-500/15 text-orange-500',
+  read:       'bg-emerald-500/15 text-emerald-500',
+  write:      'bg-emerald-500/15 text-emerald-500',
+  produce:    'bg-amber-500/15 text-amber-500',
+  consume:    'bg-amber-500/15 text-amber-500',
+  depend_on:  'bg-slate-500/15 text-slate-500',
 };
 
 /** 탭 목록 */
@@ -306,6 +320,10 @@ function ObjectDetailSheet({
   const [objectTags, setObjectTags] = useState<TagInfo[]>([]);
   const [allTags, setAllTags] = useState<TagInfo[]>([]);
   const [showTagPicker, setShowTagPicker] = useState(false);
+  const [layers, setLayers] = useState<LayerInfo[]>([]);
+  const [selectedLayerId, setSelectedLayerId] = useState<string>('__none__');
+  const [layerSaving, setLayerSaving] = useState(false);
+  const [layersLoading, setLayersLoading] = useState(false);
 
   const loadDetail = useCallback(async () => {
     if (!objectId || !open) return;
@@ -339,6 +357,32 @@ function ObjectDetailSheet({
       .then((r) => r.json())
       .then((data: TagInfo[]) => setAllTags(data))
       .catch(() => { /* 태그 로드 실패 무시 */ });
+  }, [objectId, workspaceId, open]);
+
+  useEffect(() => {
+    if (!objectId || !open) return;
+
+    setLayersLoading(true);
+    Promise.all([
+      fetch(`/api/layers?workspaceId=${workspaceId}`).then((r) => r.json() as Promise<LayerInfo[]>),
+      fetch(`/api/layers/assignments?workspaceId=${workspaceId}`).then((r) => r.json() as Promise<LayerAssignment[]>),
+    ])
+      .then(([layerRows, assignmentRows]) => {
+        const activeLayers = layerRows
+          .filter((layer) => layer.isEnabled)
+          .sort((a, b) => a.sortOrder - b.sortOrder);
+        setLayers(activeLayers);
+        const assignment = assignmentRows.find((row) => row.objectId === objectId);
+        setSelectedLayerId(assignment?.layerId ?? '__none__');
+      })
+      .catch(() => {
+        setLayers([]);
+        setSelectedLayerId('__none__');
+        toast.error('레이어 정보 로드 실패');
+      })
+      .finally(() => {
+        setLayersLoading(false);
+      });
   }, [objectId, workspaceId, open]);
 
   if (!open) return null;
@@ -393,6 +437,40 @@ function ObjectDetailSheet({
   const availableTags = allTags.filter(
     (t) => !objectTags.some((ot) => ot.id === t.id),
   );
+
+  const saveLayerAssignment = async (nextLayerId: string) => {
+    if (!objectId) return;
+
+    setLayerSaving(true);
+    try {
+      if (nextLayerId === '__none__') {
+        const res = await fetch(`/api/layers/assignments?workspaceId=${workspaceId}&objectId=${objectId}`, {
+          method: 'DELETE',
+        });
+        if (!res.ok) throw new Error();
+        setSelectedLayerId('__none__');
+        toast.success('레이어 배치가 해제되었습니다.');
+      } else {
+        const res = await fetch('/api/layers/assignments', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            workspaceId,
+            objectId,
+            layerId: nextLayerId,
+          }),
+        });
+        if (!res.ok) throw new Error();
+        setSelectedLayerId(nextLayerId);
+        toast.success('레이어가 저장되었습니다.');
+      }
+      onUpdate?.();
+    } catch {
+      toast.error('레이어 저장 실패');
+    } finally {
+      setLayerSaving(false);
+    }
+  };
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -530,6 +608,40 @@ function ObjectDetailSheet({
                 </div>
               </div>
             </section>
+
+            {detail.granularity === 'COMPOUND' && (
+              <section className="space-y-2">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">아키텍처 레이어</h3>
+                <div className="space-y-2 rounded-lg bg-muted/30 px-3 py-3">
+                  <label htmlFor="object-layer-select" className="text-xs text-muted-foreground">
+                    이 Object가 속한 레이어를 선택하세요.
+                  </label>
+                  <select
+                    id="object-layer-select"
+                    aria-label="아키텍처 레이어 선택"
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
+                    value={selectedLayerId}
+                    disabled={layerSaving || layersLoading}
+                    onChange={(e) => void saveLayerAssignment(e.target.value)}
+                  >
+                    <option value="__none__">레이어 없음</option>
+                    {layers.map((layer) => (
+                      <option key={layer.id} value={layer.id}>
+                        {layer.displayName ?? layer.name}
+                      </option>
+                    ))}
+                  </select>
+                  {layersLoading && (
+                    <p className="text-xs text-muted-foreground">레이어 정보를 불러오는 중입니다.</p>
+                  )}
+                  {!layersLoading && layers.length === 0 && (
+                    <p className="text-xs text-muted-foreground">
+                      등록된 활성 레이어가 없습니다. 필요하면 레이어 없음을 선택해 기존 배치를 해제하세요.
+                    </p>
+                  )}
+                </div>
+              </section>
+            )}
 
             {/* Outbound 관계 */}
             <section className="space-y-2">
