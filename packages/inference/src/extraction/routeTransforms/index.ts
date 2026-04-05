@@ -63,6 +63,7 @@ export interface ExtractRouteTransformsResult {
   routeTransformCount: number;
   deletedRouteTransformCount: number;
   deletedOwnerServiceIds: string[];
+  deletedGlobalTransformCount: number;
   fileCount: number;
   processedFileCount: number;
   skippedFileCount: number;
@@ -256,7 +257,7 @@ async function pruneObsoleteConfigRouteTransforms(
     activeSourceHashes: Set<string>;
     repoEvidenceId: string;
   },
-): Promise<{ deletedCount: number; deletedOwnerServiceIds: string[] }> {
+): Promise<{ deletedCount: number; deletedOwnerServiceIds: string[]; deletedGlobalTransformCount: number }> {
   const existing = await db
     .select({
       id: routeTransforms.id,
@@ -280,7 +281,7 @@ async function pruneObsoleteConfigRouteTransforms(
     });
 
   if (obsoleteRows.length === 0) {
-    return { deletedCount: 0, deletedOwnerServiceIds: [] };
+    return { deletedCount: 0, deletedOwnerServiceIds: [], deletedGlobalTransformCount: 0 };
   }
 
   await db.delete(routeTransforms).where(inArray(routeTransforms.id, obsoleteRows.map((row) => row.id)));
@@ -290,7 +291,8 @@ async function pruneObsoleteConfigRouteTransforms(
       .map((row) => row.ownerServiceId)
       .filter((value): value is string => typeof value === 'string' && value.length > 0),
   )];
-  return { deletedCount: obsoleteRows.length, deletedOwnerServiceIds };
+  const deletedGlobalTransformCount = obsoleteRows.filter((row) => row.ownerServiceId === null).length;
+  return { deletedCount: obsoleteRows.length, deletedOwnerServiceIds, deletedGlobalTransformCount };
 }
 
 function trimWildcardPath(path: string): string {
@@ -528,6 +530,7 @@ export async function extractRouteTransformsFromConfig(
     routeTransformCount,
     deletedRouteTransformCount: pruneResult.deletedCount,
     deletedOwnerServiceIds: pruneResult.deletedOwnerServiceIds,
+    deletedGlobalTransformCount: pruneResult.deletedGlobalTransformCount,
     fileCount: discoveredFiles.length,
     processedFileCount: discoveredFiles.length,
     skippedFileCount: 0,

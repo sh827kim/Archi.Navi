@@ -740,7 +740,7 @@ describe('inference orchestration runs', () => {
       sourceHash: 'binding-updated-by-run',
     });
 
-    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, args) => ({
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async () => ({
       proofStateId: args.intentId === impactedIntentId ? impactedProofStateId : untouchedProofStateId,
       status: 'FRONTIER',
       frontierReason: 'HOST_ALIAS_UNRESOLVED',
@@ -866,6 +866,92 @@ describe('inference orchestration runs', () => {
       db,
       expect.objectContaining({ workspaceId, intentId: impactedIntentId }),
     );
+  });
+
+  it('incremental run은 global route transform이 갱신되면 모든 intent를 재해결해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'incremental-global-transform-update' });
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const sourceFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: gatewayServiceId,
+    });
+
+    const intentIds = [generateId(), generateId()];
+    for (const intentId of intentIds) {
+      await db.insert(interactionIntents).values({
+        id: intentId,
+        workspaceId,
+        intentType: 'http_call',
+        sourceServiceId: gatewayServiceId,
+        sourceFunctionId,
+        hostHint: 'ORDER_SERVICE',
+        intentHash: `intent-${intentId}`,
+        anchorHash: `anchor-${intentId}`,
+      });
+      await db.insert(proofStates).values({
+        id: generateId(),
+        workspaceId,
+        intentId,
+        proofType: 'http_call',
+        status: 'NEW',
+        consumerServiceId: gatewayServiceId,
+        sourceFunctionId,
+      });
+    }
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await db.insert(routeTransforms).values({
+      id: generateId(),
+      workspaceId,
+      createdRunId: null,
+      updatedRunId: run.id,
+      sourceHash: `global-transform-${run.id}`,
+      gatewayKind: 'custom',
+      ownerServiceId: null,
+      matchHost: null,
+      matchPath: '/api/**',
+      matchMode: 'prefix',
+      stripPrefixCount: 1,
+      prependPrefix: null,
+      rewriteRegex: null,
+      rewriteReplacement: null,
+      pathCapturePolicy: 'glob',
+      routeMountPrefix: null,
+      targetServiceHint: null,
+      targetHostAlias: null,
+      targetPathBaseHint: null,
+      priority: 1,
+      evidenceIds: ['manual:test'],
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, args) => ({
+      proofStateId: generateId(),
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    }));
+
+    await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+    });
+
+    const resolvedIntentIds = vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mock.calls
+      .map(([, args]) => args.intentId)
+      .filter((intentId): intentId is string => typeof intentId === 'string');
+
+    expect(resolvedIntentIds).toHaveLength(2);
+    expect(resolvedIntentIds).toEqual(expect.arrayContaining(intentIds));
   });
 
   it('code 추출이 실패하면 run/source를 FAILED로 기록해야 한다', async () => {

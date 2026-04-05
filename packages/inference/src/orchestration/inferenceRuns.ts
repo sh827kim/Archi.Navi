@@ -49,7 +49,13 @@ export type InferenceRunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' |
 
 async function collectImpactedIntentIdsForRun(
   db: DbClient,
-  input: { workspaceId: string; runId: string; incremental: boolean; deletedRouteTransformOwnerServiceIds?: string[] },
+  input: {
+    workspaceId: string;
+    runId: string;
+    incremental: boolean;
+    deletedRouteTransformOwnerServiceIds?: string[];
+    didDeleteGlobalRouteTransform?: boolean;
+  },
 ): Promise<string[]> {
   const listAllIntentIds = async () => {
     const rows = await db
@@ -103,6 +109,10 @@ async function collectImpactedIntentIdsForRun(
       eq(proofDependencies.dependencyKind, 'route_transform_owner_service'),
       inArray(proofDependencies.dependencyKey, uniqueOwnerServiceIds),
     ));
+  }
+  const didUpdateGlobalRouteTransform = updatedTransforms.some((row) => row.ownerServiceId === null);
+  if (didUpdateGlobalRouteTransform || input.didDeleteGlobalRouteTransform) {
+    return await listAllIntentIds();
   }
 
   const dependencyBackedIntentIds = dependencyClauses.length === 0
@@ -1109,12 +1119,14 @@ export async function executeInferenceRun(
     (await getInferenceRunStatus(db, { workspaceId: input.workspaceId, runId: run.id })) === 'CANCELED';
 
   const deletedRouteTransformOwnerServiceIdsForRun = new Set<string>();
+  let didDeleteGlobalRouteTransformForRun = false;
   const resolveWorkspaceProofsForRun = async () => {
     const impactedIntentIds = await collectImpactedIntentIdsForRun(db, {
       workspaceId: input.workspaceId,
       runId: run.id,
       incremental: run.requestedIncremental,
       deletedRouteTransformOwnerServiceIds: [...deletedRouteTransformOwnerServiceIdsForRun],
+      didDeleteGlobalRouteTransform: didDeleteGlobalRouteTransformForRun,
     });
 
     if (impactedIntentIds.length === 0) {
@@ -1468,6 +1480,9 @@ export async function executeInferenceRun(
         });
         for (const ownerServiceId of routeTransformResult.deletedOwnerServiceIds) {
           deletedRouteTransformOwnerServiceIdsForRun.add(ownerServiceId);
+        }
+        if (routeTransformResult.deletedGlobalTransformCount > 0) {
+          didDeleteGlobalRouteTransformForRun = true;
         }
         const configIntentResult = await extractInteractionIntentsFromConfigRoutes(db, {
           workspaceId: input.workspaceId,
