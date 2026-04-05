@@ -367,7 +367,7 @@ describe('inference orchestration runs', () => {
   });
 
   it('proof resolution이 실패하면 legacy count로 summary를 위장하지 않아야 한다', async () => {
-    await seedProofIntent(db);
+    const seeded = await seedProofIntent(db);
     writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
 
     vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockRejectedValueOnce(
@@ -410,6 +410,13 @@ describe('inference orchestration runs', () => {
         legacy_edges_fallback: 0,
       },
     });
+
+    const failedIntent = await db
+      .select({ updatedRunId: interactionIntents.updatedRunId })
+      .from(interactionIntents)
+      .where(eq(interactionIntents.id, seeded.intentId))
+      .limit(1);
+    expect(failedIntent[0]?.updatedRunId).toBeNull();
   });
 
   it('config-only gateway route도 synthetic intent로 승격되어 proof candidate를 생성해야 한다', async () => {

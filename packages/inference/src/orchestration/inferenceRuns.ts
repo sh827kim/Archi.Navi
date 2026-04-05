@@ -1133,14 +1133,6 @@ export async function executeInferenceRun(
       return;
     }
 
-    await db
-      .update(interactionIntents)
-      .set({
-        updatedRunId: run.id,
-        updatedAt: new Date(),
-      })
-      .where(inArray(interactionIntents.id, impactedIntentIds));
-
     let resolverContext = await buildIntentProofResolverContext(db, { workspaceId: input.workspaceId });
 
     for (const intentId of impactedIntentIds) {
@@ -1235,6 +1227,15 @@ export async function executeInferenceRun(
           }
         }
       }
+
+      await db
+        .update(interactionIntents)
+        .set({
+          updatedRunId: run.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(interactionIntents.id, intentId));
+
       proofResolution.intentCount += 1;
       if (resolution.status === 'CLOSED_ATOMIC') {
         proofResolution.closedAtomicCount += 1;

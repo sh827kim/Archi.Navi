@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { aliasBindings, codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -67,6 +67,66 @@ function findServiceByAlias(
   const direct = trimmed.toLowerCase().replace(/[-_]/g, '');
   const hostPrefix = trimmed.split('.')[0]?.toLowerCase().replace(/[-_]/g, '') ?? direct;
   return serviceMap.get(direct) ?? serviceMap.get(hostPrefix) ?? null;
+}
+
+async function loadOwnerServiceIdByObjectId(
+  db: DbClient,
+  workspaceId: string,
+  ownerObjectIds: string[],
+): Promise<Map<string, string | null>> {
+  const uniqueOwnerObjectIds = uniqueSortedStrings(ownerObjectIds);
+  if (uniqueOwnerObjectIds.length === 0) {
+    return new Map();
+  }
+
+  const objectRowsById = new Map<
+    string,
+    {
+      id: string;
+      objectType: string;
+      parentId: string | null;
+    }
+  >();
+
+  const pendingObjectIds = new Set(uniqueOwnerObjectIds);
+  while (pendingObjectIds.size > 0) {
+    const batch = [...pendingObjectIds];
+    batch.forEach((objectId) => pendingObjectIds.delete(objectId));
+
+    const rows = await db
+      .select({
+        id: objects.id,
+        objectType: objects.objectType,
+        parentId: objects.parentId,
+      })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), inArray(objects.id, batch)));
+
+    for (const row of rows) {
+      objectRowsById.set(row.id, row);
+      if (row.parentId && !objectRowsById.has(row.parentId)) {
+        pendingObjectIds.add(row.parentId);
+      }
+    }
+  }
+
+  const ownerServiceIdByObjectId = new Map<string, string | null>();
+  for (const ownerObjectId of uniqueOwnerObjectIds) {
+    let currentObjectId: string | null = ownerObjectId;
+    let resolvedServiceId: string | null = null;
+    while (currentObjectId) {
+      const current = objectRowsById.get(currentObjectId);
+      if (!current) break;
+      if (current.objectType === 'service') {
+        resolvedServiceId = current.id;
+        break;
+      }
+      currentObjectId = current.parentId;
+    }
+    ownerServiceIdByObjectId.set(ownerObjectId, resolvedServiceId);
+  }
+
+  return ownerServiceIdByObjectId;
 }
 
 function inferConfigBindingKind(propertyKey: string, aliasValue: string, resolvedHost: string | null): string {
@@ -220,6 +280,13 @@ export async function extractAliasBindingsFromCodeSignals(
     .where(
       and(eq(codeCallEdges.workspaceId, options.workspaceId), eq(codeArtifacts.repoRoot, options.repoRoot)),
     );
+  const ownerServiceIdByObjectId = await loadOwnerServiceIdByObjectId(
+    db,
+    options.workspaceId,
+    rows
+      .map((row) => row.ownerObjectId)
+      .filter((ownerObjectId): ownerObjectId is string => typeof ownerObjectId === 'string' && ownerObjectId.length > 0),
+  );
 
   let bindingCount = 0;
   for (const row of rows) {
@@ -230,7 +297,7 @@ export async function extractAliasBindingsFromCodeSignals(
     const host = extractHost(row.calleeSymbol);
     const configKeys = extractConfigKeysFromMetadata(metadata);
     const service = host ? findServiceByAlias(serviceMap, host) : null;
-    const ownerService = configKeys.length > 0 ? null : service;
+    const ownerServiceId = row.ownerObjectId ? (ownerServiceIdByObjectId.get(row.ownerObjectId) ?? null) : null;
     if (host && isLikelyServiceName(host) && service) {
       await upsertAliasBinding(db, {
         workspaceId: options.workspaceId,
@@ -254,7 +321,7 @@ export async function extractAliasBindingsFromCodeSignals(
         workspaceId: options.workspaceId,
         runId: options.runId,
         bindingKind: configKey.toLowerCase().includes('base-url') ? 'base_url' : 'property_alias',
-        ownerServiceId: ownerService?.id ?? null,
+        ownerServiceId,
         aliasKey: configKey,
         aliasValue: row.calleeSymbol.trim(),
         resolvedServiceId: service?.id ?? null,

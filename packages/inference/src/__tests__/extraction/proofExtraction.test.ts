@@ -938,6 +938,102 @@ describe('proof extraction', () => {
     expect(bindings[0]?.resolvedServiceId).toBe(targetServiceId);
   });
 
+  it('code config key alias binding은 source service 단위로 owner를 분리해야 한다', async () => {
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const billingServiceId = await insertObject(db, { objectType: 'service', name: 'billing-service' });
+    await insertObject(db, { objectType: 'service', name: 'order-service' });
+    await insertObject(db, { objectType: 'service', name: 'payment-service' });
+
+    const gatewayFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: gatewayServiceId,
+      category: 'CODE',
+    });
+    const billingFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'BillingClient.fetchPayment',
+      parentId: billingServiceId,
+      category: 'CODE',
+    });
+
+    const gatewayArtifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: gatewayArtifactId,
+      workspaceId,
+      language: 'java',
+      repoRoot,
+      filePath: 'src/GatewayClient.java',
+      ownerObjectId: gatewayFunctionId,
+      sha256: 'sha-gateway',
+    });
+    const billingArtifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: billingArtifactId,
+      workspaceId,
+      language: 'java',
+      repoRoot,
+      filePath: 'src/BillingClient.java',
+      ownerObjectId: billingFunctionId,
+      sha256: 'sha-billing',
+    });
+
+    const gatewayEvidenceId = generateId();
+    await db.insert(evidences).values({
+      id: gatewayEvidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/GatewayClient.java',
+      lineStart: 12,
+      lineEnd: 12,
+      excerpt: 'restTemplate.getForObject(orderBaseUrl + "/api/orders", String.class)',
+      metadata: { kind: 'call', configKeys: ['client.api.url'] },
+    });
+    const billingEvidenceId = generateId();
+    await db.insert(evidences).values({
+      id: billingEvidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/BillingClient.java',
+      lineStart: 9,
+      lineEnd: 9,
+      excerpt: 'restTemplate.getForObject(paymentBaseUrl + "/api/payments", String.class)',
+      metadata: { kind: 'call', configKeys: ['client.api.url'] },
+    });
+
+    await db.insert(codeCallEdges).values([
+      {
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: gatewayArtifactId,
+        calleeSymbol: 'http://order-service.internal/api/orders',
+        weight: 1,
+        evidenceId: gatewayEvidenceId,
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: billingArtifactId,
+        calleeSymbol: 'http://payment-service.internal/api/payments',
+        weight: 1,
+        evidenceId: billingEvidenceId,
+      },
+    ]);
+
+    await extractAliasBindingsFromCodeSignals(db, { workspaceId, repoRoot, runId: 'run-owner-scope' });
+
+    const configBindings = await db
+      .select()
+      .from(aliasBindings)
+      .where(and(eq(aliasBindings.workspaceId, workspaceId), eq(aliasBindings.aliasKey, 'client.api.url')));
+
+    expect(configBindings).toHaveLength(2);
+    expect(configBindings.every((binding) => binding.status === 'ACTIVE')).toBe(true);
+    expect(configBindings.map((binding) => binding.ownerServiceId).sort()).toEqual(
+      [billingServiceId, gatewayServiceId].sort(),
+    );
+  });
+
   it('config property alias와 route transform IR은 richer slot으로 저장해야 한다', async () => {
     const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
     const targetServiceId = await insertObject(db, { objectType: 'service', name: 'payment-service' });
