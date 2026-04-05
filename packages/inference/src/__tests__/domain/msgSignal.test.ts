@@ -1,14 +1,13 @@
 /**
  * Message 시그널 추출 통합 테스트
- * PGlite 인메모리 DB로 토픽 네이밍 패턴 분석 및 msgScore 계산 검증
+ * embedded postgres 테스트 DB로 토픽 네이밍 패턴 분석 및 msgScore 계산 검증
  *
  * 설계 참조: docs/03-inference-engine.md §3.3 Message Signals
  * 로드맵: 2-5 Message 시그널 추출
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import { join } from 'path';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import {
     objects,
     workspaces,
@@ -21,12 +20,8 @@ import { generateId } from '@archi-navi/shared';
 import { extractTopicPrefix, computeMsgScores } from '@/domain/msgSignal';
 import { runSeedBasedInference } from '@/domain/seedBased';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-    const db = createPgliteClient();
-    await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-    return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

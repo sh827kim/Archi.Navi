@@ -13,9 +13,8 @@ const nextConfig: NextConfig = {
     '@archi-navi/core',
     '@archi-navi/inference',
   ],
-  // PGlite는 Turbopack 가상 경로(/ROOT)로 번들링되면 내부 data 파일 경로 해석이 깨질 수 있어
-  // 서버 런타임 외부 패키지로 유지한다.
-  serverExternalPackages: ['@electric-sql/pglite'],
+  // embedded-postgres는 서버 런타임 외부 패키지로 유지한다.
+  serverExternalPackages: ['embedded-postgres'],
   // 실험적 기능
   experimental: {
     // React 19 서버 컴포넌트 최적화

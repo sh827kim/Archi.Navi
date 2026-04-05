@@ -8,6 +8,27 @@ export {
   retryInferenceRun,
 } from './inferenceRuns';
 
+export {
+  buildEmptyProofEngineSummary,
+  buildProofEngineSummaryForRun,
+} from './proofEngineRun';
+export {
+  resolveInteractionIntentProof,
+  validateAndApplyProofPatch,
+} from './intentProofEngine';
+export {
+  buildFrontierAgentPatchProposal,
+  runFrontierAgentPass,
+} from '../agent/frontierAgent';
+export {
+  runIntentProofBenchmarkGate,
+  evaluateIntentProofBenchmarkReport,
+} from './intentProofBenchmarkGate';
+export {
+  buildIntentProofCutoverArtifact,
+  buildIntentProofCutoverReport,
+} from './intentProofCutoverReport';
+
 export type {
   InferenceMode,
   InferenceSourceType,
@@ -19,12 +40,34 @@ export type {
   InferenceRunDetail,
 } from './inferenceRuns';
 
-export { executeSmartPipeline } from './smartPipeline';
+export type { ProofEngineSummary, ProofEngineName } from './proofEngineRun';
 export type {
-  SmartPipelineOptions,
-  SmartPipelineResult,
-  LlmGenerateFn,
-  SmartFallbackReasonBreakdown,
-  SmartAtomicAnalysisMode,
-  SmartAtomicAgentStep,
-} from './smartPipeline';
+  IntentProofType,
+  ProofLifecycleStatus,
+  FrontierRetryStrategy,
+  ProofPatchType,
+  ProofPatchSourceKind,
+  ProofPatchValidationStatus,
+} from './intentProofEngine';
+export type {
+  FrontierAgentPatchProposal,
+  FrontierAgentPassResult,
+  RunFrontierAgentPassInput,
+} from '../agent/frontierAgent';
+export type {
+  IntentProofBenchmarkBaseline,
+  IntentProofBenchmarkMetrics,
+  IntentProofBenchmarkReport,
+  IntentProofBenchmarkScenarioReport,
+} from './intentProofBenchmarkGate';
+export type {
+  IntentProofCutoverArtifact,
+  IntentProofCutoverFrontier,
+  IntentProofCutoverMetadata,
+  IntentProofCutoverMetrics,
+  IntentProofCutoverRecommendation,
+  IntentProofCutoverRelation,
+  IntentProofCutoverReport,
+  IntentProofCutoverThresholds,
+  IntentProofCutoverTruthCorpus,
+} from './intentProofCutoverReport';

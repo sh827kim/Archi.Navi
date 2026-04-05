@@ -1,12 +1,11 @@
 /**
  * LLM 추론 후보 필터링 — 핵심 로직 통합 테스트
- * PGlite 인메모리 DB + mock LLM으로 검증
+ * embedded postgres 테스트 DB + mock LLM으로 검증
  * 설계 참조: docs/09-llm-inference-filtering.md §4, §6
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { join } from 'path';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import {
   objects,
   workspaces,
@@ -29,12 +28,8 @@ import type {
   CandidateContext,
 } from '@/llm/types';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

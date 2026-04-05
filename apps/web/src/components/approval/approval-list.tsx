@@ -8,7 +8,7 @@
 'use client';
 
 import { useEffect, useState, useTransition, useCallback, useRef } from 'react';
-import { Check, X, Sparkles, Link2, ChevronRight, Bot, Zap, FlaskConical, Loader2 } from 'lucide-react';
+import { Check, X, Sparkles, Link2, ChevronRight, Bot, FlaskConical, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   Button, Badge, Spinner, ConfirmDialog,
@@ -53,10 +53,8 @@ interface RelationCandidate {
   feedback?: RelationFeedbackMetadata;
   metadata?: {
     feedback?: RelationFeedbackMetadata;
-    targetType?: 'api_endpoint' | 'service';
-    analysisMode?: string;
-    fallbackReason?: SmartFallbackReason;
-    fallbackContext?: SmartFallbackContext;
+    targetType?: 'api_endpoint' | 'db_table' | 'topic' | 'queue';
+    [key: string]: unknown;
   };
 }
 
@@ -69,10 +67,40 @@ interface RelationFeedbackMetadata {
   sampleCount: number;
 }
 
-interface SmartFallbackContext {
-  attemptedMethod: string;
-  attemptedPath: string;
-  evidenceSummary?: string;
+interface ProofChainStep {
+  id: string;
+  type: string;
+  status: string;
+  summary: string;
+}
+
+interface FrontierEntry {
+  id: string;
+  reason: string;
+  missingSlots: string[];
+  snippets: string[];
+  lastResolutionStep: string | null;
+  agentPatched: boolean | null;
+  retryable: boolean | null;
+}
+
+interface ProofPatchEntry {
+  id: string;
+  type: string;
+  summary: string;
+  status: string;
+}
+
+interface ProofChainMetadata {
+  sourceService: string | null;
+  sourceFunction: string | null;
+  resolvedProviderEndpoint: string | null;
+  routeChain: string[];
+  supportingEvidence: string[];
+  contradictions: string[];
+  steps: ProofChainStep[];
+  frontierHistory: FrontierEntry[];
+  patchHistory: ProofPatchEntry[];
 }
 
 function getLlmExplanationSummary(candidate: RelationCandidate): string | null {
@@ -88,6 +116,15 @@ function asRecord(value: unknown): Record<string, unknown> | null {
 
 function asFiniteNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asString(value: unknown): string | null {
+  return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => asString(item)).filter((item): item is string => item !== null);
 }
 
 function getApiErrorMessage(payload: unknown, fallback: string): string {
@@ -106,197 +143,151 @@ function getApiErrorMessage(payload: unknown, fallback: string): string {
   return fallback;
 }
 
-type SmartFallbackReason =
-  | 'NO_ENDPOINT_OBJECTS'
-  | 'PATH_NOT_MATCHED'
-  | 'METHOD_NOT_MATCHED'
-  | 'INSUFFICIENT_CONTEXT';
+function parseProofChainSteps(value: unknown): ProofChainStep[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    const record = asRecord(item);
+    if (!record) return [];
+    const type = asString(record.type ?? record.stepType) ?? 'step';
+    const status = asString(record.status ?? record.state) ?? 'unknown';
+    const summary = asString(record.summary ?? record.message ?? record.description) ?? '';
+    return [{
+      id: asString(record.id) ?? `step-${index}`,
+      type,
+      status,
+      summary,
+    }];
+  });
+}
 
-type SmartAnalysisMode = 'pair_pack' | 'agent_assisted' | 'full_agent';
+function parseFrontierHistory(value: unknown): FrontierEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    const record = asRecord(item);
+    if (!record) return [];
+    const reason = asString(
+      record.reason ?? record.frontierReason ?? record.frontierCode ?? record.code,
+    ) ?? 'UNKNOWN';
+    const missingSlots = asStringArray(record.missingSlots ?? record.slots);
+    const snippets = asStringArray(record.snippets ?? record.relevantSnippets);
+    const lastResolutionStep = asString(record.lastResolutionStep ?? record.lastStep);
+    const agentPatched = typeof record.agentPatched === 'boolean'
+      ? record.agentPatched
+      : typeof record.hasAgentPatch === 'boolean'
+        ? record.hasAgentPatch
+        : null;
+    const retryable = typeof record.retryable === 'boolean'
+      ? record.retryable
+      : typeof record.recoverable === 'boolean'
+        ? record.recoverable
+        : null;
+
+    return [{
+      id: asString(record.id) ?? `frontier-${index}`,
+      reason,
+      missingSlots,
+      snippets,
+      lastResolutionStep,
+      agentPatched,
+      retryable,
+    }];
+  });
+}
+
+function parsePatchHistory(value: unknown): ProofPatchEntry[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item, index) => {
+    const record = asRecord(item);
+    if (!record) return [];
+    return [{
+      id: asString(record.id) ?? `patch-${index}`,
+      type: asString(record.type ?? record.patchType) ?? 'patch',
+      summary: asString(record.summary ?? record.message ?? record.description) ?? '요약 없음',
+      status: asString(record.status ?? record.state) ?? 'unknown',
+    }];
+  });
+}
+
+function getProofChainMetadata(candidate: RelationCandidate): ProofChainMetadata | null {
+  const metadataRecord = asRecord(candidate.metadata);
+  const proof = asRecord(metadataRecord?.proof);
+  if (!proof) return null;
+
+  const endpointRecord = asRecord(
+    proof.resolvedProviderEndpoint
+    ?? proof.providerEndpoint
+    ?? proof.endpoint,
+  );
+  const endpointMethod = asString(endpointRecord?.method ?? proof.method);
+  const endpointPath = asString(endpointRecord?.path ?? proof.path);
+  const resolvedProviderEndpoint = endpointMethod && endpointPath
+    ? `${endpointMethod} ${endpointPath}`
+    : asString(endpointRecord?.name ?? endpointRecord?.displayName);
+
+  const routeChain = asStringArray(proof.routeChain ?? proof.routes);
+  const supportingEvidence = asStringArray(proof.supportingEvidence ?? proof.evidences ?? proof.evidence);
+  const contradictions = Array.isArray(proof.contradictions)
+    ? proof.contradictions
+      .map((item) => {
+        if (typeof item === 'string') return item;
+        const record = asRecord(item);
+        return asString(record?.type ?? record?.reason ?? record?.message);
+      })
+      .filter((item): item is string => item !== null)
+    : [];
+  const steps = parseProofChainSteps(proof.steps ?? proof.proofSteps);
+  const frontierHistory = parseFrontierHistory(proof.frontierHistory ?? proof.frontiers);
+  const patchHistory = parsePatchHistory(proof.patchHistory ?? proof.patches);
+
+  const parsed: ProofChainMetadata = {
+    sourceService: asString(
+      proof.sourceService ?? proof.sourceServiceName ?? candidate.subjectParentName ?? candidate.subjectName,
+    ),
+    sourceFunction: asString(proof.sourceFunction ?? proof.sourceFunctionName),
+    resolvedProviderEndpoint,
+    routeChain,
+    supportingEvidence,
+    contradictions,
+    steps,
+    frontierHistory,
+    patchHistory,
+  };
+
+  const hasUsefulContent = Boolean(
+    parsed.sourceFunction
+    || parsed.resolvedProviderEndpoint
+    || parsed.routeChain.length > 0
+    || parsed.supportingEvidence.length > 0
+    || parsed.contradictions.length > 0
+    || parsed.steps.length > 0
+    || parsed.frontierHistory.length > 0
+    || parsed.patchHistory.length > 0,
+  );
+  return hasUsefulContent ? parsed : null;
+}
+
+function formatYesNo(value: boolean | null): string {
+  if (value === null) return 'unknown';
+  return value ? 'yes' : 'no';
+}
 
 interface SmartInferenceSummary {
-  analysisMode: SmartAnalysisMode;
-  candidatesCreated: number;
-  phase2Count: number;
-  phase3Count: number;
-  servicePairCount: number;
+  engine: 'intent_proof';
+  intentCount: number;
+  gatewayRouteSeedCount: number;
+  derivedEndpointProofCount: number;
+  proofClosedAtomicCount: number;
+  proofFrontierCount: number;
+  routeFamilyFrontierCount: number;
+  proofRejectedCount: number;
+  projectedCandidateCount: number;
+  serviceTargetProjectionCount: number;
   atomicCandidateCount: number;
-  serviceFallbackCount: number;
-  deepInspectionCount: number;
-  agentEscalatedPairCount: number;
-  agentRecoveredAtomicCount: number;
-  agentFailedPairCount: number;
-  agentToolUsageSummary: {
-    searchCalls: number;
-    readCalls: number;
-    endpointListCalls: number;
-    gatewayRouteCalls: number;
-    totalCalls: number;
-  };
-  deepInspectionTrace: {
-    attemptedCount: number;
-    failureCount: number;
-    triggerBreakdown: {
-      lowConfidence: number;
-      insufficientContext: number;
-      pathNotMatched: number;
-      noEndpointObjects: number;
-    };
-    details: SmartDeepInspectionDetail[];
-  };
-  fallbackReasonBreakdown: Record<SmartFallbackReason, number>;
-}
-
-interface SmartDeepInspectionDetail {
-  consumerServiceName: string;
-  providerServiceName: string;
-  trigger: {
-    lowConfidence: boolean;
-    insufficientContext: boolean;
-    pathNotMatched: boolean;
-    noEndpointObjects: boolean;
-  };
-  status: 'succeeded' | 'no_result' | 'failed';
-  fallbackReasons: SmartFallbackReason[];
-  toolUsage: {
-    searchCalls: number;
-    readCalls: number;
-    endpointListCalls: number;
-    gatewayRouteCalls: number;
-    totalCalls: number;
-  };
-  recoveredCalls: Array<{
-    httpMethod: string;
-    path: string;
-  }>;
-}
-
-function parseDeepInspectionDetail(value: unknown): SmartDeepInspectionDetail | null {
-  const record = asRecord(value);
-  if (!record) return null;
-  const trigger = asRecord(record.trigger);
-  const toolUsage = asRecord(record.toolUsage);
-  const recoveredCall = asRecord(record.recoveredCall);
-  const recoveredCalls = Array.isArray(record.recoveredCalls)
-    ? record.recoveredCalls
-      .map((value) => asRecord(value))
-      .filter((value): value is Record<string, unknown> => value !== null)
-    : [];
-
-  const fallbackReasons = Array.isArray(record.fallbackReasons)
-    ? record.fallbackReasons.filter((reason): reason is SmartFallbackReason => (
-      reason === 'NO_ENDPOINT_OBJECTS'
-      || reason === 'PATH_NOT_MATCHED'
-      || reason === 'METHOD_NOT_MATCHED'
-      || reason === 'INSUFFICIENT_CONTEXT'
-    ))
-    : [];
-
-  const recoveredMethod = typeof recoveredCall?.httpMethod === 'string' ? recoveredCall.httpMethod.trim() : '';
-  const recoveredPath = typeof recoveredCall?.path === 'string' ? recoveredCall.path.trim() : '';
-
-  const parsedRecoveredCalls = recoveredCalls
-    .map((value) => {
-      const httpMethod = typeof value.httpMethod === 'string' ? value.httpMethod.trim() : '';
-      const path = typeof value.path === 'string' ? value.path.trim() : '';
-      return httpMethod.length > 0 && path.length > 0 ? { httpMethod, path } : null;
-    })
-    .filter((value): value is { httpMethod: string; path: string } => value !== null);
-
-  if (parsedRecoveredCalls.length === 0 && recoveredMethod.length > 0 && recoveredPath.length > 0) {
-    parsedRecoveredCalls.push({ httpMethod: recoveredMethod, path: recoveredPath });
-  }
-
-  return {
-    consumerServiceName:
-      typeof record.consumerServiceName === 'string' ? record.consumerServiceName.trim() : '',
-    providerServiceName:
-      typeof record.providerServiceName === 'string' ? record.providerServiceName.trim() : '',
-    trigger: {
-      lowConfidence: !!trigger?.lowConfidence,
-      insufficientContext: !!trigger?.insufficientContext,
-      pathNotMatched: !!trigger?.pathNotMatched,
-      noEndpointObjects: !!trigger?.noEndpointObjects,
-    },
-    status:
-      record.status === 'failed'
-        ? 'failed'
-        : record.status === 'no_result'
-          ? 'no_result'
-          : 'succeeded',
-    fallbackReasons,
-    toolUsage: {
-      searchCalls: asFiniteNumber(toolUsage?.searchCalls) ?? 0,
-      readCalls: asFiniteNumber(toolUsage?.readCalls) ?? 0,
-      endpointListCalls: asFiniteNumber(toolUsage?.endpointListCalls) ?? 0,
-      gatewayRouteCalls: asFiniteNumber(toolUsage?.gatewayRouteCalls) ?? 0,
-      totalCalls: asFiniteNumber(toolUsage?.totalCalls) ?? 0,
-    },
-    recoveredCalls: parsedRecoveredCalls,
-  };
-}
-
-function parseDeepInspectionDetails(value: unknown): SmartDeepInspectionDetail[] {
-  if (!Array.isArray(value)) return [];
-  return value
-    .map((item) => parseDeepInspectionDetail(item))
-    .filter((item): item is SmartDeepInspectionDetail => item !== null);
-}
-
-function parseDeepInspectionTrace(value: unknown): SmartInferenceSummary['deepInspectionTrace'] {
-  const record = asRecord(value);
-  const triggerBreakdown = asRecord(record?.triggerBreakdown);
-  return {
-    attemptedCount: asFiniteNumber(record?.attemptedCount) ?? 0,
-    failureCount: asFiniteNumber(record?.failureCount) ?? 0,
-    triggerBreakdown: {
-      lowConfidence: asFiniteNumber(triggerBreakdown?.lowConfidence) ?? 0,
-      insufficientContext: asFiniteNumber(triggerBreakdown?.insufficientContext) ?? 0,
-      pathNotMatched: asFiniteNumber(triggerBreakdown?.pathNotMatched) ?? 0,
-      noEndpointObjects: asFiniteNumber(triggerBreakdown?.noEndpointObjects) ?? 0,
-    },
-    details: parseDeepInspectionDetails(record?.details),
-  };
-}
-
-function parseFallbackReasonBreakdown(value: unknown): Record<SmartFallbackReason, number> {
-  const record = asRecord(value);
-  return {
-    NO_ENDPOINT_OBJECTS: asFiniteNumber(record?.NO_ENDPOINT_OBJECTS) ?? 0,
-    PATH_NOT_MATCHED: asFiniteNumber(record?.PATH_NOT_MATCHED) ?? 0,
-    METHOD_NOT_MATCHED: asFiniteNumber(record?.METHOD_NOT_MATCHED) ?? 0,
-    INSUFFICIENT_CONTEXT: asFiniteNumber(record?.INSUFFICIENT_CONTEXT) ?? 0,
-  };
-}
-
-function formatFallbackReasonLabel(reason: SmartFallbackReason): string {
-  switch (reason) {
-    case 'NO_ENDPOINT_OBJECTS':
-      return '엔드포인트 객체 없음';
-    case 'PATH_NOT_MATCHED':
-      return '경로 불일치';
-    case 'METHOD_NOT_MATCHED':
-      return '메서드 불일치';
-    case 'INSUFFICIENT_CONTEXT':
-      return '컨텍스트 부족';
-    default:
-      return reason;
-  }
-}
-
-function formatFallbackReasonDescription(reason: SmartFallbackReason): string {
-  switch (reason) {
-    case 'NO_ENDPOINT_OBJECTS':
-      return 'provider 쪽 api_endpoint 객체가 없어 서비스 레벨 후보로 남았습니다.';
-    case 'PATH_NOT_MATCHED':
-      return '호출 경로와 일치하는 endpoint를 찾지 못해 서비스 레벨 후보로 남았습니다.';
-    case 'METHOD_NOT_MATCHED':
-      return '경로는 맞지만 HTTP 메서드가 일치하지 않아 서비스 레벨 후보로 남았습니다.';
-    case 'INSUFFICIENT_CONTEXT':
-      return '코드/프롬프트 증거가 부족해 endpoint 수준으로 확정하지 못했습니다.';
-    default:
-      return 'endpoint 수준으로 확정하지 못해 서비스 레벨 후보로 남았습니다.';
-  }
+  agentFrontierCount: number;
+  agentPatchedFrontierCount: number;
+  frontierBreakdown: Record<string, number>;
+  targetBreakdown: Record<string, number>;
+  candidatesCreated: number;
 }
 
 function getSmartInferenceSummary(payload: unknown): SmartInferenceSummary {
@@ -306,324 +297,160 @@ function getSmartInferenceSummary(payload: unknown): SmartInferenceSummary {
   const nestedSummary = asRecord(nestedData?.summary);
   const runRecord = asRecord(record?.run);
   const runStats = asRecord(runRecord?.stats);
-  const runSmartSummary = asRecord(runStats?.smartSummary);
-  const phase2 = asRecord(nestedData?.phase2);
-  const phase3 = asRecord(nestedData?.phase3);
-  const analysisMode = (
-    directSummary?.analysisMode
-    ?? nestedSummary?.analysisMode
-    ?? runSmartSummary?.analysisMode
-    ?? phase3?.analysisMode
-  ) === 'full_agent'
-    ? 'full_agent'
-    : (
-      directSummary?.analysisMode
-      ?? nestedSummary?.analysisMode
-      ?? runSmartSummary?.analysisMode
-      ?? phase3?.analysisMode
-    ) === 'agent_assisted'
-      ? 'agent_assisted'
-      : 'pair_pack';
-  const deepInspectionTrace = parseDeepInspectionTrace(
-    directSummary?.deepInspectionTrace
-    ?? nestedSummary?.deepInspectionTrace
-    ?? runSmartSummary?.deepInspectionTrace
-    ?? phase3?.deepInspectionTrace,
+  const proofSummary = asRecord(runStats?.proofSummary)
+    ?? directSummary
+    ?? nestedSummary;
+  const frontierBreakdownRecord = asRecord(proofSummary?.frontierBreakdown);
+  const targetBreakdownRecord = asRecord(proofSummary?.targetBreakdown);
+
+  const frontierBreakdown = Object.fromEntries(
+    Object.entries(frontierBreakdownRecord ?? {})
+      .map(([key, value]) => [key, asFiniteNumber(value) ?? 0] as const)
+      .filter(([, value]) => value > 0),
   );
-  const fallbackReasonBreakdown = parseFallbackReasonBreakdown(
-    directSummary?.fallbackReasonBreakdown
-    ?? nestedSummary?.fallbackReasonBreakdown
-    ?? runSmartSummary?.fallbackReasonBreakdown
-    ?? phase3?.fallbackReasonBreakdown,
+  const targetBreakdown = Object.fromEntries(
+    Object.entries(targetBreakdownRecord ?? {})
+      .map(([key, value]) => [key, asFiniteNumber(value) ?? 0] as const)
+      .filter(([, value]) => value > 0),
   );
 
-  const candidatesCreated = asFiniteNumber(directSummary?.candidatesCreated)
-    ?? asFiniteNumber(nestedSummary?.candidatesCreated)
-    ?? asFiniteNumber(runSmartSummary?.candidatesCreated)
-    ?? asFiniteNumber(phase3?.candidateCount)
-    ?? 0;
-  const phase2Count = asFiniteNumber(directSummary?.phase2Count)
-    ?? asFiniteNumber(nestedSummary?.phase2Count)
-    ?? asFiniteNumber(runSmartSummary?.phase2Count)
-    ?? asFiniteNumber(phase2?.analyzedServiceCount)
-    ?? 0;
-  const phase3Count = asFiniteNumber(directSummary?.phase3Count)
-    ?? asFiniteNumber(nestedSummary?.phase3Count)
-    ?? asFiniteNumber(runSmartSummary?.phase3Count)
-    ?? asFiniteNumber(phase3?.analyzedServiceCount)
-    ?? 0;
-  const servicePairCount = asFiniteNumber(directSummary?.servicePairCount)
-    ?? asFiniteNumber(nestedSummary?.servicePairCount)
-    ?? asFiniteNumber(runSmartSummary?.servicePairCount)
-    ?? asFiniteNumber(phase2?.servicePairCount)
-    ?? 0;
-  const atomicCandidateCount = asFiniteNumber(directSummary?.atomicCandidateCount)
-    ?? asFiniteNumber(nestedSummary?.atomicCandidateCount)
-    ?? asFiniteNumber(runSmartSummary?.atomicCandidateCount)
-    ?? asFiniteNumber(phase3?.atomicCandidateCount)
-    ?? 0;
-  const serviceFallbackCount = asFiniteNumber(directSummary?.serviceFallbackCount)
-    ?? asFiniteNumber(nestedSummary?.serviceFallbackCount)
-    ?? asFiniteNumber(runSmartSummary?.serviceFallbackCount)
-    ?? asFiniteNumber(phase3?.serviceFallbackCount)
-    ?? Object.values(fallbackReasonBreakdown).reduce((sum, count) => sum + count, 0);
-  const deepInspectionCount = asFiniteNumber(directSummary?.deepInspectionCount)
-    ?? asFiniteNumber(nestedSummary?.deepInspectionCount)
-    ?? asFiniteNumber(runSmartSummary?.deepInspectionCount)
-    ?? asFiniteNumber(phase3?.deepInspectionCount)
-    ?? deepInspectionTrace.attemptedCount;
-  const agentToolUsageSummaryRecord = asRecord(
-    directSummary?.agentToolUsageSummary
-    ?? nestedSummary?.agentToolUsageSummary
-    ?? runSmartSummary?.agentToolUsageSummary
-    ?? phase3?.agentToolUsageSummary,
-  );
+  const proofClosedAtomicCount = asFiniteNumber(proofSummary?.proofClosedAtomicCount) ?? 0;
+  const proofFrontierCount = asFiniteNumber(proofSummary?.proofFrontierCount) ?? 0;
+  const proofRejectedCount = asFiniteNumber(proofSummary?.proofRejectedCount) ?? 0;
+  const projectedCandidateCount = asFiniteNumber(proofSummary?.projectedCandidateCount) ?? proofClosedAtomicCount;
+  const serviceTargetProjectionCount = asFiniteNumber(proofSummary?.serviceTargetProjectionCount) ?? 0;
+  const atomicCandidateCount = Math.max(projectedCandidateCount - serviceTargetProjectionCount, 0);
 
   return {
-    analysisMode,
-    candidatesCreated,
-    phase2Count,
-    phase3Count,
-    servicePairCount,
+    engine: 'intent_proof',
+    intentCount: asFiniteNumber(proofSummary?.intentCount) ?? (proofClosedAtomicCount + proofFrontierCount + proofRejectedCount),
+    gatewayRouteSeedCount: asFiniteNumber(proofSummary?.gatewayRouteSeedCount) ?? 0,
+    derivedEndpointProofCount: asFiniteNumber(proofSummary?.derivedEndpointProofCount) ?? 0,
+    proofClosedAtomicCount,
+    proofFrontierCount,
+    routeFamilyFrontierCount: asFiniteNumber(proofSummary?.routeFamilyFrontierCount) ?? 0,
+    proofRejectedCount,
+    projectedCandidateCount,
+    serviceTargetProjectionCount,
     atomicCandidateCount,
-    serviceFallbackCount,
-    deepInspectionCount,
-    agentEscalatedPairCount: asFiniteNumber(directSummary?.agentEscalatedPairCount)
-      ?? asFiniteNumber(nestedSummary?.agentEscalatedPairCount)
-      ?? asFiniteNumber(runSmartSummary?.agentEscalatedPairCount)
-      ?? asFiniteNumber(phase3?.agentEscalatedPairCount)
-      ?? 0,
-    agentRecoveredAtomicCount: asFiniteNumber(directSummary?.agentRecoveredAtomicCount)
-      ?? asFiniteNumber(nestedSummary?.agentRecoveredAtomicCount)
-      ?? asFiniteNumber(runSmartSummary?.agentRecoveredAtomicCount)
-      ?? asFiniteNumber(phase3?.agentRecoveredAtomicCount)
-      ?? 0,
-    agentFailedPairCount: asFiniteNumber(directSummary?.agentFailedPairCount)
-      ?? asFiniteNumber(nestedSummary?.agentFailedPairCount)
-      ?? asFiniteNumber(runSmartSummary?.agentFailedPairCount)
-      ?? asFiniteNumber(phase3?.agentFailedPairCount)
-      ?? 0,
-    agentToolUsageSummary: {
-      searchCalls: asFiniteNumber(agentToolUsageSummaryRecord?.searchCalls) ?? 0,
-      readCalls: asFiniteNumber(agentToolUsageSummaryRecord?.readCalls) ?? 0,
-      endpointListCalls: asFiniteNumber(agentToolUsageSummaryRecord?.endpointListCalls) ?? 0,
-      totalCalls: asFiniteNumber(agentToolUsageSummaryRecord?.totalCalls) ?? 0,
-    },
-    deepInspectionTrace,
-    fallbackReasonBreakdown,
+    agentFrontierCount: asFiniteNumber(proofSummary?.agentFrontierCount) ?? 0,
+    agentPatchedFrontierCount: asFiniteNumber(proofSummary?.agentPatchedFrontierCount) ?? 0,
+    frontierBreakdown,
+    targetBreakdown,
+    candidatesCreated: atomicCandidateCount,
   };
-}
-
-function formatDeepInspectionSummary(
-  trace: SmartInferenceSummary['deepInspectionTrace'],
-): string | null {
-  if (trace.attemptedCount <= 0) return null;
-
-  const details: string[] = [];
-  if (trace.triggerBreakdown.lowConfidence > 0) {
-    details.push(`저신뢰 ${trace.triggerBreakdown.lowConfidence}개`);
-  }
-  if (trace.triggerBreakdown.insufficientContext > 0) {
-    details.push(`컨텍스트 부족 ${trace.triggerBreakdown.insufficientContext}개`);
-  }
-  if (trace.triggerBreakdown.pathNotMatched > 0) {
-    details.push(`경로 불일치 ${trace.triggerBreakdown.pathNotMatched}개`);
-  }
-  if (trace.triggerBreakdown.noEndpointObjects > 0) {
-    details.push(`endpoint 미등록 ${trace.triggerBreakdown.noEndpointObjects}개`);
-  }
-  if (trace.failureCount > 0) {
-    details.push(`실패 ${trace.failureCount}개`);
-  }
-
-  return details.length > 0
-    ? `Deep inspect ${trace.attemptedCount}회 (${details.join(', ')})`
-    : `Deep inspect ${trace.attemptedCount}회`;
-}
-
-function formatAnalysisModeLabel(mode: SmartAnalysisMode): string {
-  switch (mode) {
-    case 'agent_assisted':
-      return 'Agent-assisted';
-    case 'full_agent':
-      return 'Full-agent';
-    default:
-      return 'Pair-pack';
-  }
 }
 
 function formatSmartInferenceSuccessMessage(summary: SmartInferenceSummary): string {
   const parts = [
-    formatAnalysisModeLabel(summary.analysisMode),
-    `Config LLM ${summary.phase2Count}회`,
-    `Pair LLM ${summary.phase3Count}회`,
+    `intent ${summary.intentCount}개`,
+    ...(summary.gatewayRouteSeedCount > 0 ? [`route-family seed ${summary.gatewayRouteSeedCount}개`] : []),
+    ...(summary.derivedEndpointProofCount > 0 ? [`derived endpoint proof ${summary.derivedEndpointProofCount}개`] : []),
+    `closed ${summary.proofClosedAtomicCount}개`,
+    `frontier ${summary.proofFrontierCount}개`,
+    `rejected ${summary.proofRejectedCount}개`,
+    `atomic candidate ${summary.atomicCandidateCount}개`,
   ];
 
-  if (summary.servicePairCount > 0) {
-    parts.push(`서비스 쌍 ${summary.servicePairCount}개`);
+  if (summary.routeFamilyFrontierCount > 0) {
+    parts.push(`route-family frontier ${summary.routeFamilyFrontierCount}개`);
   }
-  if (summary.atomicCandidateCount > 0) {
-    parts.push(`원자 후보 ${summary.atomicCandidateCount}개`);
+  if (summary.agentFrontierCount > 0) {
+    parts.push(`agent 대상 frontier ${summary.agentFrontierCount}개`);
   }
-  if (summary.serviceFallbackCount > 0) {
-    const fallbackDetails = (Object.entries(summary.fallbackReasonBreakdown) as Array<[SmartFallbackReason, number]>)
-      .filter(([, count]) => count > 0)
-      .sort(([, leftCount], [, rightCount]) => rightCount - leftCount)
-      .slice(0, MAX_SMART_TOAST_FALLBACK_REASONS)
-      .map(([reason, count]) => `${formatFallbackReasonLabel(reason)} ${count}개`);
-    const fallbackSuffix = fallbackDetails.length > 0 ? ` (${fallbackDetails.join(', ')})` : '';
-    parts.push(`서비스 fallback ${summary.serviceFallbackCount}개${fallbackSuffix}`);
-  }
-  const deepInspectionSummary = formatDeepInspectionSummary(summary.deepInspectionTrace);
-  if (deepInspectionSummary) {
-    parts.push(deepInspectionSummary);
-  }
-  if (summary.agentEscalatedPairCount > 0) {
-    parts.push(`Agent pair ${summary.agentEscalatedPairCount}개`);
-  }
-  if (summary.agentRecoveredAtomicCount > 0) {
-    parts.push(`Agent atomic 복구 ${summary.agentRecoveredAtomicCount}개`);
-  }
-  if (summary.agentFailedPairCount > 0) {
-    parts.push(`Agent 실패 ${summary.agentFailedPairCount}개`);
+  if (summary.agentPatchedFrontierCount > 0) {
+    parts.push(`agent patch 반영 ${summary.agentPatchedFrontierCount}개`);
   }
 
-  return `Smart 추론 완료 — 후보 ${summary.candidatesCreated}개 생성 (${parts.join(', ')})`;
+  return `Smart 추론 완료 — ${parts.join(', ')}`;
 }
 
 function formatSmartInferenceNoCandidateMessage(summary: SmartInferenceSummary): string {
-  const deepInspectionSummary = formatDeepInspectionSummary(summary.deepInspectionTrace);
-  const agentSummary = summary.agentEscalatedPairCount > 0
-    ? `, Agent pair ${summary.agentEscalatedPairCount}개`
-    : '';
-  const deepInspectionSuffix = deepInspectionSummary ? `, ${deepInspectionSummary}` : '';
-  return `Smart 추론 완료 — 신규 후보 0개 (${formatAnalysisModeLabel(summary.analysisMode)}, 서비스 쌍 ${summary.servicePairCount}개, 원자 후보 ${summary.atomicCandidateCount}개, 서비스 fallback ${summary.serviceFallbackCount}개${agentSummary}${deepInspectionSuffix})`;
-}
-
-function formatTraceDetailPair(detail: SmartDeepInspectionDetail): string {
-  const consumer = detail.consumerServiceName.length > 0 ? detail.consumerServiceName : 'consumer 미상';
-  const provider = detail.providerServiceName.length > 0 ? detail.providerServiceName : 'provider 미상';
-  return `${consumer} -> ${provider}`;
-}
-
-function formatTraceDetailTrigger(detail: SmartDeepInspectionDetail): string {
-  const triggers: string[] = [];
-  if (detail.trigger.lowConfidence) triggers.push('저신뢰');
-  if (detail.trigger.insufficientContext) triggers.push('컨텍스트 부족');
-  if (detail.trigger.pathNotMatched) triggers.push('경로 불일치');
-  if (detail.trigger.noEndpointObjects) triggers.push('endpoint 미등록');
-  return triggers.length > 0 ? triggers.join(', ') : '트리거 없음';
-}
-
-function formatTraceDetailResult(detail: SmartDeepInspectionDetail): string {
-  if (detail.recoveredCalls.length > 0) {
-    return `복구 호출 ${detail.recoveredCalls.map((call) => `${call.httpMethod} ${call.path}`).join(', ')}`;
+  const parts = [
+    `intent ${summary.intentCount}개`,
+    ...(summary.gatewayRouteSeedCount > 0 ? [`route-family seed ${summary.gatewayRouteSeedCount}개`] : []),
+    `frontier ${summary.proofFrontierCount}개`,
+    `rejected ${summary.proofRejectedCount}개`,
+  ];
+  if (summary.routeFamilyFrontierCount > 0) {
+    parts.push(`route-family frontier ${summary.routeFamilyFrontierCount}개`);
   }
-  if (detail.fallbackReasons.length > 0) {
-    const fallbackText = detail.fallbackReasons
-      .slice(0, 3)
-      .map((reason) => formatFallbackReasonLabel(reason))
-      .join(', ');
-    return `fallback ${fallbackText}`;
-  }
-  if (detail.status === 'failed') return '복구 실패';
-  if (detail.status === 'no_result') return '복구 결과 없음';
-  return '복구 호출 정보 없음';
+  return `Smart 추론 완료 — atomic 후보 0개 (${parts.join(', ')})`;
 }
 
-function formatTraceDetailStatus(detail: SmartDeepInspectionDetail): string {
-  if (detail.status === 'failed') return '실패';
-  if (detail.status === 'no_result') return '결과 없음';
-  return '성공';
+function formatProjectionInvariantMessage(
+  summary: Pick<
+    SmartInferenceSummary,
+    | 'intentCount'
+    | 'gatewayRouteSeedCount'
+    | 'derivedEndpointProofCount'
+    | 'proofClosedAtomicCount'
+    | 'proofFrontierCount'
+    | 'routeFamilyFrontierCount'
+    | 'proofRejectedCount'
+    | 'atomicCandidateCount'
+    | 'serviceTargetProjectionCount'
+  >,
+): string {
+  const parts = [
+    `intent ${summary.intentCount}개`,
+    ...(summary.gatewayRouteSeedCount > 0 ? [`route-family seed ${summary.gatewayRouteSeedCount}개`] : []),
+    ...(summary.derivedEndpointProofCount > 0 ? [`derived endpoint proof ${summary.derivedEndpointProofCount}개`] : []),
+    `closed ${summary.proofClosedAtomicCount}개`,
+    `frontier ${summary.proofFrontierCount}개`,
+    `rejected ${summary.proofRejectedCount}개`,
+    `atomic candidate ${summary.atomicCandidateCount}개`,
+    `service target projection ${summary.serviceTargetProjectionCount}개`,
+  ];
+  if (summary.routeFamilyFrontierCount > 0) {
+    parts.push(`route-family frontier ${summary.routeFamilyFrontierCount}개`);
+  }
+  return `Smart 추론 경고 — service target projection 불변식 위반 (${parts.join(', ')})`;
 }
+
 
 function SmartTraceViewer({ summary }: { summary: SmartInferenceSummary }) {
-  const trace = summary.deepInspectionTrace;
+  const frontierEntries = Object.entries(summary.frontierBreakdown)
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, 8);
+  const targetEntries = Object.entries(summary.targetBreakdown)
+    .sort(([, left], [, right]) => right - left)
+    .slice(0, 8);
 
   return (
     <div
       data-testid="smart-trace-viewer"
       className="mb-3 rounded-xl border border-sky-500/30 bg-sky-500/5 p-4"
     >
-      <div className="text-sm font-medium text-foreground">Smart Deep Inspection Trace</div>
+      <div className="text-sm font-medium text-foreground">Intent Proof Summary</div>
       <div className="mt-1 text-xs text-muted-foreground">
-        {formatAnalysisModeLabel(summary.analysisMode)} · Deep inspect {trace.attemptedCount}회 · 실패 {trace.failureCount}회 · 저신뢰 {trace.triggerBreakdown.lowConfidence}개 · 컨텍스트 부족 {trace.triggerBreakdown.insufficientContext}개 · 경로 불일치 {trace.triggerBreakdown.pathNotMatched}개 · endpoint 미등록 {trace.triggerBreakdown.noEndpointObjects}개
+        intent {summary.intentCount}개 · route-family seed {summary.gatewayRouteSeedCount}개 · derived endpoint proof {summary.derivedEndpointProofCount}개 · closed {summary.proofClosedAtomicCount}개 · frontier {summary.proofFrontierCount}개 · rejected {summary.proofRejectedCount}개 · projected {summary.projectedCandidateCount}개 · atomic {summary.atomicCandidateCount}개
       </div>
       <div className="mt-1 text-xs text-muted-foreground">
-        Agent pair {summary.agentEscalatedPairCount}개 · atomic 복구 {summary.agentRecoveredAtomicCount}개 · agent 실패 {summary.agentFailedPairCount}개 · tool search/read/endpoint/gateway/total = {summary.agentToolUsageSummary.searchCalls}/{summary.agentToolUsageSummary.readCalls}/{summary.agentToolUsageSummary.endpointListCalls}/{summary.agentToolUsageSummary.gatewayRouteCalls}/{summary.agentToolUsageSummary.totalCalls}
+        route-family frontier {summary.routeFamilyFrontierCount}개
+        {summary.serviceTargetProjectionCount > 0
+          ? ` · 불변식 위반 service target projection ${summary.serviceTargetProjectionCount}개`
+          : ''}
+        {' · '}agent 대상 frontier {summary.agentFrontierCount}개 · agent patch 반영 {summary.agentPatchedFrontierCount}개
       </div>
-      {trace.attemptedCount <= 0 ? (
-        <div className="mt-3 text-xs text-muted-foreground">이번 실행에서 deep inspection은 수행되지 않았습니다.</div>
-      ) : trace.details.length === 0 ? (
-        <div className="mt-3 text-xs text-muted-foreground">pair 상세 정보 없음</div>
+      {frontierEntries.length === 0 && targetEntries.length === 0 ? (
+        <div className="mt-3 text-xs text-muted-foreground">이번 실행에서 추가 breakdown 정보가 없습니다.</div>
       ) : (
-        <div className="mt-3 space-y-2">
-          {trace.details.map((detail, index) => (
-            <div
-              key={`trace-${index}-${detail.consumerServiceName}-${detail.providerServiceName}`}
-              className="rounded-lg border border-border/60 bg-background/70 px-3 py-2 text-xs"
-            >
-              <div className="font-medium text-foreground">
-                {formatTraceDetailPair(detail)}
-              </div>
-              <div className="mt-1 text-muted-foreground">
-                트리거 {formatTraceDetailTrigger(detail)} · 상태 {formatTraceDetailStatus(detail)}
-              </div>
-              <div className="mt-1 text-muted-foreground">
-                도구 사용 search/read/endpoint/total = {detail.toolUsage.searchCalls}/{detail.toolUsage.readCalls}/{detail.toolUsage.endpointListCalls}/{detail.toolUsage.totalCalls}
-              </div>
-              <div className="mt-1 text-muted-foreground">{formatTraceDetailResult(detail)}</div>
+        <div className="mt-3 space-y-2 text-xs text-muted-foreground">
+          {frontierEntries.length > 0 && (
+            <div>
+              Frontier breakdown: {frontierEntries.map(([reason, count]) => `${reason} ${count}개`).join(', ')}
             </div>
-          ))}
+          )}
+          {targetEntries.length > 0 && (
+            <div>
+              Target breakdown: {targetEntries.map(([target, count]) => `${target} ${count}개`).join(', ')}
+            </div>
+          )}
         </div>
       )}
     </div>
   );
-}
-
-function getSmartFallbackReason(candidate: RelationCandidate): SmartFallbackReason | null {
-  const reason = candidate.metadata?.fallbackReason;
-  if (
-    candidate.metadata?.targetType !== 'service'
-    || (
-      candidate.metadata?.analysisMode !== 'pair_pack'
-      && candidate.metadata?.analysisMode !== 'agent_deep_inspection'
-      && candidate.metadata?.analysisMode !== 'full_agent'
-    )
-    || !reason
-  ) {
-    return null;
-  }
-  return reason;
-}
-
-function getSmartFallbackContext(candidate: RelationCandidate): SmartFallbackContext | null {
-  const context = candidate.metadata?.fallbackContext;
-  if (
-    candidate.metadata?.targetType !== 'service'
-    || (
-      candidate.metadata?.analysisMode !== 'pair_pack'
-      && candidate.metadata?.analysisMode !== 'agent_deep_inspection'
-      && candidate.metadata?.analysisMode !== 'full_agent'
-    )
-    || !context
-  ) {
-    return null;
-  }
-
-  const attemptedMethod = typeof context.attemptedMethod === 'string' ? context.attemptedMethod.trim() : '';
-  const attemptedPath = typeof context.attemptedPath === 'string' ? context.attemptedPath.trim() : '';
-  const evidenceSummary = typeof context.evidenceSummary === 'string' && context.evidenceSummary.trim().length > 0
-    ? context.evidenceSummary.trim()
-    : undefined;
-
-  if (!attemptedMethod || !attemptedPath) return null;
-
-  return {
-    attemptedMethod,
-    attemptedPath,
-    ...(evidenceSummary ? { evidenceSummary } : {}),
-  };
 }
 
 function asRelationFeedbackMetadata(value: unknown): RelationFeedbackMetadata | null {
@@ -734,38 +561,84 @@ function FeedbackHint({
   );
 }
 
-function SmartFallbackHint({ candidate }: { candidate: RelationCandidate }) {
-  const reason = getSmartFallbackReason(candidate);
-  const context = getSmartFallbackContext(candidate);
-  if (!reason) return null;
+function ProofChainPanel({ candidate }: { candidate: RelationCandidate }) {
+  const proof = getProofChainMetadata(candidate);
+  if (!proof) return null;
 
   return (
-    <div
-      data-testid="approval-smart-fallback-hint"
-      className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-950"
-    >
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-        <span className="font-medium">Smart fallback</span>
-        <span className="rounded-full border border-amber-600/30 px-2 py-0.5">
-          {formatFallbackReasonLabel(reason)}
-        </span>
-      </div>
-      <div className="mt-1 text-amber-900/90">
-        {formatFallbackReasonDescription(reason)}
-      </div>
-      {context && (
-        <div className="mt-2 space-y-1 text-amber-950/90">
-          <div>
-            시도 호출 {context.attemptedMethod} {context.attemptedPath}
+    <details data-testid="approval-proof-chain" className="mt-3 rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+      <summary className="cursor-pointer text-xs font-medium text-foreground">
+        Proof chain drill-down
+      </summary>
+      <div className="mt-2 space-y-2 text-xs text-muted-foreground">
+        {proof.sourceService && <div>source service: {proof.sourceService}</div>}
+        {proof.sourceFunction && <div>source function: {proof.sourceFunction}</div>}
+        {proof.resolvedProviderEndpoint && <div>resolved provider endpoint: {proof.resolvedProviderEndpoint}</div>}
+        {proof.routeChain.length > 0 && <div>route chain: {proof.routeChain.join(' -> ')}</div>}
+        {proof.supportingEvidence.length > 0 && (
+          <div>supporting evidence: {proof.supportingEvidence.join(' | ')}</div>
+        )}
+        {proof.contradictions.length > 0 && <div>contradiction: {proof.contradictions.join(', ')}</div>}
+        {proof.steps.length > 0 && (
+          <div data-testid="approval-proof-steps">
+            proof steps: {proof.steps.map((step) => `${step.type}(${step.status})`).join(' -> ')}
           </div>
-          {context.evidenceSummary && (
-            <div>
-              근거 {context.evidenceSummary}
+        )}
+        {proof.frontierHistory.length > 0 && (
+          <div>
+            frontier history: {proof.frontierHistory.map((item) => item.reason).join(', ')}
+          </div>
+        )}
+        {proof.patchHistory.length > 0 && (
+          <div>
+            patch history: {proof.patchHistory.map((item) => `${item.type}(${item.status})`).join(', ')}
+          </div>
+        )}
+      </div>
+    </details>
+  );
+}
+
+function FrontierQueuePanel({ candidates }: { candidates: RelationCandidate[] }) {
+  const entries = candidates.flatMap((candidate) => {
+    const proof = getProofChainMetadata(candidate);
+    if (!proof || proof.frontierHistory.length === 0) return [];
+    return proof.frontierHistory.map((frontier) => ({
+      candidate,
+      frontier,
+    }));
+  });
+
+  if (entries.length === 0) return null;
+
+  return (
+    <section
+      data-testid="frontier-queue"
+      className="mb-4 rounded-xl border border-border/70 bg-muted/10 p-3"
+      aria-label="Frontier queue"
+    >
+      <h3 className="text-sm font-medium text-foreground">Frontier Queue ({entries.length})</h3>
+      <div className="mt-2 space-y-2">
+        {entries.map(({ candidate, frontier }) => (
+          <details key={`${candidate.id}-${frontier.id}`} data-testid="frontier-item" className="rounded-lg border border-border/60 bg-background/60 px-3 py-2">
+            <summary className="cursor-pointer text-xs text-foreground">
+              {candidate.subjectName}
+              {' -> '}
+              {candidate.objectName}
+              {' · reason '}
+              {frontier.reason}
+            </summary>
+            <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+              <div>missing slots: {frontier.missingSlots.length > 0 ? frontier.missingSlots.join(', ') : 'none'}</div>
+              <div>last attempted step: {frontier.lastResolutionStep ?? 'unknown'}</div>
+              <div>agent patch: {formatYesNo(frontier.agentPatched)}</div>
+              <div>retryable: {formatYesNo(frontier.retryable)}</div>
+              {frontier.snippets.length > 0 && <div>snippets: {frontier.snippets.join(' | ')}</div>}
             </div>
-          )}
-        </div>
-      )}
-    </div>
+          </details>
+        ))}
+      </div>
+    </section>
   );
 }
 
@@ -787,7 +660,6 @@ type CrossValidationSort = 'cross-validation-priority' | 'confidence-desc' | 'co
 
 const CODE_ENGINE_LS_KEY = 'archi-navi:inference:code-engine';
 const CANDIDATE_PAGE_SIZE = 200;
-const MAX_SMART_TOAST_FALLBACK_REASONS = 3;
 
 function resolveCodeEngine(): 'hybrid' | 'ast' | 'regex' {
   if (typeof window === 'undefined') return 'hybrid';
@@ -795,14 +667,6 @@ function resolveCodeEngine(): 'hybrid' | 'ast' | 'regex' {
   if (saved === 'regex') return 'regex';
   if (saved === 'ast' || saved === 'auto') return 'ast';
   return 'hybrid';
-}
-
-function resolveSmartAnalysisMode(
-  inferenceMode: 'standard' | 'llm-boost' | 'smart' | 'smart-agent' | 'smart-full-agent',
-): SmartAnalysisMode {
-  if (inferenceMode === 'smart-agent') return 'agent_assisted';
-  if (inferenceMode === 'smart-full-agent') return 'full_agent';
-  return 'pair_pack';
 }
 
 async function resolveInferenceRepoRoots(workspaceId: string): Promise<string[]> {
@@ -814,12 +678,8 @@ async function resolveInferenceRepoRoots(workspaceId: string): Promise<string[]>
 
     const payload = (await res.json()) as ScanPathsResponse;
     const parentDirs = (payload.parentDirs ?? []).map((path) => path.trim()).filter((path) => path.length > 0);
-    if (parentDirs.length > 0) {
-      return [...new Set(parentDirs)];
-    }
-
     const paths = (payload.paths ?? []).map((path) => path.trim()).filter((path) => path.length > 0);
-    return [...new Set(paths)];
+    return [...new Set([...parentDirs, ...paths])];
   } catch {
     return [];
   }
@@ -933,8 +793,8 @@ export function ApprovalList() {
     'cross-validation-priority',
   );
 
-  // S1-1: LLM 추론 관련 상태
-  const [inferenceMode, setInferenceMode] = useState<'standard' | 'llm-boost' | 'smart' | 'smart-agent' | 'smart-full-agent'>('standard');
+  // S1-1: 추론 실행 관련 상태
+  const [inferenceMode, setInferenceMode] = useState<'standard' | 'smart'>('standard');
   const [includeDbInference, setIncludeDbInference] = useState(true);
   const [runningLlmFilter, setRunningLlmFilter] = useState(false);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
@@ -995,7 +855,9 @@ export function ApprovalList() {
     if (status === 'SUCCEEDED') {
       const summary = getSmartInferenceSummary(payload);
       setLastSmartInferenceSummary(summary);
-      if (summary.candidatesCreated > 0) {
+      if (summary.serviceTargetProjectionCount > 0) {
+        toast.warning(formatProjectionInvariantMessage(summary));
+      } else if (summary.candidatesCreated > 0) {
         toast.success(formatSmartInferenceSuccessMessage(summary));
       } else {
         toast.warning(formatSmartInferenceNoCandidateMessage(summary));
@@ -1044,11 +906,7 @@ export function ApprovalList() {
       const repoRoots = await resolveInferenceRepoRoots(workspaceId);
 
       // S1-1a: Smart Pipeline 모드
-      if (
-        inferenceMode === 'smart'
-        || inferenceMode === 'smart-agent'
-        || inferenceMode === 'smart-full-agent'
-      ) {
+      if (inferenceMode === 'smart') {
         const res = await fetch('/api/inference/smart', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', ...aiHeaders },
@@ -1057,7 +915,6 @@ export function ApprovalList() {
             repoRoots,
             useServiceMetadataPaths: true,
             async: true,
-            analysisMode: resolveSmartAnalysisMode(inferenceMode),
           }),
         });
         const payload = (await res.json()) as unknown;
@@ -1083,7 +940,7 @@ export function ApprovalList() {
         return;
       }
 
-      // S1-1b: LLM Boost 모드 또는 Standard 모드
+      // S1-1b: Standard 모드
       const body: Record<string, unknown> = {
         workspaceId,
         modes: includeDbInference ? ['config', 'code', 'db'] : ['config', 'code'],
@@ -1092,14 +949,6 @@ export function ApprovalList() {
         codeEngine: resolveCodeEngine(),
       };
 
-      if (inferenceMode === 'llm-boost') {
-        body.llmBoost = {
-          enabled: true,
-          codeIntentAnalysis: true,
-          generateExplanations: true,
-        };
-      }
-
       const res = await fetch('/api/inference/run', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...aiHeaders },
@@ -1107,9 +956,23 @@ export function ApprovalList() {
       });
       const payload = (await res.json()) as {
         error?: string;
-        summary?: { relationCandidatesCreated?: number };
+        summary?: {
+          relationCandidatesCreated?: number;
+          projectedCandidateCount?: number;
+          gatewayRouteSeedCount?: number;
+          routeFamilyFrontierCount?: number;
+          serviceTargetProjectionCount?: number;
+        };
         results?: {
-          config?: { processedFileCount?: number };
+          config?: {
+            fileCount?: number;
+            processedFileCount?: number;
+            skippedFileCount?: number;
+            aliasBindingCount?: number;
+            routeTransformCount?: number;
+            interactionIntentCount?: number;
+            gatewayRouteSeedCount?: number;
+          };
           code?: {
             signalCount?: number;
             enginesUsed?: string[];
@@ -1117,24 +980,40 @@ export function ApprovalList() {
             scanFailures?: Array<{ filePath: string; reason: string; language: string }>;
           };
         };
-        llmBoost?: { codeIntentAnalysis?: { generatedCount?: number } };
+        llmBoost?: {
+          skippedReason?: string;
+          codeIntentAnalysis?: { generatedCount?: number };
+        };
         warnings?: string[];
       };
       if (!res.ok) throw new Error(payload.error ?? '추론 실행 실패');
 
-      const created = payload.summary?.relationCandidatesCreated ?? 0;
+      const serviceTargetProjectionCount = payload.summary?.serviceTargetProjectionCount ?? 0;
+      const created = Math.max(
+        (payload.summary?.projectedCandidateCount ?? payload.summary?.relationCandidatesCreated ?? 0)
+          - serviceTargetProjectionCount,
+        0,
+      );
       const enginesUsed = payload.results?.code?.enginesUsed ?? [];
       const fallbackCount = payload.results?.code?.fallbackCount ?? 0;
       const scanFailureCount = payload.results?.code?.scanFailures?.length ?? 0;
-      const llmBoostCount = payload.llmBoost?.codeIntentAnalysis?.generatedCount ?? 0;
+      const configStats = payload.results?.config;
+      const gatewayRouteSeedCount =
+        configStats?.gatewayRouteSeedCount
+        ?? payload.summary?.gatewayRouteSeedCount
+        ?? 0;
+      const routeFamilyFrontierCount = payload.summary?.routeFamilyFrontierCount ?? 0;
+      const processedConfigFiles = configStats?.processedFileCount ?? 0;
+      const configArtifactsFound =
+        (configStats?.fileCount ?? 0) > 0
+        || (configStats?.aliasBindingCount ?? 0) > 0
+        || (configStats?.routeTransformCount ?? 0) > 0
+        || (configStats?.interactionIntentCount ?? 0) > 0;
 
       // 엔진 메타 정보 문자열 조립
       const engineParts: string[] = [];
       if (enginesUsed.length > 0) {
         engineParts.push(`엔진: ${enginesUsed.join('+')}`);
-      }
-      if (llmBoostCount > 0) {
-        engineParts.push(`LLM 보강: ${llmBoostCount}건`);
       }
       if (fallbackCount > 0) {
         engineParts.push(`fallback ${fallbackCount}건`);
@@ -1142,13 +1021,25 @@ export function ApprovalList() {
       if (scanFailureCount > 0) {
         engineParts.push(`파싱 실패 ${scanFailureCount}건`);
       }
+      if (gatewayRouteSeedCount > 0) {
+        engineParts.push(`route-family seed ${gatewayRouteSeedCount}개`);
+      }
+      if (routeFamilyFrontierCount > 0) {
+        engineParts.push(`route-family frontier ${routeFamilyFrontierCount}개`);
+      }
       const engineSuffix = engineParts.length > 0 ? ` (${engineParts.join(', ')})` : '';
 
-      if (created > 0) {
-        toast.success(`추론 실행 완료 — 관계 후보 ${created}개 생성${engineSuffix}`);
+      if (serviceTargetProjectionCount > 0) {
+        const baseMessage = created > 0
+          ? `추론 실행 완료 — atomic 후보 ${created}개 생성`
+          : '추론 실행 완료 — atomic 후보 0개';
+        toast.warning(
+          `${baseMessage} (service target projection ${serviceTargetProjectionCount}개 감지, 문서 불변식 위반${engineSuffix})`,
+        );
+      } else if (created > 0) {
+        toast.success(`추론 실행 완료 — atomic 후보 ${created}개 생성${engineSuffix}`);
       } else {
         const codeSignals = payload.results?.code?.signalCount ?? 0;
-        const processedConfigFiles = payload.results?.config?.processedFileCount ?? 0;
         const primaryWarning = payload.warnings?.[0];
 
         if (primaryWarning) {
@@ -1157,7 +1048,7 @@ export function ApprovalList() {
           toast.warning(
             `후보 0개 — 코드 시그널 ${codeSignals}개 추출됨 (관계 후보 생성은 config/db 결과 기준)`,
           );
-        } else if (processedConfigFiles === 0) {
+        } else if (!configArtifactsFound && processedConfigFiles === 0) {
           toast.warning('후보 0개 — 처리된 설정 파일이 없습니다. repoRoot/scanPath를 확인하세요.');
         } else {
           toast.warning('추론 실행 완료 — 신규 관계 후보가 생성되지 않았습니다.');
@@ -1393,10 +1284,7 @@ export function ApprovalList() {
             className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
           >
             <option value="standard">정적 분석</option>
-            <option value="llm-boost">정적 + LLM 보강</option>
-            <option value="smart">Smart Pair-pack</option>
-            <option value="smart-agent">Smart Agent-assisted</option>
-            <option value="smart-full-agent">Smart Full-agent</option>
+            <option value="smart">Smart Proof Engine</option>
           </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <input
@@ -1411,7 +1299,7 @@ export function ApprovalList() {
             onClick={() => void runInference()}
             disabled={runningInference || activeSmartRunId !== null}
           >
-            {inferenceMode === 'smart' || inferenceMode === 'smart-agent' || inferenceMode === 'smart-full-agent'
+            {inferenceMode === 'smart'
               ? <Bot className="h-3.5 w-3.5 mr-1.5" />
               : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
             {runningInference || activeSmartRunId !== null ? '추론 실행 중...' : '추론 실행'}
@@ -1441,6 +1329,7 @@ export function ApprovalList() {
   return (
     <>
       {lastSmartInferenceSummary && <SmartTraceViewer summary={lastSmartInferenceSummary} />}
+      <FrontierQueuePanel candidates={candidates} />
       <div className="mb-3 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
         <div className="flex flex-col gap-3 sm:flex-row">
           <label className="flex flex-col gap-1 text-xs text-muted-foreground">
@@ -1491,10 +1380,7 @@ export function ApprovalList() {
             className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
           >
             <option value="standard">정적 분석</option>
-            <option value="llm-boost">정적 + LLM 보강</option>
-            <option value="smart">Smart Pair-pack</option>
-            <option value="smart-agent">Smart Agent-assisted</option>
-            <option value="smart-full-agent">Smart Full-agent</option>
+            <option value="smart">Smart Proof Engine</option>
           </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <input
@@ -1510,11 +1396,9 @@ export function ApprovalList() {
             onClick={() => void runInference()}
             disabled={runningInference || activeSmartRunId !== null}
           >
-            {inferenceMode === 'smart' || inferenceMode === 'smart-agent' || inferenceMode === 'smart-full-agent'
+            {inferenceMode === 'smart'
               ? <Bot className="h-3.5 w-3.5 mr-1.5" />
-              : inferenceMode === 'llm-boost'
-                ? <Zap className="h-3.5 w-3.5 mr-1.5" />
-                : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
+              : <Sparkles className="h-3.5 w-3.5 mr-1.5" />}
             {runningInference || activeSmartRunId !== null ? '추론 실행 중...' : '추론 실행'}
           </Button>
         </div>
@@ -1604,7 +1488,7 @@ export function ApprovalList() {
                           {llmExplanation}
                         </p>
                       )}
-                      <SmartFallbackHint candidate={cand} />
+                      <ProofChainPanel candidate={cand} />
                       <FeedbackHint candidate={cand} compoundCandidate />
                     </div>
 
@@ -1682,6 +1566,7 @@ export function ApprovalList() {
                           {llmExplanation}
                         </p>
                       )}
+                      <ProofChainPanel candidate={cand} />
                       <FeedbackHint candidate={cand} compoundCandidate={false} />
                     </div>
 

@@ -2,12 +2,18 @@ import { execFileSync } from 'node:child_process';
 import { existsSync, mkdtempSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
-import { and, desc, eq, inArray } from 'drizzle-orm';
+import { and, desc, eq, inArray, or } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import {
+  aliasBindings,
+  functionSummaries,
   inferenceRunEvents,
   inferenceRuns,
   inferenceRunSources,
+  interactionIntents,
+  proofDependencies,
+  proofStates,
+  routeTransforms,
 } from '@archi-navi/db';
 import {
   extractCodeSignalsWithEngine,
@@ -15,17 +21,136 @@ import {
   type CodeSignalEngine,
 } from '../code/codeSignalEngine';
 import { extractDbSchemaSignals } from '../db/dbSchemaSignal';
-import { inferRelationsFromConfig } from '../relation/configBased';
+import { extractAliasBindingsFromCodeSignals, extractAliasBindingsFromConfig } from '../extraction/aliasBindings';
+import { extractFunctionSummariesFromCodeSignals } from '../extraction/functionSummary';
 import {
-  bindConfigToCodeEndpoints,
-  type ConfigCodeBindingResult,
-} from '../relation/configCodeBinding';
-import { crossValidatePendingRelationCandidates } from '../relation/crossSignalValidation';
-import { inferRelationsFromCodeSignals } from '../relation/codeBased';
+  extractInteractionIntentsFromCodeSignals,
+  extractInteractionIntentsFromConfigRoutes,
+} from '../extraction/intents';
+import { extractRouteTransformsFromConfig } from '../extraction/routeTransforms';
+import { runFrontierAgentPass } from '../agent/frontierAgent';
+import { buildIntentProofResolverContext, resolveInteractionIntentProof } from './intentProofEngine';
+import { buildProofEngineSummaryForRun } from './proofEngineRun';
+import { buildIntentProofCutoverArtifact } from './intentProofCutoverReport';
+import { findFiles } from '../utils/fileDiscovery';
 
 export type InferenceMode = 'config' | 'code' | 'db';
 export type InferenceSourceType = 'local' | 'githubRepo' | 'githubOrg';
 export type InferenceRunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED';
+
+async function collectImpactedIntentIdsForRun(
+  db: DbClient,
+  input: { workspaceId: string; runId: string; incremental: boolean },
+): Promise<string[]> {
+  const listAllIntentIds = async () => {
+    const rows = await db
+      .select({ id: interactionIntents.id })
+      .from(interactionIntents)
+      .where(eq(interactionIntents.workspaceId, input.workspaceId));
+    return rows.map((row) => row.id);
+  };
+
+  if (!input.incremental) {
+    return await listAllIntentIds();
+  }
+
+  const [updatedIntents, updatedBindings, updatedSummaries, updatedTransforms] = await Promise.all([
+    db
+      .select({ id: interactionIntents.id })
+      .from(interactionIntents)
+      .where(and(eq(interactionIntents.workspaceId, input.workspaceId), eq(interactionIntents.updatedRunId, input.runId))),
+    db
+      .select({ aliasKey: aliasBindings.aliasKey })
+      .from(aliasBindings)
+      .where(and(eq(aliasBindings.workspaceId, input.workspaceId), eq(aliasBindings.updatedRunId, input.runId))),
+    db
+      .select({ functionId: functionSummaries.functionId })
+      .from(functionSummaries)
+      .where(and(eq(functionSummaries.workspaceId, input.workspaceId), eq(functionSummaries.updatedRunId, input.runId))),
+    db
+      .select({ ownerServiceId: routeTransforms.ownerServiceId })
+      .from(routeTransforms)
+      .where(and(eq(routeTransforms.workspaceId, input.workspaceId), eq(routeTransforms.updatedRunId, input.runId))),
+  ]);
+
+  const dependencyClauses = [];
+  const aliasKeys = updatedBindings.map((row) => row.aliasKey).filter((value): value is string => typeof value === 'string' && value.length > 0);
+  if (aliasKeys.length > 0) {
+    dependencyClauses.push(and(eq(proofDependencies.dependencyKind, 'alias_binding'), inArray(proofDependencies.dependencyKey, aliasKeys)));
+  }
+  const functionIds = updatedSummaries.map((row) => row.functionId).filter((value): value is string => typeof value === 'string' && value.length > 0);
+  if (functionIds.length > 0) {
+    dependencyClauses.push(and(eq(proofDependencies.dependencyKind, 'function_summary_function'), inArray(proofDependencies.dependencyKey, functionIds)));
+  }
+  const ownerServiceIds = updatedTransforms.map((row) => row.ownerServiceId).filter((value): value is string => typeof value === 'string' && value.length > 0);
+  if (ownerServiceIds.length > 0) {
+    dependencyClauses.push(and(eq(proofDependencies.dependencyKind, 'route_transform_owner_service'), inArray(proofDependencies.dependencyKey, ownerServiceIds)));
+  }
+
+  const dependencyBackedIntentIds = dependencyClauses.length === 0
+    ? []
+    : (
+      await db
+        .select({ intentId: proofStates.intentId })
+        .from(proofDependencies)
+        .innerJoin(proofStates, eq(proofStates.id, proofDependencies.proofStateId))
+        .where(
+          and(
+            eq(proofDependencies.workspaceId, input.workspaceId),
+            dependencyClauses.length === 1 ? dependencyClauses[0]! : or(...dependencyClauses),
+          ),
+        )
+    ).map((row) => row.intentId);
+
+  const impactedIntentIds = [...new Set([...updatedIntents.map((row) => row.id), ...dependencyBackedIntentIds])];
+  if (impactedIntentIds.length > 0) {
+    return impactedIntentIds;
+  }
+
+  const [allIntentIds, dependencyRows] = await Promise.all([
+    listAllIntentIds(),
+    db
+      .select({ id: proofDependencies.id })
+      .from(proofDependencies)
+      .where(eq(proofDependencies.workspaceId, input.workspaceId))
+      .limit(1),
+  ]);
+
+  // Bootstrap incremental runs still need one full proof pass before dependencies exist.
+  return dependencyRows.length === 0 ? allIntentIds : [];
+}
+
+function countConfigFiles(repoRoot: string): { fileCount: number; processedFileCount: number; skippedFileCount: number } {
+  const fileCount = findFiles(repoRoot, (filePath) => {
+    const base = filePath.split('/').pop() ?? '';
+    const normalized = filePath.replace(/\\/g, '/');
+    if (
+      (base.startsWith('application') || base.startsWith('bootstrap'))
+      && (base.endsWith('.yml') || base.endsWith('.yaml'))
+    ) {
+      return true;
+    }
+    if (base.startsWith('docker-compose') && (base.endsWith('.yml') || base.endsWith('.yaml'))) {
+      return true;
+    }
+    if (!(base.endsWith('.yml') || base.endsWith('.yaml'))) {
+      return false;
+    }
+    return (
+      normalized.includes('/k8s/')
+      || normalized.includes('/kubernetes/')
+      || normalized.includes('/manifests/')
+      || base.startsWith('deployment')
+      || base.startsWith('service')
+    );
+  }).length;
+
+  return {
+    fileCount,
+    processedFileCount: fileCount,
+    skippedFileCount: 0,
+  };
+}
 
 const ALL_MODES: InferenceMode[] = ['config', 'code', 'db'];
 
@@ -41,14 +166,14 @@ function didAllSelectedModesSucceed(input: {
   modeSet: ReadonlySet<InferenceMode>;
   expectedLocalSourceCount: number;
   successfulConfigRepoCount: number;
-  successfulCodeRelationRepoCount: number;
+  successfulCodeRepoCount: number;
   dbSucceeded: boolean;
 }): boolean {
   const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
     modeSet: input.modeSet,
     expectedLocalSourceCount: input.expectedLocalSourceCount,
     successfulConfigRepoCount: input.successfulConfigRepoCount,
-    successfulCodeRelationRepoCount: input.successfulCodeRelationRepoCount,
+    successfulCodeRepoCount: input.successfulCodeRepoCount,
   });
   const selectedDbModeSucceeded = !input.modeSet.has('db') || input.dbSucceeded;
 
@@ -59,13 +184,13 @@ function didSelectedConfigAndCodeModesSucceed(input: {
   modeSet: ReadonlySet<InferenceMode>;
   expectedLocalSourceCount: number;
   successfulConfigRepoCount: number;
-  successfulCodeRelationRepoCount: number;
+  successfulCodeRepoCount: number;
 }): boolean {
   const allSelectedCodeRootsSucceeded =
     !input.modeSet.has('code')
     || (
       input.expectedLocalSourceCount > 0
-      && input.successfulCodeRelationRepoCount === input.expectedLocalSourceCount
+      && input.successfulCodeRepoCount === input.expectedLocalSourceCount
     );
   const allSelectedConfigRootsSucceeded =
     !input.modeSet.has('config')
@@ -143,6 +268,8 @@ export interface CreateInferenceRunInput {
   modes?: string[];
   codeEngine?: string | null;
   incremental?: boolean;
+  enableAgentPatches?: boolean;
+  maxAgentFrontiers?: number | null;
   triggerType?: string;
   maxAttempts?: number;
   idempotencyKey?: string | null;
@@ -302,6 +429,53 @@ function summarizeSources(sources: Array<{ sourceType: string }>): Record<string
   return summary;
 }
 
+function readEnvBool(name: string): boolean | null {
+  const value = process.env[name]?.trim().toLowerCase();
+  if (!value) return null;
+  if (value === '1' || value === 'true' || value === 'yes' || value === 'on') return true;
+  if (value === '0' || value === 'false' || value === 'no' || value === 'off') return false;
+  return null;
+}
+
+function normalizeMaxAgentFrontiers(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return 25;
+  }
+  return Math.max(0, Math.floor(value));
+}
+
+function buildRequestedAgentPatchSettings(input?: {
+  enableAgentPatches?: boolean;
+  maxAgentFrontiers?: number | null;
+}): { enabled: boolean; maxFrontiers: number } {
+  const envEnabled = readEnvBool('ARCHI_NAVI_ENABLE_AGENT_PATCHES');
+  const enabled = input?.enableAgentPatches ?? envEnabled ?? false;
+  const envMax = process.env['ARCHI_NAVI_MAX_AGENT_FRONTIERS'];
+  const parsedEnvMax = envMax ? Number(envMax) : null;
+  return {
+    enabled,
+    maxFrontiers: normalizeMaxAgentFrontiers(
+      input?.maxAgentFrontiers ?? (typeof parsedEnvMax === 'number' && Number.isFinite(parsedEnvMax) ? parsedEnvMax : 25),
+    ),
+  };
+}
+
+function readRequestedAgentPatchSettingsFromRunStats(
+  stats: unknown,
+): { enabled: boolean; maxFrontiers: number } {
+  const record = stats && typeof stats === 'object' && !Array.isArray(stats)
+    ? (stats as Record<string, unknown>)
+    : {};
+  const requested = record['requestedAgentPatches'];
+  const requestedRecord = requested && typeof requested === 'object' && !Array.isArray(requested)
+    ? (requested as Record<string, unknown>)
+    : {};
+  return buildRequestedAgentPatchSettings({
+    enableAgentPatches: requestedRecord['enabled'] === true,
+    maxAgentFrontiers: typeof requestedRecord['maxFrontiers'] === 'number' ? requestedRecord['maxFrontiers'] : null,
+  });
+}
+
 async function getInferenceRunStatus(
   db: DbClient,
   input: { workspaceId: string; runId: string },
@@ -357,6 +531,7 @@ export async function createInferenceRun(
     }
   }
   const uniqueSources = Array.from(uniqueSourceMap.values());
+  const requestedAgentPatches = buildRequestedAgentPatchSettings(input);
 
   if (input.idempotencyKey) {
     const existing = await db
@@ -386,7 +561,9 @@ export async function createInferenceRun(
       maxAttempts: Math.max(1, input.maxAttempts ?? 1),
       idempotencyKey: input.idempotencyKey ?? null,
       sourceSummary: summarizeSources(uniqueSources.map((source) => ({ sourceType: source.type }))),
-      stats: {},
+      stats: {
+        requestedAgentPatches,
+      },
       warnings: [],
       errors: [],
     })
@@ -417,6 +594,7 @@ export async function createInferenceRun(
       modes,
       codeEngine,
       sourceCount: uniqueSources.length,
+      requestedAgentPatches,
     },
   });
 
@@ -777,8 +955,10 @@ export async function executeInferenceRun(
     fileCount: 0,
     processedFileCount: 0,
     skippedFileCount: 0,
-    candidateCount: 0,
-    objectCount: 0,
+    aliasBindingCount: 0,
+    routeTransformCount: 0,
+    interactionIntentCount: 0,
+    gatewayRouteSeedCount: 0,
   };
   const codeEngine = normalizeCodeSignalEngine(run.requestedCodeEngine);
   const codeResult = {
@@ -787,7 +967,9 @@ export async function executeInferenceRun(
     artifactCount: 0,
     signalCount: 0,
     skippedCount: 0,
-    candidateCount: 0,
+    aliasBindingCount: 0,
+    functionSummaryCount: 0,
+    interactionIntentCount: 0,
     engineRequested: codeEngine,
     enginesUsed: [] as string[],
     fallbackCount: 0,
@@ -801,16 +983,24 @@ export async function executeInferenceRun(
         fkCandidateCount: number;
         implicitFkCandidateCount: number;
       } = null;
-  let crossBindingResult: ConfigCodeBindingResult | null = null;
-  let successfulCodeRelationRepoCount = 0;
-  const successfulCodeRepoRoots: string[] = [];
-  let crossValidationResult:
-    | null
-    | {
-        candidateCount: number;
-        validatedCount: number;
-          skippedSingleSourceCount: number;
-        } = null;
+  let successfulCodeRepoCount = 0;
+  const proofResolution = {
+    intentCount: 0,
+    closedAtomicCount: 0,
+    frontierCount: 0,
+    rejectedCount: 0,
+  };
+  const requestedAgentPatches = readRequestedAgentPatchSettingsFromRunStats(run.stats);
+  const frontierAgent = {
+    enabled: requestedAgentPatches.enabled,
+    maxFrontiers: requestedAgentPatches.maxFrontiers,
+    attemptedFrontierCount: 0,
+    proposalCount: 0,
+    acceptedCount: 0,
+    rejectedCount: 0,
+    noProposalCount: 0,
+    skippedCount: 0,
+  };
 
   if ((modeSet.has('config') || modeSet.has('code')) && sourceResolution.localSources.length === 0) {
     errors.push({
@@ -873,6 +1063,134 @@ export async function executeInferenceRun(
   const isRunCanceled = async () =>
     (await getInferenceRunStatus(db, { workspaceId: input.workspaceId, runId: run.id })) === 'CANCELED';
 
+  const resolveWorkspaceProofsForRun = async () => {
+    const impactedIntentIds = await collectImpactedIntentIdsForRun(db, {
+      workspaceId: input.workspaceId,
+      runId: run.id,
+      incremental: run.requestedIncremental,
+    });
+
+    if (impactedIntentIds.length === 0) {
+      return;
+    }
+
+    await db
+      .update(interactionIntents)
+      .set({
+        updatedRunId: run.id,
+        updatedAt: new Date(),
+      })
+      .where(inArray(interactionIntents.id, impactedIntentIds));
+
+    let resolverContext = await buildIntentProofResolverContext(db, { workspaceId: input.workspaceId });
+
+    for (const intentId of impactedIntentIds) {
+      let resolution = await resolveInteractionIntentProof(db, {
+        workspaceId: input.workspaceId,
+        intentId,
+        resolverContext,
+      });
+      if (resolution.status === 'FRONTIER') {
+        if (!frontierAgent.enabled) {
+          frontierAgent.skippedCount += 1;
+          await appendRunEvent(db, {
+            workspaceId: input.workspaceId,
+            runId: run.id,
+            eventType: 'FRONTIER_AGENT_PATCH',
+            message: 'frontier agent patch를 스킵했습니다: agent disabled',
+            payload: {
+              intentId,
+              proofStateId: resolution.proofStateId,
+              frontierReason: resolution.frontierReason,
+              outcome: 'disabled',
+            },
+          });
+        } else if (frontierAgent.attemptedFrontierCount >= frontierAgent.maxFrontiers) {
+          frontierAgent.skippedCount += 1;
+          await appendRunEvent(db, {
+            workspaceId: input.workspaceId,
+            runId: run.id,
+            eventType: 'FRONTIER_AGENT_PATCH',
+            message: 'frontier agent patch를 스킵했습니다: frontier limit reached',
+            payload: {
+              intentId,
+              proofStateId: resolution.proofStateId,
+              frontierReason: resolution.frontierReason,
+              outcome: 'limit_exceeded',
+              maxFrontiers: frontierAgent.maxFrontiers,
+            },
+          });
+        } else {
+          frontierAgent.attemptedFrontierCount += 1;
+          const agentResult = await runFrontierAgentPass(db, {
+            workspaceId: input.workspaceId,
+            proofStateId: resolution.proofStateId,
+            runId: run.id,
+          });
+          if (agentResult.proposal) {
+            frontierAgent.proposalCount += 1;
+            if (agentResult.validationStatus === 'ACCEPTED') {
+              frontierAgent.acceptedCount += 1;
+              if (agentResult.proposal.patchType === 'route_transform_patch') {
+                resolverContext = await buildIntentProofResolverContext(db, { workspaceId: input.workspaceId });
+              }
+            } else if (agentResult.validationStatus === 'REJECTED') {
+              frontierAgent.rejectedCount += 1;
+            }
+            await appendRunEvent(db, {
+              workspaceId: input.workspaceId,
+              runId: run.id,
+              level: agentResult.validationStatus === 'REJECTED' ? 'WARN' : 'INFO',
+              eventType: 'FRONTIER_AGENT_PATCH',
+              message:
+                agentResult.validationStatus === 'REJECTED'
+                  ? `frontier agent patch가 거절되었습니다: ${agentResult.proposal.patchType}`
+                  : `frontier agent patch를 적용했습니다: ${agentResult.proposal.patchType}`,
+              payload: {
+                intentId,
+                proofStateId: resolution.proofStateId,
+                frontierReason: agentResult.frontierReason,
+                patchType: agentResult.proposal.patchType,
+                validationStatus: agentResult.validationStatus,
+                rationale: agentResult.proposal.rationale,
+                errors: agentResult.errors,
+              },
+            });
+          } else {
+            frontierAgent.noProposalCount += 1;
+            await appendRunEvent(db, {
+              workspaceId: input.workspaceId,
+              runId: run.id,
+              eventType: 'FRONTIER_AGENT_PATCH',
+              message: 'frontier agent patch proposal이 없어 frontier를 유지했습니다.',
+              payload: {
+                intentId,
+                proofStateId: resolution.proofStateId,
+                frontierReason: agentResult.frontierReason,
+                outcome: 'no_proposal',
+              },
+            });
+          }
+          if (agentResult.resolution) {
+            resolution = agentResult.resolution;
+          }
+        }
+      }
+      proofResolution.intentCount += 1;
+      if (resolution.status === 'CLOSED_ATOMIC') {
+        proofResolution.closedAtomicCount += 1;
+        continue;
+      }
+      if (resolution.status === 'FRONTIER') {
+        proofResolution.frontierCount += 1;
+        continue;
+      }
+      if (resolution.status === 'REJECTED') {
+        proofResolution.rejectedCount += 1;
+      }
+    }
+  };
+
   if (await isRunCanceled()) {
     return await returnCurrentRunDetail(true);
   }
@@ -882,17 +1200,30 @@ export async function executeInferenceRun(
 
     if (modeSet.has('config')) {
       try {
-        const result = await inferRelationsFromConfig(db, {
+        const configFileCounts = countConfigFiles(localSource.repoRoot);
+        const aliasResult = await extractAliasBindingsFromConfig(db, {
           workspaceId: input.workspaceId,
           repoRoot: localSource.repoRoot,
-          incremental: run.requestedIncremental,
+          runId: run.id,
+        });
+        const routeTransformResult = await extractRouteTransformsFromConfig(db, {
+          workspaceId: input.workspaceId,
+          repoRoot: localSource.repoRoot,
+          runId: run.id,
+        });
+        const configIntentResult = await extractInteractionIntentsFromConfigRoutes(db, {
+          workspaceId: input.workspaceId,
+          repoRoot: localSource.repoRoot,
+          runId: run.id,
         });
         configResult.repoCount += 1;
-        configResult.fileCount += result.fileCount;
-        configResult.processedFileCount += result.processedFileCount;
-        configResult.skippedFileCount += result.skippedFileCount;
-        configResult.candidateCount += result.candidateCount;
-        configResult.objectCount += result.objectCount;
+        configResult.fileCount += configFileCounts.fileCount;
+        configResult.processedFileCount += configFileCounts.processedFileCount;
+        configResult.skippedFileCount += configFileCounts.skippedFileCount;
+        configResult.aliasBindingCount += aliasResult.bindingCount;
+        configResult.routeTransformCount += routeTransformResult.routeTransformCount;
+        configResult.interactionIntentCount += configIntentResult.intentCount;
+        configResult.gatewayRouteSeedCount += configIntentResult.gatewayRouteSeedCount ?? 0;
       } catch (error) {
         sourceHasError = true;
         errors.push({
@@ -915,11 +1246,29 @@ export async function executeInferenceRun(
           codeEngine,
           forceRescan: run.requestedIncremental ? false : true,
         });
+        const functionSummaryResult = await extractFunctionSummariesFromCodeSignals(db, {
+          workspaceId: input.workspaceId,
+          repoRoot: localSource.repoRoot,
+          runId: run.id,
+        });
+        const aliasResult = await extractAliasBindingsFromCodeSignals(db, {
+          workspaceId: input.workspaceId,
+          repoRoot: localSource.repoRoot,
+          runId: run.id,
+        });
+        const intentResult = await extractInteractionIntentsFromCodeSignals(db, {
+          workspaceId: input.workspaceId,
+          repoRoot: localSource.repoRoot,
+          runId: run.id,
+        });
         codeResult.repoCount += 1;
         codeResult.fileCount += result.fileCount;
         codeResult.artifactCount += result.artifactCount;
         codeResult.signalCount += result.signalCount;
         codeResult.skippedCount += result.skippedCount;
+        codeResult.aliasBindingCount += aliasResult.bindingCount;
+        codeResult.functionSummaryCount += functionSummaryResult.summaryCount;
+        codeResult.interactionIntentCount += intentResult.intentCount;
         if (!codeResult.enginesUsed.includes(result.engineUsed)) {
           codeResult.enginesUsed.push(result.engineUsed);
         }
@@ -931,14 +1280,7 @@ export async function executeInferenceRun(
         if (result.scanFailures && result.scanFailures.length > 0) {
           codeResult.scanFailures.push(...result.scanFailures);
         }
-
-        const codeCand = await inferRelationsFromCodeSignals(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-        });
-        codeResult.candidateCount += codeCand.candidateCount;
-        successfulCodeRelationRepoCount += 1;
-        successfulCodeRepoRoots.push(localSource.repoRoot);
+        successfulCodeRepoCount += 1;
       } catch (error) {
         sourceHasError = true;
         errors.push({
@@ -984,25 +1326,19 @@ export async function executeInferenceRun(
     modeSet,
     expectedLocalSourceCount: sourceResolution.localSources.length,
     successfulConfigRepoCount: configResult.repoCount,
-    successfulCodeRelationRepoCount,
+    successfulCodeRepoCount,
     dbSucceeded: dbResult !== null,
   });
-  const selectedConfigAndCodeModesSucceeded = didSelectedConfigAndCodeModesSucceed({
-    modeSet,
-    expectedLocalSourceCount: sourceResolution.localSources.length,
-    successfulConfigRepoCount: configResult.repoCount,
-    successfulCodeRelationRepoCount,
-  });
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
 
-  if (modeSet.has('config') && modeSet.has('code') && selectedConfigAndCodeModesSucceeded) {
+  if ((modeSet.has('config') || modeSet.has('code') || modeSet.has('db')) && allSelectedModesSucceeded) {
     try {
-      crossBindingResult = await bindConfigToCodeEndpoints(db, {
-        workspaceId: input.workspaceId,
-        repoRoots: successfulCodeRepoRoots,
-      });
+      await resolveWorkspaceProofsForRun();
     } catch (error) {
       warnings.push(
-        `config↔code 크로스 바인딩 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        `intent proof resolution 실패: ${error instanceof Error ? error.message : 'unknown'}`,
       );
     }
   }
@@ -1011,45 +1347,53 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
-  if (modeSet.has('code') && modeSet.size >= 2 && allSelectedModesSucceeded) {
-    try {
-      crossValidationResult = await crossValidatePendingRelationCandidates(db, {
-        workspaceId: input.workspaceId,
-        repoRoots: successfulCodeRepoRoots,
-        includeSchemaCandidates: modeSet.has('db'),
-      });
-    } catch (error) {
-      warnings.push(
-        `cross-signal validation 실패: ${error instanceof Error ? error.message : 'unknown'}`,
-      );
-    }
-  }
-
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
-
-  const dbCandidateCount =
-    (dbResult?.fkCandidateCount ?? 0) + (dbResult?.implicitFkCandidateCount ?? 0);
-  const crossBindingCandidateCount = crossBindingResult?.createdEndpointCandidateCount ?? 0;
-  const relationCandidatesCreated =
-    configResult.candidateCount + dbCandidateCount + codeResult.candidateCount + crossBindingCandidateCount;
   const hasAnySuccess =
-    configResult.repoCount > 0 || successfulCodeRelationRepoCount > 0 || dbResult !== null;
+    configResult.repoCount > 0 || successfulCodeRepoCount > 0 || dbResult !== null || proofResolution.intentCount > 0;
+  const proofSummary = await buildProofEngineSummaryForRun(db, {
+    workspaceId: input.workspaceId,
+    runId: run.id,
+  });
+  const relationCandidatesCreated = Math.max(
+    proofSummary.projectedCandidateCount - proofSummary.serviceTargetProjectionCount,
+    0,
+  );
+  const artifactFailedChecks = [
+    ...warnings,
+    ...errors.map((entry) => {
+      const mode = typeof entry.mode === 'string' && entry.mode.length > 0 ? `[${entry.mode}] ` : '';
+      return `${mode}${entry.message}`;
+    }),
+  ];
+  let cutoverArtifact = null;
+  try {
+    cutoverArtifact = await buildIntentProofCutoverArtifact(db, {
+      workspaceId: input.workspaceId,
+      label: `run:${run.id}`,
+      failedChecks: artifactFailedChecks,
+    });
+  } catch (error) {
+    warnings.push(
+      `cutover artifact 생성 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+    );
+  }
 
   const finalStatus: InferenceRunStatus =
     !hasAnySuccess && errors.length > 0 ? 'FAILED' : 'SUCCEEDED';
   const errorMessage = errors[0]?.message ?? null;
   const stats = {
+    engine: proofSummary.engine,
+    requestedAgentPatches,
+    proofSummary,
     config: configResult,
     code: codeResult,
     db: dbResult,
-    crossBinding: crossBindingResult,
+    proofResolution,
+    frontierAgent,
     summary: {
       relationCandidatesCreated,
       executionMode: Array.from(modeSet),
     },
-    crossValidation: crossValidationResult,
+    ...(cutoverArtifact ? { cutoverArtifact } : {}),
   };
 
   const finalizedRows = await db

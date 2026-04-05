@@ -63,7 +63,7 @@ async function pickObject(
     optionName: string;
   },
 ) {
-  const picker = page.locator('label', { hasText: label, exact: true }).locator('xpath=..');
+  const picker = page.getByText(label, { exact: true }).locator('xpath=..');
 
   await picker.getByPlaceholder('Object 이름 검색...').fill(search);
   await picker.getByRole('button', {

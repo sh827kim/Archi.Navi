@@ -2,7 +2,6 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
-import { migrate } from 'drizzle-orm/pglite/migrator';
 import { and, eq } from 'drizzle-orm';
 
 const { dbHolder, applyRollupChangesMock, createRelationChangeEventMock } = vi.hoisted(() => ({
@@ -25,7 +24,7 @@ vi.mock('@/lib/rollup-change-events', () => ({
 }));
 
 import {
-  createPgliteClient,
+  createTestDb as createEmbeddedTestDb,
   domainInferenceProfiles,
   evidences,
   objectRelations,
@@ -38,13 +37,10 @@ import {
 import { generateId } from '@archi-navi/shared';
 import { POST } from '@/app/api/inference/candidates/[id]/map-endpoints/route';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../../packages/db/src/migrations');
-const workspaceId = '00000000-0000-0000-0000-000000000051';
+const workspaceId = '00000000-0000-0000-0000-000000000082';
 
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 describe('POST /api/inference/candidates/:id/map-endpoints', () => {

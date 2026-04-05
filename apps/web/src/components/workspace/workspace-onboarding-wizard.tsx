@@ -54,10 +54,10 @@ type ScanStreamEvent =
   | { type: 'error'; message: string };
 
 const SCAN_MODE_OPTIONS: Array<{ value: ScanMode; label: string; placeholder: string }> = [
-  { value: 'local', label: '로컬 프로젝트', placeholder: '/path/to/project' },
   { value: 'workspace-dir', label: '워크스페이스 폴더', placeholder: '/path/to/workspace' },
-  { value: 'github-repo', label: 'GitHub 레포', placeholder: 'owner/repo' },
   { value: 'github-org', label: 'GitHub Org', placeholder: 'my-org' },
+  { value: 'local', label: '로컬 프로젝트', placeholder: '/path/to/project' },
+  { value: 'github-repo', label: 'GitHub 레포', placeholder: 'owner/repo' },
 ];
 
 export function WorkspaceOnboardingWizard() {
@@ -86,7 +86,7 @@ export function WorkspaceOnboardingWizard() {
     { id: 'tag-2', name: 'legacy', color: '#f59e0b' },
   ]);
 
-  const [scanMode, setScanMode] = useState<ScanMode>('local');
+  const [scanMode, setScanMode] = useState<ScanMode>('workspace-dir');
   const [scanTarget, setScanTarget] = useState('');
   const [scanDryRun, setScanDryRun] = useState(false);
   const [scanMessage, setScanMessage] = useState('');

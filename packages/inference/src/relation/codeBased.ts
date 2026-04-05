@@ -19,9 +19,10 @@ import {
   relationCandidates,
 } from '@archi-navi/db';
 import { buildUrn, generateId } from '@archi-navi/shared';
-import { and, eq, inArray, like, or } from 'drizzle-orm';
+import { and, eq, like, or } from 'drizzle-orm';
 import { saveRelationCandidate } from './candidateStore';
 import { asRecord } from './utils';
+import { preferredSignalOwnerId, resolveExistingSignalOwnerId } from '../code/ownerResolution';
 
 export interface CodeCandidateInferenceOptions {
   workspaceId: string;
@@ -66,6 +67,10 @@ export interface CodeExposeEndpointBootstrapResult {
 }
 
 type EvidenceMeta = Record<string, unknown>;
+type OwnerContext = {
+  serviceId: string;
+  functionId: string | null;
+};
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -73,6 +78,51 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+async function loadOwnerContexts(
+  db: DbClient,
+  workspaceId: string,
+  ownerObjectIds: string[],
+): Promise<Map<string, OwnerContext>> {
+  if (ownerObjectIds.length === 0) return new Map();
+
+  const ownerRows = await db
+    .select({
+      id: objects.id,
+      objectType: objects.objectType,
+      parentId: objects.parentId,
+    })
+    .from(objects)
+    .where(eq(objects.workspaceId, workspaceId));
+
+  const objectById = new Map(ownerRows.map((row) => [row.id, row] as const));
+  const context = new Map<string, OwnerContext>();
+
+  for (const ownerObjectId of ownerObjectIds) {
+    const owner = objectById.get(ownerObjectId);
+    if (!owner) continue;
+
+    if (owner.objectType === 'service') {
+      context.set(ownerObjectId, {
+        serviceId: owner.id,
+        functionId: null,
+      });
+      continue;
+    }
+
+    if (owner.objectType === 'function' && owner.parentId) {
+      const parent = objectById.get(owner.parentId);
+      if (parent?.objectType === 'service') {
+        context.set(ownerObjectId, {
+          serviceId: parent.id,
+          functionId: owner.id,
+        });
+      }
+    }
+  }
+
+  return context;
 }
 
 function extractCodeSpecializationMetadata(meta: EvidenceMeta): Record<string, string> {
@@ -336,6 +386,19 @@ export async function bootstrapApiEndpointsFromCodeSignals(
         ),
       ),
     );
+  const ownerContexts = await loadOwnerContexts(
+    db,
+    workspaceId,
+    [...new Set(
+      rows
+        .flatMap((row) => [
+          preferredSignalOwnerId((row.evidenceMeta ?? {}) as EvidenceMeta, row.ownerObjectId),
+          row.ownerObjectId,
+        ])
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    )],
+  );
+  const knownOwnerIds = new Set(ownerContexts.keys());
 
   let processedExposeCount = 0;
   let createdEndpointCount = 0;
@@ -345,9 +408,17 @@ export async function bootstrapApiEndpointsFromCodeSignals(
     if (!ownerObjectId) continue;
 
     const meta = (row.evidenceMeta ?? {}) as EvidenceMeta;
+    const resolvedOwnerId = resolveExistingSignalOwnerId({
+      metadata: meta,
+      artifactOwnerObjectId: ownerObjectId,
+      knownOwnerIds,
+    });
+    if (!resolvedOwnerId) continue;
+    const ownerContext = ownerContexts.get(resolvedOwnerId);
+    if (!ownerContext) continue;
     if (asString(meta['kind']) !== 'expose') continue;
 
-    const serviceName = serviceNameById.get(ownerObjectId);
+    const serviceName = serviceNameById.get(ownerContext.serviceId);
     const path = (asString(meta['path']) ?? row.calleeSymbol).trim();
     if (!serviceName || !path.startsWith('/')) continue;
 
@@ -355,7 +426,7 @@ export async function bootstrapApiEndpointsFromCodeSignals(
     const method = (asString(meta['method']) ?? 'ANY').toUpperCase();
     const { isNew } = await upsertApiEndpoint(db, {
       workspaceId,
-      serviceId: ownerObjectId,
+      serviceId: ownerContext.serviceId,
       serviceName,
       method,
       path,
@@ -624,9 +695,21 @@ export async function inferRelationsFromCodeSignals(
         eq(codeCallEdges.workspaceId, workspaceId),
         eq(codeArtifacts.workspaceId, workspaceId),
         eq(codeArtifacts.repoRoot, repoRoot),
-        ...(serviceIds.length > 0 ? [inArray(codeArtifacts.ownerObjectId, serviceIds)] : []),
       ),
     );
+  const ownerContexts = await loadOwnerContexts(
+    db,
+    workspaceId,
+    [...new Set(
+      rows
+        .flatMap((row) => [
+          preferredSignalOwnerId((row.evidenceMeta ?? {}) as EvidenceMeta, row.callerOwnerObjectId),
+          row.callerOwnerObjectId,
+        ])
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    )],
+  );
+  const knownOwnerIds = new Set(ownerContexts.keys());
 
   let processedEdgeCount = 0;
   let skippedEdgeCount = 0;
@@ -662,6 +745,24 @@ export async function inferRelationsFromCodeSignals(
     }
 
     const meta = (row.evidenceMeta ?? {}) as EvidenceMeta;
+    const resolvedOwnerId = resolveExistingSignalOwnerId({
+      metadata: meta,
+      artifactOwnerObjectId: callerOwnerObjectId,
+      knownOwnerIds,
+    });
+    if (!resolvedOwnerId) {
+      skippedEdgeCount += 1;
+      continue;
+    }
+    const ownerContext = ownerContexts.get(resolvedOwnerId);
+    if (!ownerContext) {
+      skippedEdgeCount += 1;
+      continue;
+    }
+    if (serviceIds.length > 0 && !serviceIds.includes(ownerContext.serviceId)) {
+      skippedEdgeCount += 1;
+      continue;
+    }
     const kind = asString(meta['kind']);
     if (!kind) {
       skippedEdgeCount += 1;
@@ -695,38 +796,21 @@ export async function inferRelationsFromCodeSignals(
       }
 
       const targetPath = extractPathFromUrlLike(trimmed);
-      if (targetPath) {
-        const endpointKey = `${targetServiceId}|${targetPath}`;
-        if (!endpointPathCollision.has(endpointKey)) {
-          const endpointId = endpointByServiceAndPath.get(endpointKey);
-          if (endpointId) {
-            processedEdgeCount += 1;
-            const saved = await saveRelationCandidate(
-              db,
-              {
-                workspaceId,
-                relationType: 'call',
-                subjectObjectId: callerOwnerObjectId,
-                objectId: endpointId,
-                confidence,
-                metadata: {
-                  ...specializationMetadata,
-                  source: 'CODE',
-                  kind,
-                  calleeSymbol,
-                  repoRoot,
-                  targetType: 'api_endpoint',
-                  targetServiceId,
-                  path: targetPath,
-                },
-              },
-              evidenceId,
-            );
-            if (saved.created) candidateCount += 1;
-            continue;
-          }
-        }
-        // endpoint 매칭이 실패/모호하면 service-level call로 fallback
+      if (!targetPath) {
+        skippedEdgeCount += 1;
+        continue;
+      }
+
+      const endpointKey = `${targetServiceId}|${targetPath}`;
+      if (endpointPathCollision.has(endpointKey)) {
+        skippedEdgeCount += 1;
+        continue;
+      }
+
+      const endpointId = endpointByServiceAndPath.get(endpointKey);
+      if (!endpointId) {
+        skippedEdgeCount += 1;
+        continue;
       }
 
       processedEdgeCount += 1;
@@ -735,8 +819,8 @@ export async function inferRelationsFromCodeSignals(
         {
           workspaceId,
           relationType: 'call',
-          subjectObjectId: callerOwnerObjectId,
-          objectId: targetServiceId,
+          subjectObjectId: ownerContext.serviceId,
+          objectId: endpointId,
           confidence,
           metadata: {
             ...specializationMetadata,
@@ -744,7 +828,9 @@ export async function inferRelationsFromCodeSignals(
             kind,
             calleeSymbol,
             repoRoot,
-            targetType: 'service',
+            targetType: 'api_endpoint',
+            targetServiceId,
+            path: targetPath,
           },
         },
         evidenceId,
@@ -776,7 +862,7 @@ export async function inferRelationsFromCodeSignals(
         {
           workspaceId,
           relationType: kind,
-          subjectObjectId: callerOwnerObjectId,
+          subjectObjectId: ownerContext.serviceId,
           objectId: upserted.id,
           confidence,
           metadata: {
@@ -796,7 +882,7 @@ export async function inferRelationsFromCodeSignals(
     }
 
     if (kind === 'db_mapping' || kind === 'db_read' || kind === 'db_write') {
-      const serviceName = serviceNameById.get(callerOwnerObjectId);
+      const serviceName = serviceNameById.get(ownerContext.serviceId);
       if (!serviceName) {
         skippedEdgeCount += 1;
         continue;
@@ -808,16 +894,16 @@ export async function inferRelationsFromCodeSignals(
         continue;
       }
 
-      const cached = databaseCache.get(callerOwnerObjectId);
+      const cached = databaseCache.get(ownerContext.serviceId);
       const database =
         cached ??
         (await resolveDatabaseForService(db, {
           workspaceId,
-          serviceId: callerOwnerObjectId,
+          serviceId: ownerContext.serviceId,
           serviceName,
           repoRoot,
         }));
-      databaseCache.set(callerOwnerObjectId, database);
+      databaseCache.set(ownerContext.serviceId, database);
       if (database.isNew) createdDatabaseCount += 1;
 
       const { id: tableId, isNew } = await upsertDbTable(db, {
@@ -841,7 +927,7 @@ export async function inferRelationsFromCodeSignals(
         {
           workspaceId,
           relationType,
-          subjectObjectId: callerOwnerObjectId,
+          subjectObjectId: ownerContext.serviceId,
           objectId: tableId,
           confidence,
           metadata: {

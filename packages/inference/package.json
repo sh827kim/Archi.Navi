@@ -13,9 +13,11 @@
     }
   },
   "scripts": {
-    "build": "pnpm run download:wasm && tsc",
+    "build": "pnpm run download:wasm && tsc -p tsconfig.json && tsc-alias -p tsconfig.json",
     "dev": "tsc -w --preserveWatchOutput",
     "test:unit": "vitest run src/__tests__",
+    "test:benchmark-gate": "vitest run src/__tests__/orchestration/intentProofBenchmarkGate.test.ts",
+    "test:cutover-fixture": "vitest run src/__tests__/orchestration/inferenceCutoverFixture.test.ts",
     "test:unit:coverage": "vitest run src/__tests__ --coverage --coverage.provider=v8 --coverage.reporter=text --coverage.reporter=json-summary --coverage.reporter=html --coverage.thresholds.lines=80 --coverage.thresholds.functions=80 --coverage.thresholds.branches=80 --coverage.thresholds.statements=80 --coverage.thresholds.perFile=true",
     "test:unit:watch": "vitest src/__tests__",
     "lint": "tsc --noEmit",
@@ -40,9 +42,10 @@
     "web-tree-sitter": "^0.24.7"
   },
   "devDependencies": {
-    "@vitest/coverage-v8": "^4.0.18",
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.3.0",
+    "@vitest/coverage-v8": "^4.0.18",
+    "tsc-alias": "^1.8.16",
     "typescript": "^5.9.3",
     "vitest": "^4.0.18"
   },

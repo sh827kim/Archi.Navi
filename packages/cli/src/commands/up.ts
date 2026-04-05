@@ -132,7 +132,7 @@ async function runInstalledWeb(options: {
   startDir: string;
 }): Promise<number> {
   const { webDir, prod, port, host, startDir } = options;
-  const defaultDataDir = resolve(homedir(), '.archi-navi', 'data');
+  const defaultDataDir = resolve(homedir(), '.archi-navi', 'db');
   const installedDbDir = findInstalledPackageDir(startDir, '@archi-navi/db');
   const installedMigrations =
     installedDbDir && existsSync(resolve(installedDbDir, 'src', 'migrations'))
@@ -143,7 +143,8 @@ async function runInstalledWeb(options: {
     ...process.env,
     PORT: String(port),
     HOSTNAME: host,
-    PGLITE_DATA_DIR: process.env['PGLITE_DATA_DIR'] ?? defaultDataDir,
+    ARCHI_NAVI_DB_DATA_DIR: process.env['ARCHI_NAVI_DB_DATA_DIR'] ?? defaultDataDir,
+    ARCHI_NAVI_DB_PORT: process.env['ARCHI_NAVI_DB_PORT'] ?? '54329',
     MIGRATIONS_FOLDER: process.env['MIGRATIONS_FOLDER'] ?? installedMigrations,
   };
 

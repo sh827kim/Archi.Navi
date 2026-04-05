@@ -3,18 +3,13 @@ import { mkdirSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { and, eq } from 'drizzle-orm';
-import { migrate } from 'drizzle-orm/pglite/migrator';
-import { createPgliteClient } from '@archi-navi/db';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects, workspaces } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import { extractHybridCodeSignals } from '@/code/hybridCodeSignalExtractor';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;

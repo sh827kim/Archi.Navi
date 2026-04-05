@@ -2,7 +2,6 @@
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
-import { migrate } from 'drizzle-orm/pglite/migrator';
 import { eq } from 'drizzle-orm';
 
 const { dbHolder } = vi.hoisted(() => ({
@@ -25,17 +24,14 @@ vi.mock('@/lib/workspace-snapshot', () => ({
   persistWorkspaceSnapshot: persistWorkspaceSnapshotMock,
 }));
 
-import { createPgliteClient, workspaces } from '@archi-navi/db';
+import { createTestDb as createEmbeddedTestDb, workspaces } from '@archi-navi/db';
 import { DELETE, PATCH } from '@/app/api/workspaces/[id]/route';
 import { dynamic, GET, POST } from '@/app/api/workspaces/route';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../../packages/db/src/migrations');
-const workspaceId = '00000000-0000-0000-0000-000000000091';
+const workspaceId = '00000000-0000-0000-0000-000000000084';
 
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 describe('/api/workspaces routes', () => {

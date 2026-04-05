@@ -6,3 +6,4 @@ export * from './domain';
 export * from './code';
 export * from './audit';
 export * from './layers';
+export * from './proof';

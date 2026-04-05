@@ -3,61 +3,29 @@ import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { and, eq } from 'drizzle-orm';
-import { migrate } from 'drizzle-orm/pglite/migrator';
 import {
-  createPgliteClient,
+  aliasBindings,
+  createTestDb,
   inferenceRunEvents,
   inferenceRuns,
   inferenceRunSources,
+  interactionIntents,
   objects,
+  proofDependencies,
+  proofStates,
   relationCandidates,
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import * as codeSignalEngineModule from '@/code/codeSignalEngine';
-import * as dbSchemaSignalModule from '@/db/dbSchemaSignal';
-import * as codeBasedModule from '@/relation/codeBased';
-import * as configBasedModule from '@/relation/configBased';
-import * as configCodeBindingModule from '@/relation/configCodeBinding';
-import * as crossValidationModule from '@/relation/crossSignalValidation';
+import * as frontierAgentModule from '@/agent/frontierAgent';
+import * as intentProofCutoverReportModule from '@/orchestration/intentProofCutoverReport';
+import * as intentProofEngineModule from '@/orchestration/intentProofEngine';
 import {
-  cancelInferenceRun,
   createInferenceRun,
   executeInferenceRun,
   retryInferenceRun,
 } from '@/orchestration/inferenceRuns';
-
-vi.mock('@/relation/configBased', async () => {
-  const actual = await vi.importActual<typeof import('@/relation/configBased')>('@/relation/configBased');
-  return {
-    ...actual,
-    inferRelationsFromConfig: vi.fn(actual.inferRelationsFromConfig),
-  };
-});
-
-vi.mock('@/relation/configCodeBinding', async () => {
-  const actual = await vi.importActual<typeof import('@/relation/configCodeBinding')>('@/relation/configCodeBinding');
-  return {
-    ...actual,
-    bindConfigToCodeEndpoints: vi.fn(actual.bindConfigToCodeEndpoints),
-  };
-});
-
-vi.mock('@/relation/crossSignalValidation', async () => {
-  const actual = await vi.importActual<typeof import('@/relation/crossSignalValidation')>('@/relation/crossSignalValidation');
-  return {
-    ...actual,
-    crossValidatePendingRelationCandidates: vi.fn(actual.crossValidatePendingRelationCandidates),
-  };
-});
-
-vi.mock('@/relation/codeBased', async () => {
-  const actual = await vi.importActual<typeof import('@/relation/codeBased')>('@/relation/codeBased');
-  return {
-    ...actual,
-    inferRelationsFromCodeSignals: vi.fn(actual.inferRelationsFromCodeSignals),
-  };
-});
 
 vi.mock('@/code/codeSignalEngine', async () => {
   const actual = await vi.importActual<typeof import('@/code/codeSignalEngine')>('@/code/codeSignalEngine');
@@ -67,40 +35,103 @@ vi.mock('@/code/codeSignalEngine', async () => {
   };
 });
 
-vi.mock('@/db/dbSchemaSignal', async () => {
-  const actual = await vi.importActual<typeof import('@/db/dbSchemaSignal')>('@/db/dbSchemaSignal');
+vi.mock('@/orchestration/intentProofEngine', async () => {
+  const actual = await vi.importActual<typeof import('@/orchestration/intentProofEngine')>('@/orchestration/intentProofEngine');
   return {
     ...actual,
-    extractDbSchemaSignals: vi.fn(actual.extractDbSchemaSignals),
+    resolveInteractionIntentProof: vi.fn(actual.resolveInteractionIntentProof),
   };
 });
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-const workspaceId = '00000000-0000-0000-0000-000000000020';
+vi.mock('@/agent/frontierAgent', async () => {
+  const actual = await vi.importActual<typeof import('@/agent/frontierAgent')>('@/agent/frontierAgent');
+  return {
+    ...actual,
+    runFrontierAgentPass: vi.fn(actual.runFrontierAgentPass),
+  };
+});
 
-async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
-}
+vi.mock('@/orchestration/intentProofCutoverReport', async () => {
+  const actual = await vi.importActual<typeof import('@/orchestration/intentProofCutoverReport')>('@/orchestration/intentProofCutoverReport');
+  return {
+    ...actual,
+    buildIntentProofCutoverArtifact: vi.fn(async () => ({
+      label: 'test-artifact',
+      relations: [],
+      failedChecks: [],
+    })),
+  };
+});
+const workspaceId = '00000000-0000-0000-0000-000000000020';
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
 
-async function createWorkspaceAndService(db: TestDb) {
-  await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
-  const serviceId = generateId();
+async function insertObject(
+  db: TestDb,
+  input: {
+    id?: string;
+    objectType: string;
+    name: string;
+    parentId?: string | null;
+    category?: string;
+    granularity?: string;
+    metadata?: Record<string, unknown>;
+  },
+) {
+  const id = input.id ?? generateId();
   await db.insert(objects).values({
-    id: serviceId,
+    id,
     workspaceId,
-    objectType: 'service',
-    category: 'COMPUTE',
-    granularity: 'COMPOUND',
-    name: 'order-service',
-    path: `/${serviceId}`,
-    depth: 0,
+    objectType: input.objectType,
+    category: input.category ?? (input.objectType === 'function' ? 'CODE' : 'COMPUTE'),
+    granularity: input.granularity ?? (input.objectType === 'service' ? 'COMPOUND' : 'ATOMIC'),
+    name: input.name,
+    parentId: input.parentId ?? null,
+    path: `/${id}`,
+    depth: input.parentId ? 1 : 0,
     visibility: 'VISIBLE',
-    metadata: {},
+    metadata: input.metadata ?? {},
   });
+  return id;
+}
+
+async function seedProofIntent(db: TestDb) {
+  await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
+
+  const consumerServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+  const sourceFunctionId = await insertObject(db, {
+    objectType: 'function',
+    name: 'GatewayClient.fetchOrder',
+    parentId: consumerServiceId,
+  });
+  const providerServiceId = await insertObject(db, { objectType: 'service', name: 'order-service' });
+  const endpointId = await insertObject(db, {
+    objectType: 'api_endpoint',
+    name: 'GET /internal/orders/{id}',
+    parentId: providerServiceId,
+    category: 'CHANNEL',
+    metadata: { method: 'GET', path: '/internal/orders/{id}' },
+  });
+
+  const intentId = generateId();
+  await db.insert(interactionIntents).values({
+    id: intentId,
+    workspaceId,
+    intentType: 'http_call',
+    sourceServiceId: consumerServiceId,
+    sourceFunctionId,
+    methodHint: 'GET',
+    externalPathHint: '/api/orders/123',
+    hostHint: 'ORDER_SERVICE',
+    configKeys: ['client.orders.url'],
+    summaryRefs: [],
+    evidenceIds: [],
+    status: 'NEW',
+    intentHash: `intent-${intentId}`,
+    anchorHash: `anchor-${intentId}`,
+  });
+
+  return { consumerServiceId, sourceFunctionId, providerServiceId, endpointId, intentId };
 }
 
 function createRetryRaceDb() {
@@ -169,31 +200,104 @@ describe('inference orchestration runs', () => {
 
   beforeEach(async () => {
     db = await createTestDb();
-    tempDir = join(tmpdir(), `archi-navi-infrun-${Date.now()}`);
+    tempDir = join(tmpdir(), `archi-navi-infrun-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     mkdirSync(tempDir, { recursive: true });
-    await createWorkspaceAndService(db);
     vi.clearAllMocks();
   });
 
   afterEach(() => {
-    try {
-      rmSync(tempDir, { recursive: true, force: true });
-    } catch {
-      // ignore
-    }
+    rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('local source + config mode 실행 시 run이 SUCCEEDED로 완료되어야 한다', async () => {
+  it('main run은 실제 proof resolution 결과를 summary에 반영해야 한다', async () => {
+    const seeded = await seedProofIntent(db);
     writeFileSync(
       join(tempDir, 'application.yml'),
-      `
-spring:
-  application:
-    name: order-service
-  datasource:
-    url: jdbc:mysql://db-host:3306/order_db
-`,
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    orders:',
+        '      path: /api/orders/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
     );
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementationOnce(async (dbClient, args) => {
+      const rootProofStateId = generateId();
+      const childProofStateId = generateId();
+      await dbClient.insert(proofStates).values([
+        {
+          id: rootProofStateId,
+          workspaceId,
+          intentId: args.intentId,
+          proofType: 'http_gateway_route',
+          status: 'RESOLVING',
+          consumerServiceId: seeded.consumerServiceId,
+          sourceFunctionId: seeded.sourceFunctionId,
+          providerServiceId: seeded.providerServiceId,
+          methodResolved: null,
+          externalPathResolved: '/api/orders',
+          internalPathResolved: '/internal/orders/123',
+          routeChain: ['zuul:/api/orders/**'],
+          slotState: {
+            routeFamilyState: 'derived_children',
+            endpointCandidateSet: {
+              objectIds: [seeded.endpointId],
+              count: 1,
+              matchBasis: 'route_prefix',
+            },
+            derivedChildProofStateIds: [childProofStateId],
+          },
+          ambiguityCount: 0,
+          contradictionCount: 0,
+          confidence: 0,
+        },
+        {
+          id: childProofStateId,
+          workspaceId,
+          intentId: args.intentId,
+          originIntentId: args.intentId,
+          parentProofStateId: rootProofStateId,
+          proofType: 'http_gateway_route',
+          status: 'CLOSED_ATOMIC',
+          consumerServiceId: seeded.consumerServiceId,
+          sourceFunctionId: seeded.sourceFunctionId,
+          providerServiceId: seeded.providerServiceId,
+          targetObjectType: 'api_endpoint',
+          targetObjectId: seeded.endpointId,
+          methodResolved: 'GET',
+          externalPathResolved: '/api/orders/123',
+          internalPathResolved: '/internal/orders/123',
+          routeChain: ['zuul:/api/orders/**'],
+          slotState: {},
+          ambiguityCount: 0,
+          contradictionCount: 0,
+          confidence: 0.97,
+          closedReason: 'endpoint_matched',
+        },
+      ]);
+      await dbClient.insert(relationCandidates).values({
+        id: generateId(),
+        workspaceId,
+        relationType: 'call',
+        subjectObjectId: seeded.sourceFunctionId,
+        objectId: seeded.endpointId,
+        confidence: 0.97,
+        metadata: { proofStateId: childProofStateId },
+        status: 'PENDING',
+      });
+      return {
+        proofStateId: childProofStateId,
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: seeded.endpointId,
+        relationType: 'call',
+      };
+    });
 
     const run = await createInferenceRun(db, {
       workspaceId,
@@ -203,248 +307,473 @@ spring:
     const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
 
     expect(detail.run.status).toBe('SUCCEEDED');
-    expect(detail.sources).toHaveLength(1);
     expect(detail.sources[0]?.status).toBe('SUCCEEDED');
-    expect(detail.events.some((event) => event.eventType === 'RUN_COMPLETED')).toBe(true);
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ workspaceId }),
+    );
+
+    const stats = detail.run.stats as Record<string, unknown>;
+    expect(stats['proofResolution']).toMatchObject({
+      intentCount: 1,
+      closedAtomicCount: 1,
+      frontierCount: 0,
+      rejectedCount: 0,
+    });
+    expect(stats['proofSummary']).toMatchObject({
+      engine: 'intent_proof',
+      intentCount: 1,
+      gatewayRouteSeedCount: 1,
+      derivedEndpointProofCount: 1,
+      proofClosedAtomicCount: 1,
+      proofFrontierCount: 0,
+      routeFamilyFrontierCount: 0,
+      proofRejectedCount: 0,
+      projectedCandidateCount: 1,
+      serviceTargetProjectionCount: 0,
+      confidenceProfileName: 'intent-proof-default',
+      confidenceProfileVersion: 'v1',
+      functionSummaryExtractionBreakdown: {
+        ast_primary: 0,
+        mixed_signals: 0,
+        legacy_edges_fallback: 0,
+      },
+    });
+    expect((stats['summary'] as Record<string, unknown>)['relationCandidatesCreated']).toBe(1);
+
+    const updatedIntents = await db
+      .select({ id: interactionIntents.id, updatedRunId: interactionIntents.updatedRunId })
+      .from(interactionIntents)
+      .where(eq(interactionIntents.workspaceId, workspaceId));
+    expect(updatedIntents.some((intent) => intent.updatedRunId === run.id)).toBe(true);
 
     const candidates = await db
       .select()
       .from(relationCandidates)
       .where(eq(relationCandidates.workspaceId, workspaceId));
-    expect(candidates.length).toBeGreaterThan(0);
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.metadata).toMatchObject({ proofStateId: expect.any(String) });
   });
 
-  it('code mode 없이 config+db 실행이면 cross validation을 호출하지 않아야 한다', async () => {
+  it('proof resolution이 실패하면 legacy count로 summary를 위장하지 않아야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockRejectedValueOnce(
+      new Error('proof failed'),
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const stats = detail.run.stats as Record<string, unknown>;
+
+    expect(detail.run.status).toBe('SUCCEEDED');
+    expect(detail.run.warnings).toContain('intent proof resolution 실패: proof failed');
+    expect(stats['config']).toMatchObject({ repoCount: 1 });
+    expect(stats['proofResolution']).toMatchObject({
+      intentCount: 0,
+      closedAtomicCount: 0,
+      frontierCount: 0,
+      rejectedCount: 0,
+    });
+    expect(stats['proofSummary']).toMatchObject({
+      engine: 'intent_proof',
+      intentCount: 0,
+      gatewayRouteSeedCount: 0,
+      derivedEndpointProofCount: 0,
+      proofClosedAtomicCount: 0,
+      proofFrontierCount: 0,
+      routeFamilyFrontierCount: 0,
+      proofRejectedCount: 0,
+      projectedCandidateCount: 0,
+      serviceTargetProjectionCount: 0,
+      confidenceProfileName: 'intent-proof-default',
+      confidenceProfileVersion: 'v1',
+      functionSummaryExtractionBreakdown: {
+        ast_primary: 0,
+        mixed_signals: 0,
+        legacy_edges_fallback: 0,
+      },
+    });
+  });
+
+  it('config-only gateway route도 synthetic intent로 승격되어 proof candidate를 생성해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'config-gateway-proof' });
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const articleServiceId = await insertObject(db, { objectType: 'service', name: 'article-service' });
+    await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /articles',
+      parentId: articleServiceId,
+      category: 'CHANNEL',
+      metadata: { method: 'GET', path: '/articles' },
+    });
+
     writeFileSync(
       join(tempDir, 'application.yml'),
-      `
-spring:
-  application:
-    name: order-service
-  datasource:
-    url: jdbc:mysql://db-host:3306/order_db
-`,
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    articles:',
+        '      path: /api/articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+      'utf-8',
     );
 
     const run = await createInferenceRun(db, {
       workspaceId,
-      modes: ['config', 'db'],
+      modes: ['config'],
       sources: [{ type: 'local', ref: tempDir }],
     });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const stats = detail.run.stats as Record<string, unknown>;
 
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
-  });
-
-  it('code mode가 포함된 다중 mode 실행이면 cross validation을 호출해야 한다', async () => {
-    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-
-    const run = await createInferenceRun(db, {
-      workspaceId,
-      modes: ['code', 'db'],
-      sources: [{ type: 'local', ref: tempDir }],
-    });
-
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
-      db,
-      { workspaceId, repoRoots: [tempDir], includeSchemaCandidates: true },
-    );
-  });
-
-  it('config+code 실행에서 config 추론이 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
-    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-    vi.mocked(configBasedModule.inferRelationsFromConfig).mockRejectedValueOnce(
-      new Error('config failed'),
-    );
-    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-
-    const run = await createInferenceRun(db, {
-      workspaceId,
-      modes: ['config', 'code'],
-      sources: [{ type: 'local', ref: tempDir }],
-    });
-
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
-  });
-
-  it('code mode가 포함되어도 code pass가 실패하면 cross validation을 호출하지 않아야 한다', async () => {
-    writeFileSync(
-      join(tempDir, 'application.yml'),
-      `
-spring:
-  application:
-    name: order-service
-  datasource:
-    url: jdbc:mysql://db-host:3306/order_db
-`,
-    );
-    vi.mocked(configBasedModule.inferRelationsFromConfig).mockResolvedValueOnce({
+    expect(detail.run.status).toBe('SUCCEEDED');
+    expect(stats['config']).toMatchObject({
+      repoCount: 1,
       fileCount: 1,
       processedFileCount: 1,
       skippedFileCount: 0,
-      candidateCount: 1,
-      objectCount: 1,
+      routeTransformCount: 1,
+      interactionIntentCount: 1,
+      gatewayRouteSeedCount: 1,
     });
+    expect(stats['proofSummary']).toMatchObject({
+      engine: 'intent_proof',
+      intentCount: 1,
+      gatewayRouteSeedCount: 1,
+      derivedEndpointProofCount: 1,
+      proofClosedAtomicCount: 1,
+      projectedCandidateCount: 1,
+    });
+
+    const intents = await db.select().from(interactionIntents).where(eq(interactionIntents.workspaceId, workspaceId));
+    expect(intents).toHaveLength(1);
+    expect(intents[0]?.intentType).toBe('http_gateway_route');
+    expect(intents[0]?.sourceServiceId).toBe(gatewayServiceId);
+    expect(intents[0]?.hostHint).toBe('article-service');
+
+    const states = await db
+      .select()
+      .from(proofStates)
+      .where(and(eq(proofStates.workspaceId, workspaceId), eq(proofStates.intentId, intents[0]!.id)));
+    expect(states).toHaveLength(2);
+    const rootState = states.find((state) => state.parentProofStateId === null);
+    const childState = states.find((state) => state.parentProofStateId !== null);
+    expect(rootState?.proofType).toBe('http_gateway_route');
+    expect(childState?.originIntentId).toBe(intents[0]?.id);
+    expect(childState?.proofType).toBe('http_gateway_route');
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.relationType).toBe('call');
+    expect(candidates[0]?.metadata).toMatchObject({ source: 'intent_proof', proofStateId: childState?.id });
+    expect(typeof candidates[0]?.objectId).toBe('string');
+  });
+
+  it('bounded route family는 여러 child proof를 생성하고 summary에 실제 child proof 수를 반영해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'config-gateway-proof-family' });
+    await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const articleServiceId = await insertObject(db, { objectType: 'service', name: 'article-service' });
+    const collectionEndpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /articles',
+      parentId: articleServiceId,
+      category: 'CHANNEL',
+      metadata: { method: 'GET', path: '/articles' },
+    });
+    const detailEndpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /articles/{id}',
+      parentId: articleServiceId,
+      category: 'CHANNEL',
+      metadata: { method: 'GET', path: '/articles/{id}' },
+    });
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    articles:',
+        '      path: /api/articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const stats = detail.run.stats as Record<string, unknown>;
+
+    expect(detail.run.status).toBe('SUCCEEDED');
+    expect(stats['proofSummary']).toMatchObject({
+      engine: 'intent_proof',
+      intentCount: 1,
+      gatewayRouteSeedCount: 1,
+      derivedEndpointProofCount: 2,
+      proofClosedAtomicCount: 2,
+      projectedCandidateCount: 2,
+      serviceTargetProjectionCount: 0,
+    });
+
+    const states = await db.select().from(proofStates).where(eq(proofStates.workspaceId, workspaceId));
+    const childStates = states.filter((state) => state.parentProofStateId !== null);
+    expect(childStates).toHaveLength(2);
+    expect(childStates.map((state) => state.targetObjectId).sort()).toEqual(
+      [collectionEndpointId, detailEndpointId].sort(),
+    );
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map((candidate) => candidate.objectId).sort()).toEqual(
+      [collectionEndpointId, detailEndpointId].sort(),
+    );
+  });
+
+  it('global prefix + stripped external hint 조합도 실제 sample처럼 root-relative endpoint family를 닫아야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'config-gateway-proof-sample-like' });
+    await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const articleServiceId = await insertObject(db, { objectType: 'service', name: 'article-service' });
+    const collectionEndpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /',
+      parentId: articleServiceId,
+      category: 'CHANNEL',
+      metadata: { method: 'GET', path: '/' },
+    });
+    const detailEndpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /{id}',
+      parentId: articleServiceId,
+      category: 'CHANNEL',
+      metadata: { method: 'GET', path: '/{id}' },
+    });
+    const authorEndpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /author/{authorId}',
+      parentId: articleServiceId,
+      category: 'CHANNEL',
+      metadata: { method: 'GET', path: '/author/{authorId}' },
+    });
+
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  prefix: /api',
+        '  routes:',
+        '    articles:',
+        '      path: /articles/**',
+        '      serviceId: article-service',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const stats = detail.run.stats as Record<string, unknown>;
+
+    expect(detail.run.status).toBe('SUCCEEDED');
+    expect(stats['proofSummary']).toMatchObject({
+      engine: 'intent_proof',
+      intentCount: 1,
+      gatewayRouteSeedCount: 1,
+      derivedEndpointProofCount: 3,
+      proofClosedAtomicCount: 3,
+      projectedCandidateCount: 3,
+      serviceTargetProjectionCount: 0,
+    });
+
+    const states = await db.select().from(proofStates).where(eq(proofStates.workspaceId, workspaceId));
+    const childStates = states.filter((state) => state.parentProofStateId !== null);
+    expect(childStates).toHaveLength(3);
+    expect(childStates.map((state) => state.targetObjectId).sort()).toEqual(
+      [collectionEndpointId, detailEndpointId, authorEndpointId].sort(),
+    );
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(3);
+    expect(candidates.map((candidate) => candidate.objectId).sort()).toEqual(
+      [collectionEndpointId, detailEndpointId, authorEndpointId].sort(),
+    );
+  });
+
+  it('incremental run은 changed dependency와 연결된 intent만 selective re-resolution 해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'incremental-selective' });
+    const consumerServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const sourceFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: consumerServiceId,
+    });
+    const otherFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchPayment',
+      parentId: consumerServiceId,
+    });
+
+    const impactedIntentId = generateId();
+    const untouchedIntentId = generateId();
+    await db.insert(interactionIntents).values([
+      {
+        id: impactedIntentId,
+        workspaceId,
+        intentType: 'http_call',
+        sourceServiceId: consumerServiceId,
+        sourceFunctionId,
+        hostHint: 'ORDERS_API',
+        configKeys: ['client.orders.url'],
+        intentHash: 'intent-impacted',
+        anchorHash: 'anchor-impacted',
+      },
+      {
+        id: untouchedIntentId,
+        workspaceId,
+        intentType: 'http_call',
+        sourceServiceId: consumerServiceId,
+        sourceFunctionId: otherFunctionId,
+        hostHint: 'PAYMENTS_API',
+        configKeys: ['client.payments.url'],
+        intentHash: 'intent-untouched',
+        anchorHash: 'anchor-untouched',
+      },
+    ]);
+
+    const impactedProofStateId = generateId();
+    const untouchedProofStateId = generateId();
+    await db.insert(proofStates).values([
+      {
+        id: impactedProofStateId,
+        workspaceId,
+        intentId: impactedIntentId,
+        proofType: 'http_call',
+        status: 'NEW',
+        consumerServiceId,
+        sourceFunctionId,
+      },
+      {
+        id: untouchedProofStateId,
+        workspaceId,
+        intentId: untouchedIntentId,
+        proofType: 'http_call',
+        status: 'NEW',
+        consumerServiceId,
+        sourceFunctionId: otherFunctionId,
+      },
+    ]);
+
+    await db.insert(proofDependencies).values([
+      {
+        id: generateId(),
+        workspaceId,
+        proofStateId: impactedProofStateId,
+        dependencyKind: 'alias_binding',
+        dependencyKey: 'client.orders.url',
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        proofStateId: untouchedProofStateId,
+        dependencyKind: 'alias_binding',
+        dependencyKey: 'client.payments.url',
+      },
+    ]);
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      createdRunId: run.id,
+      updatedRunId: run.id,
+      bindingKind: 'base_url',
+      aliasKey: 'client.orders.url',
+      aliasValue: 'http://orders-api.internal',
+      resolvedHost: 'orders-api.internal',
+      sourceHash: 'binding-updated-by-run',
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, args) => ({
+      proofStateId: args.intentId === impactedIntentId ? impactedProofStateId : untouchedProofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    }));
+
+    await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+    });
+
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ workspaceId, intentId: impactedIntentId }),
+    );
+  });
+
+  it('code 추출이 실패하면 run/source를 FAILED로 기록해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
+    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n', 'utf-8');
+
     vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockRejectedValueOnce(
       new Error('parser failed'),
     );
 
     const run = await createInferenceRun(db, {
       workspaceId,
-      modes: ['config', 'code'],
+      modes: ['code'],
       sources: [{ type: 'local', ref: tempDir }],
-    });
-
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
-    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
-  });
-
-  it('code 추출은 성공해도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
-    writeFileSync(
-      join(tempDir, 'application.yml'),
-      `
-spring:
-  application:
-    name: order-service
-  datasource:
-    url: jdbc:mysql://db-host:3306/order_db
-`,
-    );
-    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-    vi.mocked(configBasedModule.inferRelationsFromConfig).mockResolvedValueOnce({
-      fileCount: 1,
-      processedFileCount: 1,
-      skippedFileCount: 0,
-      candidateCount: 1,
-      objectCount: 1,
-    });
-    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    vi.mocked(codeBasedModule.inferRelationsFromCodeSignals).mockRejectedValueOnce(
-      new Error('relation inference failed'),
-    );
-
-    const run = await createInferenceRun(db, {
-      workspaceId,
-      modes: ['config', 'code'],
-      sources: [{ type: 'local', ref: tempDir }],
-    });
-
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
-  });
-
-  it('config+code 실행이면 cross binding을 먼저 수행한 뒤 cross validation을 호출해야 한다', async () => {
-    writeFileSync(
-      join(tempDir, 'application.yml'),
-      `
-spring:
-  application:
-    name: order-service
-zuul:
-  routes:
-    order:
-      serviceId: order-service
-`,
-    );
-    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-
-    vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints).mockResolvedValueOnce({
-      compoundCandidateCount: 1,
-      createdEndpointCandidateCount: 1,
-      skippedNoEndpointCount: 0,
-    });
-
-    const run = await createInferenceRun(db, {
-      workspaceId,
-      modes: ['config', 'code'],
-      sources: [{ type: 'local', ref: tempDir }],
-    });
-
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).toHaveBeenCalledWith(
-      db,
-      { workspaceId, repoRoots: [tempDir] },
-    );
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).toHaveBeenCalledWith(
-      db,
-      { workspaceId, repoRoots: [tempDir], includeSchemaCandidates: false },
-    );
-
-    const bindingCallOrder = vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints).mock.invocationCallOrder[0];
-    const crossValidationCallOrder =
-      vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates).mock.invocationCallOrder[0];
-
-    expect(bindingCallOrder).toBeLessThan(crossValidationCallOrder);
-  });
-
-  it('github source 준비 실패 시 run/source가 FAILED로 기록되어야 한다', async () => {
-    const run = await createInferenceRun(db, {
-      workspaceId,
-      modes: ['config', 'code'],
-      sources: [{ type: 'githubRepo', ref: 'https://github.com/example/repo' }],
     });
     const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
 
     expect(detail.run.status).toBe('FAILED');
-    expect(detail.sources).toHaveLength(1);
+    expect(detail.run.errorMessage).toBe('parser failed');
     expect(detail.sources[0]?.status).toBe('FAILED');
-    expect(detail.events.some((event) => event.eventType === 'SOURCE_RESOLVE_FAILED')).toBe(true);
+    expect(detail.events.some((event) => event.eventType === 'RUN_COMPLETED')).toBe(true);
 
-    const refreshedRunRows = await db
+    const runRows = await db
       .select()
       .from(inferenceRuns)
       .where(and(eq(inferenceRuns.workspaceId, workspaceId), eq(inferenceRuns.id, run.id)));
-    expect(refreshedRunRows[0]?.status).toBe('FAILED');
+    expect(runRows[0]?.status).toBe('FAILED');
 
     const sourceRows = await db
       .select()
@@ -459,195 +788,274 @@ zuul:
     expect(eventRows.length).toBeGreaterThan(0);
   });
 
-  it('선택한 code source 중 일부라도 relation inference가 실패하면 binding과 cross validation을 호출하지 않아야 한다', async () => {
-    const secondDir = join(tmpdir(), `archi-navi-infrun-${Date.now()}-b`);
-    mkdirSync(secondDir, { recursive: true });
-    try {
-      writeFileSync(
-        join(tempDir, 'application.yml'),
-        `
-spring:
-  application:
-    name: order-service
-zuul:
-  routes:
-    order:
-      serviceId: order-service
-`,
-      );
-      writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-      writeFileSync(join(secondDir, 'application.yml'), 'spring:\n  application:\n    name: order-service\n');
-      writeFileSync(join(secondDir, 'index.ts'), 'export const secondOrderService = true;\n');
+  it('retry race condition이면 이벤트를 추가하지 않고 현재 상태를 반환해야 한다', async () => {
+    const { db: raceDb, getAppendedEventCount } = createRetryRaceDb();
 
-      vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValue({
-        fileCount: 1,
-        artifactCount: 1,
-        signalCount: 1,
-        skippedCount: 0,
-        engineUsed: 'hybrid',
-        fallbackUsed: false,
-        warning: null,
-        scanFailures: [],
-      });
-      vi.mocked(codeBasedModule.inferRelationsFromCodeSignals)
-        .mockResolvedValueOnce({
-          edgeCount: 1,
-          processedEdgeCount: 1,
-          skippedEdgeCount: 0,
-          candidateCount: 1,
-          createdTopicCount: 0,
-          createdQueueCount: 0,
-          createdDatabaseCount: 0,
-          createdDbTableCount: 0,
-          createdEndpointCount: 0,
-        })
-        .mockRejectedValueOnce(new Error('relation inference failed'));
+    const result = await retryInferenceRun(raceDb, {
+      workspaceId,
+      runId: 'retry-run-1',
+    });
 
-      const run = await createInferenceRun(db, {
-        workspaceId,
-        modes: ['config', 'code'],
-        sources: [
-          { type: 'local', ref: tempDir },
-          { type: 'local', ref: secondDir },
-        ],
-      });
-
-      await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-      expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).not.toHaveBeenCalled();
-      expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
-    } finally {
-      rmSync(secondDir, { recursive: true, force: true });
-    }
+    expect(result).toEqual({
+      retried: false,
+      status: 'RUNNING',
+      reason: '상태가 변경되어 재시도 예약에 실패했습니다.',
+    });
+    expect(getAppendedEventCount()).toBe(0);
   });
 
-  it('code+db 실행에서 db 추론이 실패하면 cross validation을 호출하지 않아야 한다', async () => {
-    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
+  it('agent patch가 활성화되면 frontier proof에 대해 patch pass를 수행하고 최종 상태를 summary에 반영해야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId: 'proof-frontier-1',
+      status: 'FRONTIER',
+      frontierReason: 'CONFIG_BINDING_MISSING',
+      targetObjectId: null,
+      relationType: null,
     });
-    vi.mocked(dbSchemaSignalModule.extractDbSchemaSignals).mockRejectedValueOnce(
-      new Error('db failed'),
-    );
+    vi.mocked(frontierAgentModule.runFrontierAgentPass).mockResolvedValueOnce({
+      proofStateId: 'proof-frontier-1',
+      frontierReason: 'CONFIG_BINDING_MISSING',
+      attempted: true,
+      proposal: {
+        proofStateId: 'proof-frontier-1',
+        frontierReason: 'CONFIG_BINDING_MISSING',
+        frontierClass: 'ALIAS',
+        patchType: 'alias_binding',
+        payload: {
+          aliasKey: 'client.orders.url',
+          resolvedServiceId: 'provider-1',
+        },
+        rationale: 'single service match',
+      },
+      patchId: 'patch-1',
+      validationStatus: 'ACCEPTED',
+      errors: [],
+      resolution: {
+        proofStateId: 'proof-frontier-1',
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: 'endpoint-1',
+        relationType: 'call',
+      },
+    });
 
     const run = await createInferenceRun(db, {
       workspaceId,
-      modes: ['code', 'db'],
-      sources: [{ type: 'local', ref: tempDir }],
-    });
-
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
-  });
-
-  it('config+code+db 실행에서 db 추론이 실패해도 binding은 수행하고 cross validation은 건너뛰어야 한다', async () => {
-    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: order-service\n');
-    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    vi.mocked(dbSchemaSignalModule.extractDbSchemaSignals).mockRejectedValueOnce(
-      new Error('db failed'),
-    );
-
-    const run = await createInferenceRun(db, {
-      workspaceId,
-      modes: ['config', 'code', 'db'],
-      sources: [{ type: 'local', ref: tempDir }],
-    });
-
-    await executeInferenceRun(db, { workspaceId, runId: run.id });
-
-    expect(vi.mocked(configCodeBindingModule.bindConfigToCodeEndpoints)).toHaveBeenCalledWith(
-      db,
-      { workspaceId, repoRoots: [tempDir] },
-    );
-    expect(vi.mocked(crossValidationModule.crossValidatePendingRelationCandidates)).not.toHaveBeenCalled();
-  });
-
-  it('code-only 실행에서 relation inference가 전부 실패하면 run이 FAILED로 완료되어야 한다', async () => {
-    writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n');
-    vi.mocked(codeSignalEngineModule.extractCodeSignalsWithEngine).mockResolvedValueOnce({
-      fileCount: 1,
-      artifactCount: 1,
-      signalCount: 1,
-      skippedCount: 0,
-      engineUsed: 'hybrid',
-      fallbackUsed: false,
-      warning: null,
-      scanFailures: [],
-    });
-    vi.mocked(codeBasedModule.inferRelationsFromCodeSignals).mockRejectedValueOnce(
-      new Error('relation inference failed'),
-    );
-
-    const run = await createInferenceRun(db, {
-      workspaceId,
-      modes: ['code'],
+      modes: ['config'],
+      enableAgentPatches: true,
+      maxAgentFrontiers: 2,
       sources: [{ type: 'local', ref: tempDir }],
     });
     const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
 
-    expect(detail.run.status).toBe('FAILED');
-    expect(detail.sources[0]?.status).toBe('FAILED');
+    expect(vi.mocked(frontierAgentModule.runFrontierAgentPass)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(frontierAgentModule.runFrontierAgentPass)).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({
+        workspaceId,
+        proofStateId: 'proof-frontier-1',
+        runId: run.id,
+      }),
+    );
+
+    const stats = detail.run.stats as Record<string, unknown>;
+    expect(stats['requestedAgentPatches']).toMatchObject({
+      enabled: true,
+      maxFrontiers: 2,
+    });
+    expect(stats['frontierAgent']).toMatchObject({
+      enabled: true,
+      attemptedFrontierCount: 1,
+      proposalCount: 1,
+      acceptedCount: 1,
+      rejectedCount: 0,
+      noProposalCount: 0,
+      skippedCount: 0,
+    });
+    expect(stats['proofResolution']).toMatchObject({
+      intentCount: 1,
+      closedAtomicCount: 1,
+      frontierCount: 0,
+      rejectedCount: 0,
+    });
+    expect(detail.events.some((event) => event.eventType === 'FRONTIER_AGENT_PATCH')).toBe(true);
   });
 
-  it('RUNNING 중 취소되면 최종 상태를 CANCELED로 유지해야 한다', async () => {
-    const inferRelationsFromConfigMock = vi.mocked(configBasedModule.inferRelationsFromConfig);
-    let runId = '';
-    inferRelationsFromConfigMock.mockImplementationOnce(async () => {
-      const cancelResult = await cancelInferenceRun(db, { workspaceId, runId });
-      expect(cancelResult).toEqual({ canceled: true, status: 'CANCELED' });
+  it('agent disabled 상태의 frontier도 skip event로 남겨야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId: 'proof-frontier-disabled',
+      status: 'FRONTIER',
+      frontierReason: 'CONFIG_BINDING_MISSING',
+      targetObjectId: null,
+      relationType: null,
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      enableAgentPatches: false,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(vi.mocked(frontierAgentModule.runFrontierAgentPass)).not.toHaveBeenCalled();
+    expect(detail.events.some((event) =>
+      event.eventType === 'FRONTIER_AGENT_PATCH'
+      && (event.payload as Record<string, unknown>)['outcome'] === 'disabled')).toBe(true);
+  });
+
+  it('agent proposal이 없으면 no_proposal event를 남겨야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId: 'proof-frontier-no-proposal',
+      status: 'FRONTIER',
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+      targetObjectId: null,
+      relationType: null,
+    });
+    vi.mocked(frontierAgentModule.runFrontierAgentPass).mockResolvedValueOnce({
+      proofStateId: 'proof-frontier-no-proposal',
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+      attempted: false,
+      proposal: null,
+      patchId: null,
+      validationStatus: null,
+      errors: [],
+      resolution: null,
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      enableAgentPatches: true,
+      maxAgentFrontiers: 2,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(detail.events.some((event) =>
+      event.eventType === 'FRONTIER_AGENT_PATCH'
+      && (event.payload as Record<string, unknown>)['outcome'] === 'no_proposal')).toBe(true);
+  });
+
+  it('frontier limit 초과도 skip event로 남겨야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const secondIntentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: secondIntentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: seeded.consumerServiceId,
+      sourceFunctionId: null,
+      methodHint: 'GET',
+      externalPathHint: '/api/second',
+      hostHint: 'SECOND_API',
+      intentHash: 'intent-frontier-limit-second',
+      anchorHash: 'anchor-frontier-limit-second',
+    });
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)
+      .mockResolvedValueOnce({
+        proofStateId: 'proof-frontier-limit-1',
+        status: 'FRONTIER',
+        frontierReason: 'CONFIG_BINDING_MISSING',
+        targetObjectId: null,
+        relationType: null,
+      })
+      .mockResolvedValueOnce({
+        proofStateId: 'proof-frontier-limit-2',
+        status: 'FRONTIER',
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        targetObjectId: null,
+        relationType: null,
+      });
+    vi.mocked(frontierAgentModule.runFrontierAgentPass).mockResolvedValueOnce({
+      proofStateId: 'proof-frontier-limit-1',
+      frontierReason: 'CONFIG_BINDING_MISSING',
+      attempted: false,
+      proposal: null,
+      patchId: null,
+      validationStatus: null,
+      errors: [],
+      resolution: null,
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      enableAgentPatches: true,
+      maxAgentFrontiers: 1,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    expect(detail.events.some((event) =>
+      event.eventType === 'FRONTIER_AGENT_PATCH'
+      && (event.payload as Record<string, unknown>)['outcome'] === 'limit_exceeded')).toBe(true);
+  });
+
+  it('cutover artifact 실패는 warning으로만 남기고 run은 계속 완료해야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementationOnce(async (dbClient) => {
+      const proofStateId = generateId();
+      await dbClient.insert(proofStates).values({
+        id: proofStateId,
+        workspaceId,
+        intentId: seeded.intentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: seeded.sourceFunctionId,
+        providerServiceId: seeded.providerServiceId,
+        targetObjectType: null,
+        targetObjectId: null,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/orders/123',
+        internalPathResolved: null,
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      });
       return {
-        fileCount: 1,
-        processedFileCount: 1,
-        skippedFileCount: 0,
-        candidateCount: 0,
-        objectCount: 0,
+        proofStateId,
+        status: 'FRONTIER',
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        targetObjectId: null,
+        relationType: null,
       };
     });
+    vi.mocked(intentProofCutoverReportModule.buildIntentProofCutoverArtifact).mockRejectedValueOnce(
+      new Error('artifact failed'),
+    );
 
     const run = await createInferenceRun(db, {
       workspaceId,
       modes: ['config'],
       sources: [{ type: 'local', ref: tempDir }],
     });
-    runId = run.id;
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
 
-    const detail = await executeInferenceRun(db, { workspaceId, runId });
-
-    expect(detail.run.status).toBe('CANCELED');
-    expect(detail.run.errorMessage).toBe('사용자에 의해 취소됨');
-    expect(detail.events.some((event) => event.eventType === 'RUN_CANCELED')).toBe(true);
-    expect(detail.events.some((event) => event.eventType === 'RUN_COMPLETED')).toBe(false);
-  });
-
-  it('재시도 경쟁 상태에서 상태 전이가 없으면 retried=false를 반환해야 한다', async () => {
-    const race = createRetryRaceDb();
-
-    const result = await retryInferenceRun(race.db, {
-      workspaceId,
-      runId: 'retry-run-1',
+    expect(detail.run.status).toBe('SUCCEEDED');
+    expect(detail.run.warnings).toContain('cutover artifact 생성 실패: artifact failed');
+    expect((detail.run.stats as Record<string, unknown>)['proofSummary']).toMatchObject({
+      gatewayRouteSeedCount: 0,
+      proofFrontierCount: 1,
+      projectedCandidateCount: 0,
+      serviceTargetProjectionCount: 0,
     });
-
-    expect(result.retried).toBe(false);
-    expect(result.status).toBe('RUNNING');
-    expect(result.reason).toContain('상태가 변경');
-    expect(race.getAppendedEventCount()).toBe(0);
   });
 });

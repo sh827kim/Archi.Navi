@@ -1,25 +1,20 @@
 /**
  * extractAstCodeSignals 통합 테스트 (Phase 2)
- * PGlite 인메모리 DB + 임시 파일 시스템으로 실제 추출 흐름 검증
+ * embedded postgres 테스트 DB + 임시 파일 시스템으로 실제 추출 흐름 검증
  * Phase 1 extractCodeSignals와 동일한 인터페이스 확인
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import { codeArtifacts, codeCallEdges, evidences, objects, workspaces } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { extractAstCodeSignals } from '@/code/ast/extractAstCodeSignals';
 import { generateId } from '@archi-navi/shared';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-    const db = createPgliteClient();
-    await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-    return db;
+  return await createEmbeddedTestDb();
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
@@ -998,6 +993,82 @@ public class PaymentService {
 
         expect(artifacts).toHaveLength(1);
         expect(artifacts[0]?.ownerObjectId).toBe(orderServiceId);
+    });
+
+    it('AST 추출은 function object를 생성하고 evidence metadata에 ownerFunction을 남겨야 한다', async () => {
+        const { orderServiceId } = await createFixtures(db);
+
+        const svcDir = join(tempDir, 'order-service', 'src');
+        mkdirSync(svcDir, { recursive: true });
+        writeFileSync(
+            join(svcDir, 'OrderClient.ts'),
+            `class OrderClient {
+  async fetchOrder() {
+    return axios.get('/api/orders');
+  }
+}`,
+        );
+
+        await extractAstCodeSignals(db, { workspaceId, repoRoot: tempDir });
+
+        const functions = await db
+            .select()
+            .from(objects)
+            .where(
+                and(
+                    eq(objects.workspaceId, workspaceId),
+                    eq(objects.objectType, 'function'),
+                    eq(objects.parentId, orderServiceId),
+                ),
+            );
+
+        expect(functions).toHaveLength(1);
+        expect(functions[0]?.name).toBe('OrderClient.fetchOrder');
+
+        const savedEvidences = await db
+            .select()
+            .from(evidences)
+            .where(eq(evidences.workspaceId, workspaceId));
+        const callEvidence = savedEvidences.find(
+            (evidence) => ((evidence.metadata as Record<string, unknown>)['kind'] as string | undefined) === 'call',
+        );
+        expect(callEvidence).toBeDefined();
+        expect((callEvidence?.metadata as Record<string, unknown>)['ownerFunctionId']).toBe(functions[0]?.id);
+        expect((callEvidence?.metadata as Record<string, unknown>)['ownerFunctionName']).toBe('fetchOrder');
+        expect((callEvidence?.metadata as Record<string, unknown>)['ownerClassName']).toBe('OrderClient');
+        expect((callEvidence?.metadata as Record<string, unknown>)['ownerFunctionKey']).toBeTruthy();
+    });
+
+    it('AST 재스캔은 같은 function object를 재사용해야 한다', async () => {
+        const { orderServiceId } = await createFixtures(db);
+
+        const svcDir = join(tempDir, 'order-service', 'src');
+        mkdirSync(svcDir, { recursive: true });
+        writeFileSync(
+            join(svcDir, 'OrderClient.ts'),
+            `class OrderClient {
+  async fetchOrder() {
+    return axios.get('/api/orders');
+  }
+}`,
+        );
+
+        await extractAstCodeSignals(db, { workspaceId, repoRoot: tempDir });
+        await extractAstCodeSignals(db, { workspaceId, repoRoot: tempDir, forceRescan: true });
+
+        const functions = await db
+            .select()
+            .from(objects)
+            .where(
+                and(
+                    eq(objects.workspaceId, workspaceId),
+                    eq(objects.objectType, 'function'),
+                    eq(objects.parentId, orderServiceId),
+                ),
+            );
+
+        expect(functions).toHaveLength(1);
+        expect(functions[0]?.name).toBe('OrderClient.fetchOrder');
     });
 
     // ─── 빈 디렉토리 ─────────────────────────────────────────────────────────

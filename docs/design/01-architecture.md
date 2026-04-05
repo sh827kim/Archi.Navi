@@ -43,7 +43,7 @@ Archi.Navi는 단순한 그래프 뷰어가 아니라, 워크스페이스 단위
 │ packages/db         : schema, client, migrations             │
 ├──────────────────────────────────────────────────────────────┤
 │ Persistence / Integration                                    │
-│ PostgreSQL or PGlite + Drizzle ORM                           │
+│ Embedded PostgreSQL or PostgreSQL + Drizzle ORM              │
 │ Local FS / optional GitHub source resolution / SSE           │
 └──────────────────────────────────────────────────────────────┘
 ```
@@ -226,7 +226,7 @@ pnpm dev
 ```
 
 - 기본 개발 경로는 Next.js 앱 단일 실행이다.
-- 로컬 기본 DB는 `PGLITE_DATA_DIR` 기반 PGlite 저장소를 사용한다.
+- 로컬 기본 DB는 `ARCHI_NAVI_DB_DATA_DIR` 기반 embedded postgres 저장소를 사용한다.
 - migration 경로는 `packages/db/src/migrations`를 기준으로 한다.
 
 ## 7.2 확장 실행 환경

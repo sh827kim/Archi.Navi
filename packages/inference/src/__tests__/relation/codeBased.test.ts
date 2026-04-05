@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createPgliteClient } from '@archi-navi/db';
-import { migrate } from 'drizzle-orm/pglite/migrator';
+import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import { join } from 'path';
 import {
   codeArtifacts,
@@ -15,12 +14,8 @@ import { generateId } from '@archi-navi/shared';
 import { eq, and } from 'drizzle-orm';
 import { inferRelationsFromCodeSignals } from '@/relation/codeBased';
 
-const MIGRATIONS_FOLDER = join(process.cwd(), '../db/src/migrations');
-
 async function createTestDb() {
-  const db = createPgliteClient();
-  await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });
-  return db;
+  return await createEmbeddedTestDb();
 }
 
 describe('inferRelationsFromCodeSignals', () => {
@@ -34,7 +29,7 @@ describe('inferRelationsFromCodeSignals', () => {
     await db.insert(workspaces).values({ id: workspaceId, name: 'test-ws-codebased' });
   });
 
-  it('call(kind=call, URL host)로 서비스 간 후보를 생성해야 한다', async () => {
+  it('endpoint 매칭이 없는 call(kind=call, URL host+path)은 service fallback 없이 스킵해야 한다', async () => {
     const aId = generateId();
     const bId = generateId();
     await db.insert(objects).values([
@@ -97,28 +92,135 @@ describe('inferRelationsFromCodeSignals', () => {
     });
 
     const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.candidateCount).toBe(0);
+    expect(result.processedEdgeCount).toBe(0);
+    expect(result.skippedEdgeCount).toBe(1);
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(0);
+
+    const links = await db
+      .select()
+      .from(relationCandidateEvidences)
+      .where(eq(relationCandidateEvidences.workspaceId, workspaceId));
+    expect(links).toHaveLength(0);
+  });
+
+  it('function owner artifact도 legacy code 후보에서는 service subject로 정규화해야 한다', async () => {
+    const aId = generateId();
+    const aFunctionId = generateId();
+    const bId = generateId();
+    const endpointId = generateId();
+    await db.insert(objects).values([
+      {
+        id: aId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'api-gateway',
+        path: `/${aId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: aFunctionId,
+        workspaceId,
+        objectType: 'function',
+        category: 'CODE',
+        granularity: 'ATOMIC',
+        name: 'GatewayClient.fetchUsers',
+        parentId: aId,
+        path: `/${aFunctionId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: bId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'user-service',
+        path: `/${bId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/users',
+        displayName: 'GET /api/users',
+        parentId: bId,
+        path: `/user-service/get-api-users`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/users', repoRoot, source: 'CODE' },
+      },
+    ]);
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'typescript',
+      repoRoot,
+      filePath: 'src/GatewayClient.ts',
+      ownerObjectId: aFunctionId,
+      sha256: 'function-owner-artifact',
+    });
+
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/GatewayClient.ts',
+      lineStart: 3,
+      lineEnd: 3,
+      excerpt: "return axios.get('http://user-service/api/users');",
+      metadata: {
+        kind: 'call',
+        confidence: 0.92,
+        ownerFunctionId: aFunctionId,
+      },
+    });
+
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'http://user-service/api/users',
+      weight: 1,
+      evidenceId,
+    });
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
     expect(result.candidateCount).toBe(1);
+    expect(result.processedEdgeCount).toBe(1);
 
     const candidates = await db
       .select()
       .from(relationCandidates)
       .where(eq(relationCandidates.workspaceId, workspaceId));
     expect(candidates).toHaveLength(1);
-    expect(candidates[0]?.relationType).toBe('call');
     expect(candidates[0]?.subjectObjectId).toBe(aId);
-    expect(candidates[0]?.objectId).toBe(bId);
-
-    const links = await db
-      .select()
-      .from(relationCandidateEvidences)
-      .where(eq(relationCandidateEvidences.workspaceId, workspaceId));
-    expect(links).toHaveLength(1);
-    expect(links[0]?.evidenceId).toBe(evidenceId);
+    expect(candidates[0]?.objectId).toBe(endpointId);
   });
 
-  it('crossValidation 보정 confidence보다 낮아도 원본 confidence보다 높으면 code 후보를 갱신해야 한다', async () => {
+  it('stale ownerFunctionId가 있어도 artifact owner service로 fallback 해야 한다', async () => {
     const aId = generateId();
     const bId = generateId();
+    const endpointId = generateId();
     await db.insert(objects).values([
       {
         id: aId,
@@ -144,6 +246,113 @@ describe('inferRelationsFromCodeSignals', () => {
         visibility: 'VISIBLE',
         metadata: {},
       },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/users',
+        displayName: 'GET /api/users',
+        parentId: bId,
+        path: `/user-service/get-api-users-fallback`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/users', repoRoot, source: 'CODE' },
+      },
+    ]);
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'typescript',
+      repoRoot,
+      filePath: 'src/GatewayClientFallback.ts',
+      ownerObjectId: aId,
+      sha256: 'stale-owner-fallback-artifact',
+    });
+
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/GatewayClientFallback.ts',
+      lineStart: 3,
+      lineEnd: 3,
+      excerpt: "return axios.get('http://user-service/api/users');",
+      metadata: {
+        kind: 'call',
+        confidence: 0.92,
+        ownerFunctionId: generateId(),
+      },
+    });
+
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'http://user-service/api/users',
+      weight: 1,
+      evidenceId,
+    });
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.candidateCount).toBe(1);
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.subjectObjectId).toBe(aId);
+    expect(candidates[0]?.objectId).toBe(endpointId);
+  });
+
+  it('crossValidation 보정 confidence보다 낮아도 원본 confidence보다 높으면 code 후보를 갱신해야 한다', async () => {
+    const aId = generateId();
+    const bId = generateId();
+    const endpointId = generateId();
+    await db.insert(objects).values([
+      {
+        id: aId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'api-gateway',
+        path: `/${aId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: bId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'user-service',
+        path: `/${bId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/users',
+        displayName: 'GET /api/users',
+        parentId: bId,
+        path: `/user-service/get-api-users`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/users', repoRoot, source: 'CODE' },
+      },
     ]);
 
     const candidateId = generateId();
@@ -152,11 +361,12 @@ describe('inferRelationsFromCodeSignals', () => {
       workspaceId,
       relationType: 'call',
       subjectObjectId: aId,
-      objectId: bId,
+      objectId: endpointId,
       confidence: 0.95,
       status: 'PENDING',
       metadata: {
         source: 'old',
+        targetType: 'api_endpoint',
         crossValidation: {
           validated: true,
           supportingSources: ['config', 'code'],
@@ -212,6 +422,7 @@ describe('inferRelationsFromCodeSignals', () => {
   it('동일 raw confidence로 재사용되는 pending code 후보도 기존 crossValidation 상태를 제거해야 한다', async () => {
     const aId = generateId();
     const bId = generateId();
+    const endpointId = generateId();
     await db.insert(objects).values([
       {
         id: aId,
@@ -237,6 +448,20 @@ describe('inferRelationsFromCodeSignals', () => {
         visibility: 'VISIBLE',
         metadata: {},
       },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/users',
+        displayName: 'GET /api/users',
+        parentId: bId,
+        path: `/user-service/get-api-users`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/users', repoRoot, source: 'CODE' },
+      },
     ]);
 
     const candidateId = generateId();
@@ -245,11 +470,12 @@ describe('inferRelationsFromCodeSignals', () => {
       workspaceId,
       relationType: 'call',
       subjectObjectId: aId,
-      objectId: bId,
+      objectId: endpointId,
       confidence: 0.95,
       status: 'PENDING',
       metadata: {
         source: 'old',
+        targetType: 'api_endpoint',
         crossValidation: {
           validated: true,
           supportingSources: ['config', 'code'],
@@ -305,6 +531,7 @@ describe('inferRelationsFromCodeSignals', () => {
   it('동일 raw confidence로 재사용되는 pending code 후보도 최신 repoRoot provenance로 갱신해야 한다', async () => {
     const aId = generateId();
     const bId = generateId();
+    const endpointId = generateId();
     const newRepoRoot = '/tmp/repo-next';
     await db.insert(objects).values([
       {
@@ -331,6 +558,20 @@ describe('inferRelationsFromCodeSignals', () => {
         visibility: 'VISIBLE',
         metadata: {},
       },
+      {
+        id: endpointId,
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/users',
+        displayName: 'GET /api/users',
+        parentId: bId,
+        path: `/user-service/get-api-users`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/users', repoRoot: newRepoRoot, source: 'CODE' },
+      },
     ]);
 
     const candidateId = generateId();
@@ -339,13 +580,13 @@ describe('inferRelationsFromCodeSignals', () => {
       workspaceId,
       relationType: 'call',
       subjectObjectId: aId,
-      objectId: bId,
+      objectId: endpointId,
       confidence: 0.95,
       status: 'PENDING',
       metadata: {
         source: 'old',
         repoRoot: '/tmp/repo-old',
-        targetType: 'service',
+        targetType: 'api_endpoint',
         crossValidation: {
           validated: true,
           supportingSources: ['config', 'code'],

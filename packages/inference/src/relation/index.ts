@@ -2,10 +2,7 @@
  * Relation 추론 엔진
  * 코드/설정에서 신호를 추출하여 relation_candidates 생성
  */
-export { inferRelationsFromConfig } from './configBased';
 export { inferRelationsFromCodeSignals } from './codeBased';
-export { bindConfigToCodeEndpoints } from './configCodeBinding';
-export type { ConfigCodeBindingResult } from './configCodeBinding';
 export { crossValidatePendingRelationCandidates } from './crossSignalValidation';
 export {
   DEFAULT_CROSS_VALIDATION_CONFIG,

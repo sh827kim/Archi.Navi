@@ -1,6 +1,6 @@
 /**
  * labelExtractor 단위 테스트
- * 순수 함수이므로 PGlite 불필요
+ * 순수 함수이므로 DB 런타임 불필요
  */
 import { describe, it, expect } from 'vitest';
 import { extractLabelCandidates } from '@/domain/labelExtractor';

@@ -25,6 +25,43 @@ vi.mock('drizzle-orm', () => ({
 
 import { GET, PUT } from '@/app/api/inference/profiles/default/route';
 
+function createDefaultProofConfidence() {
+  return {
+    name: 'intent-proof-default',
+    version: 'v1',
+    weights: {
+      summaryQuality: 0.45,
+      slotCompleteness: 0.25,
+      corroborationPerSignal: 0.05,
+      corroborationCap: 0.2,
+      contradictionPenaltyPerItem: 0.2,
+      contradictionPenaltyCap: 0.6,
+    },
+    slotWeights: {
+      http: {
+        method: 0.2,
+        externalPath: 0.2,
+        internalPath: 0.2,
+        providerService: 0.2,
+        targetObject: 0.2,
+      },
+      db: {
+        action: 0.25,
+        table: 0.25,
+        schema: 0.15,
+        datasource: 0.1,
+        targetObject: 0.25,
+      },
+      message: {
+        channel: 0.4,
+        broker: 0.2,
+        objectType: 0.15,
+        targetObject: 0.25,
+      },
+    },
+  };
+}
+
 function createProfileRow() {
   return {
     id: 'profile-1',
@@ -80,6 +117,7 @@ function createTransactionDb(
   updated: ReturnType<typeof createProfileRow>,
   currentState: {
     cross_validation: unknown;
+    proof_confidence_config?: unknown;
     feedback_config: unknown;
     feedback_adjustments: unknown;
     domain_feedback_config: unknown;
@@ -87,6 +125,7 @@ function createTransactionDb(
   },
   updatedState: {
     cross_validation: unknown;
+    proof_confidence_config?: unknown;
     feedback_config: unknown;
     feedback_adjustments: unknown;
     domain_feedback_config: unknown;
@@ -152,6 +191,7 @@ describe('inference profile default route', () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload).toEqual(expect.objectContaining({
+      proofConfidence: createDefaultProofConfidence(),
       relationFeedbackConfig: {
         enabled: true,
         minSamples: 10,
@@ -260,6 +300,77 @@ describe('inference profile default route', () => {
     expect(db.select).not.toHaveBeenCalled();
   });
 
+  it('PUT은 proofConfidence partial update를 적용하고 누락 필드는 유지해야 한다', async () => {
+    const current = createProfileRow();
+    const updated = createProfileRow();
+    const currentProofConfidence = createDefaultProofConfidence();
+    const updatedProofConfidence = {
+      ...currentProofConfidence,
+      name: 'intent-proof-custom',
+      version: 'v2',
+      weights: {
+        ...currentProofConfidence.weights,
+        summaryQuality: 0.5,
+      },
+      slotWeights: {
+        ...currentProofConfidence.slotWeights,
+        http: {
+          ...currentProofConfidence.slotWeights.http,
+          targetObject: 0.3,
+        },
+      },
+    };
+    const { db, transactionExecuteMock } = createTransactionDb(
+      current,
+      updated,
+      {
+        cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
+        proof_confidence_config: currentProofConfidence,
+        feedback_config: null,
+        feedback_adjustments: null,
+        domain_feedback_config: null,
+        domain_feedback_adjustments: null,
+      },
+      {
+        cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
+        proof_confidence_config: updatedProofConfidence,
+        feedback_config: null,
+        feedback_adjustments: null,
+        domain_feedback_config: null,
+        domain_feedback_adjustments: null,
+      },
+    );
+    getDbMock.mockResolvedValue(db);
+
+    const response = await PUT(new NextRequest('http://localhost/api/inference/profiles/default', {
+      method: 'PUT',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        proofConfidence: {
+          name: 'intent-proof-custom',
+          version: 'v2',
+          weights: {
+            summaryQuality: 0.5,
+          },
+          slotWeights: {
+            http: {
+              targetObject: 0.3,
+            },
+          },
+        },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(4);
+    const proofConfidenceQuery = getExecutedSql(transactionExecuteMock, 1);
+    expect(proofConfidenceQuery.strings.join('')).toContain('set proof_confidence_config = ');
+
+    const payload = await response.json();
+    expect(payload.proofConfidence).toEqual(updatedProofConfidence);
+  });
+
   it('PUT은 relation/domain feedback 설정을 독립적으로 저장하고 summary를 분리해 반환해야 한다', async () => {
     const current = createProfileRow();
     const updated = createProfileRow();
@@ -313,9 +424,9 @@ describe('inference profile default route', () => {
     ));
 
     expect(response.status).toBe(200);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
-    const relationQuery = getExecutedSql(transactionExecuteMock, 1);
-    const domainQuery = getExecutedSql(transactionExecuteMock, 2);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(4);
+    const relationQuery = getExecutedSql(transactionExecuteMock, 2);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 3);
     expect(relationQuery.strings.join('')).toContain('set feedback_config = ');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');
     expect(domainQuery.strings.join('')).toContain('set domain_feedback_config = ');
@@ -677,9 +788,9 @@ describe('inference profile default route', () => {
     expect(response.status).toBe(200);
     expect(db.select).not.toHaveBeenCalled();
     expect(executeMock).toHaveBeenCalledTimes(6);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(3);
-    const relationQuery = getExecutedSql(transactionExecuteMock, 1);
-    const domainQuery = getExecutedSql(transactionExecuteMock, 2);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(4);
+    const relationQuery = getExecutedSql(transactionExecuteMock, 2);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 3);
     expect(relationQuery.strings.join('')).toContain('feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('domain_feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');

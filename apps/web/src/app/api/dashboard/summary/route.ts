@@ -8,8 +8,15 @@ import {
 } from '@archi-navi/db';
 import { listInferenceRuns } from '@archi-navi/inference';
 
-function asCount(rows: Array<{ count: number }>): number {
-  return rows[0]?.count ?? 0;
+function asCount(rows: Array<{ count: number | string | bigint | null }>): number {
+  const value = rows[0]?.count;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'bigint') return Number(value);
+  if (typeof value === 'string') {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  return 0;
 }
 
 export async function GET(req: NextRequest) {

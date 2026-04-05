@@ -233,6 +233,18 @@ describe('ServiceListClient object edit flows', () => {
     expect(within(sheet).getByText('HIDDEN')).toBeTruthy();
   });
 
+  it('상세 sheet에서 approval proof drill-down 링크를 노출해야 한다', async () => {
+    setupFetchMock();
+    render(<ServiceListClient />);
+    const sheet = await openDetailSheet();
+
+    const links = within(sheet).getAllByRole('link', { name: 'proof chain drill-down' });
+    expect(links.length).toBe(2);
+    expect(links[0]?.getAttribute('href')).toContain('/approval?workspaceId=ws-1');
+    expect(links[0]?.getAttribute('href')).toContain('focusObjectId=obj-1');
+    expect(links[0]?.getAttribute('href')).toContain('drill=proof-chain');
+  });
+
   it('목록 카드 visibility 토글 경로도 PATCH를 호출해야 한다', async () => {
     const fetchMock = setupFetchMock();
 

@@ -99,7 +99,7 @@ archi-navi/
 | UI 라이브러리 | TailwindCSS 4 + shadcn/ui |
 | 그래프 시각화 | Cytoscape.js + 3d-force-graph + React Flow |
 | 상태 관리 | Zustand |
-| 데이터베이스 | PGlite (로컬) / PostgreSQL 17 (팀 배포) |
+| 데이터베이스 | Embedded PostgreSQL (로컬) / PostgreSQL 17 (팀 배포) |
 | ORM | Drizzle ORM |
 | AI / LLM | Vercel AI SDK (OpenAI, Anthropic, Google) |
 | 모노레포 | Turborepo + pnpm |
@@ -133,12 +133,13 @@ mkdir -p apps/web
 ### 환경변수
 
 ```env
-# DB — 기본적으로 PGlite 사용 (별도 설치 불필요)
-# PostgreSQL 사용 시 아래 주석 해제
+# DB — 로컬 개발에서는 embedded postgres를 기본으로 사용
+# 외부 PostgreSQL 서버 사용 시 아래 주석 해제
 # DATABASE_URL=postgresql://postgres:password@localhost:5432/archinavi
 
-# PGlite 데이터 저장 경로 (기본: .archi-navi/data)
-PGLITE_DATA_DIR=.archi-navi/data
+# embedded postgres 데이터 경로 (기본: .archi-navi/dev-db)
+ARCHI_NAVI_DB_DATA_DIR=.archi-navi/dev-db
+ARCHI_NAVI_DB_PORT=54329
 
 # AI 프로바이더: openai | anthropic | google
 AI_PROVIDER=openai

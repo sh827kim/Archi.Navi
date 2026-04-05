@@ -29,6 +29,10 @@
 | [06-compound-view.md](./06-compound-view.md) | mapping graph / contributor drill-down UI 기준 문서 | Current |
 | [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) | 추론 엔진 고도화/확장 설계 | Extension |
 | [08-developer-productivity.md](./08-developer-productivity.md) | 생산성 기능 로드맵/확장 설계 | Extension |
+| [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md) | intent-first proof engine 개요 | Proposed |
+| [10-intent-centric-proof-engine-state-model.md](./10-intent-centric-proof-engine-state-model.md) | intent/proof 상태 모델과 추출 레이어 | Proposed |
+| [11-intent-centric-proof-engine-resolution-pipeline.md](./11-intent-centric-proof-engine-resolution-pipeline.md) | fixed resolution pipeline, frontier, agent | Proposed |
+| [12-intent-centric-proof-engine-adoption-plan.md](./12-intent-centric-proof-engine-adoption-plan.md) | 구현 교체, UI/운영, cutover 계획 | Proposed |
 
 ## 이번 현행화에서 반영한 방향
 - 제품의 중심축을 `단발성 추론 도구`가 아니라 `워크스페이스 기반 운영형 아키텍처 지식 시스템`으로 재정의했다.

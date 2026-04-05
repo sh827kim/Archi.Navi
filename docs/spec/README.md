@@ -55,6 +55,10 @@
 - [45-query-engine-input-usability-spec.md](./45-query-engine-input-usability-spec.md)
 - [46-ai-architecture-assistant-scope-expansion-spec.md](./46-ai-architecture-assistant-scope-expansion-spec.md)
 - [47-zuul-route-aware-smart-atomic-spec.md](./47-zuul-route-aware-smart-atomic-spec.md)
+- [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
+- [49-intent-centric-proof-engine-state-model-spec.md](./49-intent-centric-proof-engine-state-model-spec.md)
+- [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md)
+- [51-intent-centric-proof-engine-adoption-plan-spec.md](./51-intent-centric-proof-engine-adoption-plan-spec.md)
 
 ## 참고
 - 구현 체크리스트: [docs/checklists/README.md](../checklists/README.md)

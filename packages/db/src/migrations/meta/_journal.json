@@ -50,6 +50,41 @@
       "when": 1774689837000,
       "tag": "0006_domain_feedback_profile",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1775041200000,
+      "tag": "0007_intent_proof_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1775228400000,
+      "tag": "0008_route_family_lineage",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1775259600000,
+      "tag": "0009_function_summary_v2",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1775264400000,
+      "tag": "0010_proof_confidence_breakdown",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1775282400000,
+      "tag": "0011_proof_confidence_profile_and_ast_summary",
+      "breakpoints": true
     }
   ]
 }
