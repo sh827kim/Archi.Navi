@@ -69,7 +69,13 @@ export type InferenceRunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' |
 
 async function collectImpactedIntentIdsForRun(
   db: DbClient,
-  input: { workspaceId: string; runId: string; incremental: boolean },
+  input: {
+    workspaceId: string;
+    runId: string;
+    incremental: boolean;
+    deletedRouteTransformOwnerServiceIds?: string[];
+    didDeleteGlobalRouteTransform?: boolean;
+  },
 ): Promise<string[]> {
   const listAllIntentIds = async () => {
     const rows = await db
@@ -111,9 +117,22 @@ async function collectImpactedIntentIdsForRun(
   if (functionIds.length > 0) {
     dependencyClauses.push(and(eq(proofDependencies.dependencyKind, 'function_summary_function'), inArray(proofDependencies.dependencyKey, functionIds)));
   }
-  const ownerServiceIds = updatedTransforms.map((row) => row.ownerServiceId).filter((value): value is string => typeof value === 'string' && value.length > 0);
-  if (ownerServiceIds.length > 0) {
-    dependencyClauses.push(and(eq(proofDependencies.dependencyKind, 'route_transform_owner_service'), inArray(proofDependencies.dependencyKey, ownerServiceIds)));
+  const ownerServiceIds = [
+    ...updatedTransforms
+      .map((row) => row.ownerServiceId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ...(input.deletedRouteTransformOwnerServiceIds ?? []),
+  ];
+  const uniqueOwnerServiceIds = [...new Set(ownerServiceIds)];
+  if (uniqueOwnerServiceIds.length > 0) {
+    dependencyClauses.push(and(
+      eq(proofDependencies.dependencyKind, 'route_transform_owner_service'),
+      inArray(proofDependencies.dependencyKey, uniqueOwnerServiceIds),
+    ));
+  }
+  const didUpdateGlobalRouteTransform = updatedTransforms.some((row) => row.ownerServiceId === null);
+  if (didUpdateGlobalRouteTransform || input.didDeleteGlobalRouteTransform) {
+    return await listAllIntentIds();
   }
 
   const dependencyBackedIntentIds = dependencyClauses.length === 0
@@ -1127,24 +1146,20 @@ export async function executeInferenceRun(
   const isRunCanceled = async () =>
     (await getInferenceRunStatus(db, { workspaceId: input.workspaceId, runId: run.id })) === 'CANCELED';
 
+  const deletedRouteTransformOwnerServiceIdsForRun = new Set<string>();
+  let didDeleteGlobalRouteTransformForRun = false;
   const resolveWorkspaceProofsForRun = async () => {
     const impactedIntentIds = await collectImpactedIntentIdsForRun(db, {
       workspaceId: input.workspaceId,
       runId: run.id,
       incremental: run.requestedIncremental,
+      deletedRouteTransformOwnerServiceIds: [...deletedRouteTransformOwnerServiceIdsForRun],
+      didDeleteGlobalRouteTransform: didDeleteGlobalRouteTransformForRun,
     });
 
     if (impactedIntentIds.length === 0) {
       return;
     }
-
-    await db
-      .update(interactionIntents)
-      .set({
-        updatedRunId: run.id,
-        updatedAt: new Date(),
-      })
-      .where(inArray(interactionIntents.id, impactedIntentIds));
 
     let resolverContext = await buildIntentProofResolverContext(db, { workspaceId: input.workspaceId });
 
@@ -1240,6 +1255,15 @@ export async function executeInferenceRun(
           }
         }
       }
+
+      await db
+        .update(interactionIntents)
+        .set({
+          updatedRunId: run.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(interactionIntents.id, intentId));
+
       proofResolution.intentCount += 1;
       if (resolution.status === 'CLOSED_ATOMIC') {
         proofResolution.closedAtomicCount += 1;
@@ -1725,6 +1749,12 @@ export async function executeInferenceRun(
           repoRoot: localSource.repoRoot,
           runId: run.id,
         });
+        for (const ownerServiceId of routeTransformResult.deletedOwnerServiceIds) {
+          deletedRouteTransformOwnerServiceIdsForRun.add(ownerServiceId);
+        }
+        if (routeTransformResult.deletedGlobalTransformCount > 0) {
+          didDeleteGlobalRouteTransformForRun = true;
+        }
         const configIntentResult = await extractInteractionIntentsFromConfigRoutes(db, {
           workspaceId: input.workspaceId,
           repoRoot: localSource.repoRoot,

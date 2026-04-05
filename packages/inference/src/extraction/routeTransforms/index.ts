@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { objects, routeTransforms } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -61,6 +61,9 @@ export interface ExtractRouteTransformsOptions {
 
 export interface ExtractRouteTransformsResult {
   routeTransformCount: number;
+  deletedRouteTransformCount: number;
+  deletedOwnerServiceIds: string[];
+  deletedGlobalTransformCount: number;
   fileCount: number;
   processedFileCount: number;
   skippedFileCount: number;
@@ -95,6 +98,10 @@ function extractTargetHostAlias(urlValue: string | null): string | null {
 function buildConfigEvidenceId(repoRoot: string, filePath: string, routeKey: string): string {
   const relativePath = relative(repoRoot, filePath).trim();
   return `config:${relativePath.length > 0 ? relativePath : filePath}#${routeKey}`;
+}
+
+function buildConfigRepoEvidenceId(repoRoot: string): string {
+  return `config_repo:${stableHash([repoRoot])}`;
 }
 
 function isDefaultGatewayRouteConfigFile(filePath: string): boolean {
@@ -164,23 +171,7 @@ async function upsertRouteTransform(
     evidenceIds: string[];
   },
 ): Promise<void> {
-  const sourceHash = stableHash([
-    input.gatewayKind,
-    input.ownerServiceId ?? '',
-    input.matchHost ?? '',
-    input.matchPath,
-    input.matchMode,
-    input.stripPrefixCount ?? '',
-    input.prependPrefix ?? '',
-    input.rewriteRegex ?? '',
-    input.rewriteReplacement ?? '',
-    input.pathCapturePolicy ?? '',
-    input.routeMountPrefix ?? '',
-    input.targetServiceHint ?? '',
-    input.targetHostAlias ?? '',
-    input.targetPathBaseHint ?? '',
-    input.priority,
-  ]);
+  const sourceHash = buildRouteTransformSourceHash(input);
 
   const existing = await db
     .select({ id: routeTransforms.id })
@@ -221,6 +212,87 @@ async function upsertRouteTransform(
     sourceHash,
     ...payload,
   });
+}
+
+function buildRouteTransformSourceHash(input: {
+  gatewayKind: string;
+  ownerServiceId: string | null;
+  matchHost: string | null;
+  matchPath: string;
+  matchMode: 'exact' | 'prefix' | 'regex';
+  prependPrefix: string | null;
+  rewriteRegex: string | null;
+  rewriteReplacement: string | null;
+  pathCapturePolicy: string | null;
+  routeMountPrefix: string | null;
+  targetServiceHint: string | null;
+  targetHostAlias: string | null;
+  targetPathBaseHint: string | null;
+  priority: number;
+  stripPrefixCount: number | null;
+}): string {
+  return stableHash([
+    input.gatewayKind,
+    input.ownerServiceId ?? '',
+    input.matchHost ?? '',
+    input.matchPath,
+    input.matchMode,
+    input.stripPrefixCount ?? '',
+    input.prependPrefix ?? '',
+    input.rewriteRegex ?? '',
+    input.rewriteReplacement ?? '',
+    input.pathCapturePolicy ?? '',
+    input.routeMountPrefix ?? '',
+    input.targetServiceHint ?? '',
+    input.targetHostAlias ?? '',
+    input.targetPathBaseHint ?? '',
+    input.priority,
+  ]);
+}
+
+async function pruneObsoleteConfigRouteTransforms(
+  db: DbClient,
+  input: {
+    workspaceId: string;
+    activeSourceHashes: Set<string>;
+    repoEvidenceId: string;
+  },
+): Promise<{ deletedCount: number; deletedOwnerServiceIds: string[]; deletedGlobalTransformCount: number }> {
+  const existing = await db
+    .select({
+      id: routeTransforms.id,
+      sourceHash: routeTransforms.sourceHash,
+      ownerServiceId: routeTransforms.ownerServiceId,
+      evidenceIds: routeTransforms.evidenceIds,
+    })
+    .from(routeTransforms)
+    .where(eq(routeTransforms.workspaceId, input.workspaceId));
+
+  const obsoleteRows = existing
+    .filter((row) => {
+      const evidenceIds = Array.isArray(row.evidenceIds)
+        ? row.evidenceIds.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+      const isConfigDerived = evidenceIds.some((evidenceId) => evidenceId.startsWith('config:'));
+      const belongsToCurrentRepo = evidenceIds.includes(input.repoEvidenceId);
+      if (!isConfigDerived) return false;
+      if (!belongsToCurrentRepo) return false;
+      return !input.activeSourceHashes.has(row.sourceHash);
+    });
+
+  if (obsoleteRows.length === 0) {
+    return { deletedCount: 0, deletedOwnerServiceIds: [], deletedGlobalTransformCount: 0 };
+  }
+
+  await db.delete(routeTransforms).where(inArray(routeTransforms.id, obsoleteRows.map((row) => row.id)));
+
+  const deletedOwnerServiceIds = [...new Set(
+    obsoleteRows
+      .map((row) => row.ownerServiceId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  )];
+  const deletedGlobalTransformCount = obsoleteRows.filter((row) => row.ownerServiceId === null).length;
+  return { deletedCount: obsoleteRows.length, deletedOwnerServiceIds, deletedGlobalTransformCount };
 }
 
 function trimWildcardPath(path: string): string {
@@ -375,6 +447,8 @@ export async function extractRouteTransformsFromConfig(
   const serviceIdByName = await loadServiceIdByName(db, options.workspaceId);
   const plugins = resolveGatewayRouteTransformPlugins(options.plugins);
   const discoveredFiles = findGatewayRouteCandidateFiles(options.repoRoot, plugins);
+  const activeSourceHashes = new Set<string>();
+  const repoEvidenceId = buildConfigRepoEvidenceId(options.repoRoot);
 
   let routeTransformCount = 0;
   for (const filePath of discoveredFiles) {
@@ -401,6 +475,7 @@ export async function extractRouteTransformsFromConfig(
           filePath,
           index,
         });
+        const evidenceIds = [...new Set([repoEvidenceId, ...normalizedRoute.evidenceIds])];
         await upsertRouteTransform(db, {
           workspaceId: options.workspaceId,
           runId: options.runId,
@@ -419,15 +494,43 @@ export async function extractRouteTransformsFromConfig(
           targetPathBaseHint: normalizedRoute.targetPathBaseHint,
           priority: normalizedRoute.priority,
           stripPrefixCount: normalizedRoute.stripPrefixCount,
-          evidenceIds: normalizedRoute.evidenceIds,
+          evidenceIds,
         });
+        activeSourceHashes.add(
+          buildRouteTransformSourceHash({
+            gatewayKind: normalizedRoute.gatewayKind,
+            ownerServiceId,
+            matchHost: normalizedRoute.matchHost,
+            matchPath: normalizedRoute.matchPath,
+            matchMode: normalizedRoute.matchMode,
+            stripPrefixCount: normalizedRoute.stripPrefixCount,
+            prependPrefix: normalizedRoute.prependPrefix,
+            rewriteRegex: normalizedRoute.rewriteRegex,
+            rewriteReplacement: normalizedRoute.rewriteReplacement,
+            pathCapturePolicy: normalizedRoute.pathCapturePolicy,
+            routeMountPrefix: normalizedRoute.routeMountPrefix,
+            targetServiceHint: normalizedRoute.targetServiceHint,
+            targetHostAlias: normalizedRoute.targetHostAlias,
+            targetPathBaseHint: normalizedRoute.targetPathBaseHint,
+            priority: normalizedRoute.priority,
+          }),
+        );
         routeTransformCount += 1;
       }
     }
   }
 
+  const pruneResult = await pruneObsoleteConfigRouteTransforms(db, {
+    workspaceId: options.workspaceId,
+    activeSourceHashes,
+    repoEvidenceId,
+  });
+
   return {
     routeTransformCount,
+    deletedRouteTransformCount: pruneResult.deletedCount,
+    deletedOwnerServiceIds: pruneResult.deletedOwnerServiceIds,
+    deletedGlobalTransformCount: pruneResult.deletedGlobalTransformCount,
     fileCount: discoveredFiles.length,
     processedFileCount: discoveredFiles.length,
     skippedFileCount: 0,

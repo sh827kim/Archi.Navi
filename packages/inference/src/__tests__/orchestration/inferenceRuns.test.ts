@@ -372,7 +372,7 @@ describe('inference orchestration runs', () => {
   });
 
   it('proof resolution이 실패하면 legacy count로 summary를 위장하지 않아야 한다', async () => {
-    await seedProofIntent(db);
+    const seeded = await seedProofIntent(db);
     writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
 
     vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockRejectedValueOnce(
@@ -415,6 +415,13 @@ describe('inference orchestration runs', () => {
         legacy_edges_fallback: 0,
       },
     });
+
+    const failedIntent = await db
+      .select({ updatedRunId: interactionIntents.updatedRunId })
+      .from(interactionIntents)
+      .where(eq(interactionIntents.id, seeded.intentId))
+      .limit(1);
+    expect(failedIntent[0]?.updatedRunId).toBeNull();
   });
 
   it('config-only gateway route도 synthetic intent로 승격되어 proof candidate를 생성해야 한다', async () => {
@@ -745,7 +752,7 @@ describe('inference orchestration runs', () => {
       sourceHash: 'binding-updated-by-run',
     });
 
-    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, args) => ({
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async () => ({
       proofStateId: args.intentId === impactedIntentId ? impactedProofStateId : untouchedProofStateId,
       status: 'FRONTIER',
       frontierReason: 'HOST_ALIAS_UNRESOLVED',
@@ -763,6 +770,200 @@ describe('inference orchestration runs', () => {
       db,
       expect.objectContaining({ workspaceId, intentId: impactedIntentId }),
     );
+  });
+
+  it('incremental run은 삭제된 route transform owner dependency와 연결된 intent도 재해결해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'incremental-transform-delete' });
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const orderServiceId = await insertObject(db, { objectType: 'service', name: 'order-service' });
+    const sourceFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: gatewayServiceId,
+    });
+
+    const impactedIntentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: impactedIntentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: gatewayServiceId,
+      sourceFunctionId,
+      hostHint: 'ORDER_SERVICE',
+      intentHash: `intent-${impactedIntentId}`,
+      anchorHash: `anchor-${impactedIntentId}`,
+    });
+
+    const impactedProofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: impactedProofStateId,
+      workspaceId,
+      intentId: impactedIntentId,
+      proofType: 'http_call',
+      status: 'NEW',
+      consumerServiceId: gatewayServiceId,
+      sourceFunctionId,
+    });
+    await db.insert(proofDependencies).values({
+      id: generateId(),
+      workspaceId,
+      proofStateId: impactedProofStateId,
+      dependencyKind: 'route_transform_owner_service',
+      dependencyKey: orderServiceId,
+    });
+
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    orders:',
+        '      path: /api/orders/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    await db.insert(routeTransforms).values({
+      id: generateId(),
+      workspaceId,
+      createdRunId: null,
+      updatedRunId: null,
+      sourceHash: 'route-transform-before-cleanup',
+      gatewayKind: 'zuul',
+      ownerServiceId: orderServiceId,
+      matchHost: null,
+      matchPath: '/api/orders/**',
+      matchMode: 'prefix',
+      stripPrefixCount: 1,
+      prependPrefix: null,
+      rewriteRegex: null,
+      rewriteReplacement: null,
+      pathCapturePolicy: 'glob',
+      routeMountPrefix: null,
+      targetServiceHint: 'order-service',
+      targetHostAlias: null,
+      targetPathBaseHint: '/orders',
+      priority: 100,
+      evidenceIds: ['config_repo:legacy-repo', 'config:application.yml#orders'],
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async () => ({
+      proofStateId: impactedProofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    }));
+
+    await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+    });
+
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ workspaceId, intentId: impactedIntentId }),
+    );
+  });
+
+  it('incremental run은 global route transform이 갱신되면 모든 intent를 재해결해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'incremental-global-transform-update' });
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const sourceFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: gatewayServiceId,
+    });
+
+    const intentIds = [generateId(), generateId()];
+    for (const intentId of intentIds) {
+      await db.insert(interactionIntents).values({
+        id: intentId,
+        workspaceId,
+        intentType: 'http_call',
+        sourceServiceId: gatewayServiceId,
+        sourceFunctionId,
+        hostHint: 'ORDER_SERVICE',
+        intentHash: `intent-${intentId}`,
+        anchorHash: `anchor-${intentId}`,
+      });
+      await db.insert(proofStates).values({
+        id: generateId(),
+        workspaceId,
+        intentId,
+        proofType: 'http_call',
+        status: 'NEW',
+        consumerServiceId: gatewayServiceId,
+        sourceFunctionId,
+      });
+    }
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await db.insert(routeTransforms).values({
+      id: generateId(),
+      workspaceId,
+      createdRunId: null,
+      updatedRunId: run.id,
+      sourceHash: `global-transform-${run.id}`,
+      gatewayKind: 'custom',
+      ownerServiceId: null,
+      matchHost: null,
+      matchPath: '/api/**',
+      matchMode: 'prefix',
+      stripPrefixCount: 1,
+      prependPrefix: null,
+      rewriteRegex: null,
+      rewriteReplacement: null,
+      pathCapturePolicy: 'glob',
+      routeMountPrefix: null,
+      targetServiceHint: null,
+      targetHostAlias: null,
+      targetPathBaseHint: null,
+      priority: 1,
+      evidenceIds: ['manual:test'],
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, args) => ({
+      proofStateId: generateId(),
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    }));
+
+    await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+    });
+
+    const resolvedIntentIds = vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mock.calls
+      .map(([, args]) => args.intentId)
+      .filter((intentId): intentId is string => typeof intentId === 'string');
+
+    expect(resolvedIntentIds).toHaveLength(2);
+    expect(resolvedIntentIds).toEqual(expect.arrayContaining(intentIds));
   });
 
   it('code 추출이 실패하면 run/source를 FAILED로 기록해야 한다', async () => {
