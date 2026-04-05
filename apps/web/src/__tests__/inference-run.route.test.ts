@@ -241,6 +241,28 @@ describe('POST /api/inference/run', () => {
     );
   });
 
+  it('smartProof=true 인데 모델이 없으면 run을 만들지 않고 400을 반환해야 한다', async () => {
+    getInferenceModelMock.mockReturnValue(null);
+
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        modes: ['config'],
+        repoRoots: ['/repo/root'],
+        useServiceMetadataPaths: false,
+        smartProof: true,
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(createInferenceRunMock).not.toHaveBeenCalled();
+    expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      error: 'smartProof가 활성화되었지만 사용할 LLM 모델이 설정되지 않았습니다.',
+    });
+  });
+
   it('nested local repoRoots는 ancestor root만 남기도록 정규화해야 한다', async () => {
     getDbMock.mockResolvedValue({ db: 'mock' });
     createInferenceRunMock.mockResolvedValue({

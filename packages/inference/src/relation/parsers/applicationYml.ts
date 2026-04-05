@@ -341,7 +341,9 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
 
       const routeKey = toStringValue(routeObj['id']);
       const uri = toStringValue(routeObj['uri']);
-      const path = parseSpringCloudGatewayPathPredicate(toStringArray(routeObj['predicates']));
+      const normalizedPredicates = normalizeSpringCloudGatewayEntries(routeObj['predicates']);
+      const normalizedFilters = normalizeSpringCloudGatewayEntries(routeObj['filters']);
+      const path = parseSpringCloudGatewayPathPredicate(normalizedPredicates);
       if (!routeKey || !uri || !uri.startsWith('lb://') || !path) {
         continue;
       }
@@ -349,10 +351,10 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
       springCloudGatewayRoutes.push({
         routeKey,
         path,
-        stripPrefixCount: parseSpringCloudGatewayStripPrefix(toStringArray(routeObj['filters'])),
-        prefixPath: parseSpringCloudGatewayPrefixPath(toStringArray(routeObj['filters'])),
-        rewriteRegex: parseSpringCloudGatewayRewriteRegex(toStringArray(routeObj['filters'])),
-        rewriteReplacement: parseSpringCloudGatewayRewriteReplacement(toStringArray(routeObj['filters'])),
+        stripPrefixCount: parseSpringCloudGatewayStripPrefix(normalizedFilters),
+        prefixPath: parseSpringCloudGatewayPrefixPath(normalizedFilters),
+        rewriteRegex: parseSpringCloudGatewayRewriteRegex(normalizedFilters),
+        rewriteReplacement: parseSpringCloudGatewayRewriteReplacement(normalizedFilters),
         uri,
       });
     }
@@ -362,7 +364,9 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
       if (!routeObj) continue;
 
       const uri = toStringValue(routeObj['uri']);
-      const path = parseSpringCloudGatewayPathPredicate(toStringArray(routeObj['predicates']));
+      const normalizedPredicates = normalizeSpringCloudGatewayEntries(routeObj['predicates']);
+      const normalizedFilters = normalizeSpringCloudGatewayEntries(routeObj['filters']);
+      const path = parseSpringCloudGatewayPathPredicate(normalizedPredicates);
       if (!uri || !uri.startsWith('lb://') || !path) {
         continue;
       }
@@ -370,10 +374,10 @@ export function parseApplicationYml(filePath: string, content: string): AppYmlSi
       springCloudGatewayRoutes.push({
         routeKey,
         path,
-        stripPrefixCount: parseSpringCloudGatewayStripPrefix(toStringArray(routeObj['filters'])),
-        prefixPath: parseSpringCloudGatewayPrefixPath(toStringArray(routeObj['filters'])),
-        rewriteRegex: parseSpringCloudGatewayRewriteRegex(toStringArray(routeObj['filters'])),
-        rewriteReplacement: parseSpringCloudGatewayRewriteReplacement(toStringArray(routeObj['filters'])),
+        stripPrefixCount: parseSpringCloudGatewayStripPrefix(normalizedFilters),
+        prefixPath: parseSpringCloudGatewayPrefixPath(normalizedFilters),
+        rewriteRegex: parseSpringCloudGatewayRewriteRegex(normalizedFilters),
+        rewriteReplacement: parseSpringCloudGatewayRewriteReplacement(normalizedFilters),
         uri,
       });
     }
@@ -425,6 +429,64 @@ function toStringValue(value: unknown): string | null {
 function toStringArray(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   return value.map((entry) => (typeof entry === 'string' ? entry : String(entry))).filter((entry) => entry.trim().length > 0);
+}
+
+function normalizeSpringCloudGatewayEntries(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+
+  const normalizedEntries: string[] = [];
+  for (const entry of value) {
+    if (typeof entry === 'string') {
+      const normalized = entry.trim();
+      if (normalized.length > 0) {
+        normalizedEntries.push(normalized);
+      }
+      continue;
+    }
+
+    const objectEntry = toRecord(entry);
+    const name = toStringValue(objectEntry?.['name']);
+    const args = toRecord(objectEntry?.['args']);
+    if (!name || !args) {
+      const fallback = String(entry).trim();
+      if (fallback.length > 0) {
+        normalizedEntries.push(fallback);
+      }
+      continue;
+    }
+
+    const argumentValues = Object.values(args)
+      .map((argValue) => {
+        if (typeof argValue === 'string' || typeof argValue === 'number') {
+          return String(argValue).trim();
+        }
+        return null;
+      })
+      .filter((argValue): argValue is string => argValue !== null && argValue.length > 0);
+
+    if (argumentValues.length === 0) continue;
+
+    if (name === 'Path') {
+      normalizedEntries.push(`Path=${argumentValues[0]}`);
+      continue;
+    }
+    if (name === 'StripPrefix') {
+      normalizedEntries.push(`StripPrefix=${argumentValues[0]}`);
+      continue;
+    }
+    if (name === 'PrefixPath') {
+      normalizedEntries.push(`PrefixPath=${argumentValues[0]}`);
+      continue;
+    }
+    if (name === 'RewritePath' && argumentValues.length >= 2) {
+      normalizedEntries.push(`RewritePath=${argumentValues[0]}, ${argumentValues[1]}`);
+      continue;
+    }
+
+    normalizedEntries.push(`${name}=${argumentValues.join(',')}`);
+  }
+
+  return normalizedEntries;
 }
 
 function parseSpringCloudGatewayPathPredicate(predicates: string[]): string | null {

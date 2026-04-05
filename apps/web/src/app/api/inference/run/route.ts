@@ -206,6 +206,17 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const normalizedSmartProof = normalizeSmartProofConfig(body.smartProof);
+    const modelInfo = normalizedSmartProof.enabled ? getInferenceModel(req) : null;
+    if (normalizedSmartProof.enabled && !modelInfo) {
+      return NextResponse.json(
+        {
+          error: 'smartProof가 활성화되었지만 사용할 LLM 모델이 설정되지 않았습니다.',
+        },
+        { status: 400 },
+      );
+    }
+
     const db = await getDb();
     const run = await createInferenceRun(db, {
       workspaceId,
@@ -222,8 +233,6 @@ export async function POST(req: NextRequest) {
         : {}),
       sources,
     });
-    const normalizedSmartProof = normalizeSmartProofConfig(body.smartProof);
-    const modelInfo = normalizedSmartProof.enabled ? getInferenceModel(req) : null;
     const smartGenerateFn = modelInfo
       ? createGenerateSmartResolutionFn(modelInfo.model, modelInfo.modelName)
       : undefined;
