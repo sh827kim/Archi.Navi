@@ -3,6 +3,8 @@ import {
   buildEmptyProofEngineSummary,
   executeInferenceRun,
   getInferenceRunDetail,
+  normalizeSmartProofConfig,
+  type SmartProofConfig,
 } from '@archi-navi/inference';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -37,7 +39,17 @@ export async function getSmartInferenceRunDetail(input: {
   }
 
   const stats = asRecord(detail.run.stats);
-  const summary = asRecord(stats?.proofSummary) ?? buildEmptyProofEngineSummary();
+  const summaryRecord = asRecord(stats?.proofSummary) ?? buildEmptyProofEngineSummary() as Record<string, unknown>;
+  const smartModeRecord = asRecord(summaryRecord.smartMode);
+  const requestedSmartProof = normalizeSmartProofConfig(stats?.requestedSmartProof as boolean | SmartProofConfig | undefined);
+  const summary = {
+    ...summaryRecord,
+    smartMode: {
+      ...buildEmptyProofEngineSummary().smartMode,
+      ...(smartModeRecord ?? {}),
+      enabled: requestedSmartProof.enabled,
+    },
+  };
 
   return {
     detail,

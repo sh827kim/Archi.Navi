@@ -11,6 +11,8 @@ const {
   executeInferenceRunMock,
   getInferenceRunDetailMock,
   buildEmptyProofEngineSummaryMock,
+  getInferenceModelMock,
+  createGenerateSmartResolutionFnMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
   createInferenceRunMock: vi.fn(),
@@ -31,7 +33,24 @@ const {
     agentPatchedFrontierCount: 0,
     frontierBreakdown: {},
     targetBreakdown: {},
+    smartMode: {
+      enabled: false,
+      llmCallCount: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      estimatedCostUsd: 0,
+      frontierResolvedByLlm: 0,
+      summaryEnhancedByLlm: 0,
+      contradictionsChallenged: 0,
+      autoAcceptedCount: 0,
+      pendingReviewCount: 0,
+      skippedCount: 0,
+      resolutionByCategory: {},
+      resolutionByFrontierReason: {},
+    },
   })),
+  getInferenceModelMock: vi.fn(),
+  createGenerateSmartResolutionFnMock: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('@archi-navi/db', async () => {
@@ -52,6 +71,11 @@ vi.mock('@archi-navi/inference', async () => {
     buildEmptyProofEngineSummary: buildEmptyProofEngineSummaryMock,
   };
 });
+
+vi.mock('@/lib/inference-llm', () => ({
+  getInferenceModel: getInferenceModelMock,
+  createGenerateSmartResolutionFn: createGenerateSmartResolutionFnMock,
+}));
 
 import { GET, POST } from '@/app/api/inference/smart/route';
 
@@ -95,6 +119,10 @@ describe('/api/inference/smart', () => {
   it('POST는 proof engine run을 생성하고 summary를 반환해야 한다', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-sync-'));
     getDbMock.mockResolvedValue(createDbMock());
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
+    });
     createInferenceRunMock.mockResolvedValue({
       id: 'run-proof-1',
       status: 'QUEUED',
@@ -150,6 +178,7 @@ describe('/api/inference/smart', () => {
         triggerType: 'INTENT_PROOF_ENGINE',
         modes: ['config', 'code'],
         incremental: true,
+        smartProof: true,
         enableAgentPatches: true,
         maxAgentFrontiers: 4,
         sources: [{ type: 'local', ref: repoRoot }],
@@ -157,7 +186,14 @@ describe('/api/inference/smart', () => {
     );
     expect(executeInferenceRunMock).toHaveBeenCalledWith(
       expect.anything(),
-      { workspaceId: 'ws-1', runId: 'run-proof-1' },
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        runId: 'run-proof-1',
+      }),
+    );
+    expect(createGenerateSmartResolutionFnMock).toHaveBeenCalledWith(
+      { provider: 'openai' },
+      'gpt-4o',
     );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
@@ -174,6 +210,9 @@ describe('/api/inference/smart', () => {
         proofRejectedCount: 1,
         projectedCandidateCount: 3,
         serviceTargetProjectionCount: 0,
+        smartMode: {
+          enabled: true,
+        },
         frontierBreakdown: {
           PATH_NOT_MATCHED: 1,
         },
@@ -190,6 +229,12 @@ describe('/api/inference/smart', () => {
   it('POST async=true는 proof engine run을 큐잉하고 202를 반환해야 한다', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-async-'));
     getDbMock.mockResolvedValue(createDbMock([repoRoot]));
+    const smartGenerateFn = vi.fn();
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
+    });
+    createGenerateSmartResolutionFnMock.mockReturnValue(smartGenerateFn);
     createInferenceRunMock.mockResolvedValue({
       id: 'run-proof-async',
       status: 'QUEUED',
@@ -231,12 +276,17 @@ describe('/api/inference/smart', () => {
     expect(createInferenceRunMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
+        smartProof: true,
         sources: [{ type: 'local', ref: repoRoot }],
       }),
     );
     expect(executeInferenceRunMock).toHaveBeenCalledWith(
       expect.anything(),
-      { workspaceId: 'ws-1', runId: 'run-proof-async' },
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        runId: 'run-proof-async',
+        smartGenerateFn,
+      }),
     );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
@@ -246,6 +296,9 @@ describe('/api/inference/smart', () => {
       summary: {
         engine: 'intent_proof',
         intentCount: 0,
+        smartMode: {
+          enabled: true,
+        },
       },
     });
   });
@@ -324,6 +377,9 @@ describe('/api/inference/smart', () => {
         routeFamilyFrontierCount: 0,
         projectedCandidateCount: 2,
         serviceTargetProjectionCount: 0,
+        smartMode: {
+          enabled: true,
+        },
       },
       data: {
         summary: {

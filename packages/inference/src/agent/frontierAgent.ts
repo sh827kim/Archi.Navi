@@ -140,7 +140,7 @@ function scoreAliasServiceMatch(
   ]).map(normalizeToken);
   const normalizedExactServiceNameCandidates = exactServiceNameHintCandidates
     .map((entry) => asString(entry)?.toLowerCase().trim())
-    .filter((entry): entry is string => entry !== null && entry.length > 0);
+    .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
   const normalizedServiceName = service.name.trim().toLowerCase();
 
   let score = 0;

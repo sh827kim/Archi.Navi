@@ -26,7 +26,7 @@ export type ProofPatchType =
   | 'route_transform_patch'
   | 'endpoint_disambiguation'
   | 'method_path_hint';
-export type ProofPatchSourceKind = 'deterministic' | 'agent' | 'manual';
+export type ProofPatchSourceKind = 'deterministic' | 'agent' | 'smart_agent' | 'manual';
 export type ProofPatchValidationStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 
 type JsonRecord = Record<string, unknown>;
@@ -46,6 +46,7 @@ interface ValidateAndApplyProofPatchInput {
   payload: Record<string, unknown>;
   sourceKind: ProofPatchSourceKind;
   runId?: string | null;
+  applyMode?: 'apply' | 'defer';
 }
 
 interface HttpResolutionSlots {
@@ -1179,7 +1180,7 @@ async function appendProofStep(
   db: DbClient,
   proofStateId: string,
   stepType: string,
-  status: 'APPLIED' | 'FAILED' | 'SKIPPED',
+  status: 'APPLIED' | 'FAILED' | 'SKIPPED' | 'PENDING',
   inputSnapshot: Record<string, unknown>,
   outputSnapshot: Record<string, unknown>,
   message: string,
@@ -4249,6 +4250,11 @@ export async function validateAndApplyProofPatch(
     : [];
   const finalErrors = [...validation.errors, ...deterministicErrors];
   const finalStatus: ProofPatchValidationStatus = finalErrors.length === 0 ? 'ACCEPTED' : 'REJECTED';
+  const applyMode = input.applyMode ?? 'apply';
+  const storedStatus: ProofPatchValidationStatus =
+    finalStatus === 'ACCEPTED' && applyMode === 'defer'
+      ? 'PENDING'
+      : finalStatus;
   const patchId = generateId();
 
   await db.insert(proofPatches).values({
@@ -4258,21 +4264,25 @@ export async function validateAndApplyProofPatch(
     patchType: input.patchType,
     payload,
     sourceKind: input.sourceKind,
-    validationStatus: finalStatus,
+    validationStatus: storedStatus,
     evidenceIds: asStringArray(payload['evidenceIds']),
   });
 
-  if (finalStatus === 'REJECTED') {
+  if (storedStatus === 'REJECTED' || storedStatus === 'PENDING') {
     await appendProofStep(
       db,
       input.proofStateId,
       'validate_patch',
-      'FAILED',
+      storedStatus === 'REJECTED' ? 'FAILED' : 'PENDING',
       { patchType: input.patchType },
       { errors: finalErrors },
-      '유효하지 않은 patch를 거절했습니다.',
+      storedStatus === 'REJECTED' ? '유효하지 않은 patch를 거절했습니다.' : '수동 검토 대기 중인 patch를 저장했습니다.',
     );
-    return { patchId, validationStatus: finalStatus, errors: finalErrors, resolution: null };
+    return { patchId, validationStatus: storedStatus, errors: finalErrors, resolution: null };
+  }
+
+  if (applyMode === 'defer' && finalStatus === 'ACCEPTED') {
+    return { patchId, validationStatus: storedStatus, errors: finalErrors, resolution: null };
   }
 
   await applyAcceptedPatch(db, input, payload);
@@ -4284,6 +4294,10 @@ export async function validateAndApplyProofPatch(
   const state = stateRows[0];
   if (!state) throw new Error(`proof state를 찾을 수 없습니다: ${input.proofStateId}`);
 
+  const resolution = await resolveInteractionIntentProof(db, {
+    workspaceId: input.workspaceId,
+    intentId: state.intentId,
+  });
   await appendProofStep(
     db,
     input.proofStateId,
@@ -4291,11 +4305,7 @@ export async function validateAndApplyProofPatch(
     'APPLIED',
     { patchType: input.patchType },
     { patchId },
-    '허용된 patch를 저장하고 proof를 재평가합니다.',
+    '허용된 patch를 저장하고 proof를 재평가했습니다.',
   );
-  const resolution = await resolveInteractionIntentProof(db, {
-    workspaceId: input.workspaceId,
-    intentId: state.intentId,
-  });
   return { patchId, validationStatus: finalStatus, errors: finalErrors, resolution };
 }

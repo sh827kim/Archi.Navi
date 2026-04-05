@@ -71,3 +71,42 @@ export type {
   IntentProofCutoverThresholds,
   IntentProofCutoverTruthCorpus,
 } from './intentProofCutoverReport';
+export type {
+  SmartBudgetTrackerSnapshot,
+  SmartFrontierResolution,
+  SmartModeSummary,
+  SmartProofConfig,
+  SmartResolutionTokenUsage,
+} from '../agent/smartProofTypes';
+export {
+  buildDefaultSmartProofConfig,
+  buildEmptySmartModeSummary,
+  normalizeSmartProofConfig,
+} from '../agent/smartProofTypes';
+export {
+  canAffordSmartBudgetCall,
+  createSmartBudgetTracker,
+  isSmartBudgetExhausted,
+  recordSmartBudgetCall,
+} from '../agent/smartBudgetTracker';
+export {
+  buildHostAliasResolutionPrompt,
+  buildRouteTransformResolutionPrompt,
+  buildSmartFrontierPrompt,
+  buildSmartAliasBindingPatch,
+  buildSmartPatchFromProposal,
+  buildSmartRouteTransformPatch,
+  isSupportedSmartFrontierReason,
+  resolveSmartFrontier,
+  SUPPORTED_SMART_FRONTIER_REASONS,
+} from '../agent/smartFrontierResolver';
+export type {
+  GenerateSmartResolutionFn,
+  ResolveSmartFrontierInput,
+  ResolveSmartFrontierResult,
+  SmartAliasBindingProposal,
+  SmartFrontierResolutionContext,
+  SmartPatchProposal,
+  SmartRouteTransformProposal,
+  SupportedSmartFrontierReason,
+} from '../agent/smartFrontierResolver';

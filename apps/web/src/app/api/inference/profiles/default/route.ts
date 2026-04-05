@@ -6,6 +6,7 @@
 import { eq, sql } from 'drizzle-orm';
 import { type NextRequest, NextResponse } from 'next/server';
 import { domainInferenceProfiles, getDb } from '@archi-navi/db';
+import { normalizeSmartProofConfig, type SmartProofConfig } from '@archi-navi/inference';
 
 const DEFAULT_PROFILE_NAME = 'default';
 
@@ -161,6 +162,7 @@ interface ProfileResponse {
   enabledLayers: unknown;
   crossValidation?: unknown;
   proofConfidence?: unknown;
+  smartProofConfig?: unknown;
   feedbackConfig?: unknown;
   feedbackAdjustments?: unknown;
   domainFeedbackConfig?: unknown;
@@ -206,6 +208,7 @@ interface UpdateProfileBody {
       message?: Partial<MessageProofSlotWeights>;
     };
   };
+  smartProofConfig?: boolean | Partial<SmartProofConfig>;
   relationFeedbackConfig?: Partial<FeedbackConfig>;
   domainFeedbackConfig?: Partial<FeedbackConfig>;
   resetRelationFeedback?: boolean;
@@ -466,6 +469,7 @@ function toPublicProfile(
 ) {
   const crossValidation = asCrossValidationConfig(row.crossValidation);
   const proofConfidence = asProofConfidenceConfig(row.proofConfidence);
+  const smartProofConfig = normalizeSmartProofConfig(row.smartProofConfig as boolean | SmartProofConfig | null | undefined);
   const relationFeedbackConfig = asFeedbackConfig(row.feedbackConfig);
   const relationFeedbackAdjustments = asFeedbackAdjustments(
     row.feedbackAdjustments,
@@ -504,6 +508,7 @@ function toPublicProfile(
       : ['call', 'db', 'msg', 'code'],
     crossValidation,
     proofConfidence,
+    smartProofConfig,
     relationFeedbackConfig,
     relationFeedbackSummary,
     domainFeedbackConfig,
@@ -529,6 +534,7 @@ async function selectProfileJsonState(
 ): Promise<{
   crossValidation: unknown;
   proofConfidence: unknown;
+  smartProofConfig: unknown;
   feedbackConfig: unknown;
   feedbackAdjustments: unknown;
   domainFeedbackConfig: unknown;
@@ -538,6 +544,7 @@ async function selectProfileJsonState(
     const state = await db.execute<{
       cross_validation: unknown;
       proof_confidence_config: unknown;
+      smart_proof_config: unknown;
       feedback_config: unknown;
       feedback_adjustments: unknown;
       domain_feedback_config: unknown;
@@ -546,6 +553,7 @@ async function selectProfileJsonState(
       select
         cross_validation,
         proof_confidence_config,
+        smart_proof_config,
         feedback_config,
         feedback_adjustments,
         domain_feedback_config,
@@ -559,6 +567,7 @@ async function selectProfileJsonState(
     return {
       crossValidation: rows[0]?.cross_validation,
       proofConfidence: rows[0]?.proof_confidence_config,
+      smartProofConfig: rows[0]?.smart_proof_config,
       feedbackConfig: rows[0]?.feedback_config,
       feedbackAdjustments: rows[0]?.feedback_adjustments,
       domainFeedbackConfig: rows[0]?.domain_feedback_config,
@@ -567,6 +576,7 @@ async function selectProfileJsonState(
   } catch (error) {
     if (!isMissingColumnError(error, [
       'proof_confidence_config',
+      'smart_proof_config',
       'domain_feedback_config',
       'domain_feedback_adjustments',
     ])) {
@@ -578,12 +588,14 @@ async function selectProfileJsonState(
     const relationState = await db.execute<{
       cross_validation: unknown;
       proof_confidence_config: unknown;
+      smart_proof_config: unknown;
       feedback_config: unknown;
       feedback_adjustments: unknown;
     }>(sql`
       select
         cross_validation,
         proof_confidence_config,
+        smart_proof_config,
         feedback_config,
         feedback_adjustments
       from ${domainInferenceProfiles}
@@ -595,6 +607,7 @@ async function selectProfileJsonState(
     return {
       crossValidation: rows[0]?.cross_validation,
       proofConfidence: rows[0]?.proof_confidence_config,
+      smartProofConfig: rows[0]?.smart_proof_config,
       feedbackConfig: rows[0]?.feedback_config,
       feedbackAdjustments: rows[0]?.feedback_adjustments,
       domainFeedbackConfig: undefined,
@@ -603,6 +616,7 @@ async function selectProfileJsonState(
   } catch (error) {
     if (!isMissingColumnError(error, [
       'proof_confidence_config',
+      'smart_proof_config',
       'feedback_config',
       'feedback_adjustments',
     ])) {
@@ -614,8 +628,9 @@ async function selectProfileJsonState(
     const crossValidation = await db.execute<{
       cross_validation: unknown;
       proof_confidence_config: unknown;
+      smart_proof_config: unknown;
     }>(sql`
-      select cross_validation, proof_confidence_config
+      select cross_validation, proof_confidence_config, smart_proof_config
       from ${domainInferenceProfiles}
       where id = ${profileId}
       limit 1
@@ -625,18 +640,20 @@ async function selectProfileJsonState(
     return {
       crossValidation: rows[0]?.cross_validation,
       proofConfidence: rows[0]?.proof_confidence_config,
+      smartProofConfig: rows[0]?.smart_proof_config,
       feedbackConfig: undefined,
       feedbackAdjustments: undefined,
       domainFeedbackConfig: undefined,
       domainFeedbackAdjustments: undefined,
     };
   } catch (error) {
-    if (!isMissingColumnError(error, ['cross_validation', 'proof_confidence_config'])) {
+    if (!isMissingColumnError(error, ['cross_validation', 'proof_confidence_config', 'smart_proof_config'])) {
       throw error;
     }
     return {
       crossValidation: undefined,
       proofConfidence: undefined,
+      smartProofConfig: undefined,
       feedbackConfig: undefined,
       feedbackAdjustments: undefined,
       domainFeedbackConfig: undefined,
@@ -710,6 +727,7 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
     ...row,
     crossValidation: state.crossValidation,
     proofConfidence: state.proofConfidence,
+    smartProofConfig: state.smartProofConfig,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
     domainFeedbackConfig: state.domainFeedbackConfig,
@@ -728,6 +746,7 @@ async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | 
     ...row,
     crossValidation: state.crossValidation,
     proofConfidence: state.proofConfidence,
+    smartProofConfig: state.smartProofConfig,
     feedbackConfig: state.feedbackConfig,
     feedbackAdjustments: state.feedbackAdjustments,
     domainFeedbackConfig: state.domainFeedbackConfig,
@@ -879,6 +898,32 @@ export async function PUT(req: NextRequest) {
         },
       },
     });
+    const currentSmartProofConfig = normalizeSmartProofConfig(
+      current.smartProofConfig as boolean | SmartProofConfig | null | undefined,
+    );
+    const smartProofConfigInput = body.smartProofConfig;
+    const smartProofConfig = normalizeSmartProofConfig(
+      smartProofConfigInput === undefined
+        ? currentSmartProofConfig
+        : smartProofConfigInput === true || smartProofConfigInput === false
+          ? { ...currentSmartProofConfig, enabled: smartProofConfigInput }
+          : {
+              ...currentSmartProofConfig,
+              ...smartProofConfigInput,
+              categories: {
+                ...currentSmartProofConfig.categories,
+                ...(smartProofConfigInput.categories ?? {}),
+              },
+              budget: {
+                ...currentSmartProofConfig.budget,
+                ...(smartProofConfigInput.budget ?? {}),
+              },
+              thresholds: {
+                ...currentSmartProofConfig.thresholds,
+                ...(smartProofConfigInput.thresholds ?? {}),
+              },
+            },
+    );
     const resetRelationFeedback = body.resetRelationFeedback === true;
     const resetDomainFeedback = body.resetDomainFeedback === true;
     const currentRelationFeedbackConfig = asFeedbackConfig(current.feedbackConfig);
@@ -949,6 +994,18 @@ export async function PUT(req: NextRequest) {
         `);
       } catch (error) {
         if (!isMissingColumnError(error, ['proof_confidence_config'])) {
+          throw error;
+        }
+      }
+
+      try {
+        await tx.execute(sql`
+          update ${domainInferenceProfiles}
+          set smart_proof_config = ${JSON.stringify(smartProofConfig)}::jsonb
+          where id = ${current.id}
+        `);
+      } catch (error) {
+        if (!isMissingColumnError(error, ['smart_proof_config'])) {
           throw error;
         }
       }

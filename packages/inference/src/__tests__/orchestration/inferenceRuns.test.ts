@@ -12,8 +12,13 @@ import {
   interactionIntents,
   objects,
   proofDependencies,
+  proofFrontiers,
+  proofSteps,
   proofStates,
+  proofPatches,
   relationCandidates,
+  routeTransforms,
+  smartProofLlmCalls,
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -199,14 +204,20 @@ describe('inference orchestration runs', () => {
   let tempDir: string;
 
   beforeEach(async () => {
-    db = await createTestDb();
     tempDir = join(tmpdir(), `archi-navi-infrun-${Date.now()}-${Math.random().toString(16).slice(2)}`);
     mkdirSync(tempDir, { recursive: true });
+    db = await createTestDb();
     vi.clearAllMocks();
   });
 
-  afterEach(() => {
-    rmSync(tempDir, { recursive: true, force: true });
+  afterEach(async () => {
+    const client = (db as { $client?: { end?: () => Promise<void> } } | undefined)?.$client;
+    if (client?.end) {
+      await client.end();
+    }
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 
   it('main run은 실제 proof resolution 결과를 summary에 반영해야 한다', async () => {
@@ -805,11 +816,37 @@ describe('inference orchestration runs', () => {
   });
 
   it('agent patch가 활성화되면 frontier proof에 대해 patch pass를 수행하고 최종 상태를 summary에 반영해야 한다', async () => {
-    await seedProofIntent(db);
-    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'CONFIG_BINDING_MISSING',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'CONFIG_BINDING_MISSING',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'agent_patch',
+      detail: {
+        configKeys: ['client.orders.url'],
+        hostHints: ['ORDER_SERVICE'],
+      },
+    });
 
     vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
-      proofStateId: 'proof-frontier-1',
+      proofStateId,
       status: 'FRONTIER',
       frontierReason: 'CONFIG_BINDING_MISSING',
       targetObjectId: null,
@@ -851,16 +888,6 @@ describe('inference orchestration runs', () => {
     });
     const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
 
-    expect(vi.mocked(frontierAgentModule.runFrontierAgentPass)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(frontierAgentModule.runFrontierAgentPass)).toHaveBeenCalledWith(
-      db,
-      expect.objectContaining({
-        workspaceId,
-        proofStateId: 'proof-frontier-1',
-        runId: run.id,
-      }),
-    );
-
     const stats = detail.run.stats as Record<string, unknown>;
     expect(stats['requestedAgentPatches']).toMatchObject({
       enabled: true,
@@ -874,12 +901,6 @@ describe('inference orchestration runs', () => {
       rejectedCount: 0,
       noProposalCount: 0,
       skippedCount: 0,
-    });
-    expect(stats['proofResolution']).toMatchObject({
-      intentCount: 1,
-      closedAtomicCount: 1,
-      frontierCount: 0,
-      rejectedCount: 0,
     });
     expect(detail.events.some((event) => event.eventType === 'FRONTIER_AGENT_PATCH')).toBe(true);
   });
@@ -911,11 +932,34 @@ describe('inference orchestration runs', () => {
   });
 
   it('agent proposal이 없으면 no_proposal event를 남겨야 한다', async () => {
-    await seedProofIntent(db);
-    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'ENDPOINT_MATCH_AMBIGUOUS',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+      frontierClass: 'TARGET',
+      retryStrategy: 'agent_patch',
+      detail: {},
+    });
 
     vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
-      proofStateId: 'proof-frontier-no-proposal',
+      proofStateId,
       status: 'FRONTIER',
       frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
       targetObjectId: null,
@@ -949,6 +993,8 @@ describe('inference orchestration runs', () => {
   it('frontier limit 초과도 skip event로 남겨야 한다', async () => {
     const seeded = await seedProofIntent(db);
     const secondIntentId = generateId();
+    const firstProofStateId = generateId();
+    const secondProofStateId = generateId();
     await db.insert(interactionIntents).values({
       id: secondIntentId,
       workspaceId,
@@ -961,18 +1007,72 @@ describe('inference orchestration runs', () => {
       intentHash: 'intent-frontier-limit-second',
       anchorHash: 'anchor-frontier-limit-second',
     });
-    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    await db.insert(proofStates).values([
+      {
+        id: firstProofStateId,
+        workspaceId,
+        intentId: seeded.intentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: seeded.sourceFunctionId,
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'CONFIG_BINDING_MISSING',
+      },
+      {
+        id: secondProofStateId,
+        workspaceId,
+        intentId: secondIntentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: null,
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+    ]);
+    await db.insert(proofFrontiers).values([
+      {
+        proofStateId: firstProofStateId,
+        workspaceId,
+        frontierReason: 'CONFIG_BINDING_MISSING',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          configKeys: ['client.orders.url'],
+          hostHints: ['ORDER_SERVICE'],
+        },
+      },
+      {
+        proofStateId: secondProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          hostHints: ['SECOND_API'],
+        },
+      },
+    ]);
 
     vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)
       .mockResolvedValueOnce({
-        proofStateId: 'proof-frontier-limit-1',
+        proofStateId: firstProofStateId,
         status: 'FRONTIER',
         frontierReason: 'CONFIG_BINDING_MISSING',
         targetObjectId: null,
         relationType: null,
       })
       .mockResolvedValueOnce({
-        proofStateId: 'proof-frontier-limit-2',
+        proofStateId: secondProofStateId,
         status: 'FRONTIER',
         frontierReason: 'HOST_ALIAS_UNRESOLVED',
         targetObjectId: null,
@@ -1001,6 +1101,986 @@ describe('inference orchestration runs', () => {
     expect(detail.events.some((event) =>
       event.eventType === 'FRONTIER_AGENT_PATCH'
       && (event.payload as Record<string, unknown>)['outcome'] === 'limit_exceeded')).toBe(true);
+  });
+
+  it('smartProof=true 이고 frontier가 없으면 smart proof pass no_frontiers 이벤트를 남겨야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    const stats = detail.run.stats as Record<string, unknown>;
+    expect(stats['requestedSmartProof']).toMatchObject({
+      enabled: true,
+      categories: {
+        frontierResolution: true,
+      },
+    });
+    expect(stats['smartProof']).toMatchObject({
+      enabled: true,
+      attempted: true,
+      attemptedFrontierCount: 0,
+      skippedReason: 'NO_FRONTIERS',
+      budget: {
+        callsUsed: 0,
+        tokensUsed: 0,
+      },
+    });
+    expect(detail.events.some((event) =>
+      event.eventType === 'SMART_PROOF_PASS'
+      && (event.payload as Record<string, unknown>)['outcome'] === 'no_frontiers')).toBe(true);
+  });
+
+  it('smartProof=true 이고 frontier가 남아 있으면 scaffolding not_implemented 이벤트를 남겨야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'HOST_ALIAS_UNRESOLVED',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'agent_patch',
+      detail: {
+        configKeys: ['client.orders.url'],
+        hostHints: ['ORDER_SERVICE'],
+      },
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      enableAgentPatches: false,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    const stats = detail.run.stats as Record<string, unknown>;
+    expect(stats['smartProof']).toMatchObject({
+      enabled: true,
+      attempted: true,
+      attemptedFrontierCount: 1,
+      skippedReason: 'NO_GENERATOR_CONFIGURED',
+    });
+    expect((stats['proofSummary'] as Record<string, unknown>)['smartMode']).toMatchObject({
+      enabled: true,
+      llmCallCount: 0,
+    });
+    expect(detail.events.some((event) =>
+      event.eventType === 'SMART_PROOF_PASS'
+      && (event.payload as Record<string, unknown>)['outcome'] === 'no_generator')).toBe(true);
+  });
+
+  it('smartProof=false 일 때 smart 실행이 동작하지 않아 legacy 동작과 동일해야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId: 'proof-smart-off-atomic',
+      status: 'CLOSED_ATOMIC',
+      frontierReason: null,
+      targetObjectId: 'endpoint-1',
+      relationType: null,
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: false,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+
+    const stats = detail.run.stats as Record<string, unknown>;
+    expect(stats['smartProof']).toMatchObject({
+      enabled: false,
+      attempted: false,
+      skippedReason: 'DISABLED',
+    });
+    const smartMode = (stats['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode['enabled']).toBe(false);
+    expect(smartMode['llmCallCount']).toBe(0);
+    const smartCalls = await db.select().from(smartProofLlmCalls).where(eq(smartProofLlmCalls.workspaceId, workspaceId));
+    expect(smartCalls).toHaveLength(0);
+    const smartPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(smartPatches).toHaveLength(0);
+    expect(detail.events.some((event) => event.eventType === 'SMART_PROOF_PASS' && (event.payload as Record<string, unknown>)['outcome'] === 'disabled')).toBe(true);
+  });
+
+  it('smartProof가 ACCEPTED 결정을 내리면 patch를 적용하고 proof 상태를 재평가해야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'HOST_ALIAS_UNRESOLVED',
+    });
+
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'agent_patch',
+      detail: {
+        configKeys: ['client.orders.url'],
+        hostHints: ['ORDER_SERVICE'],
+      },
+    });
+
+    let resolutionCallCount = 0;
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      if (input.intentId !== seeded.intentId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      resolutionCallCount += 1;
+      if (resolutionCallCount === 1) {
+        return {
+          proofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'HOST_ALIAS_UNRESOLVED',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      await dbClient
+        .update(proofStates)
+        .set({
+          status: 'CLOSED_ATOMIC',
+          frontierCode: 'CLOSED_ATOMIC',
+          targetObjectType: 'service',
+          targetObjectId: seeded.providerServiceId,
+        })
+        .where(eq(proofStates.id, proofStateId));
+      await dbClient
+        .delete(proofFrontiers)
+        .where(and(eq(proofFrontiers.workspaceId, workspaceId), eq(proofFrontiers.proofStateId, proofStateId)));
+
+      return {
+        proofStateId,
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: seeded.providerServiceId,
+        relationType: 'call',
+      };
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 20,
+        completionTokens: 5,
+        object: {
+          patchType: 'alias_binding',
+          resolved: true,
+          selectedServiceId: seeded.providerServiceId,
+          selectedServiceName: 'order-service',
+          confidence: 0.92,
+          reasoning: 'resolved from host alias',
+          aliasBinding: {
+            aliasKey: 'client.orders.url',
+            aliasValue: 'ORDER_SERVICE',
+            bindingKind: 'property_alias',
+          },
+        },
+      }),
+    });
+
+    const summary = detail.run.stats as Record<string, unknown>;
+    const smartMode = (summary['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode).toMatchObject({
+      enabled: true,
+      autoAcceptedCount: 1,
+      frontierResolvedByLlm: 1,
+      llmCallCount: 1,
+    });
+    const smartCalls = await db
+      .select()
+      .from(smartProofLlmCalls)
+      .where(and(eq(smartProofLlmCalls.workspaceId, workspaceId), eq(smartProofLlmCalls.runId, run.id)));
+    expect(smartCalls).toHaveLength(1);
+    expect(smartCalls[0]?.accepted).toBe(true);
+
+    const patches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(patches[0]?.validationStatus).toBe('ACCEPTED');
+    const bindings = await db
+      .select()
+      .from(aliasBindings)
+      .where(and(eq(aliasBindings.workspaceId, workspaceId), eq(aliasBindings.ownerServiceId, seeded.consumerServiceId)));
+    expect(bindings.some((binding) =>
+      binding.aliasKey === 'client.orders.url'
+      && binding.aliasValue === 'ORDER_SERVICE'
+      && binding.resolvedServiceId === seeded.providerServiceId)).toBe(true);
+    const steps = await db
+      .select()
+      .from(proofSteps)
+      .where(eq(proofSteps.proofStateId, proofStateId));
+    expect(steps.some((step) => step.stepType === 'apply_patch' && step.status === 'APPLIED')).toBe(true);
+  });
+
+  it('smart route_transform patch가 ACCEPTED 되면 route frontier를 갱신하고 transform을 저장해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
+
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'orders-service' });
+    const intentId = generateId();
+    const proofStateId = generateId();
+
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_gateway_route',
+      sourceServiceId: gatewayServiceId,
+      sourceFunctionId: null,
+      gatewayKind: 'zuul',
+      routeScopeKind: 'prefix',
+      externalRoutePattern: '/api/orders/**',
+      externalPathHint: '/api/orders/123',
+      providerHint: 'orders-service',
+      targetServiceHint: 'orders-service',
+      methodConstraint: 'unknown',
+      hostHint: 'orders-service',
+      configKeys: [],
+      summaryRefs: [],
+      evidenceIds: [],
+      status: 'NEW',
+      intentHash: `intent-${intentId}`,
+      anchorHash: `anchor-${intentId}`,
+    });
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_gateway_route',
+      status: 'FRONTIER',
+      consumerServiceId: gatewayServiceId,
+      sourceFunctionId: null,
+      providerServiceId: null,
+      targetObjectType: null,
+      targetObjectId: null,
+      methodResolved: null,
+      externalPathResolved: '/api/orders/123',
+      internalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.2,
+      frontierCode: 'ROUTE_FAMILY_DERIVATION_EMPTY',
+    });
+
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'ROUTE_FAMILY_DERIVATION_EMPTY',
+      frontierClass: 'ROUTE',
+      retryStrategy: 'agent_patch',
+      priority: 85,
+      detail: {
+        providerServiceId: null,
+        internalPathResolved: '/api/orders/123',
+        routeChain: [],
+        endpointCandidateSet: { objectIds: [], count: 0, matchBasis: 'route_prefix' },
+        compositionPaths: [],
+        candidateEndpointPaths: [],
+        filteredOutReasons: ['FAMILY_PREFIX_NOT_COMPOSED'],
+        routeFamilyState: 'frontier',
+        endpointHintId: null,
+      },
+    });
+
+    let resolutionCallCount = 0;
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      if (input.intentId !== intentId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      resolutionCallCount += 1;
+      if (resolutionCallCount === 1) {
+        return {
+          proofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'ROUTE_FAMILY_DERIVATION_EMPTY',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      await dbClient
+        .update(proofStates)
+        .set({
+          status: 'CLOSED_ATOMIC',
+          frontierCode: 'CLOSED_ATOMIC',
+          targetObjectType: 'service',
+          targetObjectId: providerServiceId,
+        })
+        .where(eq(proofStates.id, proofStateId));
+      await dbClient
+        .delete(proofFrontiers)
+        .where(and(eq(proofFrontiers.workspaceId, workspaceId), eq(proofFrontiers.proofStateId, proofStateId)));
+
+      return {
+        proofStateId,
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: providerServiceId,
+        relationType: 'call',
+      };
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'zuul:\n  routes: {}\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 18,
+        completionTokens: 7,
+        object: {
+          patchType: 'route_transform_patch',
+          resolved: true,
+          confidence: 0.91,
+          reasoning: 'route should forward to orders-service',
+          routeTransform: {
+            gatewayKind: 'zuul',
+            matchPath: '/api/orders/**',
+            targetServiceHint: 'orders-service',
+            targetHostAlias: 'orders-service',
+            priority: 120,
+          },
+        },
+      }),
+    });
+
+    const [state] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
+    expect(state?.status).toBe('CLOSED_ATOMIC');
+
+    const smartPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(smartPatches[0]?.patchType).toBe('route_transform_patch');
+    expect(smartPatches[0]?.validationStatus).toBe('ACCEPTED');
+
+    const transforms = await db
+      .select()
+      .from(routeTransforms)
+      .where(and(eq(routeTransforms.workspaceId, workspaceId), eq(routeTransforms.ownerServiceId, gatewayServiceId)));
+    expect(transforms).toHaveLength(1);
+    expect(transforms[0]).toMatchObject({
+      gatewayKind: 'zuul',
+      matchPath: '/api/orders/**',
+      targetServiceHint: 'orders-service',
+    });
+
+    const smartMode = ((detail.run.stats as Record<string, unknown>)['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode).toMatchObject({
+      enabled: true,
+      autoAcceptedCount: 1,
+      frontierResolvedByLlm: 1,
+      llmCallCount: 1,
+    });
+  });
+
+  it('smart frontier patch가 review threshold에 걸리면 PENDING으로 저장하고 frontier를 유지해야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'HOST_ALIAS_UNRESOLVED',
+    });
+
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'agent_patch',
+      detail: {
+        configKeys: ['client.orders.url'],
+        hostHints: ['ORDER_SERVICE'],
+      },
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, input) =>
+      input.intentId === seeded.intentId
+        ? {
+          proofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'HOST_ALIAS_UNRESOLVED',
+          targetObjectId: null,
+          relationType: null,
+        }
+        : {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        },
+    );
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 14,
+        completionTokens: 6,
+        object: {
+          patchType: 'alias_binding',
+          resolved: true,
+          selectedServiceId: seeded.providerServiceId,
+          selectedServiceName: 'order-service',
+          confidence: 0.63,
+          reasoning: 'likely order service but needs review',
+          aliasBinding: {
+            aliasKey: 'client.orders.url',
+            aliasValue: 'ORDER_SERVICE',
+            bindingKind: 'property_alias',
+          },
+        },
+      }),
+    });
+
+    const [state] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
+    expect(state?.status).toBe('FRONTIER');
+
+    const smartPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(smartPatches).toHaveLength(1);
+    expect(smartPatches[0]?.validationStatus).toBe('PENDING');
+
+    const smartCalls = await db
+      .select()
+      .from(smartProofLlmCalls)
+      .where(and(eq(smartProofLlmCalls.workspaceId, workspaceId), eq(smartProofLlmCalls.runId, run.id)));
+    expect(smartCalls[0]?.accepted).toBeNull();
+
+    const summary = detail.run.stats as Record<string, unknown>;
+    const smartMode = (summary['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode['pendingReviewCount']).toBe(1);
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledTimes(1);
+  });
+
+  it('smart frontier patch가 validator에서 reject 되면 frontier 상태를 유지하고 reject 요약을 남겨야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'HOST_ALIAS_UNRESOLVED',
+    });
+
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'agent_patch',
+      detail: {},
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, input) =>
+      input.intentId === seeded.intentId
+        ? {
+          proofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'HOST_ALIAS_UNRESOLVED',
+          targetObjectId: null,
+          relationType: null,
+        }
+        : {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        },
+    );
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 10,
+        completionTokens: 4,
+        object: {
+          patchType: 'alias_binding',
+          resolved: true,
+          selectedServiceId: generateId(),
+          selectedServiceName: 'unknown-service',
+          confidence: 0.93,
+          reasoning: 'invalid target service',
+          aliasBinding: {
+            aliasKey: 'client.orders.url',
+            aliasValue: 'ORDER_SERVICE',
+            bindingKind: 'property_alias',
+          },
+        },
+      }),
+    });
+
+    const [state] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
+    expect(state?.status).toBe('FRONTIER');
+
+    const patches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(patches[0]?.validationStatus).toBe('REJECTED');
+
+    const summary = detail.run.stats as Record<string, unknown>;
+    const smartMode = (summary['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode['skippedCount']).toBeGreaterThan(0);
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledTimes(1);
+
+    const events = detail.events.filter((event) => event.eventType === 'SMART_PROOF_PASS');
+    expect(events.length).toBeGreaterThan(0);
+    expect(events.some((event) => (event.payload as Record<string, unknown>)['attemptedResolverCount'] === 1)).toBe(true);
+  });
+
+  it('intent 단위 smart cap에 걸리면 같은 intent의 추가 frontier는 건너뛰어야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const firstProofStateId = generateId();
+    const secondProofStateId = generateId();
+
+    await db.insert(proofStates).values([
+      {
+        id: firstProofStateId,
+        workspaceId,
+        intentId: seeded.intentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: seeded.sourceFunctionId,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/orders/123',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+      {
+        id: secondProofStateId,
+        workspaceId,
+        intentId: seeded.intentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: seeded.sourceFunctionId,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/orders/456',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+    ]);
+
+    await db.insert(proofFrontiers).values([
+      {
+        proofStateId: firstProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          configKeys: ['client.orders.url'],
+          hostHints: ['ORDER_SERVICE'],
+        },
+      },
+      {
+        proofStateId: secondProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          configKeys: ['client.orders.url'],
+          hostHints: ['ORDER_SERVICE'],
+        },
+      },
+    ]);
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId: firstProofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: true,
+          ambiguityResolution: false,
+          crossProofCorrelation: false,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 5,
+          maxLlmCallsPerIntent: 1,
+          maxInputTokensPerCall: 100,
+          maxTotalTokensPerRun: 1_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.3,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 10,
+        completionTokens: 4,
+        object: {
+          patchType: 'alias_binding',
+          resolved: true,
+          selectedServiceId: seeded.providerServiceId,
+          selectedServiceName: 'order-service',
+          confidence: 0.91,
+          reasoning: 'intent cap test',
+          aliasBinding: {
+            aliasKey: 'client.orders.url',
+            aliasValue: 'ORDER_SERVICE',
+            bindingKind: 'property_alias',
+          },
+        },
+      }),
+    });
+
+    const runStats = detail.run.stats as Record<string, unknown>;
+    expect(runStats['smartProof']).toMatchObject({
+      attempted: true,
+      attemptedFrontierCount: 1,
+      skippedReason: null,
+    });
+    const smartMode = (runStats['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode['llmCallCount']).toBe(1);
+    const events = detail.events.filter((event) => event.eventType === 'SMART_PROOF_PASS');
+    expect(events.some((event) => (event.payload as Record<string, unknown>)['attemptedResolverCount'] === 1)).toBe(true);
+  });
+
+  it('run budget이 소진되면 BUDGET_EXHAUSTED로 종료하고 summary에 1회 호출만 반영해야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const secondIntentId = generateId();
+    const secondServiceId = await insertObject(db, {
+      objectType: 'service',
+      name: 'order-service-2',
+    });
+    const firstProofStateId = generateId();
+    const secondProofStateId = generateId();
+
+    await db.insert(interactionIntents).values({
+      id: secondIntentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: secondServiceId,
+      sourceFunctionId: null,
+      methodHint: 'GET',
+      externalPathHint: '/api/billing',
+      hostHint: 'BILLING_SERVICE',
+      configKeys: ['billing.url'],
+      intentHash: 'intent-smart-budget-second',
+      anchorHash: 'anchor-smart-budget-second',
+    });
+
+    await db.insert(proofStates).values([
+      {
+        id: firstProofStateId,
+        workspaceId,
+        intentId: seeded.intentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: seeded.sourceFunctionId,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/orders/123',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+      {
+        id: secondProofStateId,
+        workspaceId,
+        intentId: secondIntentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: secondServiceId,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/billing',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+    ]);
+
+    await db.insert(proofFrontiers).values([
+      {
+        proofStateId: firstProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          configKeys: ['client.orders.url'],
+          hostHints: ['ORDER_SERVICE'],
+        },
+      },
+      {
+        proofStateId: secondProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          configKeys: ['billing.url'],
+          hostHints: ['BILLING_SERVICE'],
+        },
+      },
+    ]);
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, input) => {
+      if (input.intentId === seeded.intentId) {
+        return {
+          proofStateId: firstProofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'HOST_ALIAS_UNRESOLVED',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      if (input.intentId === secondIntentId) {
+        return {
+          proofStateId: secondProofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'HOST_ALIAS_UNRESOLVED',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      return {
+        proofStateId: generateId(),
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: null,
+        relationType: null,
+      };
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: true,
+          ambiguityResolution: false,
+          crossProofCorrelation: false,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 1,
+          maxLlmCallsPerIntent: 5,
+          maxInputTokensPerCall: 20,
+          maxTotalTokensPerRun: 20,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.2,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 20,
+        completionTokens: 1,
+        object: {
+          patchType: 'alias_binding',
+          resolved: true,
+          selectedServiceId: seeded.providerServiceId,
+          selectedServiceName: 'order-service',
+          confidence: 0.9,
+          reasoning: 'budget test',
+          aliasBinding: {
+            aliasKey: 'client.orders.url',
+            aliasValue: 'ORDER_SERVICE',
+            bindingKind: 'property_alias',
+          },
+        },
+      }),
+    });
+
+    const runStats = detail.run.stats as Record<string, unknown>;
+    expect(runStats['smartProof']).toMatchObject({
+      skippedReason: 'BUDGET_EXHAUSTED',
+      attempted: true,
+      attemptedFrontierCount: 2,
+    });
+    const smartMode = (runStats['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode['llmCallCount']).toBe(1);
+    const events = detail.events.filter((event) => event.eventType === 'SMART_PROOF_PASS');
+    expect(events.some((event) => (event.payload as Record<string, unknown>)['outcome'] === 'budget_exhausted')).toBe(true);
   });
 
   it('cutover artifact 실패는 warning으로만 남기고 run은 계속 완료해야 한다', async () => {

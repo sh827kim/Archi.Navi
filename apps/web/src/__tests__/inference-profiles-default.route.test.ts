@@ -62,6 +62,31 @@ function createDefaultProofConfidence() {
   };
 }
 
+function createDefaultSmartProofConfig() {
+  return {
+    enabled: false,
+    categories: {
+      preResolutionEnhancement: false,
+      frontierResolution: true,
+      ambiguityResolution: false,
+      crossProofCorrelation: false,
+      contradictionDetection: false,
+    },
+    budget: {
+      maxLlmCallsPerRun: 100,
+      maxLlmCallsPerIntent: 5,
+      maxInputTokensPerCall: 4000,
+      maxTotalTokensPerRun: 500000,
+    },
+    thresholds: {
+      autoAcceptConfidence: 0.8,
+      reviewConfidence: 0.5,
+      skipConfidence: 0.3,
+    },
+    temperature: 0.1,
+  };
+}
+
 function createProfileRow() {
   return {
     id: 'profile-1',
@@ -118,6 +143,7 @@ function createTransactionDb(
   currentState: {
     cross_validation: unknown;
     proof_confidence_config?: unknown;
+    smart_proof_config?: unknown;
     feedback_config: unknown;
     feedback_adjustments: unknown;
     domain_feedback_config: unknown;
@@ -126,6 +152,7 @@ function createTransactionDb(
   updatedState: {
     cross_validation: unknown;
     proof_confidence_config?: unknown;
+    smart_proof_config?: unknown;
     feedback_config: unknown;
     feedback_adjustments: unknown;
     domain_feedback_config: unknown;
@@ -175,6 +202,7 @@ describe('inference profile default route', () => {
         .mockResolvedValueOnce({
           rows: [{
             cross_validation: null,
+            smart_proof_config: null,
             feedback_config: null,
             feedback_adjustments: null,
             domain_feedback_config: null,
@@ -192,6 +220,7 @@ describe('inference profile default route', () => {
     const payload = await response.json();
     expect(payload).toEqual(expect.objectContaining({
       proofConfidence: createDefaultProofConfidence(),
+      smartProofConfig: createDefaultSmartProofConfig(),
       relationFeedbackConfig: {
         enabled: true,
         minSamples: 10,
@@ -363,12 +392,78 @@ describe('inference profile default route', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(4);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
     const proofConfidenceQuery = getExecutedSql(transactionExecuteMock, 1);
     expect(proofConfidenceQuery.strings.join('')).toContain('set proof_confidence_config = ');
 
     const payload = await response.json();
     expect(payload.proofConfidence).toEqual(updatedProofConfidence);
+  });
+
+  it('PUT은 smartProofConfig partial update를 병합 저장하고 응답에 반영해야 한다', async () => {
+    const current = createProfileRow();
+    const updated = createProfileRow();
+    const currentSmartProofConfig = createDefaultSmartProofConfig();
+    const updatedSmartProofConfig = {
+      ...currentSmartProofConfig,
+      enabled: true,
+      budget: {
+        ...currentSmartProofConfig.budget,
+        maxLlmCallsPerRun: 7,
+      },
+      thresholds: {
+        ...currentSmartProofConfig.thresholds,
+        autoAcceptConfidence: 0.9,
+      },
+    };
+    const { db, transactionExecuteMock } = createTransactionDb(
+      current,
+      updated,
+      {
+        cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
+        proof_confidence_config: createDefaultProofConfidence(),
+        smart_proof_config: currentSmartProofConfig,
+        feedback_config: null,
+        feedback_adjustments: null,
+        domain_feedback_config: null,
+        domain_feedback_adjustments: null,
+      },
+      {
+        cross_validation: { enabled: true, boostFactor: 0.3, penaltyFactor: 0.85 },
+        proof_confidence_config: createDefaultProofConfidence(),
+        smart_proof_config: updatedSmartProofConfig,
+        feedback_config: null,
+        feedback_adjustments: null,
+        domain_feedback_config: null,
+        domain_feedback_adjustments: null,
+      },
+    );
+    getDbMock.mockResolvedValue(db);
+
+    const response = await PUT(new NextRequest('http://localhost/api/inference/profiles/default', {
+      method: 'PUT',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        smartProofConfig: {
+          enabled: true,
+          budget: {
+            maxLlmCallsPerRun: 7,
+          },
+          thresholds: {
+            autoAcceptConfidence: 0.9,
+          },
+        },
+      }),
+      headers: { 'Content-Type': 'application/json' },
+    }));
+
+    expect(response.status).toBe(200);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
+    const smartProofQuery = getExecutedSql(transactionExecuteMock, 2);
+    expect(smartProofQuery.strings.join('')).toContain('set smart_proof_config = ');
+
+    const payload = await response.json();
+    expect(payload.smartProofConfig).toEqual(updatedSmartProofConfig);
   });
 
   it('PUT은 relation/domain feedback 설정을 독립적으로 저장하고 summary를 분리해 반환해야 한다', async () => {
@@ -424,9 +519,9 @@ describe('inference profile default route', () => {
     ));
 
     expect(response.status).toBe(200);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(4);
-    const relationQuery = getExecutedSql(transactionExecuteMock, 2);
-    const domainQuery = getExecutedSql(transactionExecuteMock, 3);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
+    const relationQuery = getExecutedSql(transactionExecuteMock, 3);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 4);
     expect(relationQuery.strings.join('')).toContain('set feedback_config = ');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');
     expect(domainQuery.strings.join('')).toContain('set domain_feedback_config = ');
@@ -747,6 +842,7 @@ describe('inference profile default route', () => {
     const transactionExecuteMock = vi.fn()
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'));
     const db = {
       select: vi.fn(),
@@ -788,9 +884,9 @@ describe('inference profile default route', () => {
     expect(response.status).toBe(200);
     expect(db.select).not.toHaveBeenCalled();
     expect(executeMock).toHaveBeenCalledTimes(6);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(4);
-    const relationQuery = getExecutedSql(transactionExecuteMock, 2);
-    const domainQuery = getExecutedSql(transactionExecuteMock, 3);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
+    const relationQuery = getExecutedSql(transactionExecuteMock, 3);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 4);
     expect(relationQuery.strings.join('')).toContain('feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('domain_feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');

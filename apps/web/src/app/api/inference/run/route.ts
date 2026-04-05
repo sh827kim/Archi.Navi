@@ -2,11 +2,15 @@ import { type NextRequest, NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
 import { getDb, objects } from '@archi-navi/db';
 import {
+  buildEmptyProofEngineSummary,
   createInferenceRun,
   executeInferenceRun,
+  normalizeSmartProofConfig,
   normalizeInferenceRunModes,
   type InferenceSourceType,
+  type SmartProofConfig,
 } from '@archi-navi/inference';
+import { createGenerateSmartResolutionFn, getInferenceModel } from '@/lib/inference-llm';
 
 interface RunInferenceRequest {
   workspaceId?: string;
@@ -20,11 +24,32 @@ interface RunInferenceRequest {
   codeEngine?: string;
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number;
+  smartProof?: boolean | SmartProofConfig;
   llmBoost?: {
     enabled?: boolean;
     codeIntentAnalysis?: boolean;
     generateExplanations?: boolean;
     maxCalls?: number;
+  };
+}
+
+function withRequestedSmartMode(
+  summary: Record<string, unknown>,
+  smartProof: boolean | SmartProofConfig | undefined,
+) {
+  const normalized = normalizeSmartProofConfig(smartProof);
+  const smartMode = summary['smartMode'];
+  const smartModeRecord = smartMode && typeof smartMode === 'object' && !Array.isArray(smartMode)
+    ? smartMode as Record<string, unknown>
+    : {};
+
+  return {
+    ...summary,
+    smartMode: {
+      ...buildEmptyProofEngineSummary().smartMode,
+      ...smartModeRecord,
+      enabled: normalized.enabled,
+    },
   };
 }
 
@@ -188,6 +213,7 @@ export async function POST(req: NextRequest) {
       ...(body.codeEngine != null ? { codeEngine: body.codeEngine } : {}),
       incremental: body.forceRescan === true ? false : body.incremental !== false,
       triggerType: 'INTENT_PROOF_ENGINE',
+      ...(body.smartProof !== undefined ? { smartProof: body.smartProof } : {}),
       ...(body.enableAgentPatches !== undefined
         ? { enableAgentPatches: body.enableAgentPatches === true }
         : {}),
@@ -196,9 +222,19 @@ export async function POST(req: NextRequest) {
         : {}),
       sources,
     });
-    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const normalizedSmartProof = normalizeSmartProofConfig(body.smartProof);
+    const modelInfo = normalizedSmartProof.enabled ? getInferenceModel(req) : null;
+    const smartGenerateFn = modelInfo
+      ? createGenerateSmartResolutionFn(modelInfo.model, modelInfo.modelName)
+      : undefined;
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      ...(smartGenerateFn ? { smartGenerateFn } : {}),
+    });
     const runStats = (detail.run.stats ?? {}) as Record<string, unknown>;
-    const proofSummary = (runStats['proofSummary'] ?? {}) as Record<string, unknown>;
+    const rawProofSummary = (runStats['proofSummary'] ?? buildEmptyProofEngineSummary()) as Record<string, unknown>;
+    const proofSummary = withRequestedSmartMode(rawProofSummary, body.smartProof);
     const frontierAgent = (runStats['frontierAgent'] ?? null) as Record<string, unknown> | null;
     const requestedAgentPatches = (runStats['requestedAgentPatches'] ?? {
       enabled: body.enableAgentPatches === true,
@@ -221,6 +257,7 @@ export async function POST(req: NextRequest) {
         proofResolution: runStats['proofResolution'] ?? null,
         frontierAgent,
         requestedAgentPatches,
+        requestedSmartProof: normalizeSmartProofConfig(body.smartProof),
       },
       warnings: detail.run.warnings,
       errors: detail.run.errors,

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq, sql } from 'drizzle-orm';
 import { inArray } from 'drizzle-orm';
 import {
@@ -278,6 +278,13 @@ describe('intent proof engine', () => {
       parentId: serviceId,
       category: 'CODE',
     });
+  });
+
+  afterEach(async () => {
+    const client = (db as { $client?: { end?: () => Promise<void> } } | undefined)?.$client;
+    if (client?.end) {
+      await client.end();
+    }
   });
 
   it('resolveWorkspaceInteractionIntents는 기본 동작에서 입력 intent 순서를 보존해야 한다', async () => {
@@ -932,6 +939,11 @@ describe('intent proof engine', () => {
       configKeys: ['client.orders.regex-url'],
       intentHash: 'intent-http-route-regex',
       anchorHash: 'anchor-http-route-regex',
+    });
+
+    const result = await resolveInteractionIntentProof(db, {
+      workspaceId,
+      intentId,
     });
 
     expect(result.status).toBe('CLOSED_ATOMIC');
@@ -2382,6 +2394,58 @@ describe('intent proof engine', () => {
       'aliasValue must align with the unresolved host alias',
       'resolvedServiceId must align with downstream service hints',
     ]));
+  });
+
+  it('smart_agent alias patch는 review 모드일 때 PENDING으로 저장되고 frontier를 유지해야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'orders-service' });
+    await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /internal/orders/{id}',
+      parentId: providerServiceId,
+      metadata: { method: 'GET', path: '/internal/orders/{id}' },
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      hostHint: 'ORDERS_API',
+      configKeys: ['client.orders.url'],
+      targetServiceHint: 'orders-service',
+      intentHash: 'intent-smart-agent-review-patch',
+      anchorHash: 'anchor-smart-agent-review-patch',
+    });
+
+    const initial = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(initial.status).toBe('FRONTIER');
+    expect(initial.frontierReason).toBe('CONFIG_BINDING_MISSING');
+
+    const patchResult = await validateAndApplyProofPatch(db, {
+      workspaceId,
+      proofStateId: initial.proofStateId,
+      patchType: 'alias_binding',
+      payload: {
+        ownerServiceId: serviceId,
+        aliasKey: 'client.orders.url',
+        aliasValue: 'ORDERS_API',
+        resolvedServiceId: providerServiceId,
+      },
+      sourceKind: 'smart_agent',
+      applyMode: 'defer',
+    });
+
+    expect(patchResult.validationStatus).toBe('PENDING');
+    const patches = await db.select().from(proofPatches).where(eq(proofPatches.proofStateId, initial.proofStateId));
+    expect(patches[0]?.sourceKind).toBe('smart_agent');
+    expect(patches[0]?.validationStatus).toBe('PENDING');
+
+    const states = await db.select().from(proofStates).where(eq(proofStates.id, initial.proofStateId));
+    expect(states[0]?.status).toBe('FRONTIER');
   });
 
   it('frontier와 무관한 route_transform patch는 REJECTED여야 한다', async () => {

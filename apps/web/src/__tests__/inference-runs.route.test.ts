@@ -28,6 +28,21 @@ const {
     agentPatchedFrontierCount: 0,
     frontierBreakdown: {},
     targetBreakdown: {},
+    smartMode: {
+      enabled: false,
+      llmCallCount: 0,
+      totalInputTokens: 0,
+      totalOutputTokens: 0,
+      estimatedCostUsd: 0,
+      frontierResolvedByLlm: 0,
+      summaryEnhancedByLlm: 0,
+      contradictionsChallenged: 0,
+      autoAcceptedCount: 0,
+      pendingReviewCount: 0,
+      skippedCount: 0,
+      resolutionByCategory: {},
+      resolutionByFrontierReason: {},
+    },
   })),
 }));
 
@@ -111,6 +126,9 @@ describe('POST /api/inference/runs', () => {
         projectedCandidateCount: 0,
         routeFamilyFrontierCount: 0,
         serviceTargetProjectionCount: 0,
+        smartMode: {
+          enabled: false,
+        },
       },
       results: {
         frontierAgent: {
@@ -120,6 +138,9 @@ describe('POST /api/inference/runs', () => {
         requestedAgentPatches: {
           enabled: true,
           maxFrontiers: 3,
+        },
+        requestedSmartProof: {
+          enabled: false,
         },
       },
     });

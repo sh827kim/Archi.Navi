@@ -2,12 +2,15 @@ import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import {
   functionSummaries,
+  inferenceRuns,
   interactionIntents,
   proofFrontiers,
   proofPatches,
   proofStates,
   relationCandidates,
 } from '@archi-navi/db';
+import { smartProofLlmCalls } from '@archi-navi/db/schema';
+import { buildEmptySmartModeSummary, type SmartModeSummary } from '../agent/smartProofTypes';
 
 export type ProofEngineName = 'intent_proof';
 
@@ -32,6 +35,7 @@ export interface ProofEngineSummary {
   functionSummaryExtractionBreakdown: Record<string, number>;
   frontierBreakdown: Record<string, number>;
   targetBreakdown: Record<string, number>;
+  smartMode: SmartModeSummary;
 }
 
 interface BuildProofEngineSummaryForRunInput {
@@ -62,6 +66,7 @@ export function buildEmptyProofEngineSummary(): ProofEngineSummary {
     },
     frontierBreakdown: {},
     targetBreakdown: {},
+    smartMode: buildEmptySmartModeSummary(false),
   };
 }
 
@@ -93,7 +98,18 @@ export async function buildProofEngineSummaryForRun(
     );
 
   if (runIntents.length === 0) {
-    return buildEmptyProofEngineSummary();
+    const runRows = await db
+      .select({ stats: inferenceRuns.stats })
+      .from(inferenceRuns)
+      .where(and(eq(inferenceRuns.workspaceId, input.workspaceId), eq(inferenceRuns.id, input.runId)))
+      .limit(1);
+    const runStats = asRecord(runRows[0]?.stats);
+    const requestedSmartProof = asRecord(runStats?.['requestedSmartProof']);
+
+    return {
+      ...buildEmptyProofEngineSummary(),
+      smartMode: buildEmptySmartModeSummary(requestedSmartProof?.['enabled'] === true),
+    };
   }
 
   const intentIds = runIntents.map((row) => row.id);
@@ -121,11 +137,22 @@ export async function buildProofEngineSummaryForRun(
     );
 
   if (states.length === 0) {
-    return buildEmptyProofEngineSummary();
+    const runRows = await db
+      .select({ stats: inferenceRuns.stats })
+      .from(inferenceRuns)
+      .where(and(eq(inferenceRuns.workspaceId, input.workspaceId), eq(inferenceRuns.id, input.runId)))
+      .limit(1);
+    const runStats = asRecord(runRows[0]?.stats);
+    const requestedSmartProof = asRecord(runStats?.['requestedSmartProof']);
+
+    return {
+      ...buildEmptyProofEngineSummary(),
+      smartMode: buildEmptySmartModeSummary(requestedSmartProof?.['enabled'] === true),
+    };
   }
 
   const stateIds = states.map((state) => state.id);
-  const [frontiers, patches, candidates, updatedSummaries] = await Promise.all([
+  const [frontiers, patches, candidates, updatedSummaries, smartCallRows, runRows] = await Promise.all([
     db
       .select({
         proofStateId: proofFrontiers.proofStateId,
@@ -141,6 +168,7 @@ export async function buildProofEngineSummaryForRun(
       ),
     db
       .select({
+        id: proofPatches.id,
         proofStateId: proofPatches.proofStateId,
         sourceKind: proofPatches.sourceKind,
         validationStatus: proofPatches.validationStatus,
@@ -169,7 +197,49 @@ export async function buildProofEngineSummaryForRun(
           eq(functionSummaries.updatedRunId, input.runId),
         ),
       ),
+    db
+      .select({
+        callCategory: smartProofLlmCalls.callCategory,
+        frontierReason: smartProofLlmCalls.frontierReason,
+        inputTokens: smartProofLlmCalls.inputTokens,
+        outputTokens: smartProofLlmCalls.outputTokens,
+        estimatedCostUsd: smartProofLlmCalls.estimatedCostUsd,
+        accepted: smartProofLlmCalls.accepted,
+        confidence: smartProofLlmCalls.confidence,
+        patchId: smartProofLlmCalls.patchId,
+      })
+      .from(smartProofLlmCalls)
+      .where(
+        and(
+          eq(smartProofLlmCalls.workspaceId, input.workspaceId),
+          eq(smartProofLlmCalls.runId, input.runId),
+        ),
+      ),
+    db
+      .select({ stats: inferenceRuns.stats })
+      .from(inferenceRuns)
+      .where(and(eq(inferenceRuns.workspaceId, input.workspaceId), eq(inferenceRuns.id, input.runId)))
+      .limit(1),
   ]);
+
+  const smartCallPatchIds = smartCallRows
+    .map((call) => call.patchId)
+    .filter((patchId): patchId is string => typeof patchId === 'string');
+
+  const smartCallPatchRows = smartCallPatchIds.length === 0
+    ? []
+    : await db
+      .select({
+        id: proofPatches.id,
+        validationStatus: proofPatches.validationStatus,
+      })
+      .from(proofPatches)
+      .where(
+        and(
+          eq(proofPatches.workspaceId, input.workspaceId),
+          inArray(proofPatches.id, smartCallPatchIds),
+        ),
+      );
 
   const trackedStateIds = new Set(stateIds);
   const projectedCandidateCount = candidates.filter((candidate) => {
@@ -218,6 +288,34 @@ export async function buildProofEngineSummaryForRun(
       .filter((patch) => patch.sourceKind === 'agent' && patch.validationStatus === 'ACCEPTED' && patch.proofStateId)
       .map((patch) => patch.proofStateId as string),
   );
+  const runStats = asRecord(runRows[0]?.stats);
+  const requestedSmartProof = asRecord(runStats?.['requestedSmartProof']);
+  const smartMode = buildEmptySmartModeSummary(requestedSmartProof?.['enabled'] === true);
+  const smartPatchStatusById = new Map(
+    smartCallPatchRows.map((patch) => [patch.id, patch.validationStatus]),
+  );
+
+  for (const row of smartCallRows) {
+    smartMode.llmCallCount += 1;
+    smartMode.totalInputTokens += row.inputTokens;
+    smartMode.totalOutputTokens += row.outputTokens;
+    smartMode.estimatedCostUsd += row.estimatedCostUsd ?? 0;
+    smartMode.resolutionByCategory[row.callCategory] = (smartMode.resolutionByCategory[row.callCategory] ?? 0) + 1;
+    if (row.frontierReason) {
+      smartMode.resolutionByFrontierReason[row.frontierReason] =
+        (smartMode.resolutionByFrontierReason[row.frontierReason] ?? 0) + 1;
+    }
+
+    const patchStatus = row.patchId ? smartPatchStatusById.get(row.patchId) ?? null : null;
+    if (patchStatus === 'ACCEPTED') {
+      smartMode.autoAcceptedCount += 1;
+      smartMode.frontierResolvedByLlm += 1;
+    } else if (patchStatus === 'PENDING') {
+      smartMode.pendingReviewCount += 1;
+    } else if (patchStatus === 'REJECTED' || row.accepted === false) {
+      smartMode.skippedCount += 1;
+    }
+  }
 
   return {
     engine: 'intent_proof',
@@ -251,5 +349,6 @@ export async function buildProofEngineSummaryForRun(
     functionSummaryExtractionBreakdown,
     frontierBreakdown,
     targetBreakdown,
+    smartMode,
   };
 }

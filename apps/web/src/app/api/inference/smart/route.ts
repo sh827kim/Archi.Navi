@@ -8,7 +8,10 @@ import {
   createInferenceRun,
   executeInferenceRun,
   getInferenceRunDetail,
+  normalizeSmartProofConfig,
+  type SmartProofConfig,
 } from '@archi-navi/inference';
+import { createGenerateSmartResolutionFn, getInferenceModel } from '@/lib/inference-llm';
 
 interface SmartRunRequest {
   workspaceId?: string;
@@ -19,6 +22,7 @@ interface SmartRunRequest {
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number;
   forceRescan?: boolean;
+  smartProof?: boolean | SmartProofConfig;
 }
 
 function dedupeNestedRepoRoots(repoRoots: string[]) {
@@ -89,7 +93,30 @@ async function collectSmartRepoRoots(
 function extractProofSummary(detail: Awaited<ReturnType<typeof getInferenceRunDetail>>) {
   const stats = asRecord(detail.run.stats);
   const proofSummary = asRecord(stats?.['proofSummary']);
-  return proofSummary ?? buildEmptyProofEngineSummary();
+  if (proofSummary) {
+    return withRequestedSmartMode(proofSummary, stats?.['requestedSmartProof'] as boolean | SmartProofConfig | undefined);
+  }
+  return withRequestedSmartMode(buildEmptyProofEngineSummary() as Record<string, unknown>, stats?.['requestedSmartProof'] as boolean | SmartProofConfig | undefined);
+}
+
+function withRequestedSmartMode(
+  summary: Record<string, unknown>,
+  smartProof: boolean | SmartProofConfig | undefined,
+) {
+  const normalized = normalizeSmartProofConfig(smartProof ?? true);
+  const smartMode = summary['smartMode'];
+  const smartModeRecord = smartMode && typeof smartMode === 'object' && !Array.isArray(smartMode)
+    ? smartMode as Record<string, unknown>
+    : {};
+
+  return {
+    ...summary,
+    smartMode: {
+      ...buildEmptyProofEngineSummary().smartMode,
+      ...smartModeRecord,
+      enabled: normalized.enabled,
+    },
+  };
 }
 
 export async function GET(req: Request) {
@@ -191,6 +218,7 @@ export async function POST(req: Request) {
       triggerType: 'INTENT_PROOF_ENGINE',
       modes: ['config', 'code'],
       incremental: body.forceRescan === true ? false : true,
+      smartProof: body.smartProof ?? true,
       ...(body.enableAgentPatches !== undefined
         ? { enableAgentPatches: body.enableAgentPatches === true }
         : {}),
@@ -199,22 +227,32 @@ export async function POST(req: Request) {
         : {}),
       sources: validRoots.map((repoRoot) => ({ type: 'local', ref: repoRoot })),
     });
+    const normalizedSmartProof = normalizeSmartProofConfig(body.smartProof ?? true);
+    const modelInfo = normalizedSmartProof.enabled ? getInferenceModel(req) : null;
+    const smartGenerateFn = modelInfo
+      ? createGenerateSmartResolutionFn(modelInfo.model, modelInfo.modelName)
+      : undefined;
 
     if (body.async === true) {
       queueMicrotask(() => {
-        void executeInferenceRun(db, { workspaceId, runId: run.id }).catch((error) => {
+        void executeInferenceRun(db, {
+          workspaceId,
+          runId: run.id,
+          ...(smartGenerateFn ? { smartGenerateFn } : {}),
+        }).catch((error) => {
           console.error('[POST /api/inference/smart] async execute failed', error);
         });
       });
 
       const detail = await getInferenceRunDetail(db, { workspaceId, runId: run.id });
+      const proofSummary = withRequestedSmartMode(extractProofSummary(detail) as Record<string, unknown>, body.smartProof);
       return NextResponse.json(
         {
           success: true,
           engine: 'intent_proof',
           queued: true,
           runId: run.id,
-          summary: extractProofSummary(detail),
+          summary: proofSummary,
           run: detail.run,
           sources: detail.sources,
         },
@@ -222,8 +260,12 @@ export async function POST(req: Request) {
       );
     }
 
-    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
-    const proofSummary = extractProofSummary(detail);
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      ...(smartGenerateFn ? { smartGenerateFn } : {}),
+    });
+    const proofSummary = withRequestedSmartMode(extractProofSummary(detail) as Record<string, unknown>, body.smartProof);
 
     return NextResponse.json({
       success: true,

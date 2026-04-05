@@ -85,6 +85,20 @@
       "when": 1775282400000,
       "tag": "0011_proof_confidence_profile_and_ast_summary",
       "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1775347200000,
+      "tag": "0012_smart_proof_engine",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1775350800000,
+      "tag": "0013_domain_profile_smart_proof_config",
+      "breakpoints": true
     }
   ]
 }

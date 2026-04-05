@@ -7,10 +7,14 @@ const {
   getDbMock,
   createInferenceRunMock,
   executeInferenceRunMock,
+  getInferenceModelMock,
+  createGenerateSmartResolutionFnMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
   createInferenceRunMock: vi.fn(),
   executeInferenceRunMock: vi.fn(),
+  getInferenceModelMock: vi.fn(),
+  createGenerateSmartResolutionFnMock: vi.fn(() => vi.fn()),
 }));
 
 vi.mock('@archi-navi/db', async () => {
@@ -30,6 +34,11 @@ vi.mock('@archi-navi/inference', async () => {
   };
 });
 
+vi.mock('@/lib/inference-llm', () => ({
+  getInferenceModel: getInferenceModelMock,
+  createGenerateSmartResolutionFn: createGenerateSmartResolutionFnMock,
+}));
+
 import { POST } from '@/app/api/inference/run/route';
 
 describe('POST /api/inference/run', () => {
@@ -48,6 +57,10 @@ describe('POST /api/inference/run', () => {
 
   it('proof-engine sync run으로 정규화해 실행하고 summary를 반환해야 한다', async () => {
     getDbMock.mockResolvedValue({ db: 'mock' });
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
+    });
     createInferenceRunMock.mockResolvedValue({
       id: 'run-1',
       status: 'QUEUED',
@@ -136,6 +149,9 @@ describe('POST /api/inference/run', () => {
         intentCount: 3,
         gatewayRouteSeedCount: 1,
         derivedEndpointProofCount: 2,
+        smartMode: {
+          enabled: false,
+        },
         routeFamilyFrontierCount: 1,
         projectedCandidateCount: 2,
         serviceTargetProjectionCount: 0,
@@ -145,6 +161,7 @@ describe('POST /api/inference/run', () => {
         proofResolution: { intentCount: 3, frontierCount: 1 },
         frontierAgent: { attemptedFrontierCount: 1, rejectedPatchCount: 1 },
         requestedAgentPatches: { enabled: true, maxFrontiers: 7 },
+        requestedSmartProof: { enabled: false },
       },
       llmBoost: {
         skippedReason: 'DISABLED_IN_PROOF_ENGINE',
@@ -153,6 +170,75 @@ describe('POST /api/inference/run', () => {
         },
       },
     });
+    expect(createGenerateSmartResolutionFnMock).not.toHaveBeenCalled();
+  });
+
+  it('smartProof=true 이면 모델이 있을 때 smartGenerateFn을 실행 입력으로 전달해야 한다', async () => {
+    getDbMock.mockResolvedValue({ db: 'mock' });
+    const smartGenerateFn = vi.fn();
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
+    });
+    createGenerateSmartResolutionFnMock.mockReturnValue(smartGenerateFn);
+    createInferenceRunMock.mockResolvedValue({
+      id: 'run-smart-1',
+      status: 'QUEUED',
+    });
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-smart-1',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 0,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 0,
+            proofFrontierCount: 0,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 0,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 0,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {},
+            targetBreakdown: {},
+            smartMode: { enabled: true },
+          },
+        },
+        warnings: [],
+        errors: [],
+      },
+      sources: [],
+      events: [],
+    });
+
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        modes: ['config'],
+        repoRoots: ['/repo/root'],
+        useServiceMetadataPaths: false,
+        smartProof: true,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createGenerateSmartResolutionFnMock).toHaveBeenCalledWith(
+      { provider: 'openai' },
+      'gpt-4o',
+    );
+    expect(executeInferenceRunMock).toHaveBeenCalledWith(
+      { db: 'mock' },
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        runId: 'run-smart-1',
+        smartGenerateFn,
+      }),
+    );
   });
 
   it('nested local repoRoots는 ancestor root만 남기도록 정규화해야 한다', async () => {

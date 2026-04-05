@@ -6,8 +6,10 @@ import {
   createInferenceRun,
   executeInferenceRun,
   listInferenceRuns,
+  normalizeSmartProofConfig,
   normalizeInferenceRunModes,
   type InferenceSourceType,
+  type SmartProofConfig,
 } from '@archi-navi/inference';
 
 interface InferenceRunRequestBody {
@@ -27,6 +29,7 @@ interface InferenceRunRequestBody {
   useServiceMetadataPaths?: boolean;
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number;
+  smartProof?: boolean | SmartProofConfig;
 }
 
 function authorizeInferenceRunsRequest(req: NextRequest): NextResponse | null {
@@ -167,6 +170,7 @@ export async function POST(req: NextRequest) {
       ...(body.codeEngine != null ? { codeEngine: body.codeEngine } : {}),
       incremental: body.forceRescan === true ? false : body.incremental !== false,
       triggerType: body.triggerType ?? 'INTENT_PROOF_ENGINE',
+      ...(body.smartProof !== undefined ? { smartProof: body.smartProof } : {}),
       ...(body.maxAttempts != null ? { maxAttempts: body.maxAttempts } : {}),
       ...(body.idempotencyKey != null ? { idempotencyKey: body.idempotencyKey } : {}),
       ...(body.enableAgentPatches !== undefined
@@ -184,7 +188,14 @@ export async function POST(req: NextRequest) {
       });
     });
 
-    const proofSummary = buildEmptyProofEngineSummary();
+    const requestedSmartProof = normalizeSmartProofConfig(body.smartProof);
+    const proofSummary = {
+      ...buildEmptyProofEngineSummary(),
+      smartMode: {
+        ...buildEmptyProofEngineSummary().smartMode,
+        enabled: requestedSmartProof.enabled,
+      },
+    };
     const requestedAgentPatches = {
       enabled: body.enableAgentPatches === true,
       maxFrontiers: typeof body.maxAgentFrontiers === 'number' ? body.maxAgentFrontiers : null,
@@ -213,6 +224,7 @@ export async function POST(req: NextRequest) {
           proofResolution: null,
           frontierAgent,
           requestedAgentPatches,
+          requestedSmartProof,
         },
       },
       { status: 202 },

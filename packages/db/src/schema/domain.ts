@@ -55,6 +55,29 @@ const DEFAULT_PROOF_CONFIDENCE_CONFIG = {
   },
 } as const;
 
+const DEFAULT_SMART_PROOF_CONFIG = {
+  enabled: false,
+  categories: {
+    preResolutionEnhancement: false,
+    frontierResolution: true,
+    ambiguityResolution: false,
+    crossProofCorrelation: false,
+    contradictionDetection: false,
+  },
+  budget: {
+    maxLlmCallsPerRun: 100,
+    maxLlmCallsPerIntent: 5,
+    maxInputTokensPerCall: 4000,
+    maxTotalTokensPerRun: 500000,
+  },
+  thresholds: {
+    autoAcceptConfidence: 0.8,
+    reviewConfidence: 0.5,
+    skipConfidence: 0.3,
+  },
+  temperature: 0.1,
+} as const;
+
 // 확정된 도메인 소속 분포 (Affinity Distribution)
 export const objectDomainAffinities = pgTable(
   'object_domain_affinities',
@@ -136,6 +159,7 @@ export const domainInferenceProfiles = pgTable(
       penaltyFactor: 0.85,
     }),
     proofConfidenceConfig: jsonb('proof_confidence_config').default(DEFAULT_PROOF_CONFIDENCE_CONFIG),
+    smartProofConfig: jsonb('smart_proof_config').default(DEFAULT_SMART_PROOF_CONFIG),
 
     createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),

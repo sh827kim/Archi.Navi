@@ -1,5 +1,5 @@
 import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { aliasBindings, createTestDb, functionSummaries, getEmbeddedPostgresTestSupport, interactionIntents, objects, proofDependencies, proofFrontiers, proofStates, routeTransforms, workspaces } from '../index';
+import { aliasBindings, createTestDb, functionSummaries, getEmbeddedPostgresTestSupport, interactionIntents, objects, proofDependencies, proofFrontiers, proofPatches, proofStates, routeTransforms, smartProofLlmCalls, workspaces } from '../index';
 import { generateId } from '@archi-navi/shared';
 
 const workspaceId = '00000000-0000-0000-0000-000000000888';
@@ -376,6 +376,84 @@ describe('proof schema migration', () => {
           consumerServiceId: serviceId,
         },
       ]),
+    ).resolves.not.toThrow();
+  });
+
+  it('proof patch는 smart_agent source kind를 저장할 수 있다', async () => {
+    if (!embeddedSupport.supported) return;
+    const proofStateId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: serviceId,
+    });
+
+    await expect(
+      db.insert(proofPatches).values({
+        id: generateId(),
+        workspaceId,
+        proofStateId,
+        patchType: 'alias_binding',
+        payload: {
+          aliasKey: 'clients.order.base-url',
+          resolvedServiceId: targetId,
+        },
+        sourceKind: 'smart_agent',
+        validationStatus: 'PENDING',
+      }),
+    ).resolves.not.toThrow();
+  });
+
+  it('smart proof llm call은 proof patch와 연결되어 저장될 수 있다', async () => {
+    if (!embeddedSupport.supported) return;
+    const proofStateId = generateId();
+    const patchId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: serviceId,
+    });
+
+    await db.insert(proofPatches).values({
+      id: patchId,
+      workspaceId,
+      proofStateId,
+      patchType: 'alias_binding',
+      payload: {
+        aliasKey: 'clients.order.base-url',
+        resolvedServiceId: targetId,
+      },
+      sourceKind: 'smart_agent',
+      validationStatus: 'PENDING',
+    });
+
+    await expect(
+      db.insert(smartProofLlmCalls).values({
+        id: generateId(),
+        workspaceId,
+        proofStateId,
+        callCategory: 'frontier_resolution',
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        model: 'gpt-5.4',
+        inputTokens: 1200,
+        outputTokens: 140,
+        promptHash: 'prompt-hash-1',
+        responseHash: 'response-hash-1',
+        promptSnapshot: { prompt: 'resolve host alias' },
+        responseSnapshot: { resolved: true },
+        confidence: 0.84,
+        accepted: true,
+        patchId,
+        durationMs: 120,
+      }),
     ).resolves.not.toThrow();
   });
 

@@ -11,6 +11,7 @@ import {
   inferenceRuns,
   inferenceRunSources,
   interactionIntents,
+  proofFrontiers,
   proofDependencies,
   proofStates,
   routeTransforms,
@@ -29,6 +30,14 @@ import {
 } from '../extraction/intents';
 import { extractRouteTransformsFromConfig } from '../extraction/routeTransforms';
 import { runFrontierAgentPass } from '../agent/frontierAgent';
+import { resolveSmartFrontier, type GenerateSmartResolutionFn, type SmartPatchProposal } from '../agent/smartFrontierResolver';
+import { normalizeSmartProofConfig, type SmartProofConfig } from '../agent/smartProofTypes';
+import {
+  canAffordSmartBudgetCall,
+  createSmartBudgetTracker,
+  isSmartBudgetExhausted,
+  recordSmartBudgetCall,
+} from '../agent/smartBudgetTracker';
 import { buildIntentProofResolverContext, resolveInteractionIntentProof } from './intentProofEngine';
 import { buildProofEngineSummaryForRun } from './proofEngineRun';
 import { buildIntentProofCutoverArtifact } from './intentProofCutoverReport';
@@ -268,6 +277,7 @@ export interface CreateInferenceRunInput {
   modes?: string[];
   codeEngine?: string | null;
   incremental?: boolean;
+  smartProof?: boolean | SmartProofConfig | null;
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number | null;
   triggerType?: string;
@@ -279,6 +289,7 @@ export interface CreateInferenceRunInput {
 export interface ExecuteInferenceRunInput {
   workspaceId: string;
   runId: string;
+  smartGenerateFn?: GenerateSmartResolutionFn<SmartPatchProposal>;
 }
 
 export interface InferenceRunListItem {
@@ -476,6 +487,15 @@ function readRequestedAgentPatchSettingsFromRunStats(
   });
 }
 
+function readRequestedSmartProofSettingsFromRunStats(
+  stats: unknown,
+): SmartProofConfig {
+  const record = stats && typeof stats === 'object' && !Array.isArray(stats)
+    ? (stats as Record<string, unknown>)
+    : {};
+  return normalizeSmartProofConfig(record['requestedSmartProof'] as boolean | SmartProofConfig | null | undefined);
+}
+
 async function getInferenceRunStatus(
   db: DbClient,
   input: { workspaceId: string; runId: string },
@@ -532,6 +552,7 @@ export async function createInferenceRun(
   }
   const uniqueSources = Array.from(uniqueSourceMap.values());
   const requestedAgentPatches = buildRequestedAgentPatchSettings(input);
+  const requestedSmartProof = normalizeSmartProofConfig(input.smartProof);
 
   if (input.idempotencyKey) {
     const existing = await db
@@ -563,6 +584,7 @@ export async function createInferenceRun(
       sourceSummary: summarizeSources(uniqueSources.map((source) => ({ sourceType: source.type }))),
       stats: {
         requestedAgentPatches,
+        requestedSmartProof,
       },
       warnings: [],
       errors: [],
@@ -595,6 +617,7 @@ export async function createInferenceRun(
       codeEngine,
       sourceCount: uniqueSources.length,
       requestedAgentPatches,
+      requestedSmartProof,
     },
   });
 
@@ -990,7 +1013,9 @@ export async function executeInferenceRun(
     frontierCount: 0,
     rejectedCount: 0,
   };
+  const smartFrontierProofStateIds = new Set<string>();
   const requestedAgentPatches = readRequestedAgentPatchSettingsFromRunStats(run.stats);
+  const requestedSmartProof = readRequestedSmartProofSettingsFromRunStats(run.stats);
   const frontierAgent = {
     enabled: requestedAgentPatches.enabled,
     maxFrontiers: requestedAgentPatches.maxFrontiers,
@@ -1000,6 +1025,17 @@ export async function executeInferenceRun(
     rejectedCount: 0,
     noProposalCount: 0,
     skippedCount: 0,
+  };
+  const smartProof = {
+    enabled: requestedSmartProof.enabled,
+    attempted: false,
+    attemptedFrontierCount: 0,
+    attemptLimitReachedByIntent: false,
+    budget: createSmartBudgetTracker({
+      maxCalls: requestedSmartProof.budget.maxLlmCallsPerRun,
+      maxTokens: requestedSmartProof.budget.maxTotalTokensPerRun,
+    }),
+    skippedReason: requestedSmartProof.enabled ? null as string | null : 'DISABLED',
   };
 
   if ((modeSet.has('config') || modeSet.has('code')) && sourceResolution.localSources.length === 0) {
@@ -1183,12 +1219,220 @@ export async function executeInferenceRun(
       }
       if (resolution.status === 'FRONTIER') {
         proofResolution.frontierCount += 1;
+        smartFrontierProofStateIds.add(resolution.proofStateId);
         continue;
       }
       if (resolution.status === 'REJECTED') {
         proofResolution.rejectedCount += 1;
       }
     }
+  };
+
+  const runSmartProofPass = async () => {
+    if (!requestedSmartProof.enabled) {
+      await appendRunEvent(db, {
+        workspaceId: input.workspaceId,
+        runId: run.id,
+        eventType: 'SMART_PROOF_PASS',
+        message: 'smart proof pass를 스킵했습니다: disabled',
+        payload: {
+          enabled: false,
+          outcome: 'disabled',
+          budget: smartProof.budget,
+        },
+      });
+      return;
+    }
+
+    smartProof.attempted = true;
+
+    if (proofResolution.frontierCount === 0) {
+      smartProof.skippedReason = 'NO_FRONTIERS';
+      await appendRunEvent(db, {
+        workspaceId: input.workspaceId,
+        runId: run.id,
+        eventType: 'SMART_PROOF_PASS',
+        message: 'smart proof pass를 스킵했습니다: frontier 없음',
+        payload: {
+          enabled: true,
+          outcome: 'no_frontiers',
+          budget: smartProof.budget,
+        },
+      });
+      return;
+    }
+
+    smartProof.attemptedFrontierCount = proofResolution.frontierCount;
+    if (!input.smartGenerateFn) {
+      smartProof.skippedReason = 'NO_GENERATOR_CONFIGURED';
+      await appendRunEvent(db, {
+        workspaceId: input.workspaceId,
+        runId: run.id,
+        eventType: 'SMART_PROOF_PASS',
+        message: 'smart proof pass를 스킵했습니다: generator 미구성',
+        payload: {
+          enabled: true,
+          outcome: 'no_generator',
+          attemptedFrontierCount: smartProof.attemptedFrontierCount,
+          budget: smartProof.budget,
+        },
+      });
+      return;
+    }
+    if (isSmartBudgetExhausted(smartProof.budget)) {
+      smartProof.skippedReason = 'BUDGET_EXHAUSTED';
+      await appendRunEvent(db, {
+        workspaceId: input.workspaceId,
+        runId: run.id,
+        eventType: 'SMART_PROOF_PASS',
+        level: 'WARN',
+        message: 'smart proof pass를 스킵했습니다: budget exhausted',
+        payload: {
+          enabled: true,
+          outcome: 'budget_exhausted',
+          attemptedFrontierCount: smartProof.attemptedFrontierCount,
+          budget: smartProof.budget,
+        },
+      });
+      return;
+    }
+
+    const frontierStateIds = Array.from(smartFrontierProofStateIds);
+    if (frontierStateIds.length === 0) {
+      smartProof.skippedReason = 'NO_SUPPORTED_FRONTIERS';
+      await appendRunEvent(db, {
+        workspaceId: input.workspaceId,
+        runId: run.id,
+        eventType: 'SMART_PROOF_PASS',
+        message: 'smart proof pass를 스킵했습니다: 현재 run에 지원 frontier 없음',
+        payload: {
+          enabled: true,
+          outcome: 'no_supported_frontiers',
+          attemptedFrontierCount: smartProof.attemptedFrontierCount,
+          budget: smartProof.budget,
+        },
+      });
+      return;
+    }
+
+    const frontierRows = await db
+      .select({
+        proofStateId: proofFrontiers.proofStateId,
+        frontierReason: proofFrontiers.frontierReason,
+      })
+      .from(proofFrontiers)
+      .where(
+        and(
+          eq(proofFrontiers.workspaceId, input.workspaceId),
+          inArray(proofFrontiers.proofStateId, frontierStateIds),
+        ),
+      );
+
+    const frontierStateIntents = frontierStateIds.length > 0
+      ? await db
+        .select({
+          proofStateId: proofStates.id,
+          intentId: proofStates.intentId,
+        })
+        .from(proofStates)
+        .where(
+          and(
+            eq(proofStates.workspaceId, input.workspaceId),
+            inArray(proofStates.id, frontierStateIds),
+          ),
+        )
+      : [];
+    const intentCallCountByProofState = new Map<string, number>(
+      frontierStateIntents.map((row) => [row.proofStateId, 0]),
+    );
+    const proofStateToIntentId = new Map<string, string>(
+      frontierStateIntents.map((row) => [row.proofStateId, row.intentId]),
+    );
+    const intentCallCountByIntent = new Map<string, number>();
+
+    let attemptedResolvers = 0;
+    let unsupportedCount = 0;
+    let budgetExhausted = false;
+    for (const frontierRow of frontierRows) {
+      if (!frontierRow.proofStateId) continue;
+      if (isSmartBudgetExhausted(smartProof.budget)) {
+        budgetExhausted = true;
+        break;
+      }
+      const intentId = proofStateToIntentId.get(frontierRow.proofStateId);
+      const currentIntentCalls = typeof intentId === 'string'
+        ? intentCallCountByIntent.get(intentId) ?? 0
+        : 0;
+      if (typeof intentId === 'string' && currentIntentCalls >= requestedSmartProof.budget.maxLlmCallsPerIntent) {
+        smartProof.attemptLimitReachedByIntent = true;
+        continue;
+      }
+      if (!canAffordSmartBudgetCall(smartProof.budget, requestedSmartProof.budget.maxInputTokensPerCall)) {
+        budgetExhausted = true;
+        break;
+      }
+      const result = await resolveSmartFrontier(db, {
+        workspaceId: input.workspaceId,
+        proofStateId: frontierRow.proofStateId,
+        runId: run.id,
+        config: requestedSmartProof,
+        generateFn: input.smartGenerateFn,
+      });
+      if (!result.attempted && result.frontierReason === 'UNSUPPORTED') {
+        unsupportedCount += 1;
+        continue;
+      }
+      attemptedResolvers += 1;
+      if (typeof intentId === 'string') {
+        const nextIntentCount = currentIntentCalls + 1;
+        intentCallCountByIntent.set(intentId, nextIntentCount);
+        intentCallCountByProofState.set(frontierRow.proofStateId, nextIntentCount);
+      } else {
+        const prev = intentCallCountByProofState.get(frontierRow.proofStateId) ?? 0;
+        intentCallCountByProofState.set(frontierRow.proofStateId, prev + 1);
+      }
+      smartProof.budget = recordSmartBudgetCall(smartProof.budget, {
+        inputTokens: result.tokensUsed.input,
+        outputTokens: result.tokensUsed.output,
+      });
+      if (isSmartBudgetExhausted(smartProof.budget)) {
+        budgetExhausted = true;
+        break;
+      }
+    }
+
+    if (attemptedResolvers === 0) {
+      smartProof.skippedReason = budgetExhausted || isSmartBudgetExhausted(smartProof.budget)
+        ? 'BUDGET_EXHAUSTED'
+        : 'NO_SUPPORTED_FRONTIERS';
+    } else {
+      smartProof.skippedReason = budgetExhausted ? 'BUDGET_EXHAUSTED' : null;
+    }
+    await appendRunEvent(db, {
+      workspaceId: input.workspaceId,
+      runId: run.id,
+      eventType: 'SMART_PROOF_PASS',
+      level: budgetExhausted ? 'WARN' : 'INFO',
+      message: budgetExhausted
+        ? 'smart proof frontier resolver를 budget 한도까지 실행했습니다.'
+        : attemptedResolvers > 0
+          ? 'smart proof frontier resolver를 실행했습니다.'
+          : 'smart proof pass를 스킵했습니다: 지원 frontier 없음',
+      payload: {
+        enabled: true,
+        outcome: budgetExhausted
+          ? 'budget_exhausted'
+          : attemptedResolvers > 0
+            ? 'resolver_attempted'
+            : 'no_supported_frontiers',
+        attemptedFrontierCount: smartProof.attemptedFrontierCount,
+        attemptedResolverCount: attemptedResolvers,
+        unsupportedCount,
+        attemptLimitReachedByIntent: smartProof.attemptLimitReachedByIntent,
+        categories: requestedSmartProof.categories,
+        budget: smartProof.budget,
+      },
+    });
   };
 
   if (await isRunCanceled()) {
@@ -1347,6 +1591,18 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
+  try {
+    await runSmartProofPass();
+  } catch (error) {
+    warnings.push(
+      `smart proof pass 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+    );
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
   const hasAnySuccess =
     configResult.repoCount > 0 || successfulCodeRepoCount > 0 || dbResult !== null || proofResolution.intentCount > 0;
   const proofSummary = await buildProofEngineSummaryForRun(db, {
@@ -1383,6 +1639,8 @@ export async function executeInferenceRun(
   const stats = {
     engine: proofSummary.engine,
     requestedAgentPatches,
+    requestedSmartProof,
+    smartProof,
     proofSummary,
     config: configResult,
     code: codeResult,

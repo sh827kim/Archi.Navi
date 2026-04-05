@@ -10,12 +10,14 @@ import type {
   GenerateBoostSuggestionFn,
   GenerateDomainLabelFn,
   GenerateExplanationFn,
+  GenerateSmartResolutionFn,
   LlmAssessment,
   LlmBoostContext,
   LlmBoostSuggestion,
   LlmExplanation,
   DomainLabelContext,
   DomainLabelSuggestion,
+  SmartPatchProposal,
 } from '@archi-navi/inference';
 
 const assessmentSchema = z.object({
@@ -46,6 +48,39 @@ const domainLabelSchema = z.object({
   ko: z.string(),
   en: z.string(),
 });
+
+const smartAliasBindingProposalSchema = z.object({
+  patchType: z.literal('alias_binding'),
+  resolved: z.boolean(),
+  selectedServiceId: z.string().nullable(),
+  selectedServiceName: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  aliasBinding: z.object({
+    aliasKey: z.string(),
+    aliasValue: z.string(),
+    bindingKind: z.enum(['base_url', 'service_discovery', 'gateway_target', 'property_alias']),
+  }).nullable(),
+});
+
+const smartRouteTransformProposalSchema = z.object({
+  patchType: z.literal('route_transform_patch'),
+  resolved: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  routeTransform: z.object({
+    gatewayKind: z.string().nullable(),
+    matchPath: z.string().nullable(),
+    targetServiceHint: z.string().nullable(),
+    targetHostAlias: z.string().nullable(),
+    priority: z.number().int().nullable(),
+  }).nullable(),
+});
+
+const smartPatchProposalSchema = z.discriminatedUnion('patchType', [
+  smartAliasBindingProposalSchema,
+  smartRouteTransformProposalSchema,
+]);
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
   if (headerApiKey) return headerApiKey;
@@ -201,5 +236,28 @@ export function createGenerateDomainLabelFn(
     });
 
     return result.object;
+  };
+}
+
+export function createGenerateSmartResolutionFn(
+  aiModel: LanguageModel,
+  modelName: string,
+): GenerateSmartResolutionFn<SmartPatchProposal> {
+  return async (prompt: string) => {
+    const result = await generateObject({
+      model: aiModel,
+      schema: smartPatchProposalSchema,
+      prompt,
+      temperature: 0.1,
+    });
+
+    const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
+
+    return {
+      model: modelName,
+      promptTokens: usage?.inputTokens ?? 0,
+      completionTokens: usage?.outputTokens ?? 0,
+      object: result.object,
+    };
   };
 }

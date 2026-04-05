@@ -1,5 +1,5 @@
 import { sql } from 'drizzle-orm';
-import { check, index, integer, jsonb, pgTable, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
+import { boolean, check, index, integer, jsonb, pgTable, real, text, timestamp, unique, uuid } from 'drizzle-orm/pg-core';
 import { inferenceRuns } from './audit';
 import { objects, workspaces } from './core';
 
@@ -360,7 +360,7 @@ export const proofPatches = pgTable(
     ),
     check(
       'chk_proof_patches_source_kind',
-      sql`${table.sourceKind} in ('deterministic', 'agent', 'manual')`,
+      sql`${table.sourceKind} in ('deterministic', 'agent', 'smart_agent', 'manual')`,
     ),
     check(
       'chk_proof_patches_validation_status',
@@ -368,6 +368,48 @@ export const proofPatches = pgTable(
     ),
     index('idx_proof_patches_ws_status').on(table.workspaceId, table.validationStatus, table.sourceKind),
     index('idx_proof_patches_ws_proof').on(table.workspaceId, table.proofStateId, table.validationStatus),
+  ],
+);
+
+export const smartProofLlmCalls = pgTable(
+  'smart_proof_llm_calls',
+  {
+    id: uuid('id').primaryKey().defaultRandom(),
+    workspaceId: uuid('workspace_id')
+      .notNull()
+      .references(() => workspaces.id, { onDelete: 'cascade' }),
+    runId: uuid('run_id').references(() => inferenceRuns.id, { onDelete: 'set null' }),
+    proofStateId: uuid('proof_state_id').references(() => proofStates.id, { onDelete: 'set null' }),
+    callCategory: text('call_category').notNull(),
+    frontierReason: text('frontier_reason'),
+    model: text('model').notNull(),
+    temperature: real('temperature').notNull().default(0.1),
+    inputTokens: integer('input_tokens').notNull(),
+    outputTokens: integer('output_tokens').notNull(),
+    estimatedCostUsd: real('estimated_cost_usd'),
+    promptHash: text('prompt_hash').notNull(),
+    responseHash: text('response_hash').notNull(),
+    promptSnapshot: jsonb('prompt_snapshot').notNull().default({}),
+    responseSnapshot: jsonb('response_snapshot').notNull().default({}),
+    confidence: real('confidence'),
+    accepted: boolean('accepted'),
+    patchId: uuid('patch_id').references(() => proofPatches.id, { onDelete: 'set null' }),
+    durationMs: integer('duration_ms'),
+    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
+  },
+  (table) => [
+    check(
+      'chk_smart_proof_llm_calls_category',
+      sql`${table.callCategory} in (
+        'pre_resolution_enhancement',
+        'frontier_resolution',
+        'ambiguity_resolution',
+        'cross_proof_correlation',
+        'contradiction_detection'
+      )`,
+    ),
+    index('idx_smart_proof_llm_calls_ws_run').on(table.workspaceId, table.runId),
+    index('idx_smart_proof_llm_calls_proof').on(table.proofStateId),
   ],
 );
 
