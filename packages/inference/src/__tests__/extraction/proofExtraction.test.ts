@@ -294,6 +294,7 @@ describe('proof extraction', () => {
       dynamicPath: true,
       dynamicHost: false,
       unsupportedPattern: false,
+      astBacked: false,
     });
   });
 
@@ -980,6 +981,105 @@ describe('proof extraction', () => {
       truncated: false,
       dynamicPath: false,
       unsupportedPattern: false,
+      astBacked: true,
+    });
+  });
+
+  it('mixed_signals 모드에서 AST confidence가 regex confidence보다 우선 적용되어야 한다', async () => {
+    const serviceId = await insertObject(db, { objectType: 'service', name: 'billing-service' });
+    const functionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'BillingClient.charge',
+      parentId: serviceId,
+    });
+    const artifactId = generateId();
+    const filePath = join(repoRoot, 'src', 'billing', 'BillingClient.java');
+    mkdirSync(join(repoRoot, 'src', 'billing'), { recursive: true });
+    writeFileSync(filePath, 'class BillingClient {}');
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'java',
+      repoRoot,
+      filePath,
+      ownerObjectId: functionId,
+    });
+
+    // regex 신호: 높은 confidence 0.95
+    const regexEvidenceId = generateId();
+    await db.insert(evidences).values({
+      id: regexEvidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath,
+      lineStart: 10,
+      lineEnd: 12,
+      excerpt: 'restTemplate.postForObject(billingUrl, ...)',
+      metadata: {
+        kind: 'call',
+        method: 'POST',
+        path: '/api/billing/charge',
+        confidence: 0.95,
+        extractionMode: 'regex',
+        configKeys: ['billing.base-url'],
+      },
+    });
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'http://billing-host/api/billing/charge',
+      calleeOwnerObjectId: null,
+      weight: 1,
+      evidenceId: regexEvidenceId,
+    });
+
+    // AST 신호: 낮은 confidence 0.78
+    const astEvidenceId = generateId();
+    await db.insert(evidences).values({
+      id: astEvidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath,
+      lineStart: 10,
+      lineEnd: 12,
+      excerpt: 'restTemplate.postForObject(billingUrl, ...)',
+      metadata: {
+        kind: 'call',
+        method: 'POST',
+        path: '/api/billing/charge',
+        confidence: 0.78,
+        extractionMode: 'ast',
+        configKeys: ['billing.base-url'],
+      },
+    });
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'http://billing-host/api/billing/charge',
+      calleeOwnerObjectId: null,
+      weight: 1,
+      evidenceId: astEvidenceId,
+    });
+
+    await extractFunctionSummariesFromCodeSignals(db, { workspaceId, repoRoot });
+
+    const summaries = await db
+      .select()
+      .from(functionSummaries)
+      .where(and(eq(functionSummaries.workspaceId, workspaceId), eq(functionSummaries.functionId, functionId)));
+    expect(summaries).toHaveLength(1);
+    expect(summaries[0]?.extractionStrategy).toBe('mixed_signals');
+
+    // AST confidence(0.78)가 regex confidence(0.95)보다 우선 적용
+    expect(summaries[0]?.confidence).toBe(0.78);
+
+    // summaryCompleteness는 순수 slot completeness (extraction strategy 보너스 없음)
+    expect(summaries[0]?.summaryCompleteness).toBe(0.9);
+
+    expect(summaries[0]?.flags).toMatchObject({
+      astBacked: true,
     });
   });
 });

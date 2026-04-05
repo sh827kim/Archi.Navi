@@ -23,6 +23,7 @@ type SummaryFlags = {
   dynamicPath: boolean;
   dynamicHost: boolean;
   unsupportedPattern: boolean;
+  astBacked: boolean;
 };
 
 interface SourceContext {
@@ -46,7 +47,7 @@ interface SummarySignalEntry {
   signalSource: string;
 }
 
-const FUNCTION_SUMMARY_SOURCE_HASH_VERSION = 'function-summary-v3';
+const FUNCTION_SUMMARY_SOURCE_HASH_VERSION = 'function-summary-v4';
 
 function extractConfigKeysFromMetadata(metadata: Record<string, unknown>): string[] {
   return uniqueSortedStrings([
@@ -506,12 +507,15 @@ export async function extractFunctionSummariesFromCodeSignals(
     const aliasHints: string[] = [];
     const signalSources: string[] = [];
     const provenanceEvidenceIds: string[] = [];
-    let confidence = 0.5;
+    let astConfidence = 0;
+    let legacyConfidence = 0;
+    let hasAstConfidence = false;
     const flags: SummaryFlags = {
       truncated: false,
       dynamicPath: false,
       dynamicHost: false,
       unsupportedPattern: false,
+      astBacked: extractionStrategy !== 'legacy_edges_fallback',
     };
 
     for (const entry of signalEntries) {
@@ -541,7 +545,12 @@ export async function extractFunctionSummariesFromCodeSignals(
       const method = normalizeMethod(metadata['method']);
       const confidenceHint = asNumber(metadata['confidence']);
       if (confidenceHint !== null) {
-        confidence = Math.max(confidence, confidenceHint);
+        if (isAstLikeSignalSource(entry.signalSource)) {
+          astConfidence = Math.max(astConfidence, confidenceHint);
+          hasAstConfidence = true;
+        } else {
+          legacyConfidence = Math.max(legacyConfidence, confidenceHint);
+        }
       }
       if (row.calleeOwnerObjectId) callChainHints.push(row.calleeOwnerObjectId);
 
@@ -633,6 +642,12 @@ export async function extractFunctionSummariesFromCodeSignals(
       provenanceEvidenceIds: normalizedProvenanceEvidenceIds,
       flags,
     });
+    // AST 신호가 있으면 AST confidence 우선, 없으면 legacy confidence 사용
+    const confidence = hasAstConfidence
+      ? Math.max(astConfidence, 0.5)
+      : Math.max(legacyConfidence, 0.5);
+
+    // summaryCompleteness는 순수 slot completeness — extraction strategy 보너스를 섞지 않음
     const summaryCompleteness = computeSummaryCompleteness({
       outboundHttp,
       outboundDb,

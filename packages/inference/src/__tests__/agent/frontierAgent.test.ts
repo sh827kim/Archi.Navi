@@ -312,6 +312,7 @@ describe('frontier agent', () => {
     expect(proposal).toBeNull();
   });
 
+
   it('route frontier에서 최소 route_transform patch를 제안해야 한다', async () => {
     const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
     const proofStateId = generateId();
