@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import {
   codeArtifacts,
@@ -27,6 +27,7 @@ import {
 } from '../shared';
 
 type IntentType = 'http_call' | 'http_gateway_route' | 'db_access' | 'message_publish' | 'message_consume';
+const CODE_SIGNAL_INTENT_TYPES: IntentType[] = ['http_call', 'db_access', 'message_publish', 'message_consume'];
 
 interface SourceContext {
   serviceId: string;
@@ -372,6 +373,36 @@ async function upsertInteractionIntent(
   });
 }
 
+async function retireMissingCodeSignalIntents(
+  db: DbClient,
+  options: ExtractInteractionIntentsOptions,
+  currentIntentHashes: Set<string>,
+): Promise<void> {
+  const artifactRows = await db
+    .select({ filePath: codeArtifacts.filePath })
+    .from(codeArtifacts)
+    .where(and(eq(codeArtifacts.workspaceId, options.workspaceId), eq(codeArtifacts.repoRoot, options.repoRoot)));
+  const artifactPaths = uniqueSortedStrings(artifactRows.map((row) => row.filePath));
+  if (artifactPaths.length === 0) return;
+
+  const existingRows = await db
+    .select({ id: interactionIntents.id, intentHash: interactionIntents.intentHash })
+    .from(interactionIntents)
+    .where(
+      and(
+        eq(interactionIntents.workspaceId, options.workspaceId),
+        inArray(interactionIntents.intentType, CODE_SIGNAL_INTENT_TYPES),
+        inArray(interactionIntents.sourceFilePath, artifactPaths),
+      ),
+    );
+  const staleIntentIds = existingRows
+    .filter((row) => !currentIntentHashes.has(row.intentHash))
+    .map((row) => row.id);
+  if (staleIntentIds.length === 0) return;
+
+  await db.delete(interactionIntents).where(inArray(interactionIntents.id, staleIntentIds));
+}
+
 export async function extractInteractionIntentsFromCodeSignals(
   db: DbClient,
   options: ExtractInteractionIntentsOptions,
@@ -408,6 +439,7 @@ export async function extractInteractionIntentsFromCodeSignals(
   const summaryMap = await loadSummaryMap(db, options.workspaceId);
 
   let intentCount = 0;
+  const extractedIntentHashes = new Set<string>();
   for (const row of rows) {
     const metadata = asRecord(row.evidenceMetadata) ?? {};
     const resolvedOwnerId = resolveExistingSignalOwnerId({
@@ -468,6 +500,9 @@ export async function extractInteractionIntentsFromCodeSignals(
 
     if (!hasDownstreamHint(seed)) continue;
 
+    const { intentHash } = buildIntentHashes(seed);
+    extractedIntentHashes.add(intentHash);
+
     await upsertInteractionIntent(db, {
       workspaceId: options.workspaceId,
       runId: options.runId,
@@ -475,6 +510,7 @@ export async function extractInteractionIntentsFromCodeSignals(
     });
     intentCount += 1;
   }
+  await retireMissingCodeSignalIntents(db, options, extractedIntentHashes);
 
   return { intentCount };
 }

@@ -226,6 +226,65 @@ describe('proof extraction', () => {
     expect(superseded?.summaryVersion).toBe(1);
   });
 
+  it('최신 code signal pass에서 사라진 interaction intent는 정리되어야 한다', async () => {
+    const serviceId = await insertObject(db, { objectType: 'service', name: 'gateway' });
+    const functionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: serviceId,
+      category: 'CODE',
+    });
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'typescript',
+      repoRoot,
+      filePath: 'src/gateway.ts',
+      ownerObjectId: functionId,
+      sha256: 'sha-intent-retire',
+    });
+
+    const firstEvidenceId = generateId();
+    await db.insert(evidences).values({
+      id: firstEvidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/gateway.ts',
+      lineStart: 10,
+      lineEnd: 10,
+      excerpt: "client.get('/api/orders/123')",
+      metadata: { kind: 'call', method: 'GET', confidence: 0.9 },
+    });
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: '/api/orders/123',
+      weight: 1,
+      evidenceId: firstEvidenceId,
+    });
+
+    await extractInteractionIntentsFromCodeSignals(db, { workspaceId, repoRoot, runId: 'run-a' });
+
+    let intents = await db
+      .select()
+      .from(interactionIntents)
+      .where(and(eq(interactionIntents.workspaceId, workspaceId), eq(interactionIntents.sourceFunctionId, functionId)));
+    expect(intents).toHaveLength(1);
+    expect(intents[0]?.externalPathHint).toBe('/api/orders/123');
+
+    await db.delete(codeCallEdges).where(eq(codeCallEdges.callerArtifactId, artifactId));
+    await extractInteractionIntentsFromCodeSignals(db, { workspaceId, repoRoot, runId: 'run-b' });
+
+    intents = await db
+      .select()
+      .from(interactionIntents)
+      .where(and(eq(interactionIntents.workspaceId, workspaceId), eq(interactionIntents.sourceFunctionId, functionId)));
+    expect(intents).toHaveLength(0);
+  });
+
   it('dynamic/truncated HTTP signal은 unresolved reason과 completeness 저하를 보존해야 한다', async () => {
     const serviceId = await insertObject(db, { objectType: 'service', name: 'gateway' });
     const functionId = await insertObject(db, {
