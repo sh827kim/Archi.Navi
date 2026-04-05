@@ -18,6 +18,8 @@ import type {
   DomainLabelContext,
   DomainLabelSuggestion,
   SmartPatchProposal,
+  SmartProviderServiceSelectionProposal,
+  SmartSummaryEnhancementProposal,
 } from '@archi-navi/inference';
 
 const assessmentSchema = z.object({
@@ -100,11 +102,52 @@ const smartMethodPathHintProposalSchema = z.object({
   }).nullable(),
 });
 
+const smartProviderServiceSelectionProposalSchema = z.object({
+  patchType: z.literal('provider_service_selection'),
+  resolved: z.boolean(),
+  selectedServiceId: z.string().nullable(),
+  selectedServiceName: z.string().nullable(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  ranking: z.array(z.object({
+    serviceId: z.string(),
+    serviceName: z.string().nullable(),
+    score: z.number().min(0).max(1).nullable(),
+    reasoning: z.string().nullable(),
+  })).nullable().optional(),
+});
+
+const smartSummaryEnhancementProposalSchema = z.object({
+  patchType: z.literal('function_summary_patch'),
+  resolved: z.boolean(),
+  functionId: z.string(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  summaryKind: z.enum(['http', 'db', 'message', 'mixed']).nullable().optional(),
+  serviceId: z.string().nullable().optional(),
+  outboundHttp: z.record(z.string(), z.unknown()).nullable().optional(),
+  outboundDb: z.record(z.string(), z.unknown()).nullable().optional(),
+  outboundMessage: z.record(z.string(), z.unknown()).nullable().optional(),
+  callChainHints: z.array(z.string()).nullable().optional(),
+  aliasHints: z.array(z.string()).nullable().optional(),
+  signalSources: z.array(z.string()).nullable().optional(),
+  provenanceEvidenceIds: z.array(z.string()).nullable().optional(),
+  extractionStrategy: z.string().nullable().optional(),
+  unresolvedReasons: z.array(z.string()).nullable().optional(),
+  summaryCompleteness: z.number().min(0).max(1).nullable().optional(),
+  flags: z.record(z.string(), z.unknown()).nullable().optional(),
+  confidenceScore: z.number().min(0).max(1).nullable().optional(),
+  evidenceIds: z.array(z.string()).nullable().optional(),
+  patchRationale: z.string().nullable().optional(),
+});
+
 const smartPatchProposalSchema = z.discriminatedUnion('patchType', [
   smartAliasBindingProposalSchema,
   smartRouteTransformProposalSchema,
   smartEndpointDisambiguationProposalSchema,
   smartMethodPathHintProposalSchema,
+  smartProviderServiceSelectionProposalSchema,
+  smartSummaryEnhancementProposalSchema,
 ]);
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
@@ -267,7 +310,9 @@ export function createGenerateDomainLabelFn(
 export function createGenerateSmartResolutionFn(
   aiModel: LanguageModel,
   modelName: string,
-): GenerateSmartResolutionFn<SmartPatchProposal> {
+): GenerateSmartResolutionFn<
+  SmartPatchProposal | SmartSummaryEnhancementProposal | SmartProviderServiceSelectionProposal
+> {
   return async (prompt: string) => {
     const result = await generateObject({
       model: aiModel,

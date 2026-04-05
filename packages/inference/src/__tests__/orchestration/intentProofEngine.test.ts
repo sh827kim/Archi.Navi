@@ -1921,6 +1921,78 @@ describe('intent proof engine', () => {
     expect(patchResult.errors).toContain('endpointId must reference an existing object');
   });
 
+  it('provider_service_selection patch는 provider ambiguity frontier를 닫고 selected provider를 우선 적용해야 한다', async () => {
+    const providerAServiceId = await insertObject(db, { objectType: 'service', name: 'order-api-a' });
+    const providerBServiceId = await insertObject(db, { objectType: 'service', name: 'order-api-b' });
+    const endpointA = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /orders/{id}',
+      parentId: providerAServiceId,
+      metadata: { method: 'GET', path: '/orders/{id}' },
+    });
+    await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /orders/{id}',
+      parentId: providerBServiceId,
+      metadata: { method: 'GET', path: '/orders/{id}' },
+    });
+    await db.insert(aliasBindings).values([
+      {
+        id: generateId(),
+        workspaceId,
+        bindingKind: 'property_alias',
+        ownerServiceId: serviceId,
+        aliasKey: 'client.order-a.url',
+        aliasValue: 'ORDER_API',
+        resolvedServiceId: providerAServiceId,
+        sourceHash: 'alias-order-api-a',
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        bindingKind: 'property_alias',
+        ownerServiceId: serviceId,
+        aliasKey: 'client.order-b.url',
+        aliasValue: 'ORDER_API',
+        resolvedServiceId: providerBServiceId,
+        sourceHash: 'alias-order-api-b',
+      },
+    ]);
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      hostHint: 'ORDER_API',
+      configKeys: [],
+      intentHash: 'intent-http-provider-ambiguity-patch',
+      anchorHash: 'anchor-http-provider-ambiguity-patch',
+    });
+
+    const initial = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(initial.status).toBe('FRONTIER');
+    expect(initial.frontierReason).toBe('PROVIDER_SERVICE_AMBIGUOUS');
+
+    const patchResult = await validateAndApplyProofPatch(db, {
+      workspaceId,
+      proofStateId: initial.proofStateId,
+      patchType: 'provider_service_selection',
+      payload: {
+        selectedServiceId: providerAServiceId,
+      },
+      sourceKind: 'agent',
+    });
+
+    expect(patchResult.validationStatus).toBe('ACCEPTED');
+    expect(patchResult.resolution?.status).toBe('CLOSED_ATOMIC');
+    expect(patchResult.resolution?.targetObjectId).toBe(endpointA);
+  });
+
   it('method_path_hint patch는 METHOD_UNKNOWN frontier를 닫고 target endpoint를 고정해야 한다', async () => {
     const providerServiceId = await insertObject(db, { objectType: 'service', name: 'catalog-api' });
     const endpointId = await insertObject(db, {

@@ -25,7 +25,8 @@ export type ProofPatchType =
   | 'function_summary_patch'
   | 'route_transform_patch'
   | 'endpoint_disambiguation'
-  | 'method_path_hint';
+  | 'method_path_hint'
+  | 'provider_service_selection';
 export type ProofPatchSourceKind = 'deterministic' | 'agent' | 'smart_agent' | 'manual';
 export type ProofPatchValidationStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 
@@ -80,6 +81,7 @@ interface AcceptedPatchHints {
   endpointHintId: string | null;
   methodHintOverride: string | null;
   externalPathOverride: string | null;
+  providerServiceOverride: string | null;
 }
 
 interface ProofDependencySnapshot {
@@ -1255,8 +1257,10 @@ async function getAcceptedPatchHints(
   const acceptedPatches = [...patches].reverse();
   const endpointPatch = acceptedPatches.find((patch) => patch.patchType === 'endpoint_disambiguation');
   const methodPathPatch = acceptedPatches.find((patch) => patch.patchType === 'method_path_hint');
+  const providerPatch = acceptedPatches.find((patch) => patch.patchType === 'provider_service_selection');
   const endpointPayload = asRecord(endpointPatch?.payload);
   const methodPathPayload = asRecord(methodPathPatch?.payload);
+  const providerPayload = asRecord(providerPatch?.payload);
 
   return {
     endpointHintId:
@@ -1265,6 +1269,7 @@ async function getAcceptedPatchHints(
       ?? null,
     methodHintOverride: normalizeMethod(methodPathPayload?.['method']),
     externalPathOverride: asString(methodPathPayload?.['externalPath']),
+    providerServiceOverride: asString(providerPayload?.['selectedServiceId']),
   };
 }
 
@@ -1548,6 +1553,23 @@ async function validatePatchDeterministically(
         errors.push('method_path_hint must match at least one endpoint method and path in provider service');
       }
 
+      return errors;
+    }
+    case 'provider_service_selection': {
+      const selectedServiceId = asString(payload['selectedServiceId']);
+      if (!frontier || frontier.frontierReason !== 'PROVIDER_SERVICE_AMBIGUOUS') {
+        errors.push('provider_service_selection requires a PROVIDER_SERVICE_AMBIGUOUS frontier');
+        return errors;
+      }
+      if (!selectedServiceId) {
+        errors.push('provider_service_selection requires selectedServiceId');
+        return errors;
+      }
+      const frontierDetail = asRecord(frontier.detail);
+      const candidateProviderIds = asStringArray(frontierDetail?.['candidateProviderIds']);
+      if (candidateProviderIds.length > 0 && !candidateProviderIds.includes(selectedServiceId)) {
+        errors.push('selectedServiceId must belong to the ambiguous provider candidate set');
+      }
       return errors;
     }
   }
@@ -2559,6 +2581,14 @@ async function resolveHttpIntent(
         candidateProviderIds.add(service.id);
       }
     }
+  }
+
+  if (
+    acceptedPatchHints.providerServiceOverride
+    && candidateProviderIds.has(acceptedPatchHints.providerServiceOverride)
+  ) {
+    candidateProviderIds.clear();
+    candidateProviderIds.add(acceptedPatchHints.providerServiceOverride);
   }
 
   if (candidateProviderIds.size > 1) {
@@ -4194,6 +4224,9 @@ function validateProofPatchPayload(
       if (!normalizeMethod(payload['method'])) errors.push('method is required');
       if (!asString(payload['externalPath'])) errors.push('externalPath is required');
       break;
+    case 'provider_service_selection':
+      if (!asString(payload['selectedServiceId'])) errors.push('selectedServiceId is required');
+      break;
   }
 
   return { status: errors.length === 0 ? 'ACCEPTED' : 'REJECTED', errors };
@@ -4302,6 +4335,8 @@ async function applyAcceptedPatch(
     case 'endpoint_disambiguation':
       break;
     case 'method_path_hint':
+      break;
+    case 'provider_service_selection':
       break;
   }
 }

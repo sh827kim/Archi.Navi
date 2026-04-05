@@ -160,6 +160,6 @@ describe('smartProofTypes', () => {
   it('SMART_FRONTIER_REASONS가 공개 지원 reason 집합과 일치해야 한다', () => {
     expect(SMART_FRONTIER_REASONS).toEqual(SMART_FRONTIER_REASONS_SUPPORTED);
     expect(SMART_FRONTIER_REASONS).toContain('METHOD_UNKNOWN');
-    expect(SMART_FRONTIER_REASONS).not.toContain('PROVIDER_SERVICE_AMBIGUOUS');
+    expect(SMART_FRONTIER_REASONS).toContain('PROVIDER_SERVICE_AMBIGUOUS');
   });
 });

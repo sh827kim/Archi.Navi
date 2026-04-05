@@ -114,4 +114,79 @@ describe('createGenerateBoostSuggestionFn', () => {
       },
     });
   });
+
+  it('smart resolution generator는 provider_service_selection 응답도 그대로 변환해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order',
+        selectedServiceName: 'order-service',
+        confidence: 0.89,
+        reasoning: 'provider ambiguity resolved by host/config hints',
+        ranking: [
+          {
+            serviceId: 'service-order',
+            serviceName: 'order-service',
+            score: 0.89,
+            reasoning: 'best',
+          },
+        ],
+      },
+      usage: {
+        inputTokens: 77,
+        outputTokens: 19,
+      },
+    });
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve provider ambiguity')).resolves.toMatchObject({
+      model: 'gpt-4o',
+      promptTokens: 77,
+      completionTokens: 19,
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order',
+      },
+    });
+  });
+
+  it('smart resolution generator는 provider_service_selection 응답도 그대로 변환해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order-a',
+        selectedServiceName: 'order-api-a',
+        confidence: 0.89,
+        reasoning: 'host hint matches order-api-a more strongly',
+        ranking: null,
+      },
+      usage: {
+        inputTokens: 55,
+        outputTokens: 14,
+      },
+    });
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve this provider ambiguity')).resolves.toMatchObject({
+      model: 'gpt-4o',
+      promptTokens: 55,
+      completionTokens: 14,
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order-a',
+      },
+    });
+  });
 });

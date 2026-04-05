@@ -40,3 +40,30 @@ export type {
   SmartRouteTransformProposal,
   SupportedSmartFrontierReason,
 } from './agent/smartFrontierResolver';
+export {
+  buildSmartSummaryEnhancementPrompt,
+  isSmartSummaryEnhancementCandidate,
+  loadSmartSummaryEnhancementCandidates,
+  resolveSmartSummaryEnhancement,
+} from './agent/smartSummaryEnhancer';
+export type {
+  ResolveSmartSummaryEnhancementInput,
+  ResolveSmartSummaryEnhancementResult,
+  SmartSummaryEnhancementCandidate,
+  SmartSummaryEnhancementProposal,
+} from './agent/smartSummaryEnhancer';
+export {
+  buildProviderServiceSelectionPrompt,
+  buildSmartProviderServiceSelectionPatch,
+  isSupportedSmartAmbiguityReason,
+  loadSmartAmbiguityContext,
+  resolveSmartAmbiguity,
+  SUPPORTED_SMART_AMBIGUITY_REASONS,
+} from './agent/smartAmbiguityResolver';
+export type {
+  ResolveSmartAmbiguityInput,
+  ResolveSmartAmbiguityResult,
+  SmartAmbiguityResolutionContext,
+  SmartProviderServiceSelectionProposal,
+  SupportedSmartAmbiguityReason,
+} from './agent/smartAmbiguityResolver';

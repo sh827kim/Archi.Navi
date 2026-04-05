@@ -196,7 +196,7 @@ Smart의 실행 순서는 아래를 따른다.
 5. final proof summary 집계
 ```
 
-1차 구현에서는 Category B를 핵심 경로로 본다.
+현재 1차 구현에서는 Category B가 주 경로이고, Category A는 선별 summary enhancement 최소 도입 수준으로만 활성화한다.
 
 ---
 
@@ -210,13 +210,18 @@ Smart의 실행 순서는 아래를 따른다.
 
 제한:
 
-- `legacy_edges_fallback`
-- `dynamicPath` 또는 `dynamicHost` 또는 `truncated`
+- `extractionStrategy === 'legacy_edges_fallback'`
+- `flags.dynamicPath || flags.dynamicHost || flags.truncated`
 - `summaryCompleteness < 0.6`
+
+현재 1차 구현의 선별 기준은 위 3개를 모두 동시에 만족하는 경우로 제한한다.
 
 주의:
 
 - AST/HYBRID primary signal 품질이 기준선에 도달하기 전에는 기본 활성화하지 않는다.
+- 현재 구현은 frontier proof에 연결된 active function summary만 선별한다.
+- 전수 재추론은 하지 않고, 선택된 candidate에 대해서만 `function_summary_patch`를 생성한다.
+- `ACCEPTED`된 summary patch만 기존 patch apply 경로를 통해 해당 proof를 다시 평가한다.
 
 ### 8.2 Category B. Frontier Resolution
 
@@ -253,6 +258,10 @@ Smart의 실행 순서는 아래를 따른다.
 
 - deterministic unique match가 실패한 경우만 허용
 - top-1 선택 근거와 대안 ranking을 함께 남겨야 한다
+
+현재 1차 지원 reason:
+
+- `PROVIDER_SERVICE_AMBIGUOUS` (`provider_service_selection`)
 
 ### 8.4 Category D. Cross-Proof Correlation
 
@@ -475,13 +484,13 @@ run summary는 최소한 아래 질문에 답할 수 있어야 한다.
 - 제한적 summary enhancement
 - enhancement 후 관련 intent만 재실행
 
-### Phase 4. Category C / D
+### Phase 4. Category C
 
-- ambiguity ranking
+- `PROVIDER_SERVICE_AMBIGUOUS` ambiguity ranking
+
+### Phase 5. Category D / E
+
 - correlation batch resolution
-
-### Phase 5. Category E
-
 - 저신뢰도 proof challenge
 
 ---

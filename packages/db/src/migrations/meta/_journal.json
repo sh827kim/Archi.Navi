@@ -99,6 +99,13 @@
       "when": 1775350800000,
       "tag": "0013_domain_profile_smart_proof_config",
       "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1775354400000,
+      "tag": "0014_provider_service_selection_patch",
+      "breakpoints": true
     }
   ]
 }

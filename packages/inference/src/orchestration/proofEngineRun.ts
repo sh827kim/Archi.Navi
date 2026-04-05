@@ -309,7 +309,12 @@ export async function buildProofEngineSummaryForRun(
     const patchStatus = row.patchId ? smartPatchStatusById.get(row.patchId) ?? null : null;
     if (patchStatus === 'ACCEPTED') {
       smartMode.autoAcceptedCount += 1;
-      smartMode.frontierResolvedByLlm += 1;
+      if (row.callCategory === 'frontier_resolution' || row.callCategory === 'ambiguity_resolution') {
+        smartMode.frontierResolvedByLlm += 1;
+      }
+      if (row.callCategory === 'pre_resolution_enhancement') {
+        smartMode.summaryEnhancedByLlm += 1;
+      }
     } else if (patchStatus === 'PENDING') {
       smartMode.pendingReviewCount += 1;
     } else if (patchStatus === 'REJECTED' || row.accepted === false) {

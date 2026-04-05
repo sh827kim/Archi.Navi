@@ -6,6 +6,7 @@ import { and, eq } from 'drizzle-orm';
 import {
   aliasBindings,
   createTestDb,
+  functionSummaries,
   inferenceRunEvents,
   inferenceRuns,
   inferenceRunSources,
@@ -208,6 +209,10 @@ describe('inference orchestration runs', () => {
     mkdirSync(tempDir, { recursive: true });
     db = await createTestDb();
     vi.clearAllMocks();
+    const actualIntentProofEngine = await vi.importActual<typeof import('@/orchestration/intentProofEngine')>('@/orchestration/intentProofEngine');
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(
+      actualIntentProofEngine.resolveInteractionIntentProof,
+    );
   });
 
   afterEach(async () => {
@@ -1240,6 +1245,498 @@ describe('inference orchestration runs', () => {
     expect(detail.events.some((event) => event.eventType === 'SMART_PROOF_PASS' && (event.payload as Record<string, unknown>)['outcome'] === 'disabled')).toBe(true);
   });
 
+  it('ambiguityResolution=true 이면 PROVIDER_SERVICE_AMBIGUOUS frontier에 smart ambiguity resolver를 적용해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
+
+    const consumerServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const sourceFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: consumerServiceId,
+    });
+    const providerAServiceId = await insertObject(db, { objectType: 'service', name: 'order-api-a' });
+    const providerBServiceId = await insertObject(db, { objectType: 'service', name: 'order-api-b' });
+    const intentId = generateId();
+    const proofStateId = generateId();
+
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: consumerServiceId,
+      sourceFunctionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      hostHint: 'ORDER_API',
+      configKeys: [],
+      summaryRefs: [],
+      evidenceIds: [],
+      status: 'NEW',
+      intentHash: `intent-${intentId}`,
+      anchorHash: `anchor-${intentId}`,
+    });
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId,
+      sourceFunctionId,
+      methodResolved: 'GET',
+      externalPathResolved: '/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 2,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'PROVIDER_SERVICE_AMBIGUOUS',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'PROVIDER_SERVICE_AMBIGUOUS',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'manual_review',
+      detail: {
+        candidateProviderIds: [providerAServiceId, providerBServiceId],
+        hostHints: ['ORDER_API'],
+      },
+    });
+
+    let resolutionCallCount = 0;
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      if (input.intentId !== intentId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      resolutionCallCount += 1;
+      if (resolutionCallCount === 1) {
+        return {
+          proofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'PROVIDER_SERVICE_AMBIGUOUS',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      await dbClient
+        .update(proofStates)
+        .set({
+          status: 'CLOSED_ATOMIC',
+          frontierCode: 'CLOSED_ATOMIC',
+          providerServiceId: providerAServiceId,
+          targetObjectType: 'service',
+          targetObjectId: providerAServiceId,
+        })
+        .where(eq(proofStates.id, proofStateId));
+      await dbClient
+        .delete(proofFrontiers)
+        .where(and(eq(proofFrontiers.workspaceId, workspaceId), eq(proofFrontiers.proofStateId, proofStateId)));
+
+      return {
+        proofStateId,
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: providerAServiceId,
+        relationType: 'call',
+      };
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: false,
+          ambiguityResolution: true,
+          crossProofCorrelation: false,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 5,
+          maxLlmCallsPerIntent: 2,
+          maxInputTokensPerCall: 200,
+          maxTotalTokensPerRun: 2_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.3,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 22,
+        completionTokens: 6,
+        object: {
+          patchType: 'provider_service_selection',
+          resolved: true,
+          selectedServiceId: providerAServiceId,
+          selectedServiceName: 'order-api-a',
+          confidence: 0.91,
+          reasoning: 'host hint aligns more strongly with order-api-a',
+          ranking: null,
+        },
+      }),
+    });
+
+    const smartPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(
+        and(
+          eq(proofPatches.workspaceId, workspaceId),
+          eq(proofPatches.proofStateId, proofStateId),
+          eq(proofPatches.sourceKind, 'smart_agent'),
+        ),
+    );
+    expect(smartPatches[0]?.patchType).toBe('provider_service_selection');
+    expect(smartPatches[0]?.validationStatus).toBe('ACCEPTED');
+    expect(resolutionCallCount).toBeGreaterThanOrEqual(1);
+
+    const smartMode = ((detail.run.stats as Record<string, unknown>)['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode).toMatchObject({
+      enabled: true,
+      autoAcceptedCount: 1,
+      frontierResolvedByLlm: 1,
+      llmCallCount: 1,
+    });
+  });
+
+  it('ambiguityResolution=false 이면 PROVIDER_SERVICE_AMBIGUOUS frontier를 smart가 건드리지 않아야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 2,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'PROVIDER_SERVICE_AMBIGUOUS',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'PROVIDER_SERVICE_AMBIGUOUS',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'manual_review',
+      detail: {
+        candidateProviderIds: ['svc-a', 'svc-b'],
+        hostHints: ['ORDER_API'],
+      },
+    });
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'PROVIDER_SERVICE_AMBIGUOUS',
+      targetObjectId: null,
+      relationType: null,
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: false,
+          ambiguityResolution: false,
+          crossProofCorrelation: false,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 5,
+          maxLlmCallsPerIntent: 2,
+          maxInputTokensPerCall: 200,
+          maxTotalTokensPerRun: 2_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.3,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 22,
+        completionTokens: 6,
+        object: {
+          patchType: 'provider_service_selection',
+          resolved: true,
+          selectedServiceId: 'svc-a',
+          selectedServiceName: 'svc-a',
+          confidence: 0.91,
+          reasoning: 'should not be called',
+          ranking: null,
+        },
+      }),
+    });
+
+    const smartPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(smartPatches).toHaveLength(0);
+    expect(((detail.run.stats as Record<string, unknown>)['proofSummary'] as Record<string, unknown>)['smartMode']).toMatchObject({
+      enabled: true,
+      llmCallCount: 0,
+    });
+  });
+
+  it('preResolutionEnhancement는 조건 충족 summary만 선별 실행하고 accepted patch 후 summaryVersion을 증가시켜야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
+
+    const consumerServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'order-service' });
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /api/orders/{id}',
+      parentId: providerServiceId,
+      metadata: { method: 'GET', path: '/api/orders/{id}' },
+    });
+    const sourceFilePath = join(tempDir, 'gateway-client.ts');
+    writeFileSync(
+      sourceFilePath,
+      [
+        'export async function fetchOrder() {',
+        "  return fetch('/api/orders/123');",
+        '}',
+      ].join('\n'),
+      'utf-8',
+    );
+    const sourceFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: consumerServiceId,
+      metadata: { sourceFilePath, startLine: 1, endLine: 3 },
+    });
+
+    const intentId = generateId();
+    const proofStateId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: consumerServiceId,
+      sourceFunctionId,
+      sourceFilePath,
+      methodHint: 'GET',
+      externalPathHint: '/api/orders/123',
+      hostHint: 'ORDER_SERVICE',
+      configKeys: ['client.orders.url'],
+      summaryRefs: [],
+      evidenceIds: [],
+      status: 'NEW',
+      intentHash: `intent-${intentId}`,
+      anchorHash: `anchor-${intentId}`,
+    });
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: consumerServiceId,
+      aliasKey: 'client.orders.url',
+      aliasValue: 'ORDER_SERVICE',
+      resolvedServiceId: providerServiceId,
+      sourceHash: 'alias-orders-summary-enhancement',
+    });
+
+    await db.insert(functionSummaries).values({
+      id: generateId(),
+      workspaceId,
+      functionId: sourceFunctionId,
+      serviceId: consumerServiceId,
+      summaryVersion: 1,
+      summaryKind: 'http',
+      outboundHttp: null,
+      outboundDb: null,
+      outboundMessage: null,
+      callChainHints: [],
+      aliasHints: [],
+      signalSources: ['legacy_edges'],
+      provenanceEvidenceIds: [],
+      extractionStrategy: 'legacy_edges_fallback',
+      unresolvedReasons: ['HOST_ALIAS_UNRESOLVED'],
+      summaryCompleteness: 0.2,
+      flags: { truncated: true },
+      confidence: 0.35,
+      sourceHash: 'summary-fetch-order-v1',
+      status: 'ACTIVE',
+    });
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId,
+      sourceFunctionId,
+      providerServiceId: null,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'HOST_ALIAS_UNRESOLVED',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'agent_patch',
+      detail: {
+        configKeys: ['client.orders.url'],
+        hostHints: ['ORDER_SERVICE'],
+      },
+    });
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: true,
+          frontierResolution: true,
+          ambiguityResolution: false,
+          crossProofCorrelation: false,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 5,
+          maxLlmCallsPerIntent: 2,
+          maxInputTokensPerCall: 400,
+          maxTotalTokensPerRun: 4_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.3,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 30,
+        completionTokens: 8,
+        object: {
+          patchType: 'function_summary_patch',
+          resolved: true,
+          functionId: sourceFunctionId,
+          confidence: 0.93,
+          reasoning: 'snippet and hints indicate outbound http call',
+          summaryKind: 'http',
+          outboundHttp: {
+            method: 'GET',
+            path: '/api/orders/{id}',
+            hostAlias: 'ORDER_SERVICE',
+          },
+          signalSources: ['smart_summary_enhancer'],
+          summaryCompleteness: 0.92,
+          flags: { truncated: false },
+        },
+      }),
+    });
+
+    const summaries = await db
+      .select()
+      .from(functionSummaries)
+      .where(and(eq(functionSummaries.workspaceId, workspaceId), eq(functionSummaries.functionId, sourceFunctionId)));
+    const activeSummary = summaries.find((summary) => summary.status === 'ACTIVE');
+    const supersededSummary = summaries.find((summary) => summary.status === 'SUPERSEDED');
+    expect(summaries).toHaveLength(2);
+    expect(activeSummary?.summaryVersion).toBe(2);
+    expect(activeSummary?.summaryCompleteness).toBe(0.92);
+    expect(supersededSummary?.summaryVersion).toBe(1);
+
+    const remainingFrontiers = await db
+      .select()
+      .from(proofFrontiers)
+      .where(and(eq(proofFrontiers.workspaceId, workspaceId), eq(proofFrontiers.proofStateId, proofStateId)));
+    expect(remainingFrontiers).toHaveLength(0);
+    const [updatedState] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
+    expect(updatedState?.status).not.toBe('FRONTIER');
+    const summaryPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(
+        and(
+          eq(proofPatches.workspaceId, workspaceId),
+          eq(proofPatches.proofStateId, proofStateId),
+          eq(proofPatches.patchType, 'function_summary_patch'),
+          eq(proofPatches.validationStatus, 'ACCEPTED'),
+        ),
+      );
+    expect(summaryPatches).toHaveLength(1);
+
+    const stats = detail.run.stats as Record<string, unknown>;
+    expect(stats['smartProof']).toMatchObject({
+      attemptedSummaryCandidateCount: 1,
+      acceptedSummaryEnhancementCount: 1,
+    });
+    const smartMode = (stats['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode).toMatchObject({
+      llmCallCount: 1,
+      summaryEnhancedByLlm: 1,
+      frontierResolvedByLlm: 0,
+      autoAcceptedCount: 1,
+    });
+    expect(detail.events.some((event) =>
+      event.eventType === 'SMART_PROOF_PASS'
+      && (event.payload as Record<string, unknown>)['attemptedSummaryCandidateCount'] === 1
+      && (event.payload as Record<string, unknown>)['acceptedSummaryEnhancementCount'] === 1)).toBe(true);
+  });
+
   it('smartProof가 ACCEPTED 결정을 내리면 patch를 적용하고 proof 상태를 재평가해야 한다', async () => {
     const seeded = await seedProofIntent(db);
     const proofStateId = generateId();
@@ -1619,6 +2116,42 @@ describe('inference orchestration runs', () => {
       intentHash: `intent-${intentId}`,
       anchorHash: `anchor-${intentId}`,
     });
+    const proofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId,
+      sourceFunctionId,
+      providerServiceId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 2,
+      contradictionCount: 0,
+      confidence: 0.42,
+      frontierCode: 'ENDPOINT_MATCH_AMBIGUOUS',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+      frontierClass: 'TARGET',
+      retryStrategy: 'agent_patch',
+      detail: {
+        candidateObjectIds: [endpointId],
+      },
+    });
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+      targetObjectId: null,
+      relationType: null,
+    });
 
     writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
     const run = await createInferenceRun(db, {
@@ -1649,7 +2182,7 @@ describe('inference orchestration runs', () => {
       }),
     });
 
-    const [state] = await db.select().from(proofStates).where(eq(proofStates.intentId, intentId));
+    const [state] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
     expect(state?.status).toBe('CLOSED_ATOMIC');
 
     const smartPatches = await db
@@ -1726,6 +2259,40 @@ describe('inference orchestration runs', () => {
       intentHash: `intent-${intentId}`,
       anchorHash: `anchor-${intentId}`,
     });
+    const proofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId,
+      sourceFunctionId,
+      providerServiceId,
+      methodResolved: null,
+      externalPathResolved: '/catalog/items/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.41,
+      frontierCode: 'METHOD_UNKNOWN',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'METHOD_UNKNOWN',
+      frontierClass: 'METHOD_PATH',
+      retryStrategy: 'agent_patch',
+      detail: {},
+    });
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockResolvedValueOnce({
+      proofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'METHOD_UNKNOWN',
+      targetObjectId: null,
+      relationType: null,
+    });
 
     writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
     const run = await createInferenceRun(db, {
@@ -1755,7 +2322,7 @@ describe('inference orchestration runs', () => {
       }),
     });
 
-    const [state] = await db.select().from(proofStates).where(eq(proofStates.intentId, intentId));
+    const [state] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
     const smartPatches = await db
       .select()
       .from(proofPatches)

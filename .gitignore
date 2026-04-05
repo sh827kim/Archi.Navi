@@ -54,4 +54,5 @@ packages/inference/wasm/*.wasm
 *.temp
 .idea
 .agents
+.codex/
 .pnpm-store
