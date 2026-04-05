@@ -322,6 +322,10 @@ export function LayeredArchitectureView() {
   const isLoadingRef = useRef(false);
   const curveStyleRef = useRef<CurveStyle>('bezier');
   const destroyTimerRef = useRef<number | null>(null);
+  const pendingReloadRef = useRef<{
+    showLoadingOverlay: boolean;
+    preserveViewport: boolean;
+  } | null>(null);
   const lastInitialLoadRef = useRef<{
     workspaceId: string | null;
     themeMode: ThemeMode | null;
@@ -350,10 +354,13 @@ export function LayeredArchitectureView() {
     showLoadingOverlay?: boolean;
     preserveViewport?: boolean;
   }) => {
-    if (isLoadingRef.current) return;
-    isLoadingRef.current = true;
     const showLoadingOverlay = options?.showLoadingOverlay ?? cyRef.current === null;
     const preserveViewport = options?.preserveViewport ?? cyRef.current !== null;
+    if (isLoadingRef.current) {
+      pendingReloadRef.current = { showLoadingOverlay, preserveViewport };
+      return;
+    }
+    isLoadingRef.current = true;
 
     if (showLoadingOverlay) {
       setLoading(true);
@@ -668,6 +675,11 @@ export function LayeredArchitectureView() {
         setLoading(false);
       }
       isLoadingRef.current = false;
+      const pendingReload = pendingReloadRef.current;
+      if (pendingReload) {
+        pendingReloadRef.current = null;
+        void loadData(pendingReload);
+      }
     }
   }, [workspaceId, themeMode, themePalette, cytoscapeStyles]); // workspaceId/테마 변경 시 재구성
 

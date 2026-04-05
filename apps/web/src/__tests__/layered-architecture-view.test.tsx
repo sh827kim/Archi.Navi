@@ -136,6 +136,14 @@ function createFetchMock() {
   };
 }
 
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((res) => {
+    resolve = res;
+  });
+  return { promise, resolve };
+}
+
 class FakeEventSource {
   static instances: FakeEventSource[] = [];
 
@@ -269,6 +277,82 @@ describe('LayeredArchitectureView SSE refresh', () => {
 
     await waitFor(() => {
       expect(getObjectFetchCount()).toBeGreaterThan(before);
+    });
+  });
+
+  it('초기 graph load가 진행 중일 때 theme가 바뀌면 완료 직후 재로드를 큐잉해야 한다', async () => {
+    const firstObjectsResponse = deferred<Response>();
+    let objectFetchCount = 0;
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.startsWith('/api/layers?')) {
+        return Promise.resolve(jsonResponse([
+          {
+            id: 'layer-1',
+            name: 'application',
+            displayName: 'Application',
+            color: '#3b82f6',
+            sortOrder: 0,
+            isEnabled: true,
+          },
+        ]));
+      }
+      if (url.startsWith('/api/layers/assignments?')) {
+        return Promise.resolve(jsonResponse([{ objectId: 'svc-1', layerId: 'layer-1' }]));
+      }
+      if (url.startsWith('/api/objects?')) {
+        objectFetchCount += 1;
+        if (objectFetchCount === 1) {
+          return firstObjectsResponse.promise;
+        }
+        return Promise.resolve(jsonResponse([
+          {
+            id: 'svc-1',
+            name: 'orders',
+            displayName: 'Orders',
+            objectType: 'service',
+            granularity: 'COMPOUND',
+            parentId: null,
+            depth: 0,
+          },
+        ]));
+      }
+      if (url.startsWith('/api/object-tags?')) {
+        return Promise.resolve(jsonResponse({}));
+      }
+      if (url.startsWith('/api/rollups?')) {
+        return Promise.resolve(jsonResponse({ edges: [] }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    const { rerender } = render(<LayeredArchitectureView />);
+
+    await waitFor(() => {
+      expect(objectFetchCount).toBe(1);
+    });
+
+    themeState.resolvedTheme = 'light';
+    rerender(<LayeredArchitectureView />);
+
+    await act(async () => {
+      firstObjectsResponse.resolve(jsonResponse([
+        {
+          id: 'svc-1',
+          name: 'orders',
+          displayName: 'Orders',
+          objectType: 'service',
+          granularity: 'COMPOUND',
+          parentId: null,
+          depth: 0,
+        },
+      ]));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => {
+      expect(objectFetchCount).toBeGreaterThan(1);
     });
   });
 });
