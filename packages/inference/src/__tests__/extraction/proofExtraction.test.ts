@@ -451,6 +451,93 @@ describe('proof extraction', () => {
     expect(transforms[0]?.evidenceIds).toEqual([expect.stringMatching(/config:.*application\.yml#orders$/)]);
   });
 
+  it('alias binding 재추출 시 동일 alias key의 이전 ACTIVE binding을 SUPERSEDED로 전환해야 한다', async () => {
+    await insertObject(db, { objectType: 'service', name: 'gateway' });
+    const orderServiceId = await insertObject(db, { objectType: 'service', name: 'order-service' });
+    const paymentServiceId = await insertObject(db, { objectType: 'service', name: 'payment-service' });
+
+    writeFileSync(
+      join(repoRoot, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: gateway',
+        'clients:',
+        '  order-service:',
+        '    base-url: http://order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+    await extractAliasBindingsFromConfig(db, { workspaceId, repoRoot, runId: 'run-alias-v1' });
+
+    writeFileSync(
+      join(repoRoot, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: gateway',
+        'clients:',
+        '  order-service:',
+        '    base-url: http://payment-service',
+      ].join('\n'),
+      'utf-8',
+    );
+    await extractAliasBindingsFromConfig(db, { workspaceId, repoRoot, runId: 'run-alias-v2' });
+
+    const bindings = await db
+      .select()
+      .from(aliasBindings)
+      .where(and(eq(aliasBindings.workspaceId, workspaceId), eq(aliasBindings.aliasKey, 'clients.order-service.base-url')));
+    expect(bindings).toHaveLength(2);
+
+    const activeBindings = bindings.filter((binding) => binding.status === 'ACTIVE');
+    expect(activeBindings).toHaveLength(1);
+    expect(activeBindings[0]?.resolvedServiceId).toBe(paymentServiceId);
+    expect(bindings.some((binding) => binding.status === 'SUPERSEDED' && binding.resolvedServiceId === orderServiceId)).toBe(true);
+  });
+
+  it('route transform 재추출 시 config에서 사라진 이전 transform을 정리해야 한다', async () => {
+    await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    await insertObject(db, { objectType: 'service', name: 'order-service' });
+
+    writeFileSync(
+      join(repoRoot, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    orders:',
+        '      path: /api/orders/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+    await extractRouteTransformsFromConfig(db, { workspaceId, repoRoot, runId: 'run-route-v1' });
+
+    writeFileSync(
+      join(repoRoot, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    payments:',
+        '      path: /api/payments/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+    await extractRouteTransformsFromConfig(db, { workspaceId, repoRoot, runId: 'run-route-v2' });
+
+    const transforms = await db.select().from(routeTransforms).where(eq(routeTransforms.workspaceId, workspaceId));
+    expect(transforms).toHaveLength(1);
+    expect(transforms[0]?.matchPath).toBe('/api/payments/**');
+    expect(transforms[0]?.evidenceIds).toEqual([expect.stringMatching(/config:.*application\.yml#payments$/)]);
+  });
+
   it('custom gateway plugin은 supportsFile로 기본 파일명 밖에서도 route transform을 추출할 수 있어야 한다', async () => {
     await insertObject(db, { objectType: 'service', name: 'edge-gateway' });
     await insertObject(db, { objectType: 'service', name: 'order-service' });

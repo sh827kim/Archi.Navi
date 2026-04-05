@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, isNull } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { aliasBindings, codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -158,18 +158,48 @@ async function upsertAliasBinding(
     updatedAt: new Date(),
   };
 
-  if (existing[0]) {
-    await db.update(aliasBindings).set(payload).where(eq(aliasBindings.id, existing[0].id));
-    return;
+  const existingId = existing[0]?.id ?? null;
+  let currentBindingId = existingId;
+  if (existingId) {
+    await db.update(aliasBindings).set(payload).where(eq(aliasBindings.id, existingId));
+  } else {
+    currentBindingId = generateId();
+    await db.insert(aliasBindings).values({
+      id: currentBindingId,
+      workspaceId: input.workspaceId,
+      createdRunId: normalizeOptionalUuid(input.runId),
+      sourceHash,
+      ...payload,
+    });
   }
 
-  await db.insert(aliasBindings).values({
-    id: generateId(),
-    workspaceId: input.workspaceId,
-    createdRunId: normalizeOptionalUuid(input.runId),
-    sourceHash,
-    ...payload,
-  });
+  const ownerServicePredicate = input.ownerServiceId
+    ? eq(aliasBindings.ownerServiceId, input.ownerServiceId)
+    : isNull(aliasBindings.ownerServiceId);
+  const conflictingBindings = await db
+    .select({ id: aliasBindings.id })
+    .from(aliasBindings)
+    .where(
+      and(
+        eq(aliasBindings.workspaceId, input.workspaceId),
+        eq(aliasBindings.bindingKind, input.bindingKind),
+        ownerServicePredicate,
+        eq(aliasBindings.aliasKey, input.aliasKey),
+        eq(aliasBindings.status, 'ACTIVE'),
+      ),
+    );
+
+  for (const binding of conflictingBindings) {
+    if (binding.id === currentBindingId) continue;
+    await db
+      .update(aliasBindings)
+      .set({
+        status: 'SUPERSEDED',
+        updatedRunId: normalizeOptionalUuid(input.runId),
+        updatedAt: new Date(),
+      })
+      .where(eq(aliasBindings.id, binding.id));
+  }
 }
 
 export async function extractAliasBindingsFromCodeSignals(

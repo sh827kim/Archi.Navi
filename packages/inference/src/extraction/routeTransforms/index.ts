@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { relative } from 'node:path';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { objects, routeTransforms } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
@@ -164,23 +164,7 @@ async function upsertRouteTransform(
     evidenceIds: string[];
   },
 ): Promise<void> {
-  const sourceHash = stableHash([
-    input.gatewayKind,
-    input.ownerServiceId ?? '',
-    input.matchHost ?? '',
-    input.matchPath,
-    input.matchMode,
-    input.stripPrefixCount ?? '',
-    input.prependPrefix ?? '',
-    input.rewriteRegex ?? '',
-    input.rewriteReplacement ?? '',
-    input.pathCapturePolicy ?? '',
-    input.routeMountPrefix ?? '',
-    input.targetServiceHint ?? '',
-    input.targetHostAlias ?? '',
-    input.targetPathBaseHint ?? '',
-    input.priority,
-  ]);
+  const sourceHash = buildRouteTransformSourceHash(input);
 
   const existing = await db
     .select({ id: routeTransforms.id })
@@ -221,6 +205,69 @@ async function upsertRouteTransform(
     sourceHash,
     ...payload,
   });
+}
+
+function buildRouteTransformSourceHash(input: {
+  gatewayKind: string;
+  ownerServiceId: string | null;
+  matchHost: string | null;
+  matchPath: string;
+  matchMode: 'exact' | 'prefix' | 'regex';
+  prependPrefix: string | null;
+  rewriteRegex: string | null;
+  rewriteReplacement: string | null;
+  pathCapturePolicy: string | null;
+  routeMountPrefix: string | null;
+  targetServiceHint: string | null;
+  targetHostAlias: string | null;
+  targetPathBaseHint: string | null;
+  priority: number;
+  stripPrefixCount: number | null;
+}): string {
+  return stableHash([
+    input.gatewayKind,
+    input.ownerServiceId ?? '',
+    input.matchHost ?? '',
+    input.matchPath,
+    input.matchMode,
+    input.stripPrefixCount ?? '',
+    input.prependPrefix ?? '',
+    input.rewriteRegex ?? '',
+    input.rewriteReplacement ?? '',
+    input.pathCapturePolicy ?? '',
+    input.routeMountPrefix ?? '',
+    input.targetServiceHint ?? '',
+    input.targetHostAlias ?? '',
+    input.targetPathBaseHint ?? '',
+    input.priority,
+  ]);
+}
+
+async function pruneObsoleteConfigRouteTransforms(
+  db: DbClient,
+  input: {
+    workspaceId: string;
+    activeSourceHashes: Set<string>;
+  },
+): Promise<void> {
+  const existing = await db
+    .select({ id: routeTransforms.id, sourceHash: routeTransforms.sourceHash, evidenceIds: routeTransforms.evidenceIds })
+    .from(routeTransforms)
+    .where(eq(routeTransforms.workspaceId, input.workspaceId));
+
+  const obsoleteIds = existing
+    .filter((row) => {
+      const evidenceIds = Array.isArray(row.evidenceIds)
+        ? row.evidenceIds.filter((entry): entry is string => typeof entry === 'string')
+        : [];
+      const isConfigDerived = evidenceIds.some((evidenceId) => evidenceId.startsWith('config:'));
+      if (!isConfigDerived) return false;
+      return !input.activeSourceHashes.has(row.sourceHash);
+    })
+    .map((row) => row.id);
+
+  if (obsoleteIds.length === 0) return;
+  await db.delete(routeTransforms).where(inArray(routeTransforms.id, obsoleteIds));
 }
 
 function trimWildcardPath(path: string): string {
@@ -375,6 +422,7 @@ export async function extractRouteTransformsFromConfig(
   const serviceIdByName = await loadServiceIdByName(db, options.workspaceId);
   const plugins = resolveGatewayRouteTransformPlugins(options.plugins);
   const discoveredFiles = findGatewayRouteCandidateFiles(options.repoRoot, plugins);
+  const activeSourceHashes = new Set<string>();
 
   let routeTransformCount = 0;
   for (const filePath of discoveredFiles) {
@@ -421,10 +469,34 @@ export async function extractRouteTransformsFromConfig(
           stripPrefixCount: normalizedRoute.stripPrefixCount,
           evidenceIds: normalizedRoute.evidenceIds,
         });
+        activeSourceHashes.add(
+          buildRouteTransformSourceHash({
+            gatewayKind: normalizedRoute.gatewayKind,
+            ownerServiceId,
+            matchHost: normalizedRoute.matchHost,
+            matchPath: normalizedRoute.matchPath,
+            matchMode: normalizedRoute.matchMode,
+            stripPrefixCount: normalizedRoute.stripPrefixCount,
+            prependPrefix: normalizedRoute.prependPrefix,
+            rewriteRegex: normalizedRoute.rewriteRegex,
+            rewriteReplacement: normalizedRoute.rewriteReplacement,
+            pathCapturePolicy: normalizedRoute.pathCapturePolicy,
+            routeMountPrefix: normalizedRoute.routeMountPrefix,
+            targetServiceHint: normalizedRoute.targetServiceHint,
+            targetHostAlias: normalizedRoute.targetHostAlias,
+            targetPathBaseHint: normalizedRoute.targetPathBaseHint,
+            priority: normalizedRoute.priority,
+          }),
+        );
         routeTransformCount += 1;
       }
     }
   }
+
+  await pruneObsoleteConfigRouteTransforms(db, {
+    workspaceId: options.workspaceId,
+    activeSourceHashes,
+  });
 
   return {
     routeTransformCount,
