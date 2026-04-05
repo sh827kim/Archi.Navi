@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SMART_FRONTIER_REASONS,
+  SMART_FRONTIER_REASONS_SUPPORTED,
   buildDefaultSmartProofConfig,
   buildEmptySmartModeSummary,
   normalizeSmartProofConfig,
@@ -153,5 +155,11 @@ describe('smartProofTypes', () => {
     expect(resolveSmartProofDecision(config, 0.5)).toBe('PENDING_REVIEW');
     expect(resolveSmartProofDecision(config, 0.51)).toBe('PENDING_REVIEW');
     expect(resolveSmartProofDecision(config, 0.49)).toBe('SKIPPED');
+  });
+
+  it('SMART_FRONTIER_REASONS가 공개 지원 reason 집합과 일치해야 한다', () => {
+    expect(SMART_FRONTIER_REASONS).toEqual(SMART_FRONTIER_REASONS_SUPPORTED);
+    expect(SMART_FRONTIER_REASONS).toContain('METHOD_UNKNOWN');
+    expect(SMART_FRONTIER_REASONS).not.toContain('PROVIDER_SERVICE_AMBIGUOUS');
   });
 });

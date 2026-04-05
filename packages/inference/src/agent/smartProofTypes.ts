@@ -1,14 +1,5 @@
-export const SMART_FRONTIER_REASONS = [
-  'HOST_ALIAS_UNRESOLVED',
-  'CONFIG_BINDING_MISSING',
-  'ROUTE_FAMILY_DERIVATION_EMPTY',
-  'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
-  'PROVIDER_SERVICE_AMBIGUOUS',
-  'ENDPOINT_MATCH_AMBIGUOUS',
-] as const;
-
-export type SmartFrontierReason = (typeof SMART_FRONTIER_REASONS)[number];
-
+// 공개 계약은 resolver에서 실제 지원 가능한 frontier reason과 일치시킨다.
+// NOTE: PROVIDER_SERVICE_AMBIGUOUS는 현재 Smart resolver 미지원/미구현 이유로 노출하지 않는다.
 export const SMART_FRONTIER_REASONS_SUPPORTED = [
   'HOST_ALIAS_UNRESOLVED',
   'CONFIG_BINDING_MISSING',
@@ -17,6 +8,10 @@ export const SMART_FRONTIER_REASONS_SUPPORTED = [
   'METHOD_UNKNOWN',
   'ENDPOINT_MATCH_AMBIGUOUS',
 ] as const;
+
+export const SMART_FRONTIER_REASONS = SMART_FRONTIER_REASONS_SUPPORTED;
+
+export type SmartFrontierReason = (typeof SMART_FRONTIER_REASONS)[number];
 
 export type SupportedSmartFrontierReason = (typeof SMART_FRONTIER_REASONS_SUPPORTED)[number];
 
