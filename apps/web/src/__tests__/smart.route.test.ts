@@ -325,6 +325,33 @@ describe('/api/inference/smart', () => {
     });
   });
 
+  it('POST는 smart generator가 없으면 run을 생성하지 않고 BAD_REQUEST를 반환해야 한다', async () => {
+    const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-no-model-'));
+    getDbMock.mockResolvedValue(createDbMock());
+    getInferenceModelMock.mockReturnValue(null);
+
+    const response = await POST(new Request('http://localhost/api/inference/smart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        repoRoots: [repoRoot],
+        useServiceMetadataPaths: false,
+        smartProof: true,
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(createInferenceRunMock).not.toHaveBeenCalled();
+    expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    await expect(response.json()).resolves.toMatchObject({
+      success: false,
+      error: {
+        code: 'SMART_MODEL_NOT_CONFIGURED',
+      },
+    });
+  });
+
   it('GET은 proof summary를 우선 반환해야 한다', async () => {
     getDbMock.mockResolvedValue({});
     getInferenceRunDetailMock.mockResolvedValue({

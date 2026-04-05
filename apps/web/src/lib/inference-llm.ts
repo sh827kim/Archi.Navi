@@ -18,6 +18,7 @@ import type {
   DomainLabelContext,
   DomainLabelSuggestion,
   SmartPatchProposal,
+  SmartContradictionChallengeProposal,
   SmartProviderServiceSelectionProposal,
   SmartSummaryEnhancementProposal,
 } from '@archi-navi/inference';
@@ -141,6 +142,15 @@ const smartSummaryEnhancementProposalSchema = z.object({
   patchRationale: z.string().nullable().optional(),
 });
 
+const smartContradictionChallengeProposalSchema = z.object({
+  patchType: z.literal('contradiction_challenge'),
+  shouldChallenge: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  challengeReasons: z.array(z.string()),
+  expectedAction: z.enum(['reopen_frontier']).nullable(),
+});
+
 const smartPatchProposalSchema = z.discriminatedUnion('patchType', [
   smartAliasBindingProposalSchema,
   smartRouteTransformProposalSchema,
@@ -148,6 +158,7 @@ const smartPatchProposalSchema = z.discriminatedUnion('patchType', [
   smartMethodPathHintProposalSchema,
   smartProviderServiceSelectionProposalSchema,
   smartSummaryEnhancementProposalSchema,
+  smartContradictionChallengeProposalSchema,
 ]);
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {

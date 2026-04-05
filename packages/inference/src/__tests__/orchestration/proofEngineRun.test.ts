@@ -219,4 +219,214 @@ describe('proofEngineRun', () => {
       CONFIG_BINDING_MISSING: 1,
     });
   });
+
+  it('cross_proof_correlation accepted call도 frontierResolvedByLlm로 집계해야 한다', async () => {
+    const workspaceId = generateId();
+    const runId = generateId();
+    const serviceId = generateId();
+    const intentId = generateId();
+    const proofStateId = generateId();
+    const patchId = generateId();
+
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      name: 'Smart Correlation Summary Test',
+    });
+    await db.insert(inferenceRuns).values({
+      id: runId,
+      workspaceId,
+      triggerType: 'MANUAL',
+      status: 'SUCCEEDED',
+      requestedModes: ['config'],
+      requestedIncremental: true,
+      sourceSummary: {},
+      stats: {
+        requestedSmartProof: {
+          enabled: true,
+        },
+      },
+      warnings: [],
+      errors: [],
+    });
+    await db.insert(objects).values({
+      id: serviceId,
+      workspaceId,
+      objectType: 'service',
+      name: 'gateway',
+      path: 'gateway',
+    });
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      createdRunId: runId,
+      updatedRunId: runId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: null,
+      methodHint: 'GET',
+      externalPathHint: '/api/orders',
+      hostHint: 'ORDER_API',
+      configKeys: ['client.orders.url'],
+      intentHash: 'smart-correlation-intent',
+      anchorHash: 'smart-correlation-anchor',
+    });
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: serviceId,
+      sourceFunctionId: null,
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.4,
+      frontierCode: 'HOST_ALIAS_UNRESOLVED',
+    });
+    await db.insert(proofPatches).values({
+      id: patchId,
+      workspaceId,
+      proofStateId,
+      patchType: 'alias_binding',
+      payload: {},
+      sourceKind: 'smart_agent',
+      validationStatus: 'ACCEPTED',
+      evidenceIds: [],
+    });
+    await db.insert(smartProofLlmCalls).values({
+      id: generateId(),
+      workspaceId,
+      runId,
+      proofStateId,
+      callCategory: 'cross_proof_correlation',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      model: 'mock-model',
+      inputTokens: 11,
+      outputTokens: 5,
+      promptHash: 'corr-a',
+      responseHash: 'corr-b',
+      promptSnapshot: {},
+      responseSnapshot: {},
+      accepted: true,
+      patchId,
+    });
+
+    const summary = await buildProofEngineSummaryForRun(db, {
+      workspaceId,
+      runId,
+    });
+
+    expect(summary.smartMode).toMatchObject({
+      enabled: true,
+      llmCallCount: 1,
+      autoAcceptedCount: 1,
+      frontierResolvedByLlm: 1,
+    });
+    expect(summary.smartMode.resolutionByCategory).toMatchObject({
+      cross_proof_correlation: 1,
+    });
+  });
+
+  it('contradiction_detection accepted call은 contradictionsChallenged로 집계해야 한다', async () => {
+    const workspaceId = generateId();
+    const runId = generateId();
+    const serviceId = generateId();
+    const intentId = generateId();
+    const proofStateId = generateId();
+    const patchId = generateId();
+
+    await db.insert(workspaces).values({
+      id: workspaceId,
+      name: 'Smart Contradiction Summary Test',
+    });
+    await db.insert(inferenceRuns).values({
+      id: runId,
+      workspaceId,
+      triggerType: 'MANUAL',
+      status: 'SUCCEEDED',
+      requestedModes: ['config'],
+      requestedIncremental: true,
+      sourceSummary: {},
+      stats: {
+        requestedSmartProof: {
+          enabled: true,
+        },
+      },
+      warnings: [],
+      errors: [],
+    });
+    await db.insert(objects).values({
+      id: serviceId,
+      workspaceId,
+      objectType: 'service',
+      name: 'gateway',
+      path: 'gateway',
+    });
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      createdRunId: runId,
+      updatedRunId: runId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      intentHash: 'smart-contradiction-intent',
+      anchorHash: 'smart-contradiction-anchor',
+    });
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: serviceId,
+    });
+    await db.insert(proofPatches).values({
+      id: patchId,
+      workspaceId,
+      proofStateId,
+      patchType: 'contradiction_challenge',
+      payload: {
+        challengeReasons: ['LOW_CONFIDENCE_FALSE_POSITIVE'],
+        expectedAction: 'reopen_frontier',
+      },
+      sourceKind: 'smart_agent',
+      validationStatus: 'ACCEPTED',
+      evidenceIds: [],
+    });
+    await db.insert(smartProofLlmCalls).values({
+      id: generateId(),
+      workspaceId,
+      runId,
+      proofStateId,
+      callCategory: 'contradiction_detection',
+      frontierReason: 'LOW_CONFIDENCE_CLOSED_ATOMIC',
+      model: 'mock-model',
+      inputTokens: 8,
+      outputTokens: 3,
+      promptHash: 'contra-a',
+      responseHash: 'contra-b',
+      promptSnapshot: {},
+      responseSnapshot: {},
+      accepted: true,
+      patchId,
+    });
+
+    const summary = await buildProofEngineSummaryForRun(db, {
+      workspaceId,
+      runId,
+    });
+
+    expect(summary.smartMode).toMatchObject({
+      enabled: true,
+      llmCallCount: 1,
+      autoAcceptedCount: 1,
+      contradictionsChallenged: 1,
+      frontierResolvedByLlm: 0,
+    });
+    expect(summary.smartMode.resolutionByCategory).toMatchObject({
+      contradiction_detection: 1,
+    });
+  });
 });

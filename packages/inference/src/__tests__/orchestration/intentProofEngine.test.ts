@@ -1993,6 +1993,75 @@ describe('intent proof engine', () => {
     expect(patchResult.resolution?.targetObjectId).toBe(endpointA);
   });
 
+  it('contradiction_challenge patch는 low-confidence CLOSED_ATOMIC proof를 frontier로 재분류해야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'order-api' });
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /orders/{id}',
+      parentId: providerServiceId,
+      metadata: { method: 'GET', path: '/orders/{id}' },
+    });
+
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: serviceId,
+      aliasKey: 'client.orders.url',
+      aliasValue: 'ORDER_API',
+      resolvedServiceId: providerServiceId,
+      sourceHash: 'alias-order-api-contradiction',
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      hostHint: 'ORDER_API',
+      configKeys: ['client.orders.url'],
+      intentHash: 'intent-http-contradiction-challenge',
+      anchorHash: 'anchor-http-contradiction-challenge',
+    });
+
+    const initial = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(initial.status).toBe('CLOSED_ATOMIC');
+    expect(initial.targetObjectId).toBe(endpointId);
+
+    await db
+      .update(proofStates)
+      .set({
+        confidence: 0.42,
+      })
+      .where(eq(proofStates.id, initial.proofStateId));
+
+    const patchResult = await validateAndApplyProofPatch(db, {
+      workspaceId,
+      proofStateId: initial.proofStateId,
+      patchType: 'contradiction_challenge',
+      payload: {
+        challengeReasons: ['LOW_CONFIDENCE_FALSE_POSITIVE'],
+        expectedAction: 'reopen_frontier',
+      },
+      sourceKind: 'smart_agent',
+    });
+
+    expect(patchResult.validationStatus).toBe('ACCEPTED');
+    expect(patchResult.resolution?.status).toBe('FRONTIER');
+    expect(patchResult.resolution?.frontierReason).toBe('SMART_CONTRADICTION_CHALLENGED');
+
+    const [frontier] = await db
+      .select()
+      .from(proofFrontiers)
+      .where(eq(proofFrontiers.proofStateId, initial.proofStateId))
+      .limit(1);
+    expect(frontier?.frontierReason).toBe('SMART_CONTRADICTION_CHALLENGED');
+  });
+
   it('method_path_hint patch는 METHOD_UNKNOWN frontier를 닫고 target endpoint를 고정해야 한다', async () => {
     const providerServiceId = await insertObject(db, { objectType: 'service', name: 'catalog-api' });
     const endpointId = await insertObject(db, {

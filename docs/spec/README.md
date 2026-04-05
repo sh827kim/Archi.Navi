@@ -49,6 +49,9 @@
 - [46-ai-architecture-assistant-scope-expansion-spec.md](./46-ai-architecture-assistant-scope-expansion-spec.md)
 - [52-embedded-postgres-runtime-migration-spec.md](./52-embedded-postgres-runtime-migration-spec.md)
 
+### Current Architecture Direction
+- [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)
+
 ## Proposed
 
 ### Active Architecture Direction
@@ -56,7 +59,6 @@
 - [49-intent-centric-proof-engine-state-model-spec.md](./49-intent-centric-proof-engine-state-model-spec.md)
 - [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md)
 - [51-intent-centric-proof-engine-adoption-plan-spec.md](./51-intent-centric-proof-engine-adoption-plan-spec.md)
-- [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)
 
 ### Backlog / Productivity
 - [17-inter-procedural-ast-spec.md](./17-inter-procedural-ast-spec.md)

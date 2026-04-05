@@ -1,6 +1,6 @@
 # 53. Smart Proof Engine Escalation (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P0
 상위 문서:
 - [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
@@ -274,6 +274,16 @@ Smart의 실행 순서는 아래를 따른다.
 - 개별 frontier보다 강한 공통 패턴 증거가 있어야 한다
 - batch 결과도 proof별 patch로 환원 가능해야 한다
 
+Phase 5 Category D 1차(최소 도입) 범위:
+
+- 대상 frontier는 `HOST_ALIAS_UNRESOLVED`, `CONFIG_BINDING_MISSING`만 허용한다.
+- grouping key는 `ownerServiceId + normalized(hostHints) + normalized(configKeys)`를 사용한다.
+- 그룹당 LLM 호출은 1회로 제한한다.
+- 새 patch type은 추가하지 않고 기존 `alias_binding`만 재사용한다.
+- `crossProofCorrelation=true`일 때만 동작한다.
+- accepted patch는 대표 proofState에 적용하고, 같은 run 안에서 grouped frontier 감소를 관측한다.
+- DB/message frontier correlation은 1차 범위에서 제외한다.
+
 ### 8.5 Category E. Contradiction Detection
 
 목적:
@@ -284,6 +294,14 @@ Smart의 실행 순서는 아래를 따른다.
 
 - proof를 직접 reject하지 않고 `CHALLENGE`를 제안한다
 - challenge 이후 상태 전이는 deterministic 규칙에 따라 수행한다
+
+Phase 6 Category E 1차 범위:
+
+- proposal/patch type은 `contradiction_challenge`를 사용한다.
+- 대상은 현재 run에서 관측된 `confidence < 0.65`의 `CLOSED_ATOMIC` proof로 제한한다.
+- `shouldChallenge=true`일 때만 patch를 제안한다.
+- accepted challenge는 proof를 직접 reject하지 않고 deterministic하게 `SMART_CONTRADICTION_CHALLENGED` frontier로 되돌린다.
+- retry strategy는 `manual_review`를 사용한다.
 
 ---
 
@@ -488,9 +506,13 @@ run summary는 최소한 아래 질문에 답할 수 있어야 한다.
 
 - `PROVIDER_SERVICE_AMBIGUOUS` ambiguity ranking
 
-### Phase 5. Category D / E
+### Phase 5. Category D
 
 - correlation batch resolution
+- 반복 alias/config frontier의 cross-proof correlation 최소 도입 (1차)
+
+### Phase 6. Category E
+
 - 저신뢰도 proof challenge
 
 ---

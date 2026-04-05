@@ -501,4 +501,36 @@ describe('proof schema migration', () => {
       }),
     ).rejects.toBeInstanceOf(Error);
   });
+
+  it('contradiction_challenge patch type을 저장할 수 있다', async () => {
+    if (!embeddedSupport.supported) return;
+    const proofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId,
+      proofType: 'http_call',
+      status: 'CLOSED_ATOMIC',
+      consumerServiceId: serviceId,
+      targetObjectId: targetId,
+      targetObjectType: 'api_endpoint',
+      confidence: 0.42,
+      closedReason: 'low-confidence closure',
+    });
+
+    await expect(
+      db.insert(proofPatches).values({
+        id: generateId(),
+        workspaceId,
+        proofStateId,
+        patchType: 'contradiction_challenge',
+        payload: {
+          challengeReasons: ['LOW_CONFIDENCE_FALSE_POSITIVE'],
+          expectedAction: 'reopen_frontier',
+        },
+        sourceKind: 'smart_agent',
+        validationStatus: 'ACCEPTED',
+      }),
+    ).resolves.not.toThrow();
+  });
 });

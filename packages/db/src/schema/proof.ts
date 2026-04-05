@@ -356,7 +356,7 @@ export const proofPatches = pgTable(
   (table) => [
     check(
       'chk_proof_patches_type',
-      sql`${table.patchType} in ('alias_binding', 'function_summary_patch', 'route_transform_patch', 'endpoint_disambiguation', 'method_path_hint', 'provider_service_selection', 'reject_patch')`,
+      sql`${table.patchType} in ('alias_binding', 'function_summary_patch', 'route_transform_patch', 'endpoint_disambiguation', 'method_path_hint', 'provider_service_selection', 'contradiction_challenge', 'reject_patch')`,
     ),
     check(
       'chk_proof_patches_source_kind',

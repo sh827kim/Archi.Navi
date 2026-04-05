@@ -309,11 +309,18 @@ export async function buildProofEngineSummaryForRun(
     const patchStatus = row.patchId ? smartPatchStatusById.get(row.patchId) ?? null : null;
     if (patchStatus === 'ACCEPTED') {
       smartMode.autoAcceptedCount += 1;
-      if (row.callCategory === 'frontier_resolution' || row.callCategory === 'ambiguity_resolution') {
+      if (
+        row.callCategory === 'frontier_resolution'
+        || row.callCategory === 'ambiguity_resolution'
+        || row.callCategory === 'cross_proof_correlation'
+      ) {
         smartMode.frontierResolvedByLlm += 1;
       }
       if (row.callCategory === 'pre_resolution_enhancement') {
         smartMode.summaryEnhancedByLlm += 1;
+      }
+      if (row.callCategory === 'contradiction_detection') {
+        smartMode.contradictionsChallenged += 1;
       }
     } else if (patchStatus === 'PENDING') {
       smartMode.pendingReviewCount += 1;

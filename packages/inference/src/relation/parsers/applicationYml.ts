@@ -432,7 +432,7 @@ function parseSpringCloudGatewayPathPredicate(predicates: string[]): string | nu
     const normalized = predicate.trim();
     if (!normalized.startsWith('Path=')) continue;
     const path = normalized.slice('Path='.length).trim();
-    if (!path || path.includes('{') || path.includes('}')) continue;
+    if (!path) continue;
     return path;
   }
   return null;

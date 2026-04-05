@@ -189,4 +189,37 @@ describe('createGenerateBoostSuggestionFn', () => {
       },
     });
   });
+
+  it('smart resolution generator는 contradiction_challenge 응답도 그대로 변환해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        patchType: 'contradiction_challenge',
+        shouldChallenge: true,
+        confidence: 0.84,
+        reasoning: 'closed proof is too weak and should be reopened',
+        challengeReasons: ['LOW_CONFIDENCE_FALSE_POSITIVE'],
+        expectedAction: 'reopen_frontier',
+      },
+      usage: {
+        inputTokens: 42,
+        outputTokens: 12,
+      },
+    });
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('review this low-confidence proof')).resolves.toMatchObject({
+      model: 'gpt-4o',
+      promptTokens: 42,
+      completionTokens: 12,
+      object: {
+        patchType: 'contradiction_challenge',
+        shouldChallenge: true,
+        expectedAction: 'reopen_frontier',
+      },
+    });
+  });
 });

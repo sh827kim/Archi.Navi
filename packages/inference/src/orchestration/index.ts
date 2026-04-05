@@ -137,3 +137,14 @@ export type {
   SmartProviderServiceSelectionProposal,
   SupportedSmartAmbiguityReason,
 } from '../agent/smartAmbiguityResolver';
+export {
+  buildSmartContradictionPrompt,
+  loadSmartContradictionCandidates,
+  resolveSmartContradiction,
+} from '../agent/smartContradictionResolver';
+export type {
+  ResolveSmartContradictionInput,
+  ResolveSmartContradictionResult,
+  SmartContradictionCandidate,
+  SmartContradictionChallengeProposal,
+} from '../agent/smartContradictionResolver';

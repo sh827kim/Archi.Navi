@@ -1353,6 +1353,7 @@ describe('inference orchestration runs', () => {
     const run = await createInferenceRun(db, {
       workspaceId,
       modes: ['config'],
+      incremental: false,
       smartProof: {
         enabled: true,
         categories: {
@@ -1633,8 +1634,8 @@ describe('inference orchestration runs', () => {
       targetObjectId: null,
       relationType: null,
     });
-
     writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
     const run = await createInferenceRun(db, {
       workspaceId,
       modes: ['config'],
@@ -2636,10 +2637,10 @@ describe('inference orchestration runs', () => {
       relationType: null,
     });
 
-    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
     const run = await createInferenceRun(db, {
       workspaceId,
       modes: ['config'],
+      incremental: false,
       smartProof: {
         enabled: true,
         categories: {
@@ -2814,10 +2815,10 @@ describe('inference orchestration runs', () => {
       };
     });
 
-    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
     const run = await createInferenceRun(db, {
       workspaceId,
       modes: ['config'],
+      incremental: false,
       smartProof: {
         enabled: true,
         categories: {
@@ -2875,6 +2876,687 @@ describe('inference orchestration runs', () => {
     expect(smartMode['llmCallCount']).toBe(1);
     const events = detail.events.filter((event) => event.eventType === 'SMART_PROOF_PASS');
     expect(events.some((event) => (event.payload as Record<string, unknown>)['outcome'] === 'budget_exhausted')).toBe(true);
+  });
+
+  it('smart frontier는 budget 제한이 있어도 높은 priority부터 처리해야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const secondIntentId = generateId();
+    const lowPriorityProviderServiceId = await insertObject(db, {
+      objectType: 'service',
+      name: 'billing-service',
+    });
+    const lowPriorityProofStateId = generateId();
+    const highPriorityProofStateId = generateId();
+
+    await db.insert(interactionIntents).values({
+      id: secondIntentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: seeded.consumerServiceId,
+      sourceFunctionId: null,
+      methodHint: 'GET',
+      externalPathHint: '/api/billing',
+      hostHint: 'billing_service',
+      configKeys: ['billing.url'],
+      intentHash: 'intent-smart-priority-billing',
+      anchorHash: 'anchor-smart-priority-billing',
+    });
+
+    await db.insert(proofStates).values([
+      {
+        id: lowPriorityProofStateId,
+        workspaceId,
+        intentId: secondIntentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/billing',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+      {
+        id: highPriorityProofStateId,
+        workspaceId,
+        intentId: seeded.intentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: seeded.sourceFunctionId,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/orders/123',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+    ]);
+
+    await db.insert(proofFrontiers).values([
+      {
+        proofStateId: lowPriorityProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        priority: 10,
+        detail: {
+          configKeys: ['billing.url'],
+          hostHints: ['BILLING_SERVICE'],
+        },
+      },
+      {
+        proofStateId: highPriorityProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        priority: 90,
+        detail: {
+          configKeys: ['client.orders.url'],
+          hostHints: ['ORDER_SERVICE'],
+        },
+      },
+    ]);
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (_dbClient, input) => {
+      if (input.intentId === seeded.intentId) {
+        return {
+          proofStateId: highPriorityProofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'HOST_ALIAS_UNRESOLVED',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      if (input.intentId === secondIntentId) {
+        return {
+          proofStateId: lowPriorityProofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'HOST_ALIAS_UNRESOLVED',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      return {
+        proofStateId: generateId(),
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: null,
+        relationType: null,
+      };
+    });
+
+    const promptHistory: string[] = [];
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: false,
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: true,
+          ambiguityResolution: false,
+          crossProofCorrelation: false,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 1,
+          maxLlmCallsPerIntent: 5,
+          maxInputTokensPerCall: 100,
+          maxTotalTokensPerRun: 1_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.2,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async (prompt) => {
+        promptHistory.push(prompt);
+        const billingPrompt = prompt.includes('billing.url');
+        return {
+          model: 'mock-smart-model',
+          promptTokens: 16,
+          completionTokens: 6,
+          object: {
+            patchType: 'alias_binding',
+            resolved: true,
+            selectedServiceId: billingPrompt ? lowPriorityProviderServiceId : seeded.providerServiceId,
+            selectedServiceName: billingPrompt ? 'billing-service' : 'order-service',
+            confidence: 0.92,
+            reasoning: 'priority order test',
+            aliasBinding: {
+              aliasKey: billingPrompt ? 'billing.url' : 'client.orders.url',
+              aliasValue: billingPrompt ? 'BILLING_SERVICE' : 'ORDER_SERVICE',
+              bindingKind: 'property_alias',
+            },
+          },
+        };
+      },
+    });
+
+    expect(promptHistory).toHaveLength(1);
+    expect(promptHistory[0]).toContain('client.orders.url');
+    expect(promptHistory[0]).not.toContain('billing.url');
+  });
+
+  it('crossProofCorrelation=true 이면 동일 alias/config frontier 그룹당 LLM 1회만 호출해야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const secondIntentId = generateId();
+    const firstProofStateId = generateId();
+    const secondProofStateId = generateId();
+    const proofStateByIntentId = new Map<string, string>([
+      [seeded.intentId, firstProofStateId],
+      [secondIntentId, secondProofStateId],
+    ]);
+
+    await db.insert(interactionIntents).values({
+      id: secondIntentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: seeded.consumerServiceId,
+      sourceFunctionId: null,
+      methodHint: 'GET',
+      externalPathHint: '/api/orders/456',
+      hostHint: 'order_service',
+      configKeys: ['CLIENT.ORDERS.URL'],
+      intentHash: 'intent-cross-proof-2',
+      anchorHash: 'anchor-cross-proof-2',
+    });
+
+    await db.insert(proofStates).values([
+      {
+        id: firstProofStateId,
+        workspaceId,
+        intentId: seeded.intentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: seeded.sourceFunctionId,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/orders/123',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'HOST_ALIAS_UNRESOLVED',
+      },
+      {
+        id: secondProofStateId,
+        workspaceId,
+        intentId: secondIntentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: seeded.consumerServiceId,
+        sourceFunctionId: null,
+        methodResolved: 'GET',
+        externalPathResolved: '/api/orders/456',
+        routeChain: [],
+        slotState: {},
+        ambiguityCount: 0,
+        contradictionCount: 0,
+        confidence: 0.3,
+        frontierCode: 'CONFIG_BINDING_MISSING',
+      },
+    ]);
+
+    await db.insert(proofFrontiers).values([
+      {
+        proofStateId: firstProofStateId,
+        workspaceId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          hostHints: ['ORDER_SERVICE'],
+          configKeys: ['client.orders.url'],
+        },
+      },
+      {
+        proofStateId: secondProofStateId,
+        workspaceId,
+        frontierReason: 'CONFIG_BINDING_MISSING',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+        detail: {
+          hostHints: ['order_service'],
+          configKeys: ['CLIENT.ORDERS.URL'],
+        },
+      },
+    ]);
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      const proofStateId = proofStateByIntentId.get(input.intentId);
+      if (!proofStateId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      const existingAlias = await dbClient
+        .select({ id: aliasBindings.id })
+        .from(aliasBindings)
+        .where(and(eq(aliasBindings.workspaceId, workspaceId), eq(aliasBindings.ownerServiceId, seeded.consumerServiceId)))
+        .limit(1);
+
+      if (existingAlias.length > 0) {
+        await dbClient.delete(proofFrontiers).where(eq(proofFrontiers.proofStateId, proofStateId));
+        await dbClient
+          .update(proofStates)
+          .set({
+            status: 'CLOSED_ATOMIC',
+            targetObjectType: 'service',
+            targetObjectId: seeded.providerServiceId,
+            frontierCode: null,
+          })
+          .where(eq(proofStates.id, proofStateId));
+        return {
+          proofStateId,
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: seeded.providerServiceId,
+          relationType: 'http',
+        };
+      }
+
+      const [frontier] = await dbClient
+        .select({
+          frontierReason: proofFrontiers.frontierReason,
+        })
+        .from(proofFrontiers)
+        .where(eq(proofFrontiers.proofStateId, proofStateId))
+        .limit(1);
+      return {
+        proofStateId,
+        status: 'FRONTIER',
+        frontierReason: frontier?.frontierReason ?? 'HOST_ALIAS_UNRESOLVED',
+        targetObjectId: null,
+        relationType: null,
+      };
+    });
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: false,
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: false,
+          ambiguityResolution: false,
+          crossProofCorrelation: true,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 5,
+          maxLlmCallsPerIntent: 5,
+          maxInputTokensPerCall: 100,
+          maxTotalTokensPerRun: 1_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.3,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const smartGenerateFn = vi.fn(async () => ({
+      model: 'mock-smart-model',
+      promptTokens: 10,
+      completionTokens: 4,
+      object: {
+        patchType: 'alias_binding' as const,
+        resolved: true,
+        selectedServiceId: seeded.providerServiceId,
+        selectedServiceName: 'order-service',
+        confidence: 0.91,
+        reasoning: 'correlated alias/config frontier points to order-service',
+        aliasBinding: {
+          aliasKey: 'client.orders.url',
+          aliasValue: 'ORDER_SERVICE',
+          bindingKind: 'property_alias' as const,
+        },
+      },
+    }));
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn,
+    });
+    expect(smartGenerateFn).toHaveBeenCalledTimes(1);
+    const llmCalls = await db
+      .select()
+      .from(smartProofLlmCalls)
+      .where(and(eq(smartProofLlmCalls.workspaceId, workspaceId), eq(smartProofLlmCalls.callCategory, 'cross_proof_correlation')));
+    expect(llmCalls).toHaveLength(1);
+
+    const events = detail.events.filter((event) => event.eventType === 'SMART_PROOF_PASS');
+    expect(events.some((event) => (event.payload as Record<string, unknown>)['attemptedCorrelationResolverCount'] === 1)).toBe(true);
+    expect(events.some((event) => Number((event.payload as Record<string, unknown>)['correlatedFrontierReducedCount']) >= 1)).toBe(true);
+  });
+
+  it('crossProofCorrelation=true 여도 singleton alias/config frontier는 기존 frontierResolution으로 fallback 되어야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'HOST_ALIAS_UNRESOLVED',
+    });
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      frontierClass: 'ALIAS',
+      retryStrategy: 'agent_patch',
+      detail: {
+        hostHints: ['ORDER_SERVICE'],
+        configKeys: ['client.orders.url'],
+      },
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      if (input.intentId !== seeded.intentId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      const existingAlias = await dbClient
+        .select({ id: aliasBindings.id })
+        .from(aliasBindings)
+        .where(and(eq(aliasBindings.workspaceId, workspaceId), eq(aliasBindings.ownerServiceId, seeded.consumerServiceId)))
+        .limit(1);
+
+      if (existingAlias.length > 0) {
+        await dbClient.delete(proofFrontiers).where(eq(proofFrontiers.proofStateId, proofStateId));
+        await dbClient
+          .update(proofStates)
+          .set({
+            status: 'CLOSED_ATOMIC',
+            targetObjectType: 'service',
+            targetObjectId: seeded.providerServiceId,
+            frontierCode: null,
+          })
+          .where(eq(proofStates.id, proofStateId));
+        return {
+          proofStateId,
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: seeded.providerServiceId,
+          relationType: 'http',
+        };
+      }
+
+      return {
+        proofStateId,
+        status: 'FRONTIER',
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        targetObjectId: null,
+        relationType: null,
+      };
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: false,
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: true,
+          ambiguityResolution: false,
+          crossProofCorrelation: true,
+          contradictionDetection: false,
+        },
+        budget: {
+          maxLlmCallsPerRun: 5,
+          maxLlmCallsPerIntent: 5,
+          maxInputTokensPerCall: 100,
+          maxTotalTokensPerRun: 1_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.3,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const smartGenerateFn = vi.fn(async () => ({
+      model: 'mock-smart-model',
+      promptTokens: 9,
+      completionTokens: 4,
+      object: {
+        patchType: 'alias_binding' as const,
+        resolved: true,
+        selectedServiceId: seeded.providerServiceId,
+        selectedServiceName: 'order-service',
+        confidence: 0.92,
+        reasoning: 'singleton frontier still needs normal frontier resolution',
+        aliasBinding: {
+          aliasKey: 'client.orders.url',
+          aliasValue: 'ORDER_SERVICE',
+          bindingKind: 'property_alias' as const,
+        },
+      },
+    }));
+
+    await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn,
+    });
+
+    expect(smartGenerateFn).toHaveBeenCalledTimes(1);
+
+    const correlationCalls = await db
+      .select()
+      .from(smartProofLlmCalls)
+      .where(and(eq(smartProofLlmCalls.workspaceId, workspaceId), eq(smartProofLlmCalls.callCategory, 'cross_proof_correlation')));
+    expect(correlationCalls).toHaveLength(0);
+
+    const frontierCalls = await db
+      .select()
+      .from(smartProofLlmCalls)
+      .where(and(eq(smartProofLlmCalls.workspaceId, workspaceId), eq(smartProofLlmCalls.callCategory, 'frontier_resolution')));
+    expect(frontierCalls).toHaveLength(1);
+  });
+
+  it('contradictionDetection=true 이면 low-confidence CLOSED_ATOMIC proof를 challenge 대상으로 올려야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: seeded.consumerServiceId,
+      aliasKey: 'client.orders.url',
+      aliasValue: 'ORDER_SERVICE',
+      resolvedServiceId: seeded.providerServiceId,
+      sourceHash: 'alias-order-service-contradiction-run',
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      if (input.intentId !== seeded.intentId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      const existing = await dbClient
+        .select({ id: proofStates.id })
+        .from(proofStates)
+        .where(eq(proofStates.id, proofStateId))
+        .limit(1);
+
+      if (existing.length === 0) {
+        await dbClient.insert(proofStates).values({
+          id: proofStateId,
+          workspaceId,
+          intentId: seeded.intentId,
+          proofType: 'http_call',
+          status: 'CLOSED_ATOMIC',
+          consumerServiceId: seeded.consumerServiceId,
+          sourceFunctionId: seeded.sourceFunctionId,
+          providerServiceId: seeded.providerServiceId,
+          targetObjectType: 'service',
+          targetObjectId: seeded.providerServiceId,
+          methodResolved: 'GET',
+          externalPathResolved: '/api/orders/123',
+          routeChain: [],
+          slotState: {},
+          ambiguityCount: 0,
+          contradictionCount: 0,
+          confidence: 0.42,
+          confidenceBreakdown: {
+            summaryQuality: 0.4,
+            slotCompleteness: 0.55,
+            corroboration: 0.1,
+            matchSpecificity: 0.2,
+            contradictionPenalty: 0,
+            statusCap: 0.42,
+            finalConfidence: 0.42,
+          },
+        });
+      } else {
+        await dbClient
+          .update(proofStates)
+          .set({
+            status: 'CLOSED_ATOMIC',
+            targetObjectType: 'service',
+            targetObjectId: seeded.providerServiceId,
+            frontierCode: null,
+            confidence: 0.42,
+          })
+          .where(eq(proofStates.id, proofStateId));
+      }
+
+      return {
+        proofStateId,
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: seeded.providerServiceId,
+        relationType: 'http',
+      };
+    });
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: false,
+      smartProof: {
+        enabled: true,
+        categories: {
+          preResolutionEnhancement: false,
+          frontierResolution: false,
+          ambiguityResolution: false,
+          crossProofCorrelation: false,
+          contradictionDetection: true,
+        },
+        budget: {
+          maxLlmCallsPerRun: 5,
+          maxLlmCallsPerIntent: 5,
+          maxInputTokensPerCall: 100,
+          maxTotalTokensPerRun: 1_000,
+        },
+        thresholds: {
+          autoAcceptConfidence: 0.8,
+          reviewConfidence: 0.5,
+          skipConfidence: 0.3,
+        },
+      },
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 14,
+        completionTokens: 5,
+        object: {
+          patchType: 'contradiction_challenge',
+          shouldChallenge: true,
+          confidence: 0.86,
+          reasoning: 'low-confidence closure should be reopened for review',
+          challengeReasons: ['LOW_CONFIDENCE_FALSE_POSITIVE'],
+          expectedAction: 'reopen_frontier',
+        },
+      }),
+    });
+
+    const patches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.patchType, 'contradiction_challenge')));
+    expect(patches).toHaveLength(1);
+    expect(patches[0]?.validationStatus).toBe('ACCEPTED');
+
+    const llmCalls = await db
+      .select()
+      .from(smartProofLlmCalls)
+      .where(and(eq(smartProofLlmCalls.workspaceId, workspaceId), eq(smartProofLlmCalls.callCategory, 'contradiction_detection')));
+    expect(llmCalls).toHaveLength(1);
+
+    const smartMode = ((detail.run.stats as Record<string, unknown>)['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode).toMatchObject({
+      enabled: true,
+      contradictionsChallenged: 1,
+      llmCallCount: 1,
+    });
+
+    const events = detail.events.filter((event) => event.eventType === 'SMART_PROOF_PASS');
+    expect(events.some((event) => (event.payload as Record<string, unknown>)['attemptedContradictionResolverCount'] === 1)).toBe(true);
   });
 
   it('cutover artifact 실패는 warning으로만 남기고 run은 계속 완료해야 한다', async () => {

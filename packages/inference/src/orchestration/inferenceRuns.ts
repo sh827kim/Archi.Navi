@@ -35,6 +35,17 @@ import {
   resolveSmartAmbiguity,
   type SmartProviderServiceSelectionProposal,
 } from '../agent/smartAmbiguityResolver';
+import {
+  isSupportedSmartCorrelationReason,
+  loadSmartCorrelationFrontierGroups,
+  resolveSmartCorrelationGroup,
+  type SmartCorrelationAliasBindingProposal,
+} from '../agent/smartCorrelationResolver';
+import {
+  loadSmartContradictionCandidates,
+  resolveSmartContradiction,
+  type SmartContradictionChallengeProposal,
+} from '../agent/smartContradictionResolver';
 import { normalizeSmartProofConfig, type SmartProofConfig } from '../agent/smartProofTypes';
 import {
   canAffordSmartBudgetCall,
@@ -299,7 +310,11 @@ export interface ExecuteInferenceRunInput {
   workspaceId: string;
   runId: string;
   smartGenerateFn?: GenerateSmartResolutionFn<
-    SmartPatchProposal | SmartSummaryEnhancementProposal | SmartProviderServiceSelectionProposal
+    | SmartPatchProposal
+    | SmartSummaryEnhancementProposal
+    | SmartProviderServiceSelectionProposal
+    | SmartCorrelationAliasBindingProposal
+    | SmartContradictionChallengeProposal
   >;
 }
 
@@ -1259,13 +1274,22 @@ export async function executeInferenceRun(
 
     smartProof.attempted = true;
 
-    if (proofResolution.frontierCount === 0) {
+    smartProof.attemptedFrontierCount = proofResolution.frontierCount;
+    const frontierStateIds = Array.from(smartFrontierProofStateIds);
+    const contradictionCandidates = requestedSmartProof.categories.contradictionDetection
+      ? await loadSmartContradictionCandidates(db, {
+          workspaceId: input.workspaceId,
+          runId: run.id,
+        })
+      : [];
+    const hasSmartTargets = frontierStateIds.length > 0 || contradictionCandidates.length > 0;
+    if (!hasSmartTargets) {
       smartProof.skippedReason = 'NO_FRONTIERS';
       await appendRunEvent(db, {
         workspaceId: input.workspaceId,
         runId: run.id,
         eventType: 'SMART_PROOF_PASS',
-        message: 'smart proof pass를 스킵했습니다: frontier 없음',
+        message: 'smart proof pass를 스킵했습니다: Smart 대상 proof 없음',
         payload: {
           enabled: true,
           outcome: 'no_frontiers',
@@ -1275,8 +1299,6 @@ export async function executeInferenceRun(
       return;
     }
 
-    smartProof.attemptedFrontierCount = proofResolution.frontierCount;
-    const frontierStateIds = Array.from(smartFrontierProofStateIds);
     const frontierStateIntents = frontierStateIds.length > 0
       ? await db
         .select({
@@ -1307,6 +1329,7 @@ export async function executeInferenceRun(
           enabled: true,
           outcome: 'no_generator',
           attemptedFrontierCount: smartProof.attemptedFrontierCount,
+          attemptedContradictionCandidateCount: contradictionCandidates.length,
           budget: smartProof.budget,
         },
       });
@@ -1370,17 +1393,18 @@ export async function executeInferenceRun(
       }
     }
 
-    if (frontierStateIds.length === 0) {
+    if (frontierStateIds.length === 0 && contradictionCandidates.length === 0) {
       smartProof.skippedReason = 'NO_SUPPORTED_FRONTIERS';
       await appendRunEvent(db, {
         workspaceId: input.workspaceId,
         runId: run.id,
         eventType: 'SMART_PROOF_PASS',
-        message: 'smart proof pass를 스킵했습니다: 현재 run에 지원 frontier 없음',
+        message: 'smart proof pass를 스킵했습니다: 현재 run에 지원 Smart 대상 없음',
         payload: {
           enabled: true,
           outcome: 'no_supported_frontiers',
           attemptedFrontierCount: smartProof.attemptedFrontierCount,
+          attemptedContradictionCandidateCount: contradictionCandidates.length,
           budget: smartProof.budget,
         },
       });
@@ -1398,17 +1422,45 @@ export async function executeInferenceRun(
           eq(proofFrontiers.workspaceId, input.workspaceId),
           inArray(proofFrontiers.proofStateId, frontierStateIds),
         ),
+      )
+      .orderBy(
+        desc(proofFrontiers.priority),
+        desc(proofFrontiers.updatedAt),
+        proofFrontiers.proofStateId,
       );
 
+    const correlationGroups = requestedSmartProof.categories.crossProofCorrelation
+      ? await loadSmartCorrelationFrontierGroups(db, {
+        workspaceId: input.workspaceId,
+        proofStateIds: frontierStateIds,
+      })
+      : [];
+    const correlationEligibleProofStateIds = new Set(
+      correlationGroups.flatMap((group) => group.proofStateIds),
+    );
+
     let attemptedResolvers = 0;
+    let attemptedCorrelationResolvers = 0;
     let attemptedAmbiguityResolvers = 0;
+    let attemptedContradictionResolvers = 0;
+    let correlationGroupCount = correlationGroups.length;
+    let correlatedFrontierReducedCount = 0;
     let unsupportedCount = 0;
     let unsupportedAmbiguityCount = 0;
+    let unsupportedCorrelationCount = 0;
+    let unsupportedContradictionCount = 0;
     let budgetExhausted = false;
 
     if (requestedSmartProof.categories.frontierResolution) {
       for (const frontierRow of frontierRows) {
         if (!frontierRow.proofStateId) continue;
+        if (
+          requestedSmartProof.categories.crossProofCorrelation
+          && isSupportedSmartCorrelationReason(frontierRow.frontierReason)
+          && correlationEligibleProofStateIds.has(frontierRow.proofStateId)
+        ) {
+          continue;
+        }
         if (isSmartBudgetExhausted(smartProof.budget)) {
           budgetExhausted = true;
           break;
@@ -1448,6 +1500,55 @@ export async function executeInferenceRun(
           budgetExhausted = true;
           break;
         }
+      }
+    }
+
+    if (
+      requestedSmartProof.categories.crossProofCorrelation
+      && !budgetExhausted
+      && !isSmartBudgetExhausted(smartProof.budget)
+    ) {
+      for (const group of correlationGroups) {
+        if (isSmartBudgetExhausted(smartProof.budget)) {
+          budgetExhausted = true;
+          break;
+        }
+        const representativeIntentId = proofStateToIntentId.get(group.representativeProofStateId);
+        const currentIntentCalls = typeof representativeIntentId === 'string'
+          ? intentCallCountByIntent.get(representativeIntentId) ?? 0
+          : 0;
+        if (
+          typeof representativeIntentId === 'string'
+          && currentIntentCalls >= requestedSmartProof.budget.maxLlmCallsPerIntent
+        ) {
+          smartProof.attemptLimitReachedByIntent = true;
+          continue;
+        }
+        if (!canAffordSmartBudgetCall(smartProof.budget, requestedSmartProof.budget.maxInputTokensPerCall)) {
+          budgetExhausted = true;
+          break;
+        }
+
+        const result = await resolveSmartCorrelationGroup(db, {
+          workspaceId: input.workspaceId,
+          runId: run.id,
+          config: requestedSmartProof,
+          group,
+          generateFn: input.smartGenerateFn as GenerateSmartResolutionFn<SmartCorrelationAliasBindingProposal>,
+        });
+        if (!result.attempted) {
+          unsupportedCorrelationCount += 1;
+          continue;
+        }
+        attemptedCorrelationResolvers += 1;
+        if (typeof representativeIntentId === 'string') {
+          intentCallCountByIntent.set(representativeIntentId, currentIntentCalls + 1);
+        }
+        smartProof.budget = recordSmartBudgetCall(smartProof.budget, {
+          inputTokens: result.tokensUsed.input,
+          outputTokens: result.tokensUsed.output,
+        });
+        correlatedFrontierReducedCount += result.frontierReducedCount;
       }
     }
 
@@ -1510,10 +1611,56 @@ export async function executeInferenceRun(
       }
     }
 
+    if (
+      requestedSmartProof.categories.contradictionDetection
+      && !budgetExhausted
+      && !isSmartBudgetExhausted(smartProof.budget)
+    ) {
+      for (const candidate of contradictionCandidates) {
+        if (isSmartBudgetExhausted(smartProof.budget)) {
+          budgetExhausted = true;
+          break;
+        }
+        const currentIntentCalls = intentCallCountByIntent.get(candidate.intentId) ?? 0;
+        if (currentIntentCalls >= requestedSmartProof.budget.maxLlmCallsPerIntent) {
+          smartProof.attemptLimitReachedByIntent = true;
+          continue;
+        }
+        if (!canAffordSmartBudgetCall(smartProof.budget, requestedSmartProof.budget.maxInputTokensPerCall)) {
+          budgetExhausted = true;
+          break;
+        }
+        const result = await resolveSmartContradiction(db, {
+          workspaceId: input.workspaceId,
+          runId: run.id,
+          config: requestedSmartProof,
+          candidate,
+          generateFn: input.smartGenerateFn as GenerateSmartResolutionFn<SmartContradictionChallengeProposal>,
+        });
+        if (!result.attempted) {
+          unsupportedContradictionCount += 1;
+          continue;
+        }
+        attemptedContradictionResolvers += 1;
+        intentCallCountByIntent.set(candidate.intentId, currentIntentCalls + 1);
+        smartProof.budget = recordSmartBudgetCall(smartProof.budget, {
+          inputTokens: result.tokensUsed.input,
+          outputTokens: result.tokensUsed.output,
+        });
+      }
+    }
+
+    const hasAnyResolverAttempt =
+      attemptedResolvers > 0
+      || attemptedSummaryResolvers > 0
+      || attemptedAmbiguityResolvers > 0
+      || attemptedCorrelationResolvers > 0
+      || attemptedContradictionResolvers > 0;
+
     if (attemptedResolvers === 0) {
       smartProof.skippedReason = budgetExhausted || isSmartBudgetExhausted(smartProof.budget)
         ? 'BUDGET_EXHAUSTED'
-        : attemptedSummaryResolvers > 0 || attemptedAmbiguityResolvers > 0
+        : hasAnyResolverAttempt
           ? null
           : 'NO_SUPPORTED_FRONTIERS';
     } else {
@@ -1525,25 +1672,32 @@ export async function executeInferenceRun(
       eventType: 'SMART_PROOF_PASS',
       level: budgetExhausted ? 'WARN' : 'INFO',
       message: budgetExhausted
-        ? 'smart proof frontier resolver를 budget 한도까지 실행했습니다.'
-        : attemptedResolvers > 0 || attemptedSummaryResolvers > 0 || attemptedAmbiguityResolvers > 0
-          ? 'smart proof frontier resolver를 실행했습니다.'
-          : 'smart proof pass를 스킵했습니다: 지원 frontier 없음',
+        ? 'smart proof resolver를 budget 한도까지 실행했습니다.'
+        : hasAnyResolverAttempt
+          ? 'smart proof resolver를 실행했습니다.'
+          : 'smart proof pass를 스킵했습니다: 지원 Smart 대상 없음',
       payload: {
         enabled: true,
         outcome: budgetExhausted
           ? 'budget_exhausted'
-          : attemptedResolvers > 0 || attemptedSummaryResolvers > 0 || attemptedAmbiguityResolvers > 0
+          : hasAnyResolverAttempt
             ? 'resolver_attempted'
             : 'no_supported_frontiers',
         attemptedFrontierCount: smartProof.attemptedFrontierCount,
         attemptedSummaryCandidateCount: smartProof.attemptedSummaryCandidateCount,
+        attemptedContradictionCandidateCount: contradictionCandidates.length,
         acceptedSummaryEnhancementCount: smartProof.acceptedSummaryEnhancementCount,
         attemptedSummaryResolverCount: attemptedSummaryResolvers,
         attemptedResolverCount: attemptedResolvers,
+        attemptedCorrelationResolverCount: attemptedCorrelationResolvers,
         attemptedAmbiguityResolverCount: attemptedAmbiguityResolvers,
+        attemptedContradictionResolverCount: attemptedContradictionResolvers,
+        correlationGroupCount,
+        correlatedFrontierReducedCount,
         unsupportedCount,
+        unsupportedCorrelationCount,
         unsupportedAmbiguityCount,
+        unsupportedContradictionCount,
         attemptLimitReachedByIntent: smartProof.attemptLimitReachedByIntent,
         categories: requestedSmartProof.categories,
         budget: smartProof.budget,

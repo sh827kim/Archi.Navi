@@ -26,7 +26,8 @@ export type ProofPatchType =
   | 'route_transform_patch'
   | 'endpoint_disambiguation'
   | 'method_path_hint'
-  | 'provider_service_selection';
+  | 'provider_service_selection'
+  | 'contradiction_challenge';
 export type ProofPatchSourceKind = 'deterministic' | 'agent' | 'smart_agent' | 'manual';
 export type ProofPatchValidationStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 
@@ -82,6 +83,7 @@ interface AcceptedPatchHints {
   methodHintOverride: string | null;
   externalPathOverride: string | null;
   providerServiceOverride: string | null;
+  contradictionChallengeReasons: string[];
 }
 
 interface ProofDependencySnapshot {
@@ -1258,9 +1260,11 @@ async function getAcceptedPatchHints(
   const endpointPatch = acceptedPatches.find((patch) => patch.patchType === 'endpoint_disambiguation');
   const methodPathPatch = acceptedPatches.find((patch) => patch.patchType === 'method_path_hint');
   const providerPatch = acceptedPatches.find((patch) => patch.patchType === 'provider_service_selection');
+  const contradictionPatch = acceptedPatches.find((patch) => patch.patchType === 'contradiction_challenge');
   const endpointPayload = asRecord(endpointPatch?.payload);
   const methodPathPayload = asRecord(methodPathPatch?.payload);
   const providerPayload = asRecord(providerPatch?.payload);
+  const contradictionPayload = asRecord(contradictionPatch?.payload);
 
   return {
     endpointHintId:
@@ -1270,6 +1274,7 @@ async function getAcceptedPatchHints(
     methodHintOverride: normalizeMethod(methodPathPayload?.['method']),
     externalPathOverride: asString(methodPathPayload?.['externalPath']),
     providerServiceOverride: asString(providerPayload?.['selectedServiceId']),
+    contradictionChallengeReasons: asStringArray(contradictionPayload?.['challengeReasons']),
   };
 }
 
@@ -1569,6 +1574,22 @@ async function validatePatchDeterministically(
       const candidateProviderIds = asStringArray(frontierDetail?.['candidateProviderIds']);
       if (candidateProviderIds.length > 0 && !candidateProviderIds.includes(selectedServiceId)) {
         errors.push('selectedServiceId must belong to the ambiguous provider candidate set');
+      }
+      return errors;
+    }
+    case 'contradiction_challenge': {
+      if (proofState.status !== 'CLOSED_ATOMIC') {
+        errors.push('contradiction_challenge requires a CLOSED_ATOMIC proof');
+        return errors;
+      }
+      if (asString(payload['expectedAction']) !== 'reopen_frontier') {
+        errors.push('contradiction_challenge must request reopen_frontier');
+      }
+      if (asStringArray(payload['challengeReasons']).length === 0) {
+        errors.push('contradiction_challenge requires challengeReasons');
+      }
+      if (proofState.confidence >= 0.65) {
+        errors.push('contradiction_challenge only applies to low-confidence CLOSED_ATOMIC proofs');
       }
       return errors;
     }
@@ -1920,6 +1941,46 @@ async function closeProof(
       confidenceBreakdown: input.confidenceBreakdown,
     },
   });
+}
+
+async function applyAcceptedContradictionChallenge(
+  db: DbClient,
+  input: {
+    workspaceId: string;
+    proofStateId: string;
+    contradictionChallengeReasons: string[];
+  },
+): Promise<ProofResolutionResult> {
+  await setFrontier(db, {
+    workspaceId: input.workspaceId,
+    proofStateId: input.proofStateId,
+    frontierReason: 'SMART_CONTRADICTION_CHALLENGED',
+    frontierClass: 'CONTRADICTION',
+    retryStrategy: 'manual_review',
+    priority: 95,
+    detail: {
+      challengeReasons: input.contradictionChallengeReasons,
+      source: 'contradiction_challenge',
+    },
+    contradictionCount: input.contradictionChallengeReasons.length,
+  });
+  await appendProofStep(
+    db,
+    input.proofStateId,
+    'apply_contradiction_challenge',
+    'PENDING',
+    { contradictionReasons: input.contradictionChallengeReasons },
+    { frontierReason: 'SMART_CONTRADICTION_CHALLENGED' },
+    '허용된 contradiction challenge로 proof를 재검토 frontier로 되돌렸습니다.',
+  );
+
+  return {
+    proofStateId: input.proofStateId,
+    status: 'FRONTIER',
+    frontierReason: 'SMART_CONTRADICTION_CHALLENGED',
+    targetObjectId: null,
+    relationType: null,
+  };
 }
 
 function isConfigRouteOnlyHttpIntent(
@@ -4113,10 +4174,19 @@ export async function resolveInteractionIntentProof(
         ? await resolveDbIntent(db, input.workspaceId, intent, proofStateId, summary, resolverContext)
         : await resolveMessageIntent(db, input.workspaceId, intent, proofStateId, summary, resolverContext);
 
+  const finalResult =
+    result.status === 'CLOSED_ATOMIC' && acceptedPatchHints.contradictionChallengeReasons.length > 0
+      ? await applyAcceptedContradictionChallenge(db, {
+          workspaceId: input.workspaceId,
+          proofStateId,
+          contradictionChallengeReasons: acceptedPatchHints.contradictionChallengeReasons,
+        })
+      : result;
+
   await db
     .update(interactionIntents)
     .set({
-      status: result.status,
+      status: finalResult.status,
       updatedAt: new Date(),
     })
     .where(eq(interactionIntents.id, intent.id));
@@ -4128,7 +4198,7 @@ export async function resolveInteractionIntentProof(
     summary,
   });
 
-  return result;
+  return finalResult;
 }
 
 export async function resolveWorkspaceInteractionIntents(
@@ -4226,6 +4296,14 @@ function validateProofPatchPayload(
       break;
     case 'provider_service_selection':
       if (!asString(payload['selectedServiceId'])) errors.push('selectedServiceId is required');
+      break;
+    case 'contradiction_challenge':
+      if (asString(payload['expectedAction']) !== 'reopen_frontier') {
+        errors.push('expectedAction must be reopen_frontier');
+      }
+      if (asStringArray(payload['challengeReasons']).length === 0) {
+        errors.push('challengeReasons is required');
+      }
       break;
   }
 
@@ -4337,6 +4415,8 @@ async function applyAcceptedPatch(
     case 'method_path_hint':
       break;
     case 'provider_service_selection':
+      break;
+    case 'contradiction_challenge':
       break;
   }
 }
