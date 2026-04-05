@@ -1,8 +1,11 @@
 # 52. Embedded Postgres Runtime Migration SPEC
 
-상태: Proposed
+상태: Implemented (2026-04-05)
 우선순위: S1
 로드맵 범위: 개발 환경 안정화 / DB 런타임 전환
+
+> Note (2026-04-05): 현재 구현 기준 런타임은 `embedded-postgres` 기본 + `DATABASE_URL` 외부 PostgreSQL override다.
+> 구현 기준 파일은 `packages/db/src/runtime-config.ts`, `packages/db/src/embedded-postgres-runtime.ts`, `packages/db/src/client.ts`다.
 
 ## 1. 문제 정의
 

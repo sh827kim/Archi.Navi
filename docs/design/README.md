@@ -23,16 +23,28 @@
 |------|------|--------|
 | [01-architecture.md](./01-architecture.md) | 런타임/패키지 구조 기준 문서 | Current |
 | [02-data-model.md](./02-data-model.md) | 스키마와 객체/관계 모델 기준 문서 | Current |
-| [03-inference-engine.md](./03-inference-engine.md) | 표준 추론 + Smart 추론 + 운영 모델 기준 문서 | Current |
+| [03-inference-engine.md](./03-inference-engine.md) | 표준 추론 + 운영 모델 기준 문서 (Smart pipeline은 09-13으로 대체) | Current (Smart: Superseded) |
 | [04-query-engine.md](./04-query-engine.md) | 결정론 쿼리 엔진과 AI assistant 결합 방식 기준 문서 | Current |
 | [05-rollup-and-graph.md](./05-rollup-and-graph.md) | rollup generation, delta rebuild, 실시간 갱신 기준 문서 | Current |
 | [06-compound-view.md](./06-compound-view.md) | mapping graph / contributor drill-down UI 기준 문서 | Current |
-| [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) | 추론 엔진 고도화/확장 설계 | Extension |
+| [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) | 추론 고도화 (AST/Cross-Signal/플러그인/피드백은 유효, LLM부스터/파이프라인뷰는 deprecated) | Extension (Partially Deprecated) |
 | [08-developer-productivity.md](./08-developer-productivity.md) | 생산성 기능 로드맵/확장 설계 | Extension |
 | [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md) | intent-first proof engine 개요 | Proposed |
 | [10-intent-centric-proof-engine-state-model.md](./10-intent-centric-proof-engine-state-model.md) | intent/proof 상태 모델과 추출 레이어 | Proposed |
 | [11-intent-centric-proof-engine-resolution-pipeline.md](./11-intent-centric-proof-engine-resolution-pipeline.md) | fixed resolution pipeline, frontier, agent | Proposed |
 | [12-intent-centric-proof-engine-adoption-plan.md](./12-intent-centric-proof-engine-adoption-plan.md) | 구현 교체, UI/운영, cutover 계획 | Proposed |
+| [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md) | Smart Proof Engine LLM escalation 설계 | Proposed |
+
+## Deprecated 문서
+
+`docs/design/deprecated/`에는 현행 아키텍처에서 대체된 레거시 설계가 보관되어 있다.
+
+| 파일 | 원본 | 대체 문서 |
+|------|------|-----------|
+| [deprecated/03-smart-pipeline-legacy.md](./deprecated/03-smart-pipeline-legacy.md) | 03의 pair-first Smart pipeline | [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md) |
+| [deprecated/07-llm-boost-and-pipeline-view-legacy.md](./deprecated/07-llm-boost-and-pipeline-view-legacy.md) | 07의 LLM 부스터 + 통합 파이프라인 뷰 | [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md), [12-intent-centric-proof-engine-adoption-plan.md](./12-intent-centric-proof-engine-adoption-plan.md) |
+
+---
 
 ## 이번 현행화에서 반영한 방향
 - 제품의 중심축을 `단발성 추론 도구`가 아니라 `워크스페이스 기반 운영형 아키텍처 지식 시스템`으로 재정의했다.

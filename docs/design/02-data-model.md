@@ -618,7 +618,28 @@ create index ix_call_edges_ws_caller on code_call_edges(workspace_id, caller_art
 create index ix_call_edges_ws_callee on code_call_edges(workspace_id, callee_owner_object_id);
 ```
 
-### 4.6 변경 이력 테이블
+### 4.6 Proof Engine 테이블 (Intent-Centric)
+
+> 추가: 2026-04-05. migration 0007~0012 기준.
+> 상세 스키마: [10-intent-centric-proof-engine-state-model.md](./10-intent-centric-proof-engine-state-model.md)
+
+| 테이블 | 역할 | migration |
+|--------|------|-----------|
+| `interaction_intents` | 추론 seed — 함수별 outbound interaction intent | 0007 |
+| `function_summaries` | 함수별 재사용 가능한 outbound 요약 (signal_sources, summary_completeness, extraction_strategy) | 0007, 0009, 0011 |
+| `route_transforms` | 게이트웨이/프록시/인그레스 경로 변환 IR | 0007 |
+| `alias_bindings` | host/base-url/service-discovery alias 해석 캐시 | 0007 |
+| `proof_states` | intent → atomic target 진행 상태 (confidence_breakdown 포함) | 0007, 0008, 0010 |
+| `proof_steps` | 상태 전이 구조화 로그 | 0007 |
+| `proof_frontiers` | 미해결 frontier 인덱스 (reason, retry 전략) | 0007 |
+| `proof_patches` | 결정론적/agent/smart_agent/수동 patch 제안 | 0007, 0012 |
+| `smart_proof_llm_calls` | Smart mode LLM 호출 감사 로그 (category, tokens, cost, confidence) | 0012 |
+
+`domain_inference_profiles` 확장:
+- `proof_confidence_config` (jsonb) — proof confidence 가중치 설정 (0011)
+- `smart_proof_config` (jsonb) — Smart mode 카테고리/예산/임계치 설정 (0012)
+
+### 4.7 변경 이력 테이블
 
 #### change_logs (Append-only)
 
@@ -670,9 +691,18 @@ create index ix_changelog_ws_time on change_logs(workspace_id, created_at desc);
 | **Code** | `code_artifacts` | 코드 파일 메타 |
 | | `code_import_edges` | Import 그래프 |
 | | `code_call_edges` | Call 그래프 |
+| **Proof Engine** | `interaction_intents` | 추론 seed |
+| | `function_summaries` | 함수별 outbound 요약 |
+| | `route_transforms` | 게이트웨이 경로 변환 IR |
+| | `alias_bindings` | alias 해석 캐시 |
+| | `proof_states` | intent → atomic 진행 상태 |
+| | `proof_steps` | 상태 전이 로그 |
+| | `proof_frontiers` | 미해결 frontier 인덱스 |
+| | `proof_patches` | patch 제안 |
+| | `smart_proof_llm_calls` | Smart LLM 호출 감사 로그 |
 | **Audit** | `change_logs` | Append-only 변경 이력 |
 
-**총 21개 테이블**
+**총 30개 테이블**
 
 ---
 
@@ -694,3 +724,4 @@ create index ix_changelog_ws_time on change_logs(workspace_id, created_at desc);
 | [03-inference-engine.md](./03-inference-engine.md) | 추론 파이프라인 (후보 생성 과정) |
 | [05-rollup-and-graph.md](./05-rollup-and-graph.md) | Rollup 계산 알고리즘 |
 | [04-query-engine.md](./04-query-engine.md) | Query Engine (스키마 조회 방식) |
+| [10-intent-centric-proof-engine-state-model.md](./10-intent-centric-proof-engine-state-model.md) | Proof Engine 상태 모델 (신규 테이블 상세) |

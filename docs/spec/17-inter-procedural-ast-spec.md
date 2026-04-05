@@ -1,7 +1,11 @@
 # 17. Inter-procedural AST 분석 (SPEC) (Roadmap 4-1)
 
-상태: Draft
+상태: Implemented (Phase 1 foundations)
 작성일: 2026-03-08
+
+현행 메모:
+- 현재 구현은 `packages/inference/src/code/ast/symbolTable.ts` 기반 symbol table 구축, 인터페이스 구현체 매핑, property resolver, call target 해석까지 반영한다.
+- 본 문서의 장기 범위 중 multi-module 연결, generic 타입 심화, 디스크 캐싱은 아직 후속 범위다.
 
 ## 1. 목적
 
@@ -20,7 +24,7 @@
 - 신뢰도 재조정
 
 ### 제외 (후속)
-- 런타임 동적 바인딩 (리플렉션) → LLM 부스터로 처리
+- 런타임 동적 바인딩 (리플렉션) → Smart Proof Engine escalation 또는 별도 후속 규칙으로 처리
 - Generic/템플릿 타입 해석
 - 다중 모듈(multi-module) 프로젝트 간 참조
 

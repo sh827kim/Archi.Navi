@@ -1,3 +1,21 @@
+# [Deprecated] 37. Smart Pipeline Atomic 재설계 (SPEC)
+
+> **상태: Deprecated (2026-04-05)**
+> 이 문서는 pair-scoped Smart pipeline을 기준으로 작성된 레거시 제품 계약이다.
+> 현재 Smart는 별도 pair-first 엔진이 아니라 proof engine 위의 escalation 레이어이며, 현행 계약은 [53-smart-proof-engine-escalation-spec.md](../53-smart-proof-engine-escalation-spec.md)와 [50-intent-centric-proof-engine-resolution-pipeline-spec.md](../50-intent-centric-proof-engine-resolution-pipeline-spec.md)를 따른다.
+
+---
+
+## 대체 사유
+
+- 추론 seed가 `service pair`에서 `interaction intent`로 바뀌었다.
+- fallback reason 중심 모델이 `proof/frontier` 상태 모델로 교체되었다.
+- service-level fallback candidate를 허용하던 계약이 atomic closed proof projection으로 대체되었다.
+
+---
+
+## (아래는 원본 내용)
+
 # 37. Smart Pipeline Atomic 재설계 (SPEC)
 
 상태: Implemented (S1-1a 완료, 2026-03-29)

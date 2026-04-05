@@ -1,9 +1,27 @@
+# [Deprecated] 31. Cross-Signal Validation Common Contract (SPEC)
+
+> **상태: Deprecated (2026-04-05)**
+> 이 문서는 contradiction payload와 Approval badge 공통 계약을 고정하던 중간 단계 문서였다.
+> 현재 현행 공통 계약은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 흡수되었고, 규칙별 상세는 [30-cross-signal-validation-stale-config-phase2a-spec.md](../30-cross-signal-validation-stale-config-phase2a-spec.md), [32-cross-signal-validation-phantom-call-spec.md](../32-cross-signal-validation-phantom-call-spec.md), [33-cross-signal-validation-dead-topic-spec.md](../33-cross-signal-validation-dead-topic-spec.md), [34-cross-signal-validation-orphan-fk-spec.md](../34-cross-signal-validation-orphan-fk-spec.md)를 따른다.
+
+---
+
+## 대체 사유
+
+- contradiction item shape, badge 우선순위, parser/helper pass-through 계약은 이제 `18`에서 직접 읽을 수 있다.
+- `31`을 별도 공통 계약 문서로 유지할 이유보다 `18` 단일 기준의 일관성이 더 중요해졌다.
+- 현재 읽는 순서는 `18 -> 규칙별 상세(30/32/33/34)`가 더 명확하다.
+
+---
+
+## (아래는 원본 내용)
+
 # 31. Cross-Signal Validation Common Contract (SPEC)
 
 상태: Implemented
 작성일: 2026-03-20
 상위 SPEC: `docs/spec/18-cross-signal-validation-spec.md`
-선행 SPEC: `docs/spec/29-cross-signal-validation-phase1-spec.md`, `docs/spec/30-cross-signal-validation-stale-config-phase2a-spec.md`
+선행 SPEC: `docs/spec/18-cross-signal-validation-spec.md`, `docs/spec/30-cross-signal-validation-stale-config-phase2a-spec.md`
 
 ## 1. 목적
 

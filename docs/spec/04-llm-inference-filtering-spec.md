@@ -1,8 +1,13 @@
 # Archi.Navi — LLM 추론 후보 필터링
 
 작성일: 2026-02-22
-상태: Implemented
+상태: Implemented (표준 candidate 경로)
 문서 버전: v1.0
+
+> Note (2026-04-05): 이 문서는 기존 `relation_candidates` 후처리 경로에 대한 계약이다.
+> pre-inference LLM boost/Smart pair pipeline 계열 문서는 deprecated 되었지만,
+> 본 문서의 후보 필터링 계약은 현재 표준 추론 경로에서 여전히 유효하다.
+> proof-engine 기반 Smart 확장은 [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)를 참조한다.
 
 ---
 

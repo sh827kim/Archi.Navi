@@ -27,6 +27,9 @@
 - [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md): fixed resolution pipeline, frontier, agent, projection, invalidation
 - [51-intent-centric-proof-engine-adoption-plan-spec.md](./51-intent-centric-proof-engine-adoption-plan-spec.md): 구현 교체, 패키지 구조, UI/운영, 성능, cutover 기준
 
+Smart / LLM escalation 자체의 제품 계약은 이 문서가 아니라
+[53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)를 따른다.
+
 ---
 
 ## 2. 문제 정의
@@ -108,6 +111,8 @@ route-family seed는 아래 단계를 추가로 가진다.
 
 LLM/Agent는 relation truth를 선언하지 않는다.
 대신 frontier 해소에 필요한 구조화 patch만 제안한다.
+
+Smart 모드의 실행 계약, 예산, category 정의는 `53`에서 별도로 다룬다.
 
 ---
 

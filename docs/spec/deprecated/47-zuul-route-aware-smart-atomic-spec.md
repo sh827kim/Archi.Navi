@@ -1,8 +1,32 @@
-# 47. Zuul Route-Aware Smart Atomic SPEC
+# [Deprecated] 47. Zuul Route-Aware Smart Atomic SPEC
+
+> **상태: Deprecated (2026-04-05)**
+> 이 문서는 pair-first Smart pipeline 위에서 Zuul route를 atomic 복구 힌트로 다루던 계약이다.
+> 현재 gateway route는 proof engine의 `HTTP_GATEWAY_ROUTE_INTENT`와 route transform 단계로 흡수되었고, Smart는 그 위의 escalation으로 동작한다.
+> 현행 기준은 [50-intent-centric-proof-engine-resolution-pipeline-spec.md](../50-intent-centric-proof-engine-resolution-pipeline-spec.md)와 [53-smart-proof-engine-escalation-spec.md](../53-smart-proof-engine-escalation-spec.md)다.
+
+---
+
+## 대체 사유
+
+- gateway route가 pair recovery 힌트가 아니라 1급 intent/proof seed로 승격되었다.
+- direct match 실패 후 route-aware alias match를 시도하는 구조가 route transform + child proof derivation 단계로 재설계되었다.
+- `service fallback` 허용 전제가 현행 proof engine과 충돌한다.
+
+---
+
+## (아래는 원본 내용)
+
+# [Deprecated] 47. Zuul Route-Aware Smart Atomic SPEC
 
 상태: Implemented
 우선순위: S1
 로드맵 범위: Smart Pipeline 정확도 개선
+
+Deprecated 사유:
+- route-aware Smart를 pair-scoped atomic inference로 다루는 구조는 현재 intent/proof 중심 모델에서 상위 seed + child proof 구조로 대체되었다.
+- gateway route family 해석의 현행 기준은 proof engine route-family pipeline이다.
+- 대체 기준: `docs/spec/48-intent-centric-proof-engine-spec.md`, `docs/spec/50-intent-centric-proof-engine-resolution-pipeline-spec.md`, `docs/spec/53-smart-proof-engine-escalation-spec.md`
 
 ## 1. 문제 정의
 

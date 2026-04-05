@@ -1,3 +1,21 @@
+# [Deprecated] 29. Cross-Signal Validation Phase 1 (SPEC)
+
+> **상태: Deprecated (2026-04-05)**
+> 이 문서는 cross-signal validation의 초기 단계 구현 계약이었다.
+> 현재 현행 기준은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 흡수되었고, 규칙별 상세는 [30-cross-signal-validation-stale-config-phase2a-spec.md](../30-cross-signal-validation-stale-config-phase2a-spec.md)부터 [34-cross-signal-validation-orphan-fk-spec.md](../34-cross-signal-validation-orphan-fk-spec.md)까지를 따른다.
+
+---
+
+## 대체 사유
+
+- `Phase 1` 전용 문서로 남길 이유보다 현행 단일 기준 문서가 더 중요해졌다.
+- 다중 소스 부스트, 공통 metadata shape, Approval 배지 계약은 이제 `18`의 공통 규칙에 포함된다.
+- 현재 읽는 순서는 `18 -> 30~34`가 더 자연스럽다.
+
+---
+
+## (아래는 원본 내용)
+
 # 29. Cross-Signal Validation Phase 1 (SPEC)
 
 상태: Implemented

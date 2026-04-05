@@ -1,3 +1,21 @@
+# [Deprecated] 35. Cross-Signal Validation Finalization (SPEC)
+
+> **상태: Deprecated (2026-04-05)**
+> 이 문서는 cross-signal validation 마감 단계의 통합 PR 계약이었다.
+> 현재 현행 기준은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 흡수되었고, 규칙별 상세는 [30-cross-signal-validation-stale-config-phase2a-spec.md](../30-cross-signal-validation-stale-config-phase2a-spec.md)부터 [34-cross-signal-validation-orphan-fk-spec.md](../34-cross-signal-validation-orphan-fk-spec.md)까지를 참조한다.
+
+---
+
+## 대체 사유
+
+- profile 파라미터, Approval 필터/정렬, 최종 운영 기준은 이제 `18` 한 문서에서 읽을 수 있다.
+- 마감용 PR 문서를 현행 기준으로 계속 유지할 이유가 줄었다.
+- 현재 기준에서는 `18`이 공통 규칙, `30~34`가 규칙별 상세라는 구조가 더 명확하다.
+
+---
+
+## (아래는 원본 내용)
+
 # 35. Cross-Signal Validation Finalization (SPEC)
 
 상태: Implemented

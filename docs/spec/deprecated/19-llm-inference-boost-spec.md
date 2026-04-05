@@ -1,7 +1,31 @@
-# 19. LLM 추론 부스터 (SPEC) (Roadmap 4-3)
+# [Deprecated] 19. LLM 추론 부스터 (SPEC) (Roadmap 4-3)
+
+> **상태: Deprecated (2026-04-05)**
+> 이 문서는 pre-inference LLM boost, 설명 생성, 도메인 라벨 정제를 하나의 확장 계약으로 다룬 초기 초안이다.
+> 현재 기준에서는 기능이 분리되었고, Smart escalation은 [53-smart-proof-engine-escalation-spec.md](../53-smart-proof-engine-escalation-spec.md)로 대체되었다.
+> 후보 필터링 자체는 [04-llm-inference-filtering-spec.md](../04-llm-inference-filtering-spec.md)를 유지 기준으로 본다.
+
+---
+
+## 대체 사유
+
+- pre-inference LLM boost는 pair-first/후처리 중심 계약이어서 proof engine의 frontier-local patch 모델과 맞지 않는다.
+- 관계 설명 자동 생성과 도메인 라벨 정제는 현재 제품의 핵심 추론 계약이 아니다.
+- Smart 기능의 현행 기준은 `LLM boost`가 아니라 `proof engine 이후 escalation`이다.
+
+---
+
+## (아래는 원본 내용)
+
+# [Deprecated] 19. LLM 추론 부스터 (SPEC) (Roadmap 4-3)
 
 상태: Draft
 작성일: 2026-03-08
+
+Deprecated 사유:
+- pair-first/후보 중심의 LLM booster 설계는 현재 제품 기준이 아니다.
+- 현행 Smart는 별도 추론 엔진이 아니라 proof engine 이후의 frontier-local escalation 레이어다.
+- 대체 기준: `docs/spec/53-smart-proof-engine-escalation-spec.md`
 
 > 기존 LLM 후보 필터(`docs/spec/04-llm-inference-filtering-spec.md`)의 확장.
 

@@ -55,7 +55,7 @@ Archi.Navi는 단순한 그래프 뷰어가 아니라, 워크스페이스 단위
 | UI | 운영/탐색 화면 제공 | `apps/web/src/app/(dashboard)/*`, `components/*` |
 | Application Adapter | HTTP 계약, 입력 검증, thin orchestration 연결 | `apps/web/src/app/api/**` |
 | Core Engine | rollup, graph cache, query, evidence composition | `packages/core/src/*` |
-| Inference Engine | code/config/db/openapi 신호 수집, 후보 생성, smart pipeline, run orchestration | `packages/inference/src/*` |
+| Inference Engine | intent extraction, proof resolution, frontier agent, smart escalation, run orchestration | `packages/inference/src/*` |
 | Data Layer | 스키마, DB 클라이언트, migration | `packages/db/src/*` |
 | Shared/CLI | 공통 타입/상수/ID 생성, CLI 진입점 | `packages/shared`, `packages/cli` |
 
@@ -94,18 +94,19 @@ Approval / API / CLI
 ## 3.3 Smart 추론 실행
 
 ```text
-Approval UI
-  → /api/inference/smart
-  → OpenAPI import
-  → code expose bootstrap
-  → config 기반 service pair 탐지
-  → pair-scoped atomic inference
-  → fallback/deep inspection trace 저장
+Approval / API
+  → /api/inference/run (smartProof: true)
+  → 결정론적 proof engine 실행
+  → 결정론적 frontier agent
+  → Smart LLM escalation (frontier resolution, summary enhancement 등)
+  → accepted patch → proof re-run
+  → relation/domain candidates 저장
 ```
 
-- Smart는 제품에서 별도 inference 모드로 취급한다.
-- 출력은 단순 후보 목록이 아니라 `servicePairCount`, `atomicCandidateCount`,
-  `serviceFallbackCount`, `agentRecoveredAtomicCount` 등 운영 통계를 포함한다.
+- Smart는 별도 추론 엔진이 아니라 proof engine 위의 **LLM escalation 레이어**다.
+- 결정론적 파이프라인을 항상 먼저 실행하고, LLM은 frontier(미해결 proof)에서만 개입한다.
+- 출력은 Smart mode 메트릭(LLM 호출 수, 비용, frontier 해소 수 등)을 포함한다.
+- 상세 설계: [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md)
 
 ## 3.4 승인과 rollup 반영
 
@@ -168,7 +169,7 @@ Chat Page
 | 패키지 | 책임 | 핵심 모듈 |
 |--------|------|-----------|
 | `packages/core` | 그래프 조회와 계산 | `query-engine`, `rollup`, `graph-index`, `graph-store`, `ai` |
-| `packages/inference` | 추론과 실행 orchestration | `relation`, `domain`, `code`, `db`, `openapi`, `llm`, `orchestration` |
+| `packages/inference` | 추론과 실행 orchestration | `extraction`, `agent`, `orchestration`, `relation`, `domain`, `code`, `db`, `openapi`, `llm` |
 | `packages/db` | 스키마와 클라이언트 | `schema/core`, `schema/rollup`, `schema/domain`, `schema/code`, `schema/audit`, `schema/layers` |
 | `packages/shared` | 타입/상수/유틸리티 | query/request 타입, enum, `generateId`, path/URN 유틸 |
 | `packages/ui` | 공유 UI primitive | button, badge, input, select, spinner 등 |

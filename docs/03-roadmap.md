@@ -287,7 +287,7 @@
   - 승인 UI에 교차 검증 배지 표시
 
 ### ✅ 4-3. LLM 추론 부스터 (기존 LLM 필터 확장)
-- **SPEC:** `docs/spec/19-llm-inference-boost-spec.md`
+- **SPEC:** `docs/spec/deprecated/19-llm-inference-boost-spec.md`
 - **설계:** `docs/design/07-inference-engine-advanced.md` §4
 - **구현 완료 범위:**
   - `POST /api/inference/llm-filter` 에 `generateExplanations` / `maxCalls` 경로 추가
@@ -360,7 +360,7 @@
 - **검증(최종):**
   - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 24 tests passed`
   - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/smart.route.test.ts src/__tests__/approval-list.test.tsx` → `2 files, 30 tests passed`
-- **SPEC:** `docs/spec/37-smart-pipeline-atomic-redesign-spec.md`
+- **SPEC:** `docs/spec/deprecated/37-smart-pipeline-atomic-redesign-spec.md`
 - **목표:** `config -> candidate service pair -> pair-scoped source analysis -> atomic relation` 흐름으로 재구성
 - **핵심 작업 순서:**
   - OpenAPI import 뒤에 `Phase 1.5 endpoint bootstrap` 추가 (`expose -> api_endpoint`)
@@ -581,7 +581,7 @@
 - **검증(최종):**
   - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 30 tests passed`
   - `pnpm --filter @archi-navi/inference build` → 통과
-- **SPEC:** `docs/spec/47-zuul-route-aware-smart-atomic-spec.md`
+- **SPEC:** `docs/spec/deprecated/47-zuul-route-aware-smart-atomic-spec.md`
 
 ---
 
@@ -700,7 +700,7 @@ Query Engine 구현 ─────────→ S1-4 Query UI 연결
 | Domain-first | `docs/design/05-rollup-and-graph.md` §6 Navigation Strategy |
 | **Inter-procedural AST(4-1)** | `docs/spec/17-inter-procedural-ast-spec.md` |
 | **Cross-Signal Validation(4-2)** | `docs/spec/18-cross-signal-validation-spec.md` |
-| **LLM 추론 부스터(4-3)** | `docs/spec/19-llm-inference-boost-spec.md` |
+| **LLM 추론 부스터(4-3)** | `docs/spec/deprecated/19-llm-inference-boost-spec.md` |
 | **플러그인 시스템(4-4)** | `docs/spec/20-framework-plugin-system-spec.md` |
 | **Delta Rollup(4-5)** | `docs/spec/21-realtime-rollup-spec.md` |
 | **피드백 루프(4-6)** | `docs/spec/22-inference-feedback-loop-spec.md` |

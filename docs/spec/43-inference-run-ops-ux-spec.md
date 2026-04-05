@@ -4,6 +4,10 @@
 우선순위: S1
 로드맵 범위: 추론 운영 UX
 
+현행 메모:
+- 현재 운영 화면의 Smart 요약은 pair-first `analysisMode` 통계가 아니라 proof-engine run summary와 smart/proof 관련 메타데이터를 기준으로 읽는다.
+- 이 문서의 핵심 계약은 실행 상태 가시화, source 상태 정합성, polling 갱신 UX다.
+
 ## 1. 문제 정의
 
 현재 `/inference-runs`는 목록, 상세, 취소/재시도 기본 동작은 있으나 운영 화면으로는 부족하다.
@@ -39,7 +43,7 @@
    - 실행 상태
    - 모드
    - 생성 후보 수
-   - Smart run일 경우 service pair / atomic / fallback / agent recovery
+   - Smart run일 경우 proof/smart 요약, 경고, 후보 생성 결과
 2. 상세 패널은 아래를 포함한다.
    - source별 상태, resolved repo root, message
    - 이벤트 로그

@@ -1,8 +1,31 @@
-# 42. Agent-Assisted Smart Atomic SPEC
+# [Deprecated] 42. Agent-Assisted Smart Atomic SPEC
+
+> **상태: Deprecated (2026-04-05)**
+> 이 문서는 pair-local agent가 Smart atomic 단계를 보강하는 중간 설계다.
+> 현재 agent/LLM의 역할은 pair별 atomic 판정이 아니라 frontier-local structured patch 제안이며, 현행 기준은 [53-smart-proof-engine-escalation-spec.md](../53-smart-proof-engine-escalation-spec.md)다.
+
+---
+
+## 대체 사유
+
+- `pair_pack / agent_assisted / full_agent` 같은 pair 중심 실행 모드가 더 이상 제품 계약이 아니다.
+- unresolved pair 재시도 모델이 proof frontier 해소 모델로 교체되었다.
+- approval와 운영 메타데이터도 pair 분석 모드가 아니라 proof/patch 중심으로 정리되었다.
+
+---
+
+## (아래는 원본 내용)
+
+# [Deprecated] 42. Agent-Assisted Smart Atomic SPEC
 
 상태: Implemented
 우선순위: S1
 로드맵 범위: Smart Pipeline 정확도 개선
+
+Deprecated 사유:
+- pair별 agent escalation 중심 Smart 계약은 현재 proof-engine 기반 Smart 설계와 직접 호환되지 않는다.
+- 현행 Smart는 proof frontier를 입력으로 받아 structured patch를 제안하고, deterministic validator를 통과해야만 반영된다.
+- 대체 기준: `docs/spec/50-intent-centric-proof-engine-resolution-pipeline-spec.md`, `docs/spec/53-smart-proof-engine-escalation-spec.md`
 
 ## 1. 문제 정의
 
