@@ -12,6 +12,8 @@ import {
   functionSummaries,
   interactionIntents,
   objects,
+  proofStates,
+  relationCandidates,
   routeTransforms,
   workspaces,
 } from '@archi-navi/db';
@@ -710,6 +712,138 @@ describe('proof extraction', () => {
     expect(intents[0]?.hostHint).toBe('article-service');
     expect(intents[0]?.externalPathHint).toBe('/api/articles');
     expect(intents[0]?.evidenceIds).toEqual([expect.stringMatching(/config:.*application\.yml#articles$/)]);
+  });
+
+  it('SCG config route도 proof engine용 interaction intent로 승격해야 한다', async () => {
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    await insertObject(db, { objectType: 'service', name: 'order-service' });
+
+    writeFileSync(
+      join(repoRoot, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        '  cloud:',
+        '    gateway:',
+        '      routes:',
+        '        - id: orders',
+        '          uri: lb://order-service',
+        '          predicates:',
+        '            - Path=/api/orders/**',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const result = await extractInteractionIntentsFromConfigRoutes(db, {
+      workspaceId,
+      repoRoot,
+      runId: 'run-config-scg-intent',
+    });
+
+    expect(result.intentCount).toBe(1);
+    expect(result.gatewayRouteSeedCount).toBe(1);
+    const intents = await db.select().from(interactionIntents).where(eq(interactionIntents.workspaceId, workspaceId));
+    expect(intents).toHaveLength(1);
+    expect(intents[0]).toMatchObject({
+      intentType: 'http_gateway_route',
+      sourceServiceId: gatewayServiceId,
+      sourceFunctionId: null,
+      gatewayKind: 'spring_cloud_gateway',
+      routeScopeKind: 'prefix',
+      externalRoutePattern: '/api/orders/**',
+      providerHint: 'order-service',
+      targetServiceHint: 'order-service',
+      methodConstraint: 'unknown',
+      hostHint: 'order-service',
+      externalPathHint: '/api/orders',
+    });
+  });
+
+  it('code signal에서 사라진 intent를 retire할 때 proof-projected candidate도 함께 삭제해야 한다', async () => {
+    const serviceId = await insertObject(db, { objectType: 'service', name: 'gateway' });
+    const functionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: serviceId,
+    });
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      repoRoot,
+      filePath: 'src/GatewayClient.ts',
+      language: 'typescript',
+      artifactType: 'source_file',
+      ownerObjectId: functionId,
+      contentHash: 'artifact-hash-1',
+      metadata: {},
+    });
+
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/GatewayClient.ts',
+      excerpt: 'axios.get("http://ORDER_SERVICE/api/orders")',
+      metadata: { kind: 'http_call', method: 'GET' },
+    });
+
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'http://ORDER_SERVICE/api/orders',
+      relationType: 'calls',
+      evidenceId,
+      createdAt: new Date(),
+    });
+
+    await extractInteractionIntentsFromCodeSignals(db, {
+      workspaceId,
+      repoRoot,
+      runId: 'run-intent-initial',
+    });
+
+    const [intent] = await db.select().from(interactionIntents).where(eq(interactionIntents.workspaceId, workspaceId));
+    expect(intent).toBeDefined();
+
+    const proofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: intent!.id,
+      proofType: 'http_call',
+      status: 'NEW',
+      consumerServiceId: serviceId,
+      sourceFunctionId: functionId,
+    });
+
+    await db.insert(relationCandidates).values({
+      id: generateId(),
+      workspaceId,
+      relationType: 'calls',
+      subjectObjectId: serviceId,
+      objectId: serviceId,
+      confidence: 0.9,
+      status: 'APPROVED',
+      metadata: { source: 'intent_proof', proofStateId },
+    });
+
+    await db.delete(codeCallEdges).where(eq(codeCallEdges.callerArtifactId, artifactId));
+
+    await extractInteractionIntentsFromCodeSignals(db, {
+      workspaceId,
+      repoRoot,
+      runId: 'run-intent-retire',
+    });
+
+    const intentsAfter = await db.select().from(interactionIntents).where(eq(interactionIntents.workspaceId, workspaceId));
+    const candidatesAfter = await db.select().from(relationCandidates).where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(intentsAfter).toHaveLength(0);
+    expect(candidatesAfter).toHaveLength(0);
   });
 
   it('AST ingest가 만든 function owner를 function summary와 interaction intent가 그대로 사용해야 한다', async () => {

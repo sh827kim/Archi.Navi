@@ -9,6 +9,8 @@ import {
   functionSummaries,
   interactionIntents,
   objects,
+  proofStates,
+  relationCandidates,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import { preferredSignalOwnerId, resolveExistingSignalOwnerId } from '@/code/ownerResolution';
@@ -400,6 +402,28 @@ async function retireMissingCodeSignalIntents(
     .map((row) => row.id);
   if (staleIntentIds.length === 0) return;
 
+  const staleProofStateRows = await db
+    .select({ id: proofStates.id })
+    .from(proofStates)
+    .where(and(eq(proofStates.workspaceId, options.workspaceId), inArray(proofStates.intentId, staleIntentIds)));
+  const staleProofStateIds = new Set(staleProofStateRows.map((row) => row.id));
+  if (staleProofStateIds.size > 0) {
+    const candidateRows = await db
+      .select({ id: relationCandidates.id, metadata: relationCandidates.metadata })
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, options.workspaceId));
+    const orphanCandidateIds = candidateRows
+      .filter((row) => {
+        const metadata = asRecord(row.metadata);
+        const proofStateId = asString(metadata?.['proofStateId']);
+        return proofStateId !== null && staleProofStateIds.has(proofStateId);
+      })
+      .map((row) => row.id);
+    if (orphanCandidateIds.length > 0) {
+      await db.delete(relationCandidates).where(inArray(relationCandidates.id, orphanCandidateIds));
+    }
+  }
+
   await db.delete(interactionIntents).where(inArray(interactionIntents.id, staleIntentIds));
 }
 
@@ -539,6 +563,7 @@ export async function extractInteractionIntentsFromConfigRoutes(
     if (!sourceServiceId) continue;
 
     for (const route of signal.zuulRoutes) {
+      const gatewayKind = 'zuul';
       const externalPathHint = normalizeGatewayPathHint(route.path);
       const hostHint = route.serviceId ?? extractHost(route.url ?? '') ?? null;
       if (!externalPathHint && !hostHint) continue;
@@ -552,11 +577,50 @@ export async function extractInteractionIntentsFromConfigRoutes(
         sourceFilePath: filePath,
         methodHint: null,
         externalPathHint,
-        gatewayKind: 'zuul',
+        gatewayKind,
         routeScopeKind: inferRouteScopeKind(route.path),
         externalRoutePattern: route.path,
         providerHint: route.serviceId ?? extractHost(route.url ?? '') ?? null,
         targetServiceHint: route.serviceId ?? null,
+        routeTransformRefs: [],
+        methodConstraint: 'unknown',
+        hostHint,
+        resourceHint: null,
+        dbSchemaHint: null,
+        dbTableHints: [],
+        dbQueryFragmentHash: null,
+        messageBrokerKind: null,
+        messageTopicHints: [],
+        messageQueueHints: [],
+        messageRoutingKeyHints: [],
+        configKeys: [],
+        evidenceIds: [buildConfigEvidenceId(options.repoRoot, filePath, route.routeKey)],
+        summaryRefs: [],
+      });
+      intentCount += 1;
+      gatewayRouteSeedCount += 1;
+    }
+
+    for (const route of signal.springCloudGatewayRoutes) {
+      const gatewayKind = 'spring_cloud_gateway';
+      const externalPathHint = normalizeGatewayPathHint(route.path);
+      const hostHint = extractHost(route.uri ?? '') ?? null;
+      if (!externalPathHint && !hostHint) continue;
+
+      await upsertInteractionIntent(db, {
+        workspaceId: options.workspaceId,
+        runId: options.runId,
+        intentType: 'http_gateway_route',
+        sourceServiceId,
+        sourceFunctionId: null,
+        sourceFilePath: filePath,
+        methodHint: null,
+        externalPathHint,
+        gatewayKind,
+        routeScopeKind: inferRouteScopeKind(route.path),
+        externalRoutePattern: route.path,
+        providerHint: extractHost(route.uri ?? '') ?? null,
+        targetServiceHint: extractHost(route.uri ?? '') ?? null,
         routeTransformRefs: [],
         methodConstraint: 'unknown',
         hostHint,
