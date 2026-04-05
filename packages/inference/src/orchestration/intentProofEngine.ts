@@ -1600,12 +1600,19 @@ async function upsertProofStateBase(
 
 async function clearProjectedCandidates(db: DbClient, workspaceId: string, proofStateId: string) {
   const candidates = await db
-    .select({ id: relationCandidates.id, metadata: relationCandidates.metadata })
+    .select({
+      id: relationCandidates.id,
+      status: relationCandidates.status,
+      metadata: relationCandidates.metadata,
+    })
     .from(relationCandidates)
     .where(eq(relationCandidates.workspaceId, workspaceId));
 
   const staleIds = candidates
-    .filter((candidate) => asString(asRecord(candidate.metadata)?.['proofStateId']) === proofStateId)
+    .filter(
+      (candidate) => candidate.status === 'PENDING'
+        && asString(asRecord(candidate.metadata)?.['proofStateId']) === proofStateId,
+    )
     .map((candidate) => candidate.id);
 
   for (const candidateId of staleIds) {
@@ -1810,6 +1817,26 @@ async function closeProof(
 
   await db.delete(proofFrontiers).where(eq(proofFrontiers.proofStateId, input.proofStateId));
   await clearProjectedCandidates(db, input.workspaceId, input.proofStateId);
+  const existingMatchingCandidates = await db
+    .select({
+      status: relationCandidates.status,
+      metadata: relationCandidates.metadata,
+    })
+    .from(relationCandidates)
+    .where(
+      and(
+        eq(relationCandidates.workspaceId, input.workspaceId),
+        eq(relationCandidates.relationType, input.relationType),
+        eq(relationCandidates.subjectObjectId, input.consumerServiceId),
+        eq(relationCandidates.objectId, input.targetObjectId),
+      ),
+    );
+  const hasResolvedProjection = existingMatchingCandidates.some((candidate) => {
+    if (candidate.status === 'PENDING') return false;
+    return asString(asRecord(candidate.metadata)?.['proofStateId']) === input.proofStateId;
+  });
+  if (hasResolvedProjection) return;
+
   await db.insert(relationCandidates).values({
     id: generateId(),
     workspaceId: input.workspaceId,

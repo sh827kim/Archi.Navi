@@ -507,6 +507,85 @@ describe('intent proof engine', () => {
     });
   });
 
+  it('재실행 시 proof 기반 APPROVED/REJECTED candidate를 보존하고 새 PENDING으로 덮어쓰지 않아야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'order-api' });
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /internal/orders/{id}',
+      parentId: providerServiceId,
+      metadata: { method: 'GET', path: '/internal/orders/{id}' },
+    });
+
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: serviceId,
+      aliasKey: 'client.order.base-url',
+      aliasValue: 'ORDER_API',
+      resolvedServiceId: providerServiceId,
+      resolvedHost: 'order-api.internal',
+      sourceHash: 'alias-order-api-rerun',
+    });
+
+    await db.insert(routeTransforms).values({
+      id: generateId(),
+      workspaceId,
+      gatewayKind: 'gateway',
+      ownerServiceId: serviceId,
+      matchPath: '/public/orders/*',
+      stripPrefixCount: 1,
+      prependPrefix: '/internal',
+      targetServiceHint: 'order-api',
+      sourceHash: 'route-order-api-rerun',
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/public/orders/123',
+      hostHint: 'ORDER_API',
+      configKeys: ['client.order.base-url'],
+      intentHash: 'intent-http-call-rerun-approved',
+      anchorHash: 'anchor-http-call-rerun-approved',
+    });
+
+    const initial = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(initial.status).toBe('CLOSED_ATOMIC');
+    expect(initial.targetObjectId).toBe(endpointId);
+
+    const [projected] = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(projected?.status).toBe('PENDING');
+
+    await db
+      .update(relationCandidates)
+      .set({ status: 'APPROVED' })
+      .where(eq(relationCandidates.id, projected!.id));
+
+    const rerun = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(rerun.status).toBe('CLOSED_ATOMIC');
+    expect(rerun.proofStateId).toBe(initial.proofStateId);
+
+    const rerunCandidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(rerunCandidates).toHaveLength(1);
+    expect(rerunCandidates[0]?.status).toBe('APPROVED');
+    expect(rerunCandidates[0]?.objectId).toBe(endpointId);
+    expect((rerunCandidates[0]?.metadata as Record<string, unknown> | null)?.['proofStateId']).toBe(
+      initial.proofStateId,
+    );
+  });
+
   it('preloaded resolver context 경로도 HTTP proof 결과를 동일하게 유지해야 한다', async () => {
     const providerServiceId = await insertObject(db, { objectType: 'service', name: 'order-api' });
     const endpointId = await insertObject(db, {
