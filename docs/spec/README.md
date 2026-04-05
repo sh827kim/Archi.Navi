@@ -48,6 +48,8 @@
 - [45-query-engine-input-usability-spec.md](./45-query-engine-input-usability-spec.md)
 - [46-ai-architecture-assistant-scope-expansion-spec.md](./46-ai-architecture-assistant-scope-expansion-spec.md)
 - [52-embedded-postgres-runtime-migration-spec.md](./52-embedded-postgres-runtime-migration-spec.md)
+- [54-object-detail-layer-assignment-spec.md](./54-object-detail-layer-assignment-spec.md)
+- [55-light-theme-tone-refresh-spec.md](./55-light-theme-tone-refresh-spec.md)
 
 ### Current Architecture Direction
 - [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)

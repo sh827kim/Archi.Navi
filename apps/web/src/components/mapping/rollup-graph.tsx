@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useTheme } from 'next-themes';
 import { cn, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { subscribeToRollupEvents } from '@/lib/rollup-event-source';
@@ -217,6 +218,7 @@ function parseHubThreshold(value: string | null): number {
 
 export function RollupGraph() {
   const { workspaceId } = useWorkspace();
+  const { resolvedTheme } = useTheme();
   const buildGraphRef = useRef<((level: ViewLevel, expanded: Set<string>) => Promise<void>) | null>(
     null,
   );
@@ -250,6 +252,7 @@ export function RollupGraph() {
   const [contributorNextCursor, setContributorNextCursor] = useState<string | null>(null);
   const [contributorLoadingMore, setContributorLoadingMore] = useState(false);
   const [unusedAtomicItems, setUnusedAtomicItems] = useState<UnusedAtomicItem[]>([]);
+  const themeMode = resolvedTheme === 'light' ? 'light' : 'dark';
 
   useEffect(() => {
     setSelectedDomain(null);
@@ -912,12 +915,30 @@ export function RollupGraph() {
   const selectedContributorTargetLabel =
     selectedContributorLink && nodeLabelById.get(selectedContributorLink.semanticTarget);
   const hasContributorNextPage = contributorNextCursor !== null;
+  const isLight = themeMode === 'light';
+  const canvasBgClass = isLight ? 'bg-[#f6f1e8]' : 'bg-[#0f0f11]';
+  const breadcrumbSurfaceClass = isLight
+    ? 'border-stone-300/90 bg-stone-50/90 text-slate-700'
+    : 'border-zinc-700/80 bg-zinc-950/80 text-zinc-200';
+  const breadcrumbInactiveClass = isLight
+    ? 'text-slate-600 hover:text-slate-900'
+    : 'text-zinc-300 hover:text-white';
+  const breadcrumbDividerClass = isLight ? 'text-slate-400' : 'text-zinc-500';
+  const inactiveLevelClass = isLight
+    ? 'border-stone-300/90 bg-stone-50/80 text-slate-500 hover:text-slate-900 hover:border-stone-400'
+    : 'border-white/10 bg-black/40 text-zinc-400 hover:text-white hover:border-white/20';
+  const helperChipClass = isLight
+    ? 'border border-stone-300/80 bg-stone-50/85 text-slate-500'
+    : 'bg-black/30 text-zinc-500';
 
   return (
-    <div className="relative h-full w-full bg-[#0f0f11]">
+    <div className={cn('relative h-full w-full', canvasBgClass)}>
       <div className="absolute left-4 top-4 z-10 flex max-w-[calc(100%-20rem)] flex-col gap-2">
         {hasDomainObjects && (
-          <div className="flex items-center gap-1.5 rounded-full border border-zinc-700/80 bg-zinc-950/80 px-3 py-1.5 text-[11px] text-zinc-200 backdrop-blur-sm">
+          <div className={cn(
+            'flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] backdrop-blur-sm',
+            breadcrumbSurfaceClass,
+          )}>
             <button
               onClick={() => {
                 setSelectedDomain(null);
@@ -927,14 +948,14 @@ export function RollupGraph() {
               }}
               className={cn(
                 'rounded px-1.5 py-0.5 font-semibold',
-                !selectedDomain ? 'text-primary' : 'text-zinc-300 hover:text-white',
+                !selectedDomain ? 'text-primary' : breadcrumbInactiveClass,
               )}
             >
               Domain
             </button>
             {selectedDomain && (
               <>
-                <span className="text-zinc-500">/</span>
+                <span className={breadcrumbDividerClass}>/</span>
                 <button
                   onClick={() => {
                     setSelectedService(null);
@@ -943,7 +964,7 @@ export function RollupGraph() {
                   }}
                   className={cn(
                     'max-w-[12rem] truncate rounded px-1.5 py-0.5 font-semibold',
-                    !selectedService ? 'text-primary' : 'text-zinc-300 hover:text-white',
+                    !selectedService ? 'text-primary' : breadcrumbInactiveClass,
                   )}
                   title={selectedDomain.label}
                 >
@@ -953,7 +974,7 @@ export function RollupGraph() {
             )}
             {selectedService && (
               <>
-                <span className="text-zinc-500">/</span>
+                <span className={breadcrumbDividerClass}>/</span>
                 <span
                   className="max-w-[12rem] truncate rounded px-1.5 py-0.5 font-semibold text-primary"
                   title={selectedService.label}
@@ -982,7 +1003,7 @@ export function RollupGraph() {
                   'border backdrop-blur-sm whitespace-nowrap transition-opacity',
                   viewLevel === level.value
                     ? 'border-primary bg-primary/20 text-primary'
-                    : 'border-white/10 bg-black/40 text-zinc-400 hover:text-white hover:border-white/20',
+                    : inactiveLevelClass,
                 )}
               >
                 <span
@@ -1350,7 +1371,10 @@ export function RollupGraph() {
 
       {!loading && !isEmpty && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-1.5">
-          <div className="flex gap-3 text-[10px] text-zinc-500 bg-black/30 rounded-full px-3 py-1 backdrop-blur-sm">
+          <div className={cn(
+            'flex gap-3 rounded-full px-3 py-1 text-[10px] backdrop-blur-sm',
+            helperChipClass,
+          )}>
             <span>드래그: 회전</span>
             <span>휠: 줌</span>
             <span>클릭: 포커스</span>
@@ -1364,6 +1388,7 @@ export function RollupGraph() {
       <RollupGraph3D
         nodes={graph3DData.nodes}
         links={graph3DData.links}
+        themeMode={themeMode}
         onNodeClick={(node) => {
           handleNodePrimaryAction({
             id: node.id,

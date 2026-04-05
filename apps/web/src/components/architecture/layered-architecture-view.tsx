@@ -7,8 +7,9 @@
  */
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import cytoscape, { type Core, type StylesheetCSS, type ElementDefinition } from 'cytoscape';
+import { useTheme } from 'next-themes';
 import {
   Search,
   ZoomIn,
@@ -101,133 +102,171 @@ function calcLayerTitleWidth(label: string): number {
   );
 }
 
-/* ─── 엣지 타입별 색상 (Cosmic 테마) ─── */
-const EDGE_COLORS: Record<string, string> = {
-  call: '#818cf8',          // indigo
-  expose: '#c084fc',        // purple
-  read: '#34d399',          // emerald
-  write: '#4ade80',         // green-400
-  produce: '#fbbf24',       // amber
-  consume: '#fb923c',       // orange-400
-  depend_on: '#94a3b8',     // slate
-};
+type ThemeMode = 'light' | 'dark';
 
-/* ─── 노드 타입별 색상 (Cosmic 테마) ─── */
-const NODE_COLORS: Record<string, string> = {
-  service: '#818cf8',       // indigo-400
-  api_endpoint: '#c084fc',  // purple-400
-  database: '#34d399',      // emerald-400
-  db_table: '#22d3ee',      // cyan-400  — DB 테이블 ATOMIC
-  topic: '#fbbf24',         // amber-400 — Kafka 토픽 ATOMIC
-  kafka_topic: '#fbbf24',   // amber-400 — 하위 호환
-  message_broker: '#fbbf24',// amber-400
-  domain: '#22d3ee',        // cyan-400  — 하위 호환
-  default: '#94a3b8',       // slate-400
-};
+interface ArchitectureThemePalette {
+  edgeColors: Record<string, string>;
+  nodeColors: Record<string, string>;
+  layerColors: string[];
+  layerTitleColor: string;
+  layerTitleOutline: string;
+  layerTitleOutlineOpacity: number;
+  tagBg: string;
+  tagBorder: string;
+  tagText: string;
+}
 
-/* ─── 레이어 기본 색상 팔레트 ─── */
-const LAYER_COLORS = ['#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444'];
+function createArchitectureThemePalette(themeMode: ThemeMode): ArchitectureThemePalette {
+  const vividEdgeColors = {
+    call: '#818cf8',
+    expose: '#c084fc',
+    read: '#34d399',
+    write: '#4ade80',
+    produce: '#fbbf24',
+    consume: '#fb923c',
+    depend_on: '#94a3b8',
+  };
+  const vividNodeColors = {
+    service: '#818cf8',
+    api_endpoint: '#c084fc',
+    database: '#34d399',
+    db_table: '#22d3ee',
+    topic: '#fbbf24',
+    kafka_topic: '#fbbf24',
+    message_broker: '#fbbf24',
+    domain: '#22d3ee',
+    default: '#94a3b8',
+  };
+  const vividLayerColors = ['#8b5cf6', '#3b82f6', '#06b6d4', '#10b981', '#f59e0b', '#ef4444'];
+
+  if (themeMode === 'light') {
+    return {
+      edgeColors: vividEdgeColors,
+      nodeColors: vividNodeColors,
+      layerColors: vividLayerColors,
+      layerTitleColor: '#334155',
+      layerTitleOutline: '#f8fafc',
+      layerTitleOutlineOpacity: 0.9,
+      tagBg: '#f4ede2',
+      tagBorder: '#d8c8ad',
+      tagText: '#475569',
+    };
+  }
+
+  return {
+    edgeColors: vividEdgeColors,
+    nodeColors: vividNodeColors,
+    layerColors: vividLayerColors,
+    layerTitleColor: '#f8fafc',
+    layerTitleOutline: '#020617',
+    layerTitleOutlineOpacity: 0.45,
+    tagBg: '#0f172a',
+    tagBorder: '#334155',
+    tagText: '#cbd5e1',
+  };
+}
 
 /* ─── Cytoscape 스타일시트 ─── */
-const cytoscapeStyles: StylesheetCSS[] = [
-  {
-    selector: 'node[nodeType="layer"]',
-    css: {
-      'background-color': 'data(bgColor)' as unknown as string,
-      'background-opacity': 0.13,
-      'border-width': 2,
-      'border-color': 'data(borderColor)' as unknown as string,
-      'border-opacity': 0.55,
-      shape: 'round-rectangle',
-      padding: '18px',
-      'padding-top': '34px',
-      label: '',
-      'z-compound-depth': 'bottom',
+function createCytoscapeStyles(themePalette: ArchitectureThemePalette): StylesheetCSS[] {
+  return [
+    {
+      selector: 'node[nodeType="layer"]',
+      css: {
+        'background-color': 'data(bgColor)' as unknown as string,
+        'background-opacity': 0.13,
+        'border-width': 2,
+        'border-color': 'data(borderColor)' as unknown as string,
+        'border-opacity': 0.55,
+        shape: 'round-rectangle',
+        padding: '18px',
+        'padding-top': '34px',
+        label: '',
+        'z-compound-depth': 'bottom',
+      },
     },
-  },
-  {
-    selector: 'node[nodeType="layer-title"]',
-    css: {
-      'background-opacity': 0,
-      'border-width': 0,
-      shape: 'round-rectangle',
-      width: 'data(width)' as unknown as number,
-      height: 18,
-      label: 'data(label)',
-      'text-valign': 'center',
-      'text-halign': 'center',
-      'font-size': 11,
-      'font-weight': 'bold',
-      color: '#ffffff',
-      'text-opacity': 0.9,
-      'text-outline-color': '#020617',
-      'text-outline-width': 2,
-      'text-outline-opacity': 0.45,
-      events: 'no',
+    {
+      selector: 'node[nodeType="layer-title"]',
+      css: {
+        'background-opacity': 0,
+        'border-width': 0,
+        shape: 'round-rectangle',
+        width: 'data(width)' as unknown as number,
+        height: 18,
+        label: 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-size': 11,
+        'font-weight': 'bold',
+        color: themePalette.layerTitleColor,
+        'text-opacity': 0.9,
+        'text-outline-color': themePalette.layerTitleOutline,
+        'text-outline-width': 2,
+        'text-outline-opacity': themePalette.layerTitleOutlineOpacity,
+        events: 'no',
+      },
     },
-  },
-  {
-    selector: 'node[nodeType="object"]',
-    css: {
-      'background-color': 'data(bgColor)' as unknown as string,
-      'border-width': 1,
-      'border-color': 'data(bgColor)' as unknown as string,
-      'border-opacity': 0.5,
-      shape: 'round-rectangle',
-      width: 140,
-      height: 44,
-      label: 'data(label)',
-      'text-valign': 'center',
-      'text-halign': 'center',
-      'font-size': 12,
-      color: 'data(textColor)',
-      'text-wrap': 'wrap',
-      'text-max-width': '128px',
+    {
+      selector: 'node[nodeType="object"]',
+      css: {
+        'background-color': 'data(bgColor)' as unknown as string,
+        'border-width': 1,
+        'border-color': 'data(bgColor)' as unknown as string,
+        'border-opacity': 0.5,
+        shape: 'round-rectangle',
+        width: 140,
+        height: 44,
+        label: 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-size': 12,
+        color: 'data(textColor)',
+        'text-wrap': 'wrap',
+        'text-max-width': '128px',
+      },
     },
-  },
-  {
-    selector: 'node[nodeType="layer-anchor"]',
-    css: {
-      width: 1,
-      height: 1,
-      opacity: 0,
-      'background-opacity': 0,
-      'border-width': 0,
-      label: '',
-      events: 'no',
+    {
+      selector: 'node[nodeType="layer-anchor"]',
+      css: {
+        width: 1,
+        height: 1,
+        opacity: 0,
+        'background-opacity': 0,
+        'border-width': 0,
+        label: '',
+        events: 'no',
+      },
     },
-  },
-  {
-    selector: 'node[nodeType="tag"]',
-    css: {
-      'background-color': '#0f172a',
-      'background-opacity': 0.55,
-      'border-width': 1,
-      'border-color': '#334155',
-      'border-opacity': 0.7,
-      shape: 'round-rectangle',
-      width: 128,
-      height: 20,
-      label: 'data(label)',
-      'text-valign': 'center',
-      'text-halign': 'center',
-      'font-size': 8,
-      color: '#cbd5e1',
-      'text-wrap': 'wrap',
-      'text-max-width': '118px',
+    {
+      selector: 'node[nodeType="tag"]',
+      css: {
+        'background-color': themePalette.tagBg,
+        'background-opacity': 0.55,
+        'border-width': 1,
+        'border-color': themePalette.tagBorder,
+        'border-opacity': 0.7,
+        shape: 'round-rectangle',
+        width: 128,
+        height: 20,
+        label: 'data(label)',
+        'text-valign': 'center',
+        'text-halign': 'center',
+        'font-size': 8,
+        color: themePalette.tagText,
+        'text-wrap': 'wrap',
+        'text-max-width': '118px',
+      },
     },
-  },
-  {
-    selector: 'edge',
-    css: {
-      width: 1.5,
-      'line-color': 'data(color)' as unknown as string,
-      'target-arrow-color': 'data(color)' as unknown as string,
-      'target-arrow-shape': 'triangle',
-      'curve-style': 'bezier',
-      opacity: 0.7,
+    {
+      selector: 'edge',
+      css: {
+        width: 1.5,
+        'line-color': 'data(color)' as unknown as string,
+        'target-arrow-color': 'data(color)' as unknown as string,
+        'target-arrow-shape': 'triangle',
+        'curve-style': 'bezier',
+        opacity: 0.7,
+      },
     },
-  },
   // read/consume: 데이터 출처에 원형 dot 표시 (source-arrow)
   {
     selector: 'edge[isReversed="1"]',
@@ -254,15 +293,16 @@ const cytoscapeStyles: StylesheetCSS[] = [
     selector: '.highlighted',
     css: { opacity: 1 },
   },
-  {
-    selector: '.search-match',
-    css: {
-      'border-width': 3,
-      'border-color': '#facc15',
-      opacity: 1,
+    {
+      selector: '.search-match',
+      css: {
+        'border-width': 3,
+        'border-color': '#facc15',
+        opacity: 1,
+      },
     },
-  },
-];
+  ];
+}
 
 /** 화살표 곡선 스타일 옵션 */
 type CurveStyle = 'bezier' | 'taxi' | 'straight';
@@ -275,6 +315,7 @@ const CURVE_STYLES: { value: CurveStyle; icon: typeof Spline; title: string }[] 
 
 export function LayeredArchitectureView() {
   const { workspaceId } = useWorkspace();
+  const { resolvedTheme } = useTheme();
   const containerRef = useRef<HTMLDivElement>(null);
   const cyRef = useRef<Core | null>(null);
   const graphSignatureRef = useRef<string>('');
@@ -295,6 +336,9 @@ export function LayeredArchitectureView() {
   // 레이어 목록 (뷰 내 visibility 토글용)
   const [activeLayers, setActiveLayers] = useState<LayerData[]>([]);
   const [hiddenLayerIds, setHiddenLayerIds] = useState<Set<string>>(new Set());
+  const themeMode: ThemeMode = resolvedTheme === 'light' ? 'light' : 'dark';
+  const themePalette = useMemo(() => createArchitectureThemePalette(themeMode), [themeMode]);
+  const cytoscapeStyles = useMemo(() => createCytoscapeStyles(themePalette), [themePalette]);
 
   /* ─── 데이터 로드 (workspaceId 변경 시 자동 재실행) ─── */
   const loadData = useCallback(async (options?: {
@@ -404,7 +448,7 @@ export function LayeredArchitectureView() {
       // Layer 노드
       newActiveLayers.forEach((layer, layerIdx) => {
         const yPos = CANVAS_PADDING + layerIdx * LAYER_GAP_Y;
-        const color = layer.color ?? LAYER_COLORS[layerIdx % LAYER_COLORS.length]!;
+        const color = layer.color ?? themePalette.layerColors[layerIdx % themePalette.layerColors.length]!;
         const layerLabel = layer.displayName ?? layer.name;
         const layerTitleWidth = calcLayerTitleWidth(layerLabel);
 
@@ -472,7 +516,9 @@ export function LayeredArchitectureView() {
           const objectLabel = obj.displayName ?? obj.name;
           const tagSummary = formatTagSummary(tags);
           const primaryTagColor = tags[0]?.color ?? null;
-          const objectBgColor = primaryTagColor ?? NODE_COLORS[obj.objectType] ?? NODE_COLORS['default'];
+          const objectBgColor = primaryTagColor
+            ?? themePalette.nodeColors[obj.objectType]
+            ?? themePalette.nodeColors.default;
 
           elements.push({
             data: {
@@ -529,7 +575,7 @@ export function LayeredArchitectureView() {
               source: isReversed ? edge.target : edge.source,
               target: isReversed ? edge.source : edge.target,
               relationType: edge.relationType,
-              color: EDGE_COLORS[edge.relationType] ?? '#6b7280',
+              color: themePalette.edgeColors[edge.relationType] ?? '#6b7280',
               isReversed: isReversed ? '1' : '0', // Cytoscape 선택자는 string 비교
             },
           });
@@ -537,6 +583,7 @@ export function LayeredArchitectureView() {
       }
 
       const graphSignature = JSON.stringify({
+        themeMode,
         layers: newActiveLayers.map((layer) => ({
           id: layer.id,
           name: layer.name,
@@ -582,7 +629,6 @@ export function LayeredArchitectureView() {
             layout: { name: 'preset' },
             minZoom: 0.2,
             maxZoom: 2.5,
-            wheelSensitivity: 0.3,
           });
 
           cyRef.current.fit(undefined, 40);
@@ -592,10 +638,12 @@ export function LayeredArchitectureView() {
         const cy = cyRef.current;
         const previousZoom = cy.zoom();
         const previousPan = cy.pan();
+        const styleApi = (cy as unknown as { style?: (styles: StylesheetCSS[]) => void }).style;
 
         cy.batch(() => {
           cy.elements().remove();
           cy.add(elements);
+          styleApi?.call(cy, cytoscapeStyles);
           cy.edges().style('curve-style', curveStyleRef.current);
         });
         cy.resize();
@@ -616,7 +664,7 @@ export function LayeredArchitectureView() {
       }
       isLoadingRef.current = false;
     }
-  }, [workspaceId]); // workspaceId 변경 시 loadData 재생성 → useEffect 재실행
+  }, [workspaceId, themeMode, themePalette, cytoscapeStyles]); // workspaceId/테마 변경 시 재구성
 
   useEffect(() => {
     if (destroyTimerRef.current !== null) {
@@ -773,7 +821,7 @@ export function LayeredArchitectureView() {
    * 해결: container div를 항상 DOM에 유지하고, 로딩/빈 상태는 absolute 오버레이로 표시.
    */
   return (
-    <div className="relative h-full w-full">
+    <div className="relative h-full min-h-0 w-full overflow-hidden">
       {/*
        * Cytoscape 캔버스 — 항상 마운트 상태 유지
        * loadData() 내 `if (containerRef.current)` 조건이 항상 true가 되어야 정상 초기화됨
@@ -877,7 +925,7 @@ export function LayeredArchitectureView() {
 
             {/* 엣지 타입 토글 버튼 */}
             <div className="flex flex-wrap gap-1">
-              {Object.entries(EDGE_COLORS).map(([type, color]) => (
+              {Object.entries(themePalette.edgeColors).map(([type, color]) => (
                 <button
                   key={type}
                   onClick={() => toggleEdgeType(type)}

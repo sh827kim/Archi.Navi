@@ -30,6 +30,7 @@ export interface RollupGraph3DLink {
 interface RollupGraph3DProps {
   nodes: RollupGraph3DNode[];
   links: RollupGraph3DLink[];
+  themeMode?: 'light' | 'dark';
   onNodeClick?: (node: RollupGraph3DNode, event?: MouseEvent) => void;
   onLinkClick?: (link: RollupGraph3DLink, event?: MouseEvent) => void;
   onBackgroundClick?: () => void;
@@ -180,9 +181,65 @@ function getSemanticTargetId(link: GraphLinkWithRefs): string {
   return link.semanticTarget;
 }
 
+type RollupGraphThemePalette = {
+  background: string;
+  nodeLabelColor: string;
+  nodeLabelDimColor: string;
+  nodeLabelBg: string;
+  nodeLabelDimBg: string;
+  nodeLabelBorder: string;
+  nodeLabelDimBorder: string;
+  pinnedNodeColor: string;
+  hoverNodeColor: string;
+  highlightLinkColor: string;
+  linkLabelColor: string;
+  linkLabelDimColor: string;
+  linkLabelBg: string;
+  linkLabelDimBg: string;
+};
+
+function createRollupGraphThemePalette(themeMode: 'light' | 'dark'): RollupGraphThemePalette {
+  if (themeMode === 'light') {
+    return {
+      background: '#f6f1e8',
+      nodeLabelColor: '#334155',
+      nodeLabelDimColor: 'rgba(100, 116, 139, 0.45)',
+      nodeLabelBg: 'rgba(250, 246, 240, 0.92)',
+      nodeLabelDimBg: 'rgba(228, 223, 214, 0.72)',
+      nodeLabelBorder: 'rgba(203, 213, 225, 0.95)',
+      nodeLabelDimBorder: 'rgba(203, 213, 225, 0.55)',
+      pinnedNodeColor: '#c7774d',
+      hoverNodeColor: '#b88a34',
+      highlightLinkColor: '#c7774d',
+      linkLabelColor: '#475569',
+      linkLabelDimColor: 'rgba(100, 116, 139, 0.45)',
+      linkLabelBg: 'rgba(250, 246, 240, 0.92)',
+      linkLabelDimBg: 'rgba(228, 223, 214, 0.72)',
+    };
+  }
+
+  return {
+    background: '#0f0f11',
+    nodeLabelColor: '#f8fafc',
+    nodeLabelDimColor: 'rgba(228, 228, 231, 0.35)',
+    nodeLabelBg: 'rgba(15, 15, 17, 0.72)',
+    nodeLabelDimBg: 'rgba(24, 24, 27, 0.32)',
+    nodeLabelBorder: 'rgba(82, 82, 91, 0.6)',
+    nodeLabelDimBorder: 'rgba(63, 63, 70, 0.35)',
+    pinnedNodeColor: '#c7774d',
+    hoverNodeColor: '#d4a74d',
+    highlightLinkColor: '#fde047',
+    linkLabelColor: '#d4d4d8',
+    linkLabelDimColor: 'rgba(161, 161, 170, 0.45)',
+    linkLabelBg: 'rgba(15, 15, 17, 0.72)',
+    linkLabelDimBg: 'rgba(24, 24, 27, 0.32)',
+  };
+}
+
 export function RollupGraph3D({
   nodes,
   links,
+  themeMode = 'dark',
   onNodeClick,
   onLinkClick,
   onBackgroundClick,
@@ -212,6 +269,12 @@ export function RollupGraph3D({
     nodesById: new Map<string, GraphNodeWithPos>(),
     links: [],
   });
+  const themePalette = useMemo(() => createRollupGraphThemePalette(themeMode), [themeMode]);
+  const themePaletteRef = useRef(themePalette);
+
+  useEffect(() => {
+    themePaletteRef.current = themePalette;
+  }, [themePalette]);
 
   useEffect(() => {
     onNodeClickRef.current = onNodeClick;
@@ -257,18 +320,20 @@ export function RollupGraph3D({
           highlightLinkIdsRef.current.size > 0 || pinnedLinkIdsRef.current.size > 0;
 
         const nodeColorAccessor = (node: GraphNodeWithPos) => {
+          const palette = themePaletteRef.current;
           const isPinnedRoot = node.id === pinnedRootNodeIdRef.current;
           if (!hasAnyNodeHighlight()) return node.color;
           if (isPinnedRoot) {
-            return '#f43f5e';
+            return palette.pinnedNodeColor;
           }
           if (isNodeHighlighted(node.id)) {
-            return node.id === hoverNodeIdRef.current ? '#f97316' : node.color;
+            return node.id === hoverNodeIdRef.current ? palette.hoverNodeColor : node.color;
           }
           return dimColor(node.color, 0.18);
         };
 
         const nodeLabelAccessor = (node: GraphNodeWithPos) => {
+          const palette = themePaletteRef.current;
           const active = hasAnyNodeHighlight() && !isNodeHighlighted(node.id);
           const isPinnedRoot = node.id === pinnedRootNodeIdRef.current;
           const nodeEl = document.createElement('div');
@@ -282,23 +347,24 @@ export function RollupGraph3D({
           nodeEl.style.whiteSpace = 'nowrap';
           nodeEl.style.pointerEvents = 'none';
           nodeEl.style.transform = 'translate(-50%, -50%)';
-          nodeEl.style.color = active ? 'rgba(228, 228, 231, 0.35)' : '#f8fafc';
+          nodeEl.style.color = active ? palette.nodeLabelDimColor : palette.nodeLabelColor;
           nodeEl.style.background = isPinnedRoot
-            ? 'rgba(244, 63, 94, 0.25)'
+            ? hexToRgba(palette.pinnedNodeColor, 0.2)
             : active
-              ? 'rgba(24, 24, 27, 0.32)'
-              : 'rgba(15, 15, 17, 0.72)';
+              ? palette.nodeLabelDimBg
+              : palette.nodeLabelBg;
           nodeEl.style.border = isPinnedRoot
-            ? '1px solid rgba(251, 113, 133, 0.95)'
+            ? `1px solid ${hexToRgba(palette.pinnedNodeColor, 0.88)}`
             : active
-              ? '1px solid rgba(63, 63, 70, 0.35)'
-              : '1px solid rgba(82, 82, 91, 0.6)';
+              ? `1px solid ${palette.nodeLabelDimBorder}`
+              : `1px solid ${palette.nodeLabelBorder}`;
           return new CSS2DObject(nodeEl);
         };
 
         const linkColorAccessor = (link: GraphLinkWithRefs) => {
+          const palette = themePaletteRef.current;
           if (!hasAnyLinkHighlight()) return link.color;
-          if (isLinkHighlighted(link.id)) return '#fde047';
+          if (isLinkHighlighted(link.id)) return palette.highlightLinkColor;
           return dimColor(link.color, 0.14);
         };
 
@@ -314,12 +380,13 @@ export function RollupGraph3D({
         };
 
         const linkLabelAccessor = (link: GraphLinkWithRefs) => {
+          const palette = themePaletteRef.current;
           if (!link.relationType) return null;
           const sprite = new SpriteText(link.relationType);
           const active = hasAnyLinkHighlight() && !isLinkHighlighted(link.id);
-          sprite.color = active ? 'rgba(161, 161, 170, 0.45)' : '#d4d4d8';
+          sprite.color = active ? palette.linkLabelDimColor : palette.linkLabelColor;
           sprite.textHeight = isLinkHighlighted(link.id) ? 2.6 : 2.1;
-          sprite.backgroundColor = 'rgba(15, 15, 17, 0.72)';
+          sprite.backgroundColor = active ? palette.linkLabelDimBg : palette.linkLabelBg;
           sprite.padding = 1;
           return sprite;
         };
@@ -328,7 +395,7 @@ export function RollupGraph3D({
         const instance = ForceGraph3DFactory({
           extraRenderers: [new CSS2DRenderer()],
         })(hostEl)
-          .backgroundColor('#0f0f11')
+          .backgroundColor(themePaletteRef.current.background)
           .nodeRelSize(4)
           .nodeVal((node) => Math.max(2, node.radius * 0.35))
           .nodeColor(nodeColorAccessor)
@@ -672,21 +739,32 @@ export function RollupGraph3D({
     }
   }, [nodes, links]);
 
+  useEffect(() => {
+    const instance = instanceRef.current;
+    if (!instance) return;
+    instance.backgroundColor(themePalette.background);
+    refreshHighlightRef.current?.();
+  }, [themePalette]);
+
+  const overlayTextClass = themeMode === 'light' ? 'text-slate-500' : 'text-zinc-400';
+  const emptyTextClass = themeMode === 'light' ? 'text-slate-400' : 'text-zinc-500';
+  const errorTextClass = themeMode === 'light' ? 'text-orange-600' : 'text-amber-300';
+
   return (
     <div data-testid="mapping-graph-3d" className="absolute inset-0">
       <div ref={containerRef} className="h-full w-full" />
       {!ready && !initError && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-zinc-400">
+        <div className={`pointer-events-none absolute inset-0 flex items-center justify-center text-xs ${overlayTextClass}`}>
           3D renderer loading...
         </div>
       )}
       {initError && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-amber-300">
+        <div className={`pointer-events-none absolute inset-0 flex items-center justify-center text-xs ${errorTextClass}`}>
           {initError}
         </div>
       )}
       {ready && !hasData && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-xs text-zinc-500">
+        <div className={`pointer-events-none absolute inset-0 flex items-center justify-center text-xs ${emptyTextClass}`}>
           표시할 그래프가 없습니다.
         </div>
       )}

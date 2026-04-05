@@ -4,8 +4,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RollupGraph } from '@/components/mapping/rollup-graph';
 import { ROLLUP_EVENT_FALLBACK_INTERVAL_MS } from '@/lib/rollup-event-source';
 
+const { themeState } = vi.hoisted(() => ({
+  themeState: { resolvedTheme: 'dark' as 'dark' | 'light' | undefined },
+}));
+
 vi.mock('@/contexts/workspace-context', () => ({
   useWorkspace: () => ({ workspaceId: 'ws-1' }),
+}));
+
+vi.mock('next-themes', () => ({
+  useTheme: () => themeState,
 }));
 
 vi.mock('@archi-navi/ui', () => ({
@@ -17,11 +25,13 @@ vi.mock('@/components/mapping/rollup-graph-3d', () => ({
   RollupGraph3D: ({
     nodes,
     links,
+    themeMode,
   }: {
     nodes: Array<{ id: string; label: string }>;
     links: Array<{ id: string }>;
+    themeMode?: string;
   }) => (
-    <div>
+    <div data-testid="rollup-graph-3d" data-theme-mode={themeMode}>
       <div data-testid="graph-node-labels">{nodes.map((node) => node.label).join(',')}</div>
       <div data-testid="graph-link-count">{links.length}</div>
     </div>
@@ -102,6 +112,7 @@ class FakeEventSource {
 describe('RollupGraph', () => {
   beforeEach(() => {
     FakeEventSource.instances = [];
+    themeState.resolvedTheme = 'dark';
   });
 
   afterEach(() => {
@@ -294,5 +305,30 @@ describe('RollupGraph', () => {
     await screen.findByText('현재 레벨에 표시할 Object Mapping이 없습니다');
     expect(screen.getByRole('link', { name: 'Object 목록 열기' }).getAttribute('href')).toBe('/services');
     expect(screen.getByRole('link', { name: '승인 대기로 이동' }).getAttribute('href')).toBe('/approval');
+  });
+
+  it('라이트 모드에서는 3D 그래프에 light themeMode를 전달해야 한다', async () => {
+    themeState.resolvedTheme = 'light';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url.startsWith('/api/objects?')) {
+          return Promise.resolve(jsonResponse(createDomain('domain-light-theme')));
+        }
+        if (url.startsWith('/api/domain-affinities?')) {
+          return Promise.resolve(jsonResponse([]));
+        }
+        if (url.startsWith('/api/rollups?')) {
+          return Promise.resolve(jsonResponse({ edges: [], graphStats: [] }));
+        }
+        throw new Error(`Unexpected fetch: ${url}`);
+      }),
+    );
+
+    render(<RollupGraph />);
+
+    await screen.findByText('domain-light-theme');
+    expect(screen.getByTestId('rollup-graph-3d').getAttribute('data-theme-mode')).toBe('light');
   });
 });

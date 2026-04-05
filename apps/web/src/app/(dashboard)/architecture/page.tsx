@@ -11,7 +11,7 @@ export const metadata: Metadata = {
 
 export default function ArchitecturePage() {
   return (
-    <div className="h-full w-full">
+    <div className="h-full min-h-0 w-full overflow-hidden">
       <LayeredArchitectureView />
     </div>
   );

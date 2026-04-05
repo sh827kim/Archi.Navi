@@ -91,6 +91,7 @@ function setupFetchMock() {
   let displayName = '주문 서비스';
   let description = '기존 설명';
   let visibility = 'VISIBLE';
+  let currentLayerId = 'layer-1';
 
   const baseObject: ObjectItem = {
     id: 'obj-1',
@@ -127,6 +128,33 @@ function setupFetchMock() {
     if (url === '/api/tags?workspaceId=ws-1') {
       return jsonResponse([]);
     }
+    if (url === '/api/layers?workspaceId=ws-1') {
+      return jsonResponse([
+        {
+          id: 'layer-1',
+          name: 'application',
+          displayName: 'Application',
+          color: '#3b82f6',
+          sortOrder: 0,
+          isEnabled: true,
+        },
+        {
+          id: 'layer-2',
+          name: 'infrastructure',
+          displayName: 'Infrastructure',
+          color: '#10b981',
+          sortOrder: 1,
+          isEnabled: true,
+        },
+      ]);
+    }
+    if (url === '/api/layers/assignments?workspaceId=ws-1') {
+      return jsonResponse(
+        currentLayerId
+          ? [{ objectId: 'obj-1', layerId: currentLayerId }]
+          : [],
+      );
+    }
     if (url === '/api/objects/obj-1' && method === 'PATCH') {
       const payload = JSON.parse(String(init?.body ?? '{}')) as {
         workspaceId?: string;
@@ -140,6 +168,22 @@ function setupFetchMock() {
       if ('displayName' in payload) displayName = payload.displayName ?? '';
       if ('description' in payload) description = payload.description ?? '';
       if (payload.visibility) visibility = payload.visibility;
+      return jsonResponse({ ok: true });
+    }
+    if (url === '/api/layers/assignments' && method === 'POST') {
+      const payload = JSON.parse(String(init?.body ?? '{}')) as {
+        workspaceId?: string;
+        objectId?: string;
+        layerId?: string;
+      };
+      if (payload.workspaceId !== 'ws-1' || payload.objectId !== 'obj-1' || !payload.layerId) {
+        return jsonResponse({ error: 'bad request' }, false);
+      }
+      currentLayerId = payload.layerId;
+      return jsonResponse({ id: 'assign-1' });
+    }
+    if (url === '/api/layers/assignments?workspaceId=ws-1&objectId=obj-1' && method === 'DELETE') {
+      currentLayerId = '';
       return jsonResponse({ ok: true });
     }
 
@@ -243,6 +287,51 @@ describe('ServiceListClient object edit flows', () => {
     expect(links[0]?.getAttribute('href')).toContain('/approval?workspaceId=ws-1');
     expect(links[0]?.getAttribute('href')).toContain('focusObjectId=obj-1');
     expect(links[0]?.getAttribute('href')).toContain('drill=proof-chain');
+  });
+
+  it('상세 sheet에서 현재 레이어를 표시하고 변경 시 assignment POST를 호출해야 한다', async () => {
+    const fetchMock = setupFetchMock();
+
+    render(<ServiceListClient />);
+    const sheet = await openDetailSheet();
+
+    const layerSelect = within(sheet).getByLabelText('아키텍처 레이어 선택') as HTMLSelectElement;
+    expect(layerSelect.value).toBe('layer-1');
+
+    fireEvent.change(layerSelect, { target: { value: 'layer-2' } });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/layers/assignments',
+        expect.objectContaining({
+          method: 'POST',
+          body: JSON.stringify({
+            workspaceId: 'ws-1',
+            objectId: 'obj-1',
+            layerId: 'layer-2',
+          }),
+        }),
+      );
+    });
+    expect(layerSelect.value).toBe('layer-2');
+  });
+
+  it('상세 sheet에서 레이어 없음 선택 시 assignment DELETE를 호출해야 한다', async () => {
+    const fetchMock = setupFetchMock();
+
+    render(<ServiceListClient />);
+    const sheet = await openDetailSheet();
+
+    const layerSelect = within(sheet).getByLabelText('아키텍처 레이어 선택') as HTMLSelectElement;
+    fireEvent.change(layerSelect, { target: { value: '__none__' } });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/layers/assignments?workspaceId=ws-1&objectId=obj-1',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
+    expect(layerSelect.value).toBe('__none__');
   });
 
   it('목록 카드 visibility 토글 경로도 PATCH를 호출해야 한다', async () => {

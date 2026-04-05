@@ -62,6 +62,8 @@ describe('DashboardHomeClient', () => {
     render(<DashboardHomeClient />);
 
     await screen.findByText('Alpha Workspace 운영 요약');
+    expect(screen.getByTestId('dashboard-hero-surface').className).toContain('rgba(45,212,191,0.14)');
+    expect(screen.getByTestId('dashboard-hero-surface').className).toContain('rgba(217,119,87,0.14)');
     expect(screen.getByText('총 Object')).toBeTruthy();
     expect(screen.getByText('18')).toBeTruthy();
     expect(screen.getByText('서비스')).toBeTruthy();
