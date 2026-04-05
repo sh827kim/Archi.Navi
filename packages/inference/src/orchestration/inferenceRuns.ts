@@ -49,7 +49,7 @@ export type InferenceRunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' |
 
 async function collectImpactedIntentIdsForRun(
   db: DbClient,
-  input: { workspaceId: string; runId: string; incremental: boolean },
+  input: { workspaceId: string; runId: string; incremental: boolean; deletedRouteTransformOwnerServiceIds?: string[] },
 ): Promise<string[]> {
   const listAllIntentIds = async () => {
     const rows = await db
@@ -91,9 +91,18 @@ async function collectImpactedIntentIdsForRun(
   if (functionIds.length > 0) {
     dependencyClauses.push(and(eq(proofDependencies.dependencyKind, 'function_summary_function'), inArray(proofDependencies.dependencyKey, functionIds)));
   }
-  const ownerServiceIds = updatedTransforms.map((row) => row.ownerServiceId).filter((value): value is string => typeof value === 'string' && value.length > 0);
-  if (ownerServiceIds.length > 0) {
-    dependencyClauses.push(and(eq(proofDependencies.dependencyKind, 'route_transform_owner_service'), inArray(proofDependencies.dependencyKey, ownerServiceIds)));
+  const ownerServiceIds = [
+    ...updatedTransforms
+      .map((row) => row.ownerServiceId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ...(input.deletedRouteTransformOwnerServiceIds ?? []),
+  ];
+  const uniqueOwnerServiceIds = [...new Set(ownerServiceIds)];
+  if (uniqueOwnerServiceIds.length > 0) {
+    dependencyClauses.push(and(
+      eq(proofDependencies.dependencyKind, 'route_transform_owner_service'),
+      inArray(proofDependencies.dependencyKey, uniqueOwnerServiceIds),
+    ));
   }
 
   const dependencyBackedIntentIds = dependencyClauses.length === 0
@@ -1099,11 +1108,13 @@ export async function executeInferenceRun(
   const isRunCanceled = async () =>
     (await getInferenceRunStatus(db, { workspaceId: input.workspaceId, runId: run.id })) === 'CANCELED';
 
+  const deletedRouteTransformOwnerServiceIdsForRun = new Set<string>();
   const resolveWorkspaceProofsForRun = async () => {
     const impactedIntentIds = await collectImpactedIntentIdsForRun(db, {
       workspaceId: input.workspaceId,
       runId: run.id,
       incremental: run.requestedIncremental,
+      deletedRouteTransformOwnerServiceIds: [...deletedRouteTransformOwnerServiceIdsForRun],
     });
 
     if (impactedIntentIds.length === 0) {
@@ -1455,6 +1466,9 @@ export async function executeInferenceRun(
           repoRoot: localSource.repoRoot,
           runId: run.id,
         });
+        for (const ownerServiceId of routeTransformResult.deletedOwnerServiceIds) {
+          deletedRouteTransformOwnerServiceIdsForRun.add(ownerServiceId);
+        }
         const configIntentResult = await extractInteractionIntentsFromConfigRoutes(db, {
           workspaceId: input.workspaceId,
           repoRoot: localSource.repoRoot,

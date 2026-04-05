@@ -535,7 +535,57 @@ describe('proof extraction', () => {
     const transforms = await db.select().from(routeTransforms).where(eq(routeTransforms.workspaceId, workspaceId));
     expect(transforms).toHaveLength(1);
     expect(transforms[0]?.matchPath).toBe('/api/payments/**');
-    expect(transforms[0]?.evidenceIds).toEqual([expect.stringMatching(/config:.*application\.yml#payments$/)]);
+    expect(transforms[0]?.evidenceIds).toEqual(expect.arrayContaining([
+      expect.stringMatching(/^config_repo:/),
+      expect.stringMatching(/config:.*application\.yml#payments$/),
+    ]));
+  });
+
+  it('multi-source 추출 시 현재 repo에서 obsolete prune이 다른 repo transform을 삭제하면 안 된다', async () => {
+    await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    await insertObject(db, { objectType: 'service', name: 'order-service' });
+    await insertObject(db, { objectType: 'service', name: 'payment-service' });
+
+    const anotherRepoRoot = mkdtempSync(join(tmpdir(), 'archi-proof-'));
+    try {
+      writeFileSync(
+        join(repoRoot, 'application.yml'),
+        [
+          'spring:',
+          '  application:',
+          '    name: api-gateway',
+          'zuul:',
+          '  routes:',
+          '    orders:',
+          '      path: /api/orders/**',
+          '      serviceId: order-service',
+        ].join('\n'),
+        'utf-8',
+      );
+      writeFileSync(
+        join(anotherRepoRoot, 'application.yml'),
+        [
+          'spring:',
+          '  application:',
+          '    name: api-gateway',
+          'zuul:',
+          '  routes:',
+          '    payments:',
+          '      path: /api/payments/**',
+          '      serviceId: payment-service',
+        ].join('\n'),
+        'utf-8',
+      );
+
+      await extractRouteTransformsFromConfig(db, { workspaceId, repoRoot, runId: 'run-multi-source' });
+      await extractRouteTransformsFromConfig(db, { workspaceId, repoRoot: anotherRepoRoot, runId: 'run-multi-source' });
+
+      const transforms = await db.select().from(routeTransforms).where(eq(routeTransforms.workspaceId, workspaceId));
+      expect(transforms).toHaveLength(2);
+      expect(transforms.map((row) => row.matchPath).sort()).toEqual(['/api/orders/**', '/api/payments/**']);
+    } finally {
+      rmSync(anotherRepoRoot, { recursive: true, force: true });
+    }
   });
 
   it('custom gateway plugin은 supportsFile로 기본 파일명 밖에서도 route transform을 추출할 수 있어야 한다', async () => {

@@ -61,6 +61,8 @@ export interface ExtractRouteTransformsOptions {
 
 export interface ExtractRouteTransformsResult {
   routeTransformCount: number;
+  deletedRouteTransformCount: number;
+  deletedOwnerServiceIds: string[];
   fileCount: number;
   processedFileCount: number;
   skippedFileCount: number;
@@ -95,6 +97,10 @@ function extractTargetHostAlias(urlValue: string | null): string | null {
 function buildConfigEvidenceId(repoRoot: string, filePath: string, routeKey: string): string {
   const relativePath = relative(repoRoot, filePath).trim();
   return `config:${relativePath.length > 0 ? relativePath : filePath}#${routeKey}`;
+}
+
+function buildConfigRepoEvidenceId(repoRoot: string): string {
+  return `config_repo:${stableHash([repoRoot])}`;
 }
 
 function isDefaultGatewayRouteConfigFile(filePath: string): boolean {
@@ -248,26 +254,43 @@ async function pruneObsoleteConfigRouteTransforms(
   input: {
     workspaceId: string;
     activeSourceHashes: Set<string>;
+    repoEvidenceId: string;
   },
-): Promise<void> {
+): Promise<{ deletedCount: number; deletedOwnerServiceIds: string[] }> {
   const existing = await db
-    .select({ id: routeTransforms.id, sourceHash: routeTransforms.sourceHash, evidenceIds: routeTransforms.evidenceIds })
+    .select({
+      id: routeTransforms.id,
+      sourceHash: routeTransforms.sourceHash,
+      ownerServiceId: routeTransforms.ownerServiceId,
+      evidenceIds: routeTransforms.evidenceIds,
+    })
     .from(routeTransforms)
     .where(eq(routeTransforms.workspaceId, input.workspaceId));
 
-  const obsoleteIds = existing
+  const obsoleteRows = existing
     .filter((row) => {
       const evidenceIds = Array.isArray(row.evidenceIds)
         ? row.evidenceIds.filter((entry): entry is string => typeof entry === 'string')
         : [];
       const isConfigDerived = evidenceIds.some((evidenceId) => evidenceId.startsWith('config:'));
+      const belongsToCurrentRepo = evidenceIds.includes(input.repoEvidenceId);
       if (!isConfigDerived) return false;
+      if (!belongsToCurrentRepo) return false;
       return !input.activeSourceHashes.has(row.sourceHash);
-    })
-    .map((row) => row.id);
+    });
 
-  if (obsoleteIds.length === 0) return;
-  await db.delete(routeTransforms).where(inArray(routeTransforms.id, obsoleteIds));
+  if (obsoleteRows.length === 0) {
+    return { deletedCount: 0, deletedOwnerServiceIds: [] };
+  }
+
+  await db.delete(routeTransforms).where(inArray(routeTransforms.id, obsoleteRows.map((row) => row.id)));
+
+  const deletedOwnerServiceIds = [...new Set(
+    obsoleteRows
+      .map((row) => row.ownerServiceId)
+      .filter((value): value is string => typeof value === 'string' && value.length > 0),
+  )];
+  return { deletedCount: obsoleteRows.length, deletedOwnerServiceIds };
 }
 
 function trimWildcardPath(path: string): string {
@@ -423,6 +446,7 @@ export async function extractRouteTransformsFromConfig(
   const plugins = resolveGatewayRouteTransformPlugins(options.plugins);
   const discoveredFiles = findGatewayRouteCandidateFiles(options.repoRoot, plugins);
   const activeSourceHashes = new Set<string>();
+  const repoEvidenceId = buildConfigRepoEvidenceId(options.repoRoot);
 
   let routeTransformCount = 0;
   for (const filePath of discoveredFiles) {
@@ -449,6 +473,7 @@ export async function extractRouteTransformsFromConfig(
           filePath,
           index,
         });
+        const evidenceIds = [...new Set([repoEvidenceId, ...normalizedRoute.evidenceIds])];
         await upsertRouteTransform(db, {
           workspaceId: options.workspaceId,
           runId: options.runId,
@@ -467,7 +492,7 @@ export async function extractRouteTransformsFromConfig(
           targetPathBaseHint: normalizedRoute.targetPathBaseHint,
           priority: normalizedRoute.priority,
           stripPrefixCount: normalizedRoute.stripPrefixCount,
-          evidenceIds: normalizedRoute.evidenceIds,
+          evidenceIds,
         });
         activeSourceHashes.add(
           buildRouteTransformSourceHash({
@@ -493,13 +518,16 @@ export async function extractRouteTransformsFromConfig(
     }
   }
 
-  await pruneObsoleteConfigRouteTransforms(db, {
+  const pruneResult = await pruneObsoleteConfigRouteTransforms(db, {
     workspaceId: options.workspaceId,
     activeSourceHashes,
+    repoEvidenceId,
   });
 
   return {
     routeTransformCount,
+    deletedRouteTransformCount: pruneResult.deletedCount,
+    deletedOwnerServiceIds: pruneResult.deletedOwnerServiceIds,
     fileCount: discoveredFiles.length,
     processedFileCount: discoveredFiles.length,
     skippedFileCount: 0,

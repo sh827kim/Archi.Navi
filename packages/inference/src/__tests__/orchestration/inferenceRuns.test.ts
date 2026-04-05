@@ -760,6 +760,114 @@ describe('inference orchestration runs', () => {
     );
   });
 
+  it('incremental run은 삭제된 route transform owner dependency와 연결된 intent도 재해결해야 한다', async () => {
+    await db.insert(workspaces).values({ id: workspaceId, name: 'incremental-transform-delete' });
+    const gatewayServiceId = await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const orderServiceId = await insertObject(db, { objectType: 'service', name: 'order-service' });
+    const sourceFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: gatewayServiceId,
+    });
+
+    const impactedIntentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: impactedIntentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: gatewayServiceId,
+      sourceFunctionId,
+      hostHint: 'ORDER_SERVICE',
+      intentHash: `intent-${impactedIntentId}`,
+      anchorHash: `anchor-${impactedIntentId}`,
+    });
+
+    const impactedProofStateId = generateId();
+    await db.insert(proofStates).values({
+      id: impactedProofStateId,
+      workspaceId,
+      intentId: impactedIntentId,
+      proofType: 'http_call',
+      status: 'NEW',
+      consumerServiceId: gatewayServiceId,
+      sourceFunctionId,
+    });
+    await db.insert(proofDependencies).values({
+      id: generateId(),
+      workspaceId,
+      proofStateId: impactedProofStateId,
+      dependencyKind: 'route_transform_owner_service',
+      dependencyKey: orderServiceId,
+    });
+
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    orders:',
+        '      path: /api/orders/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    await db.insert(routeTransforms).values({
+      id: generateId(),
+      workspaceId,
+      createdRunId: null,
+      updatedRunId: null,
+      sourceHash: 'route-transform-before-cleanup',
+      gatewayKind: 'zuul',
+      ownerServiceId: orderServiceId,
+      matchHost: null,
+      matchPath: '/api/orders/**',
+      matchMode: 'prefix',
+      stripPrefixCount: 1,
+      prependPrefix: null,
+      rewriteRegex: null,
+      rewriteReplacement: null,
+      pathCapturePolicy: 'glob',
+      routeMountPrefix: null,
+      targetServiceHint: 'order-service',
+      targetHostAlias: null,
+      targetPathBaseHint: '/orders',
+      priority: 100,
+      evidenceIds: ['config_repo:legacy-repo', 'config:application.yml#orders'],
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      incremental: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async () => ({
+      proofStateId: impactedProofStateId,
+      status: 'FRONTIER',
+      frontierReason: 'HOST_ALIAS_UNRESOLVED',
+      targetObjectId: null,
+      relationType: null,
+    }));
+
+    await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+    });
+
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(intentProofEngineModule.resolveInteractionIntentProof)).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ workspaceId, intentId: impactedIntentId }),
+    );
+  });
+
   it('code 추출이 실패하면 run/source를 FAILED로 기록해야 한다', async () => {
     await db.insert(workspaces).values({ id: workspaceId, name: 'orchestrator-test' });
     writeFileSync(join(tempDir, 'index.ts'), 'export const orderService = true;\n', 'utf-8');
