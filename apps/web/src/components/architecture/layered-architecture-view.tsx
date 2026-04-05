@@ -322,8 +322,13 @@ export function LayeredArchitectureView() {
   const isLoadingRef = useRef(false);
   const curveStyleRef = useRef<CurveStyle>('bezier');
   const destroyTimerRef = useRef<number | null>(null);
-  const lastInitialLoadRef = useRef<{ workspaceId: string | null; startedAt: number }>({
+  const lastInitialLoadRef = useRef<{
+    workspaceId: string | null;
+    themeMode: ThemeMode | null;
+    startedAt: number;
+  }>({
     workspaceId: null,
+    themeMode: null,
     startedAt: 0,
   });
   const [loading, setLoading] = useState(true);
@@ -675,10 +680,11 @@ export function LayeredArchitectureView() {
     const now = Date.now();
     const shouldSkipDuplicateInitialLoad =
       lastInitialLoadRef.current.workspaceId === workspaceId
+      && lastInitialLoadRef.current.themeMode === themeMode
       && (now - lastInitialLoadRef.current.startedAt) < 1000;
 
     if (!shouldSkipDuplicateInitialLoad) {
-      lastInitialLoadRef.current = { workspaceId, startedAt: now };
+      lastInitialLoadRef.current = { workspaceId, themeMode, startedAt: now };
       setHiddenLayerIds(new Set());
       graphSignatureRef.current = '';
       void loadData({ showLoadingOverlay: true, preserveViewport: false });
@@ -691,7 +697,7 @@ export function LayeredArchitectureView() {
         destroyTimerRef.current = null;
       }, 0);
     };
-  }, [loadData, workspaceId]);
+  }, [loadData, themeMode, workspaceId]);
 
   /* ─── SSE: rollup 변경 시 자동 갱신 ─── */
   useEffect(() => {

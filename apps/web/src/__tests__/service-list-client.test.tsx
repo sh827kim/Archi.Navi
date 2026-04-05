@@ -194,6 +194,59 @@ function setupFetchMock() {
   return fetchMock;
 }
 
+function setupNoEnabledLayersFetchMock() {
+  let currentLayerId = 'layer-1';
+
+  const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    const method = (init?.method ?? 'GET').toUpperCase();
+
+    if (url === '/api/objects?workspaceId=ws-1') {
+      return jsonResponse([{
+        id: 'obj-1',
+        name: 'orders-service',
+        displayName: '주문 서비스',
+        objectType: 'service',
+        granularity: 'COMPOUND',
+        visibility: 'VISIBLE',
+        parentId: null,
+        depth: 0,
+      }]);
+    }
+    if (url === '/api/objects/obj-1?workspaceId=ws-1' && method === 'GET') {
+      return jsonResponse({
+        id: 'obj-1',
+        name: 'orders-service',
+        displayName: '주문 서비스',
+        objectType: 'service',
+        granularity: 'COMPOUND',
+        visibility: 'VISIBLE',
+        parentId: null,
+        depth: 0,
+        description: '기존 설명',
+        outbound: [],
+        inbound: [],
+        children: [],
+      });
+    }
+    if (url === '/api/objects/obj-1/tags?workspaceId=ws-1') return jsonResponse([]);
+    if (url === '/api/tags?workspaceId=ws-1') return jsonResponse([]);
+    if (url === '/api/layers?workspaceId=ws-1') return jsonResponse([]);
+    if (url === '/api/layers/assignments?workspaceId=ws-1') {
+      return jsonResponse([{ objectId: 'obj-1', layerId: currentLayerId }]);
+    }
+    if (url === '/api/layers/assignments?workspaceId=ws-1&objectId=obj-1' && method === 'DELETE') {
+      currentLayerId = '';
+      return jsonResponse({ ok: true });
+    }
+
+    throw new Error(`Unexpected fetch: ${method} ${url}`);
+  });
+
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
 function getPatchPayloads(fetchMock: ReturnType<typeof vi.fn>) {
   return fetchMock.mock.calls
     .filter(([input, init]) => String(input) === '/api/objects/obj-1' && (init?.method ?? 'GET') === 'PATCH')
@@ -323,6 +376,26 @@ describe('ServiceListClient object edit flows', () => {
     const sheet = await openDetailSheet();
 
     const layerSelect = within(sheet).getByLabelText('아키텍처 레이어 선택') as HTMLSelectElement;
+    fireEvent.change(layerSelect, { target: { value: '__none__' } });
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/layers/assignments?workspaceId=ws-1&objectId=obj-1',
+        expect.objectContaining({ method: 'DELETE' }),
+      );
+    });
+    expect(layerSelect.value).toBe('__none__');
+  });
+
+  it('활성 레이어가 없어도 기존 assignment는 레이어 없음으로 해제할 수 있어야 한다', async () => {
+    const fetchMock = setupNoEnabledLayersFetchMock();
+
+    render(<ServiceListClient />);
+    const sheet = await openDetailSheet();
+
+    const layerSelect = within(sheet).getByLabelText('아키텍처 레이어 선택') as HTMLSelectElement;
+    expect(layerSelect.disabled).toBe(false);
+
     fireEvent.change(layerSelect, { target: { value: '__none__' } });
 
     await waitFor(() => {

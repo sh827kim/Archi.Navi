@@ -621,7 +621,7 @@ function ObjectDetailSheet({
                     aria-label="아키텍처 레이어 선택"
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm text-foreground"
                     value={selectedLayerId}
-                    disabled={layerSaving || layersLoading || layers.length === 0}
+                    disabled={layerSaving || layersLoading}
                     onChange={(e) => void saveLayerAssignment(e.target.value)}
                   >
                     <option value="__none__">레이어 없음</option>
@@ -635,7 +635,9 @@ function ObjectDetailSheet({
                     <p className="text-xs text-muted-foreground">레이어 정보를 불러오는 중입니다.</p>
                   )}
                   {!layersLoading && layers.length === 0 && (
-                    <p className="text-xs text-muted-foreground">등록된 레이어가 없습니다. 설정에서 레이어를 먼저 추가하세요.</p>
+                    <p className="text-xs text-muted-foreground">
+                      등록된 활성 레이어가 없습니다. 필요하면 레이어 없음을 선택해 기존 배치를 해제하세요.
+                    </p>
                   )}
                 </div>
               </section>

@@ -43,6 +43,7 @@ vi.mock('cytoscape', () => ({
         style: vi.fn(() => collection),
         removeClass: vi.fn(() => collection),
         addClass: vi.fn(() => collection),
+        remove: vi.fn(() => collection),
         filter: vi.fn(() => createCollection()),
         connectedEdges: vi.fn(() => createCollection()),
         neighborhood: vi.fn(() => createCollection()),
@@ -250,5 +251,24 @@ describe('LayeredArchitectureView SSE refresh', () => {
 
     expect(layerTitleStyle?.css.color).toBe('#334155');
     expect(tagStyle?.css['background-color']).toBe('#f4ede2');
+  });
+
+  it('초기 mount 직후 theme가 light로 결정되면 graph build를 다시 실행해야 한다', async () => {
+    const { fetchMock, getObjectFetchCount } = createFetchMock();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const { rerender } = render(<LayeredArchitectureView />);
+
+    await waitFor(() => {
+      expect(getObjectFetchCount()).toBeGreaterThanOrEqual(1);
+    });
+
+    const before = getObjectFetchCount();
+    themeState.resolvedTheme = 'light';
+    rerender(<LayeredArchitectureView />);
+
+    await waitFor(() => {
+      expect(getObjectFetchCount()).toBeGreaterThan(before);
+    });
   });
 });
