@@ -78,6 +78,8 @@ interface AcceptedProofPatchContext {
 
 interface AcceptedPatchHints {
   endpointHintId: string | null;
+  methodHintOverride: string | null;
+  externalPathOverride: string | null;
 }
 
 interface ProofDependencySnapshot {
@@ -1250,16 +1252,19 @@ async function getAcceptedPatchHints(
       ),
     );
 
-  const endpointPatch = [...patches]
-    .reverse()
-    .find((patch) => patch.patchType === 'endpoint_disambiguation');
+  const acceptedPatches = [...patches].reverse();
+  const endpointPatch = acceptedPatches.find((patch) => patch.patchType === 'endpoint_disambiguation');
+  const methodPathPatch = acceptedPatches.find((patch) => patch.patchType === 'method_path_hint');
   const endpointPayload = asRecord(endpointPatch?.payload);
+  const methodPathPayload = asRecord(methodPathPatch?.payload);
 
   return {
     endpointHintId:
       asString(endpointPayload?.['endpointId'])
       ?? asString(endpointPayload?.['targetObjectId'])
       ?? null,
+    methodHintOverride: normalizeMethod(methodPathPayload?.['method']),
+    externalPathOverride: asString(methodPathPayload?.['externalPath']),
   };
 }
 
@@ -1502,8 +1507,49 @@ async function validatePatchDeterministically(
       }
       return errors;
     }
-    case 'method_path_hint':
+    case 'method_path_hint': {
+      const methodHint = normalizeMethod(payload['method']);
+      const externalPathHint = asString(payload['externalPath']);
+      if (!frontier || frontier.frontierReason !== 'METHOD_UNKNOWN') {
+        errors.push('method_path_hint requires a METHOD_UNKNOWN frontier');
+        return errors;
+      }
+      if (!proofState.providerServiceId) {
+        errors.push('method_path_hint requires a resolved provider service');
+        return errors;
+      }
+      if (!methodHint || !externalPathHint) {
+        return errors;
+      }
+
+      const endpointRows = await db
+        .select()
+        .from(objects)
+        .where(
+          and(
+            eq(objects.workspaceId, workspaceId),
+            eq(objects.objectType, 'api_endpoint'),
+            eq(objects.parentId, proofState.providerServiceId),
+          ),
+        );
+      const normalizedHintPath = normalizePath(externalPathHint);
+      const hasCompatibleEndpoint = endpointRows.some((endpoint) => {
+        const endpointMethodPath = getEndpointMethodPath(endpoint);
+        if (endpointMethodPath.method !== methodHint) {
+          return false;
+        }
+        return Boolean(
+          endpointMethodPath.path
+          && normalizedHintPath
+          && isEndpointPathCompatible(normalizedHintPath, endpointMethodPath.path),
+        );
+      });
+      if (!hasCompatibleEndpoint) {
+        errors.push('method_path_hint must match at least one endpoint method and path in provider service');
+      }
+
       return errors;
+    }
   }
 
   return errors;
@@ -2611,14 +2657,14 @@ async function resolveHttpIntent(
     'Host alias를 provider service로 고정했습니다.',
   );
 
-  const hintedMethod = normalizeMethod(intent.methodHint);
+  const hintedMethod = acceptedPatchHints.methodHintOverride ?? normalizeMethod(intent.methodHint);
   const summaryMethod = normalizeMethod(summaryHttp?.['method']);
   const methodResolved = hintedMethod ?? summaryMethod;
   if (hintedMethod && summaryMethod && hintedMethod !== summaryMethod) {
     slots.contradictionReasons.push('METHOD_CONTRADICTION');
   }
 
-  const hintedPath = asString(intent.externalPathHint);
+  const hintedPath = acceptedPatchHints.externalPathOverride ?? asString(intent.externalPathHint);
   const summaryPathSource =
     asString(summaryHttp?.['externalPath'])
     ?? asString(summaryHttp?.['path'])

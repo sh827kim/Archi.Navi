@@ -1533,8 +1533,11 @@ describe('inference orchestration runs', () => {
       }),
     });
 
+    const proofSummary = detail.run.stats as Record<string, unknown>;
+    expect((proofSummary['proofResolution'] as Record<string, number>)['frontierCount']).toBe(1);
+
     const [state] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
-    expect(state?.status).toBe('CLOSED_ATOMIC');
+    expect(state?.status).toBe('FRONTIER');
 
     const smartPatches = await db
       .select()
@@ -1553,6 +1556,284 @@ describe('inference orchestration runs', () => {
       matchPath: '/api/orders/**',
       targetServiceHint: 'orders-service',
     });
+    const steps = await db
+      .select()
+      .from(proofSteps)
+      .where(eq(proofSteps.proofStateId, proofStateId));
+    expect(steps.some((step) => step.stepType === 'apply_patch' && step.status === 'APPLIED')).toBe(true);
+
+    const smartMode = ((detail.run.stats as Record<string, unknown>)['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode).toMatchObject({
+      enabled: true,
+      autoAcceptedCount: 1,
+      frontierResolvedByLlm: 1,
+      llmCallCount: 1,
+    });
+  });
+
+  it('smart endpoint_disambiguation patch가 ACCEPTED 되면 ambiguous endpoint frontier를 닫아야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /api/orders/{id}',
+      parentId: seeded.providerServiceId,
+      metadata: { method: 'GET', path: '/api/orders/{id}' },
+    });
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      providerServiceId: seeded.providerServiceId,
+      methodResolved: 'GET',
+      externalPathResolved: '/api/orders/123',
+      internalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 2,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'ENDPOINT_MATCH_AMBIGUOUS',
+    });
+
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+      frontierClass: 'TARGET',
+      retryStrategy: 'agent_patch',
+      detail: {
+        candidateObjectIds: [endpointId],
+      },
+    });
+
+    let resolutionCallCount = 0;
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      if (input.intentId !== seeded.intentId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      resolutionCallCount += 1;
+      if (resolutionCallCount === 1) {
+        return {
+          proofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      await dbClient
+        .update(proofStates)
+        .set({
+          status: 'CLOSED_ATOMIC',
+          frontierCode: 'CLOSED_ATOMIC',
+          targetObjectType: 'api_endpoint',
+          targetObjectId: endpointId,
+        })
+        .where(eq(proofStates.id, proofStateId));
+      await dbClient
+        .delete(proofFrontiers)
+        .where(and(eq(proofFrontiers.workspaceId, workspaceId), eq(proofFrontiers.proofStateId, proofStateId)));
+
+      return {
+        proofStateId,
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: endpointId,
+        relationType: 'call',
+      };
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 16,
+        completionTokens: 6,
+        object: {
+          patchType: 'endpoint_disambiguation',
+          resolved: true,
+          confidence: 0.91,
+          reasoning: 'single best endpoint from candidate set',
+          endpointSelection: {
+            endpointId,
+            method: 'GET',
+            path: '/api/orders/{id}',
+          },
+        },
+      }),
+    });
+
+    const [state] = await db.select().from(proofStates).where(eq(proofStates.id, proofStateId));
+    expect(state?.status).toBe('CLOSED_ATOMIC');
+
+    const smartPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(smartPatches[0]?.patchType).toBe('endpoint_disambiguation');
+    expect(smartPatches[0]?.validationStatus).toBe('ACCEPTED');
+
+    const smartMode = ((detail.run.stats as Record<string, unknown>)['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
+    expect(smartMode).toMatchObject({
+      enabled: true,
+      autoAcceptedCount: 1,
+      frontierResolvedByLlm: 1,
+      llmCallCount: 1,
+    });
+  });
+
+  it('smart method_path_hint patch가 ACCEPTED 되면 METHOD_UNKNOWN frontier를 닫아야 한다', async () => {
+    const seeded = await seedProofIntent(db);
+    const proofStateId = generateId();
+
+    await db.insert(proofStates).values({
+      id: proofStateId,
+      workspaceId,
+      intentId: seeded.intentId,
+      proofType: 'http_call',
+      status: 'FRONTIER',
+      consumerServiceId: seeded.consumerServiceId,
+      sourceFunctionId: seeded.sourceFunctionId,
+      providerServiceId: seeded.providerServiceId,
+      methodResolved: null,
+      externalPathResolved: '/api/orders/123',
+      internalPathResolved: '/api/orders/123',
+      routeChain: [],
+      slotState: {},
+      ambiguityCount: 0,
+      contradictionCount: 0,
+      confidence: 0.3,
+      frontierCode: 'METHOD_UNKNOWN',
+    });
+
+    await db.insert(proofFrontiers).values({
+      proofStateId,
+      workspaceId,
+      frontierReason: 'METHOD_UNKNOWN',
+      frontierClass: 'METHOD_PATH',
+      retryStrategy: 'agent_patch',
+      detail: {
+        methodHint: null,
+        externalPathHint: '/api/orders/123',
+      },
+    });
+    await db.insert(objects).values({
+      id: generateId(),
+      workspaceId,
+      objectType: 'api_endpoint',
+      category: 'CHANNEL',
+      granularity: 'ATOMIC',
+      name: 'GET /api/orders/{id}',
+      parentId: seeded.providerServiceId,
+      path: '/api/orders/{id}',
+      depth: 2,
+      visibility: 'VISIBLE',
+      metadata: { method: 'GET', path: '/api/orders/{id}' },
+    });
+
+    let resolutionCallCount = 0;
+    vi.mocked(intentProofEngineModule.resolveInteractionIntentProof).mockImplementation(async (dbClient, input) => {
+      if (input.intentId !== seeded.intentId) {
+        return {
+          proofStateId: generateId(),
+          status: 'CLOSED_ATOMIC',
+          frontierReason: null,
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      resolutionCallCount += 1;
+      if (resolutionCallCount === 1) {
+        return {
+          proofStateId,
+          status: 'FRONTIER',
+          frontierReason: 'METHOD_UNKNOWN',
+          targetObjectId: null,
+          relationType: null,
+        };
+      }
+
+      await dbClient
+        .update(proofStates)
+        .set({
+          status: 'CLOSED_ATOMIC',
+          frontierCode: 'CLOSED_ATOMIC',
+          targetObjectType: 'service',
+          targetObjectId: seeded.providerServiceId,
+          methodResolved: 'GET',
+        })
+        .where(eq(proofStates.id, proofStateId));
+      await dbClient
+        .delete(proofFrontiers)
+        .where(and(eq(proofFrontiers.workspaceId, workspaceId), eq(proofFrontiers.proofStateId, proofStateId)));
+
+      return {
+        proofStateId,
+        status: 'CLOSED_ATOMIC',
+        frontierReason: null,
+        targetObjectId: seeded.providerServiceId,
+        relationType: 'call',
+      };
+    });
+
+    writeFileSync(join(tempDir, 'application.yml'), 'spring:\n  application:\n    name: api-gateway\n', 'utf-8');
+    const run = await createInferenceRun(db, {
+      workspaceId,
+      modes: ['config'],
+      smartProof: true,
+      sources: [{ type: 'local', ref: tempDir }],
+    });
+
+    const detail = await executeInferenceRun(db, {
+      workspaceId,
+      runId: run.id,
+      smartGenerateFn: async () => ({
+        model: 'mock-smart-model',
+        promptTokens: 15,
+        completionTokens: 5,
+        object: {
+          patchType: 'method_path_hint',
+          resolved: true,
+          confidence: 0.88,
+          reasoning: 'route and provider endpoint strongly indicate GET',
+          methodPathHint: {
+            method: 'GET',
+            externalPath: '/api/orders/123',
+          },
+        },
+      }),
+    });
+
+    const smartPatches = await db
+      .select()
+      .from(proofPatches)
+      .where(and(eq(proofPatches.workspaceId, workspaceId), eq(proofPatches.sourceKind, 'smart_agent')));
+    expect(smartPatches[0]?.patchType).toBe('method_path_hint');
+    expect(smartPatches[0]?.validationStatus).toBe('ACCEPTED');
 
     const smartMode = ((detail.run.stats as Record<string, unknown>)['proofSummary'] as Record<string, unknown>)['smartMode'] as Record<string, unknown>;
     expect(smartMode).toMatchObject({

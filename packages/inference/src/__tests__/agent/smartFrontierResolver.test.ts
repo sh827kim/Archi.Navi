@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  buildEndpointDisambiguationPrompt,
   buildHostAliasResolutionPrompt,
+  buildMethodPathHintPrompt,
   buildRouteTransformResolutionPrompt,
   buildSmartAliasBindingPatch,
+  buildSmartEndpointDisambiguationPatch,
   buildSmartFrontierPrompt,
+  buildSmartMethodPathHintPatch,
   buildSmartPatchFromProposal,
   buildSmartRouteTransformPatch,
   isSupportedSmartFrontierReason,
@@ -40,6 +44,16 @@ function createContext(): SmartFrontierResolutionContext {
     aliasBindings: [
       { key: 'clients.payment.base-url', value: 'PAYMENT_API', resolvedService: 'payment-service' },
     ],
+    candidateEndpoints: [
+      {
+        id: 'endpoint-order-get',
+        name: 'GET /api/orders/{id}',
+        method: 'GET',
+        path: '/api/orders/{id}',
+        serviceId: 'service-order',
+        serviceName: 'order-service',
+      },
+    ],
   };
 }
 
@@ -50,12 +64,15 @@ describe('smartFrontierResolver', () => {
       'CONFIG_BINDING_MISSING',
       'ROUTE_FAMILY_DERIVATION_EMPTY',
       'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
+      'METHOD_UNKNOWN',
+      'ENDPOINT_MATCH_AMBIGUOUS',
     ]);
     expect(isSupportedSmartFrontierReason('HOST_ALIAS_UNRESOLVED')).toBe(true);
     expect(isSupportedSmartFrontierReason('CONFIG_BINDING_MISSING')).toBe(true);
     expect(isSupportedSmartFrontierReason('ROUTE_FAMILY_DERIVATION_EMPTY')).toBe(true);
     expect(isSupportedSmartFrontierReason('ROUTE_TO_ENDPOINT_COMPOSITION_FAILED')).toBe(true);
-    expect(isSupportedSmartFrontierReason('ENDPOINT_MATCH_AMBIGUOUS')).toBe(false);
+    expect(isSupportedSmartFrontierReason('METHOD_UNKNOWN')).toBe(true);
+    expect(isSupportedSmartFrontierReason('ENDPOINT_MATCH_AMBIGUOUS')).toBe(true);
   });
 
   it('host alias prompt는 핵심 frontier 문맥을 포함해야 한다', () => {
@@ -116,9 +133,42 @@ describe('smartFrontierResolver', () => {
       ...createContext(),
       frontierReason: 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
     });
+    const endpointPrompt = buildSmartFrontierPrompt({
+      ...createContext(),
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+    });
+    const methodPrompt = buildSmartFrontierPrompt({
+      ...createContext(),
+      frontierReason: 'METHOD_UNKNOWN',
+    });
 
     expect(aliasPrompt).toContain('Respond with patchType=alias_binding.');
     expect(routePrompt).toContain('Respond with patchType=route_transform_patch.');
+    expect(endpointPrompt).toContain('Respond with patchType=endpoint_disambiguation.');
+    expect(methodPrompt).toContain('Respond with patchType=method_path_hint.');
+  });
+
+  it('endpoint disambiguation prompt는 candidate endpoint 문맥을 포함해야 한다', () => {
+    const prompt = buildEndpointDisambiguationPrompt({
+      ...createContext(),
+      frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+    });
+
+    expect(prompt).toContain('Frontier reason: ENDPOINT_MATCH_AMBIGUOUS');
+    expect(prompt).toContain('Respond with patchType=endpoint_disambiguation.');
+    expect(prompt).toContain('endpoint-order-get');
+    expect(prompt).toContain('/api/orders/{id}');
+  });
+
+  it('method path hint prompt는 method/path 추론 문맥을 포함해야 한다', () => {
+    const prompt = buildMethodPathHintPrompt({
+      ...createContext(),
+      frontierReason: 'METHOD_UNKNOWN',
+    });
+
+    expect(prompt).toContain('Frontier reason: METHOD_UNKNOWN');
+    expect(prompt).toContain('Respond with patchType=method_path_hint.');
+    expect(prompt).toContain('Current path hint: /api/orders/{id}');
   });
 
   it('route transform proposal은 smart_agent patch로 변환되어야 한다', () => {
@@ -152,6 +202,64 @@ describe('smartFrontierResolver', () => {
         targetServiceHint: 'order-service',
         targetHostAlias: 'ORDER_API',
         priority: 120,
+      },
+    });
+  });
+
+  it('endpoint disambiguation proposal은 smart_agent patch로 변환되어야 한다', () => {
+    const patch = buildSmartEndpointDisambiguationPatch(
+      {
+        ...createContext(),
+        frontierReason: 'ENDPOINT_MATCH_AMBIGUOUS',
+      },
+      {
+        patchType: 'endpoint_disambiguation',
+        resolved: true,
+        confidence: 0.87,
+        reasoning: 'exact endpoint match',
+        endpointSelection: {
+          endpointId: 'endpoint-order-get',
+          method: 'GET',
+          path: '/api/orders/{id}',
+        },
+      },
+    );
+
+    expect(patch).toMatchObject({
+      patchType: 'endpoint_disambiguation',
+      sourceKind: 'smart_agent',
+      payload: {
+        endpointId: 'endpoint-order-get',
+        method: 'GET',
+        path: '/api/orders/{id}',
+      },
+    });
+  });
+
+  it('method path hint proposal은 smart_agent patch로 변환되어야 한다', () => {
+    const patch = buildSmartMethodPathHintPatch(
+      {
+        ...createContext(),
+        frontierReason: 'METHOD_UNKNOWN',
+      },
+      {
+        patchType: 'method_path_hint',
+        resolved: true,
+        confidence: 0.8,
+        reasoning: 'inferred from route shape',
+        methodPathHint: {
+          method: 'GET',
+          externalPath: '/api/orders/{id}',
+        },
+      },
+    );
+
+    expect(patch).toMatchObject({
+      patchType: 'method_path_hint',
+      sourceKind: 'smart_agent',
+      payload: {
+        method: 'GET',
+        externalPath: '/api/orders/{id}',
       },
     });
   });

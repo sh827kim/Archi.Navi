@@ -1921,6 +1921,114 @@ describe('intent proof engine', () => {
     expect(patchResult.errors).toContain('endpointId must reference an existing object');
   });
 
+  it('method_path_hint patch는 METHOD_UNKNOWN frontier를 닫고 target endpoint를 고정해야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'catalog-api' });
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /catalog/items/{id}',
+      parentId: providerServiceId,
+      metadata: { method: 'GET', path: '/catalog/items/{id}' },
+    });
+
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: serviceId,
+      aliasKey: 'client.catalog.url',
+      aliasValue: 'CATALOG_API',
+      resolvedServiceId: providerServiceId,
+      sourceHash: 'alias-catalog-api',
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: null,
+      externalPathHint: '/catalog/items/123',
+      hostHint: 'CATALOG_API',
+      configKeys: ['client.catalog.url'],
+      intentHash: 'intent-http-method-patch',
+      anchorHash: 'anchor-http-method-patch',
+    });
+
+    const initial = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(initial.status).toBe('FRONTIER');
+    expect(initial.frontierReason).toBe('METHOD_UNKNOWN');
+
+    const patchResult = await validateAndApplyProofPatch(db, {
+      workspaceId,
+      proofStateId: initial.proofStateId,
+      patchType: 'method_path_hint',
+      payload: {
+        method: 'GET',
+        externalPath: '/catalog/items/123',
+      },
+      sourceKind: 'agent',
+    });
+
+    expect(patchResult.validationStatus).toBe('ACCEPTED');
+    expect(patchResult.resolution?.status).toBe('CLOSED_ATOMIC');
+    expect(patchResult.resolution?.targetObjectId).toBe(endpointId);
+  });
+
+  it('필수 필드가 없는 method_path_hint patch는 REJECTED로 남겨야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'billing-api' });
+    await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'POST /billing/charges',
+      parentId: providerServiceId,
+      metadata: { method: 'POST', path: '/billing/charges' },
+    });
+
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: serviceId,
+      aliasKey: 'client.billing.url',
+      aliasValue: 'BILLING_API',
+      resolvedServiceId: providerServiceId,
+      sourceHash: 'alias-billing-api',
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: null,
+      externalPathHint: '/billing/charges',
+      hostHint: 'BILLING_API',
+      configKeys: ['client.billing.url'],
+      intentHash: 'intent-http-method-patch-invalid',
+      anchorHash: 'anchor-http-method-patch-invalid',
+    });
+
+    const initial = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(initial.status).toBe('FRONTIER');
+    expect(initial.frontierReason).toBe('METHOD_UNKNOWN');
+
+    const patchResult = await validateAndApplyProofPatch(db, {
+      workspaceId,
+      proofStateId: initial.proofStateId,
+      patchType: 'method_path_hint',
+      payload: {
+        externalPath: '/billing/charges',
+      },
+      sourceKind: 'agent',
+    });
+
+    expect(patchResult.validationStatus).toBe('REJECTED');
+    expect(patchResult.errors).toContain('method is required');
+  });
+
   it('DB read intent는 단일 db_table로 닫히고 read candidate를 projection해야 한다', async () => {
     const databaseId = await insertObject(db, {
       objectType: 'database',

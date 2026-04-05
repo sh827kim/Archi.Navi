@@ -224,12 +224,14 @@ Smart의 실행 순서는 아래를 따른다.
 
 - deterministic 단계가 남긴 frontier를 LLM structured patch로 해소 시도한다.
 
-1차 지원 frontier reason:
+현재 지원 frontier reason:
 
 - `HOST_ALIAS_UNRESOLVED`
 - `CONFIG_BINDING_MISSING`
 - `ENDPOINT_MATCH_AMBIGUOUS`
 - `METHOD_UNKNOWN`
+- `ROUTE_FAMILY_DERIVATION_EMPTY`
+- `ROUTE_TO_ENDPOINT_COMPOSITION_FAILED`
 
 후속 확장 후보:
 

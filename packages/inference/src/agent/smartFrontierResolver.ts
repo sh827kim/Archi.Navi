@@ -29,6 +29,8 @@ export const SUPPORTED_SMART_FRONTIER_REASONS = [
   'CONFIG_BINDING_MISSING',
   'ROUTE_FAMILY_DERIVATION_EMPTY',
   'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
+  'METHOD_UNKNOWN',
+  'ENDPOINT_MATCH_AMBIGUOUS',
 ] as const;
 
 export type SupportedSmartFrontierReason = (typeof SUPPORTED_SMART_FRONTIER_REASONS)[number];
@@ -37,6 +39,15 @@ export interface SmartFrontierAvailableService {
   id: string;
   name: string;
   endpointCount: number;
+}
+
+export interface SmartFrontierCandidateEndpoint {
+  id: string;
+  name: string;
+  method: string | null;
+  path: string | null;
+  serviceId: string | null;
+  serviceName: string | null;
 }
 
 export interface SmartFrontierAliasBinding {
@@ -68,6 +79,7 @@ export interface SmartFrontierResolutionContext {
   };
   availableServices: SmartFrontierAvailableService[];
   aliasBindings: SmartFrontierAliasBinding[];
+  candidateEndpoints: SmartFrontierCandidateEndpoint[];
 }
 
 export interface SmartAliasBindingProposal {
@@ -98,7 +110,34 @@ export interface SmartRouteTransformProposal {
   } | null;
 }
 
-export type SmartPatchProposal = SmartAliasBindingProposal | SmartRouteTransformProposal;
+export interface SmartEndpointDisambiguationProposal {
+  patchType: 'endpoint_disambiguation';
+  resolved: boolean;
+  confidence: number;
+  reasoning: string;
+  endpointSelection: {
+    endpointId: string | null;
+    method: string | null;
+    path: string | null;
+  } | null;
+}
+
+export interface SmartMethodPathHintProposal {
+  patchType: 'method_path_hint';
+  resolved: boolean;
+  confidence: number;
+  reasoning: string;
+  methodPathHint: {
+    method: string | null;
+    externalPath: string | null;
+  } | null;
+}
+
+export type SmartPatchProposal =
+  | SmartAliasBindingProposal
+  | SmartRouteTransformProposal
+  | SmartEndpointDisambiguationProposal
+  | SmartMethodPathHintProposal;
 
 export interface SmartGenerateResolutionResult<T> {
   model: string;
@@ -146,6 +185,14 @@ function sha256(value: string): string {
   return createHash('sha256').update(value).digest('hex');
 }
 
+function getEndpointMetadata(value: unknown): { method: string | null; path: string | null } {
+  const metadata = asRecord(value);
+  return {
+    method: asString(metadata?.['method']),
+    path: asString(metadata?.['path']),
+  };
+}
+
 export function isSupportedSmartFrontierReason(
   reason: string | null,
 ): reason is SupportedSmartFrontierReason {
@@ -159,6 +206,14 @@ function supportsAliasBindingPatch(reason: SupportedSmartFrontierReason): boolea
 
 function supportsRouteTransformPatch(reason: SupportedSmartFrontierReason): boolean {
   return reason === 'ROUTE_FAMILY_DERIVATION_EMPTY' || reason === 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED';
+}
+
+function supportsMethodPathPatch(reason: SupportedSmartFrontierReason): boolean {
+  return reason === 'METHOD_UNKNOWN';
+}
+
+function supportsEndpointDisambiguationPatch(reason: SupportedSmartFrontierReason): boolean {
+  return reason === 'ENDPOINT_MATCH_AMBIGUOUS';
 }
 
 export function buildHostAliasResolutionPrompt(ctx: SmartFrontierResolutionContext): string {
@@ -212,12 +267,62 @@ export function buildRouteTransformResolutionPrompt(ctx: SmartFrontierResolution
   ].join('\n');
 }
 
+export function buildEndpointDisambiguationPrompt(ctx: SmartFrontierResolutionContext): string {
+  const candidateEndpoints = ctx.candidateEndpoints.length > 0
+    ? ctx.candidateEndpoints
+      .map((endpoint) => `- ${endpoint.id}: ${endpoint.method ?? 'UNKNOWN'} ${endpoint.path ?? endpoint.name} (${endpoint.serviceName ?? endpoint.serviceId ?? 'unknown service'})`)
+      .join('\n')
+    : 'none';
+
+  return [
+    'You are resolving an ambiguous endpoint frontier for the Smart Proof Engine.',
+    `Frontier reason: ${ctx.frontierReason}`,
+    'Respond with patchType=endpoint_disambiguation.',
+    `Source service: ${ctx.intent.sourceService}`,
+    `Provider hint: ${ctx.intent.providerHint ?? ctx.intent.targetServiceHint ?? 'none'}`,
+    `HTTP method hint: ${ctx.intent.methodHint ?? 'unknown'}`,
+    `Path hint: ${ctx.intent.pathHint ?? 'unknown'}`,
+    'Candidate endpoints:',
+    candidateEndpoints,
+    'Task:',
+    'Select the single best endpoint from the candidate set. If the frontier cannot be resolved confidently, return resolved=false.',
+  ].join('\n');
+}
+
+export function buildMethodPathHintPrompt(ctx: SmartFrontierResolutionContext): string {
+  const candidateEndpoints = ctx.candidateEndpoints.length > 0
+    ? ctx.candidateEndpoints
+      .map((endpoint) => `- ${endpoint.method ?? 'UNKNOWN'} ${endpoint.path ?? endpoint.name}`)
+      .join('\n')
+    : 'none';
+
+  return [
+    'You are resolving an HTTP method/path frontier for the Smart Proof Engine.',
+    `Frontier reason: ${ctx.frontierReason}`,
+    'Respond with patchType=method_path_hint.',
+    `Source service: ${ctx.intent.sourceService}`,
+    `Current method hint: ${ctx.intent.methodHint ?? 'unknown'}`,
+    `Current path hint: ${ctx.intent.pathHint ?? 'unknown'}`,
+    `Provider hint: ${ctx.intent.providerHint ?? ctx.intent.targetServiceHint ?? 'none'}`,
+    'Candidate endpoints:',
+    candidateEndpoints,
+    'Task:',
+    'Infer the most likely HTTP method and external path. If confidence is too low, return resolved=false.',
+  ].join('\n');
+}
+
 export function buildSmartFrontierPrompt(ctx: SmartFrontierResolutionContext): string {
   if (supportsAliasBindingPatch(ctx.frontierReason)) {
     return buildHostAliasResolutionPrompt(ctx);
   }
   if (supportsRouteTransformPatch(ctx.frontierReason)) {
     return buildRouteTransformResolutionPrompt(ctx);
+  }
+  if (supportsEndpointDisambiguationPatch(ctx.frontierReason)) {
+    return buildEndpointDisambiguationPrompt(ctx);
+  }
+  if (supportsMethodPathPatch(ctx.frontierReason)) {
+    return buildMethodPathHintPrompt(ctx);
   }
   return [
     'You are resolving a Smart Proof Engine frontier.',
@@ -267,6 +372,39 @@ export function buildSmartRouteTransformPatch(
   };
 }
 
+export function buildSmartEndpointDisambiguationPatch(
+  _ctx: SmartFrontierResolutionContext,
+  proposal: SmartEndpointDisambiguationProposal,
+): NonNullable<SmartFrontierResolution['patch']> {
+  return {
+    patchType: 'endpoint_disambiguation',
+    payload: {
+      endpointId: proposal.endpointSelection?.endpointId,
+      method: proposal.endpointSelection?.method,
+      path: proposal.endpointSelection?.path,
+      confidence: proposal.confidence,
+      evidenceIds: ['smart-agent:ENDPOINT_MATCH_AMBIGUOUS'],
+    },
+    sourceKind: 'smart_agent',
+  };
+}
+
+export function buildSmartMethodPathHintPatch(
+  _ctx: SmartFrontierResolutionContext,
+  proposal: SmartMethodPathHintProposal,
+): NonNullable<SmartFrontierResolution['patch']> {
+  return {
+    patchType: 'method_path_hint',
+    payload: {
+      method: proposal.methodPathHint?.method,
+      externalPath: proposal.methodPathHint?.externalPath,
+      confidence: proposal.confidence,
+      evidenceIds: ['smart-agent:METHOD_UNKNOWN'],
+    },
+    sourceKind: 'smart_agent',
+  };
+}
+
 export function buildSmartPatchFromProposal(
   ctx: SmartFrontierResolutionContext,
   proposal: SmartPatchProposal,
@@ -276,6 +414,12 @@ export function buildSmartPatchFromProposal(
   }
   if (proposal.patchType === 'route_transform_patch' && supportsRouteTransformPatch(ctx.frontierReason)) {
     return buildSmartRouteTransformPatch(ctx, proposal);
+  }
+  if (proposal.patchType === 'endpoint_disambiguation' && supportsEndpointDisambiguationPatch(ctx.frontierReason)) {
+    return buildSmartEndpointDisambiguationPatch(ctx, proposal);
+  }
+  if (proposal.patchType === 'method_path_hint' && supportsMethodPathPatch(ctx.frontierReason)) {
+    return buildSmartMethodPathHintPatch(ctx, proposal);
   }
   return null;
 }
@@ -322,7 +466,10 @@ async function loadSmartFrontierResolutionContext(
       .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service'))),
     db
       .select({
+        id: objects.id,
+        name: objects.name,
         parentId: objects.parentId,
+        metadata: objects.metadata,
       })
       .from(objects)
       .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'api_endpoint'))),
@@ -357,8 +504,42 @@ async function loadSmartFrontierResolutionContext(
       await db
         .select({ id: objects.id, name: objects.name })
         .from(objects)
-        .where(and(eq(objects.workspaceId, workspaceId), inArray(objects.id, serviceIds)))
+      .where(and(eq(objects.workspaceId, workspaceId), inArray(objects.id, serviceIds)))
     ).map((row) => [row.id, row.name]));
+
+  const frontierDetail = asRecord(frontier.detail) ?? {};
+  const endpointCandidateSet = asRecord(frontierDetail['endpointCandidateSet']);
+  const explicitCandidateEndpointIds = [
+    ...asStringArray(frontierDetail['candidateObjectIds']),
+    ...asStringArray(endpointCandidateSet?.['objectIds']),
+  ];
+  const shouldUseProviderEndpointFallback =
+    (state.providerServiceId && (frontier.frontierReason === 'METHOD_UNKNOWN' || frontier.frontierReason === 'ENDPOINT_MATCH_AMBIGUOUS'))
+    && explicitCandidateEndpointIds.length === 0;
+  const fallbackCandidateEndpointIds = shouldUseProviderEndpointFallback
+      ? endpointRows
+        .filter((endpoint) => endpoint.parentId === state.providerServiceId)
+        .map((endpoint) => endpoint.id)
+      : [];
+  const candidateEndpointIds = explicitCandidateEndpointIds.length > 0
+    ? explicitCandidateEndpointIds
+    : fallbackCandidateEndpointIds;
+  const candidateEndpoints = candidateEndpointIds.length === 0
+    ? []
+    : endpointRows
+      .filter((endpoint) => candidateEndpointIds.includes(endpoint.id))
+      .map((endpoint) => {
+        const endpointMetadata = getEndpointMetadata(endpoint.metadata);
+        const serviceId = endpoint.parentId ?? null;
+        return {
+          id: endpoint.id,
+          name: endpoint.name,
+          method: endpointMetadata.method,
+          path: endpointMetadata.path,
+          serviceId,
+          serviceName: serviceId ? (serviceRows.find((service) => service.id === serviceId)?.name ?? null) : null,
+        };
+      });
 
   return {
     workspaceId,
@@ -379,7 +560,7 @@ async function loadSmartFrontierResolutionContext(
     },
     proofState: {
       currentSlots: asRecord(state.slotState) ?? {},
-      frontierDetail: asRecord(frontier.detail) ?? {},
+      frontierDetail,
     },
     availableServices: serviceRows.map((service) => ({
       id: service.id,
@@ -391,6 +572,7 @@ async function loadSmartFrontierResolutionContext(
       value: binding.aliasValue,
       resolvedService: binding.resolvedServiceId ? (resolvedServiceNames.get(binding.resolvedServiceId) ?? null) : null,
     })),
+    candidateEndpoints,
   };
 }
 

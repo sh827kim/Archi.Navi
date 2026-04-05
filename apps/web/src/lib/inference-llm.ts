@@ -77,9 +77,34 @@ const smartRouteTransformProposalSchema = z.object({
   }).nullable(),
 });
 
+const smartEndpointDisambiguationProposalSchema = z.object({
+  patchType: z.literal('endpoint_disambiguation'),
+  resolved: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  endpointSelection: z.object({
+    endpointId: z.string().nullable(),
+    method: z.string().nullable(),
+    path: z.string().nullable(),
+  }).nullable(),
+});
+
+const smartMethodPathHintProposalSchema = z.object({
+  patchType: z.literal('method_path_hint'),
+  resolved: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  methodPathHint: z.object({
+    method: z.string().nullable(),
+    externalPath: z.string().nullable(),
+  }).nullable(),
+});
+
 const smartPatchProposalSchema = z.discriminatedUnion('patchType', [
   smartAliasBindingProposalSchema,
   smartRouteTransformProposalSchema,
+  smartEndpointDisambiguationProposalSchema,
+  smartMethodPathHintProposalSchema,
 ]);
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
