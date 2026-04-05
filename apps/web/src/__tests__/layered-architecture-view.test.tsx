@@ -354,5 +354,13 @@ describe('LayeredArchitectureView SSE refresh', () => {
     await waitFor(() => {
       expect(objectFetchCount).toBeGreaterThan(1);
     });
+
+    const lastInitOptions = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as {
+      style: Array<{ selector: string; css: Record<string, unknown> }>;
+    };
+    const layerTitleStyle = lastInitOptions.style.find(
+      (item) => item.selector === 'node[nodeType="layer-title"]',
+    );
+    expect(layerTitleStyle?.css.color).toBe('#334155');
   });
 });

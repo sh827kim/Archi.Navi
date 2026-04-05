@@ -320,6 +320,10 @@ export function LayeredArchitectureView() {
   const cyRef = useRef<Core | null>(null);
   const graphSignatureRef = useRef<string>('');
   const isLoadingRef = useRef(false);
+  const loadDataRef = useRef<((options?: {
+    showLoadingOverlay?: boolean;
+    preserveViewport?: boolean;
+  }) => Promise<void>) | null>(null);
   const curveStyleRef = useRef<CurveStyle>('bezier');
   const destroyTimerRef = useRef<number | null>(null);
   const pendingReloadRef = useRef<{
@@ -348,6 +352,13 @@ export function LayeredArchitectureView() {
   const themeMode: ThemeMode = resolvedTheme === 'light' ? 'light' : 'dark';
   const themePalette = useMemo(() => createArchitectureThemePalette(themeMode), [themeMode]);
   const cytoscapeStyles = useMemo(() => createCytoscapeStyles(themePalette), [themePalette]);
+  const themeModeRef = useRef(themeMode);
+  const themePaletteRef = useRef(themePalette);
+  const cytoscapeStylesRef = useRef(cytoscapeStyles);
+
+  themeModeRef.current = themeMode;
+  themePaletteRef.current = themePalette;
+  cytoscapeStylesRef.current = cytoscapeStyles;
 
   /* ─── 데이터 로드 (workspaceId 변경 시 자동 재실행) ─── */
   const loadData = useCallback(async (options?: {
@@ -460,7 +471,10 @@ export function LayeredArchitectureView() {
       // Layer 노드
       newActiveLayers.forEach((layer, layerIdx) => {
         const yPos = CANVAS_PADDING + layerIdx * LAYER_GAP_Y;
-        const color = layer.color ?? themePalette.layerColors[layerIdx % themePalette.layerColors.length]!;
+        const color = layer.color
+          ?? themePaletteRef.current.layerColors[
+            layerIdx % themePaletteRef.current.layerColors.length
+          ]!;
         const layerLabel = layer.displayName ?? layer.name;
         const layerTitleWidth = calcLayerTitleWidth(layerLabel);
 
@@ -529,8 +543,8 @@ export function LayeredArchitectureView() {
           const tagSummary = formatTagSummary(tags);
           const primaryTagColor = tags[0]?.color ?? null;
           const objectBgColor = primaryTagColor
-            ?? themePalette.nodeColors[obj.objectType]
-            ?? themePalette.nodeColors.default;
+            ?? themePaletteRef.current.nodeColors[obj.objectType]
+            ?? themePaletteRef.current.nodeColors.default;
 
           elements.push({
             data: {
@@ -587,7 +601,7 @@ export function LayeredArchitectureView() {
               source: isReversed ? edge.target : edge.source,
               target: isReversed ? edge.source : edge.target,
               relationType: edge.relationType,
-              color: themePalette.edgeColors[edge.relationType] ?? '#6b7280',
+              color: themePaletteRef.current.edgeColors[edge.relationType] ?? '#6b7280',
               isReversed: isReversed ? '1' : '0', // Cytoscape 선택자는 string 비교
             },
           });
@@ -595,7 +609,7 @@ export function LayeredArchitectureView() {
       }
 
       const graphSignature = JSON.stringify({
-        themeMode,
+        themeMode: themeModeRef.current,
         layers: newActiveLayers.map((layer) => ({
           id: layer.id,
           name: layer.name,
@@ -637,7 +651,7 @@ export function LayeredArchitectureView() {
           cyRef.current = cytoscape({
             container: containerRef.current,
             elements,
-            style: cytoscapeStyles,
+            style: cytoscapeStylesRef.current,
             layout: { name: 'preset' },
             minZoom: 0.2,
             maxZoom: 2.5,
@@ -655,7 +669,7 @@ export function LayeredArchitectureView() {
         cy.batch(() => {
           cy.elements().remove();
           cy.add(elements);
-          styleApi?.call(cy, cytoscapeStyles);
+          styleApi?.call(cy, cytoscapeStylesRef.current);
           cy.edges().style('curve-style', curveStyleRef.current);
         });
         cy.resize();
@@ -677,11 +691,20 @@ export function LayeredArchitectureView() {
       isLoadingRef.current = false;
       const pendingReload = pendingReloadRef.current;
       if (pendingReload) {
-        pendingReloadRef.current = null;
-        void loadData(pendingReload);
+        window.setTimeout(() => {
+          if (isLoadingRef.current) return;
+          const queuedReload = pendingReloadRef.current;
+          if (!queuedReload) return;
+          pendingReloadRef.current = null;
+          void loadDataRef.current?.(queuedReload);
+        }, 0);
       }
     }
-  }, [workspaceId, themeMode, themePalette, cytoscapeStyles]); // workspaceId/테마 변경 시 재구성
+  }, [workspaceId]); // workspaceId 기준 fetch, palette/style는 최신 ref를 사용
+
+  useEffect(() => {
+    loadDataRef.current = loadData;
+  }, [loadData]);
 
   useEffect(() => {
     if (destroyTimerRef.current !== null) {
