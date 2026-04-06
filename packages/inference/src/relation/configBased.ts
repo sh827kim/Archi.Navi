@@ -41,6 +41,7 @@ export interface ConfigInferenceOptions {
   repoRoot: string;
   /** true: SHA256 기반 변경 파일만 처리, false: 전체 재처리 */
   incremental?: boolean;
+  candidateGenerationMode?: 'compat_deterministic';
 }
 
 /** 추론 결과 */
@@ -355,6 +356,7 @@ interface ProcessContext {
   workspaceId: string;
   repoRoot: string;
   allServices: { id: string; name: string }[];
+  candidateGenerationMode?: 'compat_deterministic';
 }
 
 interface ProcessStats {
@@ -372,6 +374,18 @@ function withConfigProvenance(
     repoRoot,
     specFile: filePath,
   };
+}
+
+function withCandidateGenerationMode(
+  metadata: Record<string, unknown>,
+  candidateGenerationMode?: 'compat_deterministic',
+): Record<string, unknown> {
+  return candidateGenerationMode
+    ? {
+        ...metadata,
+        generationMode: candidateGenerationMode,
+      }
+    : metadata;
 }
 
 /**
@@ -416,10 +430,13 @@ async function processAppYmlSignal(
           subjectObjectId: serviceId,
           objectId: dbResult.id,
           confidence: CONFIDENCE.DATASOURCE_RELATION,
-          metadata: withConfigProvenance(
-            { source: 'application_yml', configKey: 'spring.datasource.url' },
-            repoRoot,
-            signal.filePath,
+          metadata: withCandidateGenerationMode(
+            withConfigProvenance(
+              { source: 'application_yml', configKey: 'spring.datasource.url' },
+              repoRoot,
+              signal.filePath,
+            ),
+            ctx.candidateGenerationMode,
           ),
         },
         evidenceId,
@@ -435,10 +452,13 @@ async function processAppYmlSignal(
           subjectObjectId: serviceId,
           objectId: dbResult.id,
           confidence: CONFIDENCE.DATASOURCE_RELATION,
-          metadata: withConfigProvenance(
-            { source: 'application_yml', configKey: 'spring.datasource.url' },
-            repoRoot,
-            signal.filePath,
+          metadata: withCandidateGenerationMode(
+            withConfigProvenance(
+              { source: 'application_yml', configKey: 'spring.datasource.url' },
+              repoRoot,
+              signal.filePath,
+            ),
+            ctx.candidateGenerationMode,
           ),
         },
         evidenceId,
@@ -485,14 +505,17 @@ async function processAppYmlSignal(
             subjectObjectId: serviceId,
             objectId: topicResult.id,
             confidence: CONFIDENCE.KAFKA_CONSUME,
-            metadata: withConfigProvenance(
-              {
-                source: 'application_yml',
-                configKey: 'spring.kafka.consumer',
-                groupId: consumerGroupId,
-              },
-              repoRoot,
-              signal.filePath,
+            metadata: withCandidateGenerationMode(
+              withConfigProvenance(
+                {
+                  source: 'application_yml',
+                  configKey: 'spring.kafka.consumer',
+                  groupId: consumerGroupId,
+                },
+                repoRoot,
+                signal.filePath,
+              ),
+              ctx.candidateGenerationMode,
             ),
           },
           consumeEvidenceId,
@@ -510,10 +533,13 @@ async function processAppYmlSignal(
             subjectObjectId: serviceId,
             objectId: brokerResult.id,
             confidence: CONFIDENCE.KAFKA_PRODUCE,
-            metadata: withConfigProvenance(
-              { source: 'application_yml', configKey: 'spring.kafka.producer' },
-              repoRoot,
-              signal.filePath,
+            metadata: withCandidateGenerationMode(
+              withConfigProvenance(
+                { source: 'application_yml', configKey: 'spring.kafka.producer' },
+                repoRoot,
+                signal.filePath,
+              ),
+              ctx.candidateGenerationMode,
             ),
           },
           brokerEvidenceId,
@@ -549,10 +575,13 @@ async function processAppYmlSignal(
           subjectObjectId: serviceId,
           objectId: targetServiceId,
           confidence: CONFIDENCE.ZUUL_ROUTE_CALL,
-          metadata: withConfigProvenance(
-            { source: 'application_yml', configKey: 'zuul.routes.serviceId' },
-            repoRoot,
-            signal.filePath,
+          metadata: withCandidateGenerationMode(
+            withConfigProvenance(
+              { source: 'application_yml', configKey: 'zuul.routes.serviceId' },
+              repoRoot,
+              signal.filePath,
+            ),
+            ctx.candidateGenerationMode,
           ),
         },
         evidenceId,
@@ -647,10 +676,13 @@ async function processDockerComposeSignal(
           subjectObjectId: subjectId,
           objectId,
           confidence: CONFIDENCE.DOCKER_DEPENDS_ON,
-          metadata: withConfigProvenance(
-            { source: 'docker_compose', configKey: 'depends_on' },
-            repoRoot,
-            signal.filePath,
+          metadata: withCandidateGenerationMode(
+            withConfigProvenance(
+              { source: 'docker_compose', configKey: 'depends_on' },
+              repoRoot,
+              signal.filePath,
+            ),
+            ctx.candidateGenerationMode,
           ),
         },
         evidenceId,
@@ -709,10 +741,13 @@ async function processK8sSignal(
         subjectObjectId: serviceId,
         objectId: dbResult.id,
         confidence: CONFIDENCE.K8S_DB_RELATION,
-        metadata: withConfigProvenance(
-          { source: 'k8s_manifest', envKey: 'DB_URL' },
-          repoRoot,
-          signal.filePath,
+        metadata: withCandidateGenerationMode(
+          withConfigProvenance(
+            { source: 'k8s_manifest', envKey: 'DB_URL' },
+            repoRoot,
+            signal.filePath,
+          ),
+          ctx.candidateGenerationMode,
         ),
       },
       evidenceId,
@@ -727,10 +762,13 @@ async function processK8sSignal(
         subjectObjectId: serviceId,
         objectId: dbResult.id,
         confidence: CONFIDENCE.K8S_DB_RELATION,
-        metadata: withConfigProvenance(
-          { source: 'k8s_manifest', envKey: 'DB_URL' },
-          repoRoot,
-          signal.filePath,
+        metadata: withCandidateGenerationMode(
+          withConfigProvenance(
+            { source: 'k8s_manifest', envKey: 'DB_URL' },
+            repoRoot,
+            signal.filePath,
+          ),
+          ctx.candidateGenerationMode,
         ),
       },
       evidenceId,
@@ -760,10 +798,13 @@ async function processK8sSignal(
         subjectObjectId: serviceId,
         objectId: brokerResult.id,
         confidence: CONFIDENCE.K8S_KAFKA_RELATION,
-        metadata: withConfigProvenance(
-          { source: 'k8s_manifest', envKey: 'KAFKA_BROKERS' },
-          repoRoot,
-          signal.filePath,
+        metadata: withCandidateGenerationMode(
+          withConfigProvenance(
+            { source: 'k8s_manifest', envKey: 'KAFKA_BROKERS' },
+            repoRoot,
+            signal.filePath,
+          ),
+          ctx.candidateGenerationMode,
         ),
       },
       evidenceId,
@@ -789,7 +830,7 @@ export async function inferRelationsFromConfig(
   db: DbClient,
   options: ConfigInferenceOptions,
 ): Promise<ConfigInferenceResult> {
-  const { workspaceId, repoRoot, incremental = false } = options;
+  const { workspaceId, repoRoot, incremental = false, candidateGenerationMode } = options;
 
   // 워크스페이스의 서비스 Object 목록 미리 조회
   const allServices = await db
@@ -802,7 +843,13 @@ export async function inferRelationsFromConfig(
       ),
     );
 
-  const ctx: ProcessContext = { db, workspaceId, repoRoot, allServices };
+  const ctx: ProcessContext = {
+    db,
+    workspaceId,
+    repoRoot,
+    allServices,
+    ...(candidateGenerationMode ? { candidateGenerationMode } : {}),
+  };
   const stats: ProcessStats = { candidateCount: 0, objectCount: 0 };
   const serviceInventoryHash = hashServiceInventory(allServices);
 

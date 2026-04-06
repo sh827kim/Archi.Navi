@@ -29,6 +29,7 @@ export interface CodeCandidateInferenceOptions {
   repoRoot: string;
   serviceIds?: string[];
   bootstrapOnly?: boolean;
+  candidateGenerationMode?: 'compat_deterministic';
 }
 
 export interface CodeCandidateInferenceResult {
@@ -626,6 +627,7 @@ export async function inferRelationsFromCodeSignals(
   options: CodeCandidateInferenceOptions,
 ): Promise<CodeCandidateInferenceResult> {
   const { workspaceId, repoRoot } = options;
+  const candidateGenerationMode = options.candidateGenerationMode;
   const serviceIds = Array.from(
     new Set((options.serviceIds ?? []).filter((value): value is string => value.length > 0)),
   );
@@ -832,6 +834,7 @@ export async function inferRelationsFromCodeSignals(
             targetServiceId,
             path: targetPath,
           },
+          ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
         evidenceId,
       );
@@ -874,6 +877,7 @@ export async function inferRelationsFromCodeSignals(
             channel: channelName,
             repoRoot,
           },
+          ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
         evidenceId,
       );
@@ -937,6 +941,7 @@ export async function inferRelationsFromCodeSignals(
             table: normalized,
             repoRoot,
           },
+          ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
         evidenceId,
       );

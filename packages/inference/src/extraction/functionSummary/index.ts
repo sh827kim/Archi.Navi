@@ -8,8 +8,8 @@ import {
   asRecord,
   asString,
   detectDynamicPath,
-  extractHost,
-  extractPath,
+  extractHttpHostHint,
+  extractHttpPathHint,
   normalizeOptionalUuid,
   normalizeMethod,
   stableHash,
@@ -558,20 +558,32 @@ export async function extractFunctionSummariesFromCodeSignals(
       aliasHints.push(...configKeys);
 
       if (kind === 'call' || kind === 'http_call') {
-        const path = extractPath(row.calleeSymbol);
-        const host = extractHost(row.calleeSymbol);
+        const path = extractHttpPathHint(row.calleeSymbol, metadata);
+        const host = extractHttpHostHint(row.calleeSymbol, metadata);
+        const serviceNameHint = asString(metadata['serviceNameHint']);
+        const baseUrlVar = asString(metadata['baseUrlVar']);
         if (host) aliasHints.push(host);
+        if (serviceNameHint) aliasHints.push(serviceNameHint);
+        if (baseUrlVar) aliasHints.push(baseUrlVar);
         if (!outboundHttp) {
           outboundHttp = {
-            method,
+            method: method ?? normalizeMethod(metadata['methodHint']),
             path,
             hostAlias: host,
             configKeys,
+            serviceNameHint,
+            baseUrlVar,
+            dynamicPath: flags.dynamicPath,
+            dynamicHost: flags.dynamicHost,
           };
         } else {
-          outboundHttp['method'] = outboundHttp['method'] ?? method;
+          outboundHttp['method'] = outboundHttp['method'] ?? method ?? normalizeMethod(metadata['methodHint']);
           outboundHttp['path'] = outboundHttp['path'] ?? path;
           outboundHttp['hostAlias'] = outboundHttp['hostAlias'] ?? host;
+          outboundHttp['serviceNameHint'] = outboundHttp['serviceNameHint'] ?? serviceNameHint;
+          outboundHttp['baseUrlVar'] = outboundHttp['baseUrlVar'] ?? baseUrlVar;
+          outboundHttp['dynamicPath'] = outboundHttp['dynamicPath'] ?? flags.dynamicPath;
+          outboundHttp['dynamicHost'] = outboundHttp['dynamicHost'] ?? flags.dynamicHost;
           outboundHttp['configKeys'] = uniqueSortedStrings([
             ...(
               Array.isArray(outboundHttp['configKeys'])

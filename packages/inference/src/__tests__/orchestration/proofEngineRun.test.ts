@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
+  closeTestDb,
   createTestDb,
+  functionSummaries,
+  getEmbeddedPostgresTestSupport,
   inferenceRuns,
   interactionIntents,
   objects,
+  proofFrontiers,
   proofPatches,
   proofStates,
   smartProofLlmCalls,
@@ -15,18 +19,30 @@ import {
   buildProofEngineSummaryForRun,
 } from '@/orchestration/proofEngineRun';
 
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const itDb = embeddedSupport.supported ? it : it.skip;
+
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[inference:test] skipping proofEngineRun DB integration tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
+
 describe('proofEngineRun', () => {
-  let db: Awaited<ReturnType<typeof createTestDb>>;
+  let db: Awaited<ReturnType<typeof createTestDb>> | undefined;
 
   beforeEach(async () => {
+    if (!embeddedSupport.supported) {
+      return;
+    }
     db = await createTestDb();
   });
 
   afterEach(async () => {
-    const client = (db as { $client?: { end?: () => Promise<void> } } | undefined)?.$client;
-    if (client?.end) {
-      await client.end();
-    }
+    await closeTestDb(db);
+    db = undefined;
   });
 
   it('proof engine summary 기본값은 Smart 메트릭 블록을 포함해야 한다', () => {
@@ -46,7 +62,7 @@ describe('proofEngineRun', () => {
     });
   });
 
-  it('smart summary는 patch 상태 기준으로 accepted/review/skipped를 집계해야 한다', async () => {
+  itDb('smart summary는 patch 상태 기준으로 accepted/review/skipped를 집계해야 한다', async () => {
     const workspaceId = generateId();
     const runId = generateId();
     const serviceId = generateId();
@@ -56,11 +72,11 @@ describe('proofEngineRun', () => {
     const pendingPatchId = generateId();
     const rejectedPatchId = generateId();
 
-    await db.insert(workspaces).values({
+    await db!.insert(workspaces).values({
       id: workspaceId,
       name: 'Smart Summary Test',
     });
-    await db.insert(inferenceRuns).values({
+    await db!.insert(inferenceRuns).values({
       id: runId,
       workspaceId,
       triggerType: 'MANUAL',
@@ -76,14 +92,14 @@ describe('proofEngineRun', () => {
       warnings: [],
       errors: [],
     });
-    await db.insert(objects).values({
+    await db!.insert(objects).values({
       id: serviceId,
       workspaceId,
       objectType: 'service',
       name: 'gateway',
       path: 'gateway',
     });
-    await db.insert(interactionIntents).values({
+    await db!.insert(interactionIntents).values({
       id: intentId,
       workspaceId,
       createdRunId: runId,
@@ -98,7 +114,7 @@ describe('proofEngineRun', () => {
       intentHash: 'smart-summary-intent',
       anchorHash: 'smart-summary-anchor',
     });
-    await db.insert(proofStates).values({
+    await db!.insert(proofStates).values({
       id: proofStateId,
       workspaceId,
       intentId,
@@ -113,7 +129,7 @@ describe('proofEngineRun', () => {
       confidence: 0.4,
       frontierCode: 'HOST_ALIAS_UNRESOLVED',
     });
-    await db.insert(proofPatches).values([
+    await db!.insert(proofPatches).values([
       {
         id: acceptedPatchId,
         workspaceId,
@@ -145,7 +161,7 @@ describe('proofEngineRun', () => {
         evidenceIds: [],
       },
     ]);
-    await db.insert(smartProofLlmCalls).values([
+    await db!.insert(smartProofLlmCalls).values([
       {
         id: generateId(),
         workspaceId,
@@ -199,7 +215,7 @@ describe('proofEngineRun', () => {
       },
     ]);
 
-    const summary = await buildProofEngineSummaryForRun(db, {
+    const summary = await buildProofEngineSummaryForRun(db!, {
       workspaceId,
       runId,
     });
@@ -220,7 +236,7 @@ describe('proofEngineRun', () => {
     });
   });
 
-  it('cross_proof_correlation accepted call도 frontierResolvedByLlm로 집계해야 한다', async () => {
+  itDb('cross_proof_correlation accepted call도 frontierResolvedByLlm로 집계해야 한다', async () => {
     const workspaceId = generateId();
     const runId = generateId();
     const serviceId = generateId();
@@ -228,11 +244,11 @@ describe('proofEngineRun', () => {
     const proofStateId = generateId();
     const patchId = generateId();
 
-    await db.insert(workspaces).values({
+    await db!.insert(workspaces).values({
       id: workspaceId,
       name: 'Smart Correlation Summary Test',
     });
-    await db.insert(inferenceRuns).values({
+    await db!.insert(inferenceRuns).values({
       id: runId,
       workspaceId,
       triggerType: 'MANUAL',
@@ -248,14 +264,14 @@ describe('proofEngineRun', () => {
       warnings: [],
       errors: [],
     });
-    await db.insert(objects).values({
+    await db!.insert(objects).values({
       id: serviceId,
       workspaceId,
       objectType: 'service',
       name: 'gateway',
       path: 'gateway',
     });
-    await db.insert(interactionIntents).values({
+    await db!.insert(interactionIntents).values({
       id: intentId,
       workspaceId,
       createdRunId: runId,
@@ -270,7 +286,7 @@ describe('proofEngineRun', () => {
       intentHash: 'smart-correlation-intent',
       anchorHash: 'smart-correlation-anchor',
     });
-    await db.insert(proofStates).values({
+    await db!.insert(proofStates).values({
       id: proofStateId,
       workspaceId,
       intentId,
@@ -285,7 +301,7 @@ describe('proofEngineRun', () => {
       confidence: 0.4,
       frontierCode: 'HOST_ALIAS_UNRESOLVED',
     });
-    await db.insert(proofPatches).values({
+    await db!.insert(proofPatches).values({
       id: patchId,
       workspaceId,
       proofStateId,
@@ -295,7 +311,7 @@ describe('proofEngineRun', () => {
       validationStatus: 'ACCEPTED',
       evidenceIds: [],
     });
-    await db.insert(smartProofLlmCalls).values({
+    await db!.insert(smartProofLlmCalls).values({
       id: generateId(),
       workspaceId,
       runId,
@@ -313,7 +329,7 @@ describe('proofEngineRun', () => {
       patchId,
     });
 
-    const summary = await buildProofEngineSummaryForRun(db, {
+    const summary = await buildProofEngineSummaryForRun(db!, {
       workspaceId,
       runId,
     });
@@ -329,7 +345,7 @@ describe('proofEngineRun', () => {
     });
   });
 
-  it('contradiction_detection accepted call은 contradictionsChallenged로 집계해야 한다', async () => {
+  itDb('contradiction_detection accepted call은 contradictionsChallenged로 집계해야 한다', async () => {
     const workspaceId = generateId();
     const runId = generateId();
     const serviceId = generateId();
@@ -337,11 +353,11 @@ describe('proofEngineRun', () => {
     const proofStateId = generateId();
     const patchId = generateId();
 
-    await db.insert(workspaces).values({
+    await db!.insert(workspaces).values({
       id: workspaceId,
       name: 'Smart Contradiction Summary Test',
     });
-    await db.insert(inferenceRuns).values({
+    await db!.insert(inferenceRuns).values({
       id: runId,
       workspaceId,
       triggerType: 'MANUAL',
@@ -357,14 +373,14 @@ describe('proofEngineRun', () => {
       warnings: [],
       errors: [],
     });
-    await db.insert(objects).values({
+    await db!.insert(objects).values({
       id: serviceId,
       workspaceId,
       objectType: 'service',
       name: 'gateway',
       path: 'gateway',
     });
-    await db.insert(interactionIntents).values({
+    await db!.insert(interactionIntents).values({
       id: intentId,
       workspaceId,
       createdRunId: runId,
@@ -374,7 +390,7 @@ describe('proofEngineRun', () => {
       intentHash: 'smart-contradiction-intent',
       anchorHash: 'smart-contradiction-anchor',
     });
-    await db.insert(proofStates).values({
+    await db!.insert(proofStates).values({
       id: proofStateId,
       workspaceId,
       intentId,
@@ -382,7 +398,7 @@ describe('proofEngineRun', () => {
       status: 'FRONTIER',
       consumerServiceId: serviceId,
     });
-    await db.insert(proofPatches).values({
+    await db!.insert(proofPatches).values({
       id: patchId,
       workspaceId,
       proofStateId,
@@ -395,7 +411,7 @@ describe('proofEngineRun', () => {
       validationStatus: 'ACCEPTED',
       evidenceIds: [],
     });
-    await db.insert(smartProofLlmCalls).values({
+    await db!.insert(smartProofLlmCalls).values({
       id: generateId(),
       workspaceId,
       runId,
@@ -413,7 +429,7 @@ describe('proofEngineRun', () => {
       patchId,
     });
 
-    const summary = await buildProofEngineSummaryForRun(db, {
+    const summary = await buildProofEngineSummaryForRun(db!, {
       workspaceId,
       runId,
     });
@@ -427,6 +443,205 @@ describe('proofEngineRun', () => {
     });
     expect(summary.smartMode.resolutionByCategory).toMatchObject({
       contradiction_detection: 1,
+    });
+  });
+
+  itDb('partial HTTP summary와 frontier reason을 함께 사용해 dynamic/path-only intent count를 집계해야 한다', async () => {
+    const workspaceId = generateId();
+    const runId = generateId();
+    const serviceId = generateId();
+    const dynamicFunctionId = generateId();
+    const pathOnlyFunctionId = generateId();
+    const dynamicIntentId = generateId();
+    const pathSummaryIntentId = generateId();
+    const frontierPathIntentId = generateId();
+    const dynamicProofStateId = generateId();
+    const pathSummaryProofStateId = generateId();
+    const frontierPathProofStateId = generateId();
+
+    await db!.insert(workspaces).values({
+      id: workspaceId,
+      name: 'Proof Summary Partial HTTP Metrics',
+    });
+    await db!.insert(inferenceRuns).values({
+      id: runId,
+      workspaceId,
+      triggerType: 'MANUAL',
+      status: 'SUCCEEDED',
+      requestedModes: ['code'],
+      requestedIncremental: true,
+      sourceSummary: {},
+      stats: {},
+      warnings: [],
+      errors: [],
+    });
+    await db!.insert(objects).values([
+      {
+        id: serviceId,
+        workspaceId,
+        objectType: 'service',
+        name: 'gateway',
+        path: 'gateway',
+      },
+      {
+        id: dynamicFunctionId,
+        workspaceId,
+        objectType: 'function',
+        name: 'Gateway.dynamicFetch',
+        parentId: serviceId,
+        path: 'gateway/dynamicFetch',
+      },
+      {
+        id: pathOnlyFunctionId,
+        workspaceId,
+        objectType: 'function',
+        name: 'Gateway.pathOnlyFetch',
+        parentId: serviceId,
+        path: 'gateway/pathOnlyFetch',
+      },
+    ]);
+    await db!.insert(functionSummaries).values([
+      {
+        id: generateId(),
+        workspaceId,
+        functionId: dynamicFunctionId,
+        serviceId,
+        updatedRunId: runId,
+        summaryKind: 'http',
+        outboundHttp: {
+          method: 'GET',
+          path: '/api/orders/{id}',
+          dynamicPath: true,
+        },
+        flags: {
+          dynamicPath: true,
+        },
+        extractionStrategy: 'ast_primary',
+        sourceHash: 'summary-dynamic-run',
+        confidence: 0.91,
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        functionId: pathOnlyFunctionId,
+        serviceId,
+        updatedRunId: runId,
+        summaryKind: 'http',
+        outboundHttp: {
+          method: 'GET',
+          path: '/api/orders/{id}',
+        },
+        extractionStrategy: 'ast_primary',
+        sourceHash: 'summary-path-only-run',
+        confidence: 0.89,
+      },
+    ]);
+    await db!.insert(interactionIntents).values([
+      {
+        id: dynamicIntentId,
+        workspaceId,
+        createdRunId: runId,
+        updatedRunId: runId,
+        intentType: 'http_call',
+        sourceServiceId: serviceId,
+        sourceFunctionId: dynamicFunctionId,
+        methodHint: 'GET',
+        externalPathHint: '/api/orders/1',
+        intentHash: 'intent-summary-dynamic',
+        anchorHash: 'anchor-summary-dynamic',
+      },
+      {
+        id: pathSummaryIntentId,
+        workspaceId,
+        createdRunId: runId,
+        updatedRunId: runId,
+        intentType: 'http_call',
+        sourceServiceId: serviceId,
+        sourceFunctionId: pathOnlyFunctionId,
+        methodHint: 'GET',
+        externalPathHint: '/api/orders/2',
+        intentHash: 'intent-summary-path',
+        anchorHash: 'anchor-summary-path',
+      },
+      {
+        id: frontierPathIntentId,
+        workspaceId,
+        createdRunId: runId,
+        updatedRunId: runId,
+        intentType: 'http_call',
+        sourceServiceId: serviceId,
+        methodHint: 'GET',
+        externalPathHint: '/api/orders/3',
+        intentHash: 'intent-frontier-path',
+        anchorHash: 'anchor-frontier-path',
+      },
+    ]);
+    await db!.insert(proofStates).values([
+      {
+        id: dynamicProofStateId,
+        workspaceId,
+        intentId: dynamicIntentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: serviceId,
+        sourceFunctionId: dynamicFunctionId,
+      },
+      {
+        id: pathSummaryProofStateId,
+        workspaceId,
+        intentId: pathSummaryIntentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: serviceId,
+        sourceFunctionId: pathOnlyFunctionId,
+      },
+      {
+        id: frontierPathProofStateId,
+        workspaceId,
+        intentId: frontierPathIntentId,
+        proofType: 'http_call',
+        status: 'FRONTIER',
+        consumerServiceId: serviceId,
+      },
+    ]);
+    await db!.insert(proofFrontiers).values([
+      {
+        id: generateId(),
+        workspaceId,
+        proofStateId: dynamicProofStateId,
+        frontierReason: 'HOST_ALIAS_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        proofStateId: pathSummaryProofStateId,
+        frontierReason: 'CONFIG_BINDING_MISSING',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        proofStateId: frontierPathProofStateId,
+        frontierReason: 'PATH_ONLY_TARGET_UNRESOLVED',
+        frontierClass: 'ALIAS',
+        retryStrategy: 'agent_patch',
+      },
+    ]);
+
+    const summary = await buildProofEngineSummaryForRun(db!, {
+      workspaceId,
+      runId,
+    });
+
+    expect(summary.dynamicUriIntentCount).toBe(1);
+    expect(summary.pathOnlyIntentCount).toBe(2);
+    expect(summary.frontierReasonBreakdown).toMatchObject({
+      HOST_ALIAS_UNRESOLVED: 1,
+      CONFIG_BINDING_MISSING: 1,
+      PATH_ONLY_TARGET_UNRESOLVED: 1,
     });
   });
 });

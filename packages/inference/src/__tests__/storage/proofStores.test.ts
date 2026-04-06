@@ -1,10 +1,12 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { and, eq } from 'drizzle-orm';
 import {
   codeArtifacts,
   codeCallEdges,
+  closeTestDb,
   createTestDb,
   evidences,
+  getEmbeddedPostgresTestSupport,
   interactionIntents,
   objects,
   proofDependencies,
@@ -19,6 +21,16 @@ import { createProofExtractionStore, createProofStateStore } from '@/storage';
 const workspaceId = '00000000-0000-0000-0000-000000000777';
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const describeDb = embeddedSupport.supported ? describe : describe.skip;
+
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[inference:test] skipping proofStores integration tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
 
 async function insertObject(
   db: TestDb,
@@ -49,12 +61,17 @@ async function insertObject(
   return id;
 }
 
-describe('proof stores', () => {
-  let db: TestDb;
+describeDb('proof stores', () => {
+  let db: TestDb | undefined;
 
   beforeEach(async () => {
     db = await createTestDb();
     await db.insert(workspaces).values({ id: workspaceId, name: 'proof-stores' });
+  });
+
+  afterEach(async () => {
+    await closeTestDb(db);
+    db = undefined;
   });
 
   it('extraction store는 proof extraction primitives를 한 번에 실행한다', async () => {

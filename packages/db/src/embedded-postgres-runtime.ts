@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, rmSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { resolve } from 'node:path';
 import { getPostgresDataDirectory, ensurePostgresDatabase } from './postgres-utils.js';
@@ -17,6 +17,7 @@ type EmbeddedPostgresCtor = new (opts: {
   port: number;
   persistent: boolean;
   initdbFlags?: string[];
+  postgresFlags?: string[];
   onLog?: (message: unknown) => void;
   onError?: (message: unknown) => void;
 }) => EmbeddedPostgresInstance;
@@ -30,6 +31,12 @@ export type EmbeddedPostgresConnection = {
 export type EmbeddedPostgresConnectionOptions = {
   user?: string;
   password?: string;
+};
+
+export type EmbeddedPostgresDataDirCleanupResult = {
+  removedPidFile: boolean;
+  resetCluster: boolean;
+  reasons: string[];
 };
 
 function buildPostgresConnectionString(input: {
@@ -56,6 +63,29 @@ function readRunningPostmasterPid(postmasterPidFile: string): number | null {
   }
 }
 
+function readPostmasterPidFile(postmasterPidFile: string): {
+  pid: number | null;
+  empty: boolean;
+} {
+  if (!existsSync(postmasterPidFile)) {
+    return { pid: null, empty: false };
+  }
+
+  try {
+    const text = readFileSync(postmasterPidFile, 'utf8');
+    if (text.trim().length === 0) {
+      return { pid: null, empty: true };
+    }
+    const pid = Number(text.split('\n')[0]?.trim());
+    return {
+      pid: Number.isInteger(pid) && pid > 0 ? pid : null,
+      empty: false,
+    };
+  } catch {
+    return { pid: null, empty: false };
+  }
+}
+
 function readPidFilePort(postmasterPidFile: string): number | null {
   if (!existsSync(postmasterPidFile)) return null;
   try {
@@ -64,6 +94,85 @@ function readPidFilePort(postmasterPidFile: string): number | null {
   } catch {
     return null;
   }
+}
+
+function canSafelyRemoveStalePidFile(postmasterPidFile: string): boolean {
+  if (!existsSync(postmasterPidFile)) return false;
+  const runningPid = readRunningPostmasterPid(postmasterPidFile);
+  if (runningPid) return false;
+  return true;
+}
+
+export function cleanupBrokenEmbeddedPostgresDataDir(dataDir: string): EmbeddedPostgresDataDirCleanupResult {
+  const resolvedDataDir = resolve(dataDir);
+  const postmasterPidFile = resolve(resolvedDataDir, 'postmaster.pid');
+  const pgVersionFile = resolve(resolvedDataDir, 'PG_VERSION');
+  const requiredClusterDirs = ['base', 'global', 'pg_wal'];
+  const result: EmbeddedPostgresDataDirCleanupResult = {
+    removedPidFile: false,
+    resetCluster: false,
+    reasons: [],
+  };
+
+  if (!existsSync(resolvedDataDir)) {
+    return result;
+  }
+
+  if (existsSync(postmasterPidFile)) {
+    const pidFile = readPostmasterPidFile(postmasterPidFile);
+    const pidFileSize = (() => {
+      try {
+        return statSync(postmasterPidFile).size;
+      } catch {
+        return -1;
+      }
+    })();
+
+    if (pidFileSize === 0 || pidFile.empty) {
+      rmSync(postmasterPidFile, { force: true });
+      result.removedPidFile = true;
+      result.reasons.push('Removed empty postmaster.pid');
+    } else if (pidFile.pid === null && canSafelyRemoveStalePidFile(postmasterPidFile)) {
+      rmSync(postmasterPidFile, { force: true });
+      result.removedPidFile = true;
+      result.reasons.push('Removed invalid postmaster.pid');
+    } else if (canSafelyRemoveStalePidFile(postmasterPidFile)) {
+      rmSync(postmasterPidFile, { force: true });
+      result.removedPidFile = true;
+      result.reasons.push('Removed stale postmaster.pid');
+    }
+  }
+
+  const hasPgVersion = existsSync(pgVersionFile);
+  const entries = (() => {
+    try {
+      return readdirSync(resolvedDataDir);
+    } catch {
+      return [];
+    }
+  })();
+  const missingClusterDirs = requiredClusterDirs.filter(
+    (directory) => !existsSync(resolve(resolvedDataDir, directory)),
+  );
+  const hasClusterArtifacts =
+    hasPgVersion
+    || entries.some((entry) => entry === 'postmaster.pid' || entry === 'base' || entry === 'global' || entry === 'pg_wal' || entry.startsWith('pg_'));
+  const clusterLooksIncomplete =
+    hasClusterArtifacts && (!hasPgVersion || missingClusterDirs.length > 0);
+  const runningPid = readRunningPostmasterPid(postmasterPidFile);
+
+  if (clusterLooksIncomplete && !runningPid) {
+    rmSync(resolvedDataDir, { recursive: true, force: true });
+    result.resetCluster = true;
+    if (!hasPgVersion) {
+      result.reasons.push('Removed incomplete cluster without PG_VERSION');
+    }
+    if (missingClusterDirs.length > 0) {
+      result.reasons.push(`Removed incomplete cluster missing ${missingClusterDirs.join(', ')}`);
+    }
+  }
+
+  return result;
 }
 
 async function isPortInUse(port: number): Promise<boolean> {
@@ -100,6 +209,7 @@ export async function ensureEmbeddedPostgresConnection(
 ): Promise<EmbeddedPostgresConnection> {
   const EmbeddedPostgres = await loadEmbeddedPostgresCtor();
   const resolvedDataDir = resolve(dataDir);
+  cleanupBrokenEmbeddedPostgresDataDir(resolvedDataDir);
   const user = options.user?.trim() || 'archi_navi';
   const password = options.password?.trim() || 'archi_navi';
   const postmasterPidFile = resolve(resolvedDataDir, 'postmaster.pid');
@@ -167,6 +277,12 @@ export async function ensureEmbeddedPostgresConnection(
     port: selectedPort,
     persistent: true,
     initdbFlags: ['--encoding=UTF8', '--locale=C', '--lc-messages=C'],
+    postgresFlags: [
+      '-c', 'shared_memory_type=mmap',
+      '-c', 'dynamic_shared_memory_type=mmap',
+      '-c', 'shared_buffers=16MB',
+      '-c', 'max_connections=100',
+    ],
     onLog: logBuffer.append,
     onError: logBuffer.append,
   });
@@ -182,7 +298,7 @@ export async function ensureEmbeddedPostgresConnection(
     }
   }
 
-  if (existsSync(postmasterPidFile)) {
+  if (canSafelyRemoveStalePidFile(postmasterPidFile)) {
     rmSync(postmasterPidFile, { force: true });
   }
 

@@ -97,6 +97,12 @@ describe('POST /api/inference/run', () => {
             rejectedPatchCount: 1,
             skippedReason: null,
           },
+          summary: {
+            relationCandidatesCreated: 2,
+            proofCandidatesCreated: 2,
+            compatCandidatesCreated: 0,
+            compatModeEnabled: false,
+          },
           requestedAgentPatches: {
             enabled: true,
             maxFrontiers: 7,
@@ -111,11 +117,12 @@ describe('POST /api/inference/run', () => {
 
     const response = await POST(new NextRequest('http://localhost/api/inference/run', {
       method: 'POST',
-      body: JSON.stringify({
+        body: JSON.stringify({
         workspaceId: 'ws-1',
         transports: ['http'],
         repoRoots: ['/repo/root'],
         useServiceMetadataPaths: false,
+        compatDeterministicCandidates: false,
         enableAgentPatches: true,
         maxAgentFrontiers: 7,
         llmBoost: {
@@ -134,6 +141,7 @@ describe('POST /api/inference/run', () => {
         workspaceId: 'ws-1',
         modes: ['config', 'code'],
         triggerType: 'INTENT_PROOF_ENGINE',
+        compatDeterministicCandidates: false,
         enableAgentPatches: true,
         maxAgentFrontiers: 7,
         sources: [{ type: 'local', ref: '/repo/root' }],
@@ -159,6 +167,12 @@ describe('POST /api/inference/run', () => {
       results: {
         code: { enginesUsed: ['hybrid'] },
         proofResolution: { intentCount: 3, frontierCount: 1 },
+        summary: {
+          relationCandidatesCreated: 2,
+          proofCandidatesCreated: 2,
+          compatCandidatesCreated: 0,
+          compatModeEnabled: false,
+        },
         frontierAgent: { attemptedFrontierCount: 1, rejectedPatchCount: 1 },
         requestedAgentPatches: { enabled: true, maxFrontiers: 7 },
         requestedSmartProof: { enabled: false },
@@ -171,6 +185,78 @@ describe('POST /api/inference/run', () => {
       },
     });
     expect(createGenerateSmartResolutionFnMock).not.toHaveBeenCalled();
+  });
+
+  it('compatDeterministicCandidates=true 이면 별도 compat summary를 함께 반환해야 한다', async () => {
+    getDbMock.mockResolvedValue({ db: 'mock' });
+    createInferenceRunMock.mockResolvedValue({
+      id: 'run-compat-1',
+      status: 'QUEUED',
+    });
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-compat-1',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 1,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 0,
+            proofFrontierCount: 1,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 1,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 0,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {},
+            targetBreakdown: {},
+          },
+          summary: {
+            relationCandidatesCreated: 3,
+            proofCandidatesCreated: 1,
+            compatCandidatesCreated: 2,
+            compatModeEnabled: true,
+          },
+        },
+        warnings: [],
+        errors: [],
+      },
+      sources: [],
+      events: [],
+    });
+
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        modes: ['config', 'code'],
+        repoRoots: ['/repo/root'],
+        useServiceMetadataPaths: false,
+        compatDeterministicCandidates: true,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createInferenceRunMock).toHaveBeenCalledWith(
+      { db: 'mock' },
+      expect.objectContaining({
+        workspaceId: 'ws-1',
+        compatDeterministicCandidates: true,
+      }),
+    );
+    await expect(response.json()).resolves.toMatchObject({
+      results: {
+        summary: {
+          relationCandidatesCreated: 3,
+          proofCandidatesCreated: 1,
+          compatCandidatesCreated: 2,
+          compatModeEnabled: true,
+        },
+      },
+    });
   });
 
   it('smartProof=true 이면 모델이 있을 때 smartGenerateFn을 실행 입력으로 전달해야 한다', async () => {

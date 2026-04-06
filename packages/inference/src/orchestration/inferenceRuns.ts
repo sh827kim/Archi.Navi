@@ -29,6 +29,9 @@ import {
   extractInteractionIntentsFromConfigRoutes,
 } from '../extraction/intents';
 import { extractRouteTransformsFromConfig } from '../extraction/routeTransforms';
+import { bindConfigToCodeEndpoints } from '../relation/configCodeBinding';
+import { inferRelationsFromConfig } from '../relation/configBased';
+import { inferRelationsFromCodeSignals } from '../relation/codeBased';
 import { runFrontierAgentPass } from '../agent/frontierAgent';
 import { resolveSmartFrontier, type GenerateSmartResolutionFn, type SmartPatchProposal } from '../agent/smartFrontierResolver';
 import {
@@ -317,6 +320,7 @@ export interface CreateInferenceRunInput {
   modes?: string[];
   codeEngine?: string | null;
   incremental?: boolean;
+  compatDeterministicCandidates?: boolean;
   smartProof?: boolean | SmartProofConfig | null;
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number | null;
@@ -517,6 +521,14 @@ function buildRequestedAgentPatchSettings(input?: {
   };
 }
 
+function buildCompatDeterministicSettings(
+  input?: { compatDeterministicCandidates?: boolean | null },
+): { enabled: boolean } {
+  return {
+    enabled: input?.compatDeterministicCandidates === true,
+  };
+}
+
 function readRequestedAgentPatchSettingsFromRunStats(
   stats: unknown,
 ): { enabled: boolean; maxFrontiers: number } {
@@ -540,6 +552,21 @@ function readRequestedSmartProofSettingsFromRunStats(
     ? (stats as Record<string, unknown>)
     : {};
   return normalizeSmartProofConfig(record['requestedSmartProof'] as boolean | SmartProofConfig | null | undefined);
+}
+
+function readCompatDeterministicSettingsFromRunStats(
+  stats: unknown,
+): { enabled: boolean } {
+  const record = stats && typeof stats === 'object' && !Array.isArray(stats)
+    ? (stats as Record<string, unknown>)
+    : {};
+  const requested = record['requestedCompatDeterministic'];
+  const requestedRecord = requested && typeof requested === 'object' && !Array.isArray(requested)
+    ? (requested as Record<string, unknown>)
+    : {};
+  return buildCompatDeterministicSettings({
+    compatDeterministicCandidates: requestedRecord['enabled'] === true,
+  });
 }
 
 async function getInferenceRunStatus(
@@ -599,6 +626,7 @@ export async function createInferenceRun(
   const uniqueSources = Array.from(uniqueSourceMap.values());
   const requestedAgentPatches = buildRequestedAgentPatchSettings(input);
   const requestedSmartProof = normalizeSmartProofConfig(input.smartProof);
+  const requestedCompatDeterministic = buildCompatDeterministicSettings(input);
 
   if (input.idempotencyKey) {
     const existing = await db
@@ -631,6 +659,7 @@ export async function createInferenceRun(
       stats: {
         requestedAgentPatches,
         requestedSmartProof,
+        requestedCompatDeterministic,
       },
       warnings: [],
       errors: [],
@@ -664,6 +693,7 @@ export async function createInferenceRun(
       sourceCount: uniqueSources.length,
       requestedAgentPatches,
       requestedSmartProof,
+      requestedCompatDeterministic,
     },
   });
 
@@ -1074,6 +1104,7 @@ export async function executeInferenceRun(
   const smartFrontierProofStateIds = new Set<string>();
   const requestedAgentPatches = readRequestedAgentPatchSettingsFromRunStats(run.stats);
   const requestedSmartProof = readRequestedSmartProofSettingsFromRunStats(run.stats);
+  const requestedCompatDeterministic = readCompatDeterministicSettingsFromRunStats(run.stats);
   const frontierAgent = {
     enabled: requestedAgentPatches.enabled,
     maxFrontiers: requestedAgentPatches.maxFrontiers,
@@ -1096,6 +1127,12 @@ export async function executeInferenceRun(
       maxTokens: requestedSmartProof.budget.maxTotalTokensPerRun,
     }),
     skippedReason: requestedSmartProof.enabled ? null as string | null : 'DISABLED',
+  };
+  const compatDeterministic = {
+    enabled: requestedCompatDeterministic.enabled,
+    configCandidatesCreated: 0,
+    codeCandidatesCreated: 0,
+    boundEndpointCandidatesCreated: 0,
   };
 
   if ((modeSet.has('config') || modeSet.has('code')) && sourceResolution.localSources.length === 0) {
@@ -1941,16 +1978,61 @@ export async function executeInferenceRun(
     return await returnCurrentRunDetail(true);
   }
 
+  if (requestedCompatDeterministic.enabled) {
+    for (const localSource of sourceResolution.localSources) {
+      try {
+        if (modeSet.has('config')) {
+          const result = await inferRelationsFromConfig(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            incremental: run.requestedIncremental,
+            candidateGenerationMode: 'compat_deterministic',
+          });
+          compatDeterministic.configCandidatesCreated += result.candidateCount;
+        }
+        if (modeSet.has('code')) {
+          const result = await inferRelationsFromCodeSignals(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            candidateGenerationMode: 'compat_deterministic',
+          });
+          compatDeterministic.codeCandidatesCreated += result.candidateCount;
+        }
+        if (modeSet.has('config') || modeSet.has('code')) {
+          const result = await bindConfigToCodeEndpoints(db, {
+            workspaceId: input.workspaceId,
+            repoRoots: [localSource.repoRoot],
+            candidateGenerationMode: 'compat_deterministic',
+          });
+          compatDeterministic.boundEndpointCandidatesCreated += result.createdEndpointCandidateCount;
+        }
+      } catch (error) {
+        warnings.push(
+          `[compat:${localSource.repoRoot}] compat deterministic 실행 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
+    }
+  }
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
   const hasAnySuccess =
     configResult.repoCount > 0 || successfulCodeRepoCount > 0 || dbResult !== null || proofResolution.intentCount > 0;
   const proofSummary = await buildProofEngineSummaryForRun(db, {
     workspaceId: input.workspaceId,
     runId: run.id,
   });
-  const relationCandidatesCreated = Math.max(
+  const proofCandidatesCreated = Math.max(
     proofSummary.projectedCandidateCount - proofSummary.serviceTargetProjectionCount,
     0,
   );
+  const compatCandidatesCreated =
+    compatDeterministic.configCandidatesCreated
+    + compatDeterministic.codeCandidatesCreated
+    + compatDeterministic.boundEndpointCandidatesCreated;
+  const relationCandidatesCreated = proofCandidatesCreated + compatCandidatesCreated;
   const artifactFailedChecks = [
     ...warnings,
     ...errors.map((entry) => {
@@ -1981,6 +2063,7 @@ export async function executeInferenceRun(
     engine: proofSummary.engine,
     requestedAgentPatches,
     requestedSmartProof,
+    requestedCompatDeterministic,
     smartProof,
     proofSummary,
     config: configResult,
@@ -1991,8 +2074,12 @@ export async function executeInferenceRun(
     frontierAgent,
     summary: {
       relationCandidatesCreated,
+      proofCandidatesCreated,
+      compatCandidatesCreated,
+      compatModeEnabled: compatDeterministic.enabled,
       executionMode: Array.from(modeSet),
     },
+    compatDeterministic,
     ...(cutoverArtifact ? { cutoverArtifact } : {}),
   };
 

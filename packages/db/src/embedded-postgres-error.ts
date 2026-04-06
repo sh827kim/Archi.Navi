@@ -18,7 +18,11 @@ function summarizeRecentLogs(recentLogs: string[]): string | null {
 
 function detectEmbeddedPostgresHint(recentLogs: string[]): string | null {
   const haystack = recentLogs.join('\n').toLowerCase();
-  if (!haystack.includes('could not create shared memory segment')) {
+  if (
+    !haystack.includes('could not create shared memory segment')
+    && !haystack.includes('shmat(')
+    && !haystack.includes('shared memory')
+  ) {
     return null;
   }
 

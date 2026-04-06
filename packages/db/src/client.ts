@@ -14,9 +14,14 @@ import {
   DEFAULT_EMBEDDED_POSTGRES_USER,
   resolveDatabaseTarget,
   resolveEmbeddedPostgresRuntimeConfigFromEnv,
+  resolveTestEmbeddedPostgresDefaults,
 } from './runtime-config.js';
-import { ensureEmbeddedPostgresConnection, type EmbeddedPostgresConnection } from './embedded-postgres-runtime.js';
-import { ensurePostgresDatabase, getPostgresDataDirectory } from './postgres-utils.js';
+import {
+  cleanupBrokenEmbeddedPostgresDataDir,
+  ensureEmbeddedPostgresConnection,
+  type EmbeddedPostgresConnection,
+} from './embedded-postgres-runtime.js';
+import { ensurePostgresDatabase } from './postgres-utils.js';
 
 type SqlClient = ReturnType<typeof postgres>;
 
@@ -33,8 +38,12 @@ let _testDatabaseCounter = 0;
 const DEFAULT_MIGRATIONS_FOLDER = existsSync(resolve(__dirname, 'migrations'))
   ? resolve(__dirname, 'migrations')
   : resolve(__dirname, '..', 'src', 'migrations');
-const DEFAULT_TEST_SHARED_DATA_DIR = resolve(__dirname, '..', '..', '..', 'apps', 'web', '.archi-navi', 'dev-db');
-const DEFAULT_TEST_SHARED_PORT = 54329;
+const TEST_RUNTIME_DEFAULTS = resolveTestEmbeddedPostgresDefaults({
+  baseDataDir: resolve(__dirname, '..', '..', '..', 'apps', 'web', '.archi-navi', 'dev-db'),
+  basePort: 54329,
+});
+const DEFAULT_TEST_SHARED_DATA_DIR = TEST_RUNTIME_DEFAULTS.dataDir;
+const DEFAULT_TEST_SHARED_PORT = TEST_RUNTIME_DEFAULTS.port;
 
 type TestRuntime =
   | {
@@ -48,8 +57,8 @@ type TestRuntime =
       stop(): Promise<void>;
     };
 
-export function createDb(url: string) {
-  const sql = postgres(url, { max: 10, onnotice: () => {} });
+export function createDb(url: string, options?: { max?: number }) {
+  const sql = postgres(url, { max: options?.max ?? 10, onnotice: () => {} });
   return drizzlePg(sql, { schema });
 }
 
@@ -80,6 +89,16 @@ export async function closeDb(): Promise<void> {
     _client = null;
     _clientPromise = null;
     _stopRuntime = null;
+  }
+}
+
+export async function closeTestDb(db: DbClient | null | undefined): Promise<void> {
+  const sqlClient = (db as { $client?: { end?: () => Promise<unknown> } } | null | undefined)?.$client;
+  if (!sqlClient?.end) return;
+  try {
+    await sqlClient.end();
+  } catch (error) {
+    console.warn('[archi-navi/db] 테스트 DB 종료 중 경고:', error);
   }
 }
 
@@ -181,6 +200,22 @@ function replaceDatabaseName(connectionString: string, databaseName: string): st
   return url.toString();
 }
 
+function createTestDatabaseError(error: unknown): Error {
+  const message = error instanceof Error ? error.message : String(error);
+  const normalized = message.toLowerCase();
+  if (
+    normalized.includes('could not create shared memory segment')
+    || normalized.includes('shmat(')
+    || normalized.includes('shared memory')
+  ) {
+    return new Error(
+      `${message} 테스트용 embedded PostgreSQL이 shared memory를 할당하지 못했습니다. `
+        + 'ARCHI_NAVI_TEST_DATABASE_URL로 외부 PostgreSQL을 지정하거나 shared memory 제한을 완화하세요.',
+    );
+  }
+  return new Error(`테스트 DB 준비 실패: ${message}`);
+}
+
 async function getSharedTestRuntime(): Promise<TestRuntime> {
   if (_sharedTestRuntimePromise) return _sharedTestRuntimePromise;
 
@@ -195,6 +230,7 @@ async function getSharedTestRuntime(): Promise<TestRuntime> {
     }
 
     const { dataDir, port: preferredPort, user, password, databaseName } = resolveSharedTestRuntimeConfig();
+    cleanupBrokenEmbeddedPostgresDataDir(dataDir);
     mkdirSync(resolve(dataDir, '..'), { recursive: true });
     const runtime = await ensureEmbeddedPostgresConnection(dataDir, preferredPort, databaseName, {
       user,
@@ -211,10 +247,14 @@ async function getSharedTestRuntime(): Promise<TestRuntime> {
 }
 
 export async function createTestDb(): Promise<DbClient> {
-  const runtime = await getSharedTestRuntime();
-  const databaseName = nextTestDatabaseName();
-  await ensurePostgresDatabase(runtime.adminConnectionString, databaseName);
-  const connectionString = replaceDatabaseName(runtime.adminConnectionString, databaseName);
-  await applyMigrations(connectionString);
-  return createDb(connectionString);
+  try {
+    const runtime = await getSharedTestRuntime();
+    const databaseName = nextTestDatabaseName();
+    await ensurePostgresDatabase(runtime.adminConnectionString, databaseName);
+    const connectionString = replaceDatabaseName(runtime.adminConnectionString, databaseName);
+    await applyMigrations(connectionString);
+    return createDb(connectionString, { max: 1 });
+  } catch (error) {
+    throw createTestDatabaseError(error);
+  }
 }

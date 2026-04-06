@@ -4,6 +4,7 @@ const mockPostgres = vi.fn();
 const mockDrizzle = vi.fn();
 const mockMigrate = vi.fn();
 const mockEnsureEmbeddedPostgresConnection = vi.fn();
+const mockCleanupBrokenEmbeddedPostgresDataDir = vi.fn();
 
 vi.mock('postgres', () => ({
   default: vi.fn((...args: unknown[]) => mockPostgres(...args)),
@@ -19,6 +20,9 @@ vi.mock('drizzle-orm/postgres-js/migrator', () => ({
 
 vi.mock('../embedded-postgres-runtime.js', () => ({
   ensureEmbeddedPostgresConnection: vi.fn((...args: unknown[]) => mockEnsureEmbeddedPostgresConnection(...args)),
+  cleanupBrokenEmbeddedPostgresDataDir: vi.fn((...args: unknown[]) =>
+    mockCleanupBrokenEmbeddedPostgresDataDir(...args)
+  ),
 }));
 
 type MockSql = {
@@ -36,6 +40,9 @@ function createMockSql(): MockSql {
 function createMockDbClient() {
   return {
     execute: vi.fn().mockResolvedValue([]),
+    $client: {
+      end: vi.fn().mockResolvedValue(undefined),
+    },
   };
 }
 
@@ -53,6 +60,7 @@ describe('db/client', () => {
   const oldTestDbUser = process.env['ARCHI_NAVI_TEST_DB_USER'];
   const oldTestDbPassword = process.env['ARCHI_NAVI_TEST_DB_PASSWORD'];
   const oldTestDbName = process.env['ARCHI_NAVI_TEST_DB_NAME'];
+  const oldVitestWorkerId = process.env['VITEST_WORKER_ID'];
   const oldMigrationsFolder = process.env['MIGRATIONS_FOLDER'];
 
   beforeEach(() => {
@@ -63,6 +71,11 @@ describe('db/client', () => {
       connectionString: 'postgres://archi_navi:archi_navi@127.0.0.1:54329/archi_navi',
       source: 'embedded-postgres@54329',
       stop: vi.fn().mockResolvedValue(undefined),
+    });
+    mockCleanupBrokenEmbeddedPostgresDataDir.mockReturnValue({
+      removedPidFile: false,
+      resetCluster: false,
+      reasons: [],
     });
     mockPostgres.mockImplementation(() => createMockSql());
     mockDrizzle.mockImplementation(() => createMockDbClient());
@@ -110,6 +123,9 @@ describe('db/client', () => {
 
     if (oldTestDbName === undefined) delete process.env['ARCHI_NAVI_TEST_DB_NAME'];
     else process.env['ARCHI_NAVI_TEST_DB_NAME'] = oldTestDbName;
+
+    if (oldVitestWorkerId === undefined) delete process.env['VITEST_WORKER_ID'];
+    else process.env['VITEST_WORKER_ID'] = oldVitestWorkerId;
 
     if (oldMigrationsFolder === undefined) delete process.env['MIGRATIONS_FOLDER'];
     else process.env['MIGRATIONS_FOLDER'] = oldMigrationsFolder;
@@ -214,8 +230,58 @@ describe('db/client', () => {
 
     expect(db).toBeDefined();
     expect(mockEnsureEmbeddedPostgresConnection).toHaveBeenCalledTimes(1);
+    expect(mockCleanupBrokenEmbeddedPostgresDataDir).toHaveBeenCalledTimes(1);
     expect(mockMigrate).toHaveBeenCalledTimes(1);
     expect(mockPostgres).toHaveBeenCalled();
+  });
+
+  it('closeTestDb는 테스트 DB client가 있으면 종료해야 한다', async () => {
+    const end = vi.fn().mockResolvedValue(undefined);
+    const { closeTestDb } = await import('../client.js');
+
+    await closeTestDb({ $client: { end } } as unknown as Awaited<ReturnType<typeof import('../client.js')['createTestDb']>>);
+
+    expect(end).toHaveBeenCalledTimes(1);
+  });
+
+  it('createTestDb 기본 런타임은 worker별 data dir와 port를 분리해야 한다', async () => {
+    delete process.env['ARCHI_NAVI_TEST_DATABASE_URL'];
+    delete process.env['ARCHI_NAVI_TEST_DB_DATA_DIR'];
+    delete process.env['ARCHI_NAVI_TEST_DB_PORT'];
+    process.env['VITEST_WORKER_ID'] = '3';
+
+    const { createTestDb } = await import('../client.js');
+    await createTestDb();
+
+    const expectedPort = 54329 + 40 + Math.abs(process.pid % 20);
+
+    expect(mockEnsureEmbeddedPostgresConnection).toHaveBeenCalledWith(
+      expect.stringContaining(`/worker-3/pid-${process.pid}`),
+      expectedPort,
+      'postgres',
+      { user: 'archi_navi', password: 'archi_navi' },
+    );
+  });
+
+  it('closeTestDb는 테스트 DB client의 underlying sql 연결을 종료해야 한다', async () => {
+    const db = createMockDbClient();
+    const { closeTestDb } = await import('../client.js');
+
+    await closeTestDb(db as never);
+
+    expect(db.$client.end).toHaveBeenCalledTimes(1);
+  });
+
+  it('createTestDb는 shared memory 미지원 환경에서 설명적인 에러를 던져야 한다', async () => {
+    delete process.env['ARCHI_NAVI_TEST_DATABASE_URL'];
+    mockEnsureEmbeddedPostgresConnection.mockRejectedValue(
+      new Error('embedded postgres 기동 실패: shmat(...) Operation not permitted'),
+    );
+
+    const { createTestDb } = await import('../client.js');
+
+    await expect(createTestDb()).rejects.toThrow('ARCHI_NAVI_TEST_DATABASE_URL');
+    await expect(createTestDb()).rejects.toThrow('shared memory');
   });
 
   it('test embedded-postgres user/password/dbName 환경변수를 shared runtime에 반영해야 한다', async () => {

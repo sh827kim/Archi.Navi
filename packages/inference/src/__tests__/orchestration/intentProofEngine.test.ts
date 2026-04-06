@@ -3,9 +3,11 @@ import { and, eq, sql } from 'drizzle-orm';
 import { inArray } from 'drizzle-orm';
 import {
   aliasBindings,
+  closeTestDb,
   createTestDb,
   domainInferenceProfiles,
   functionSummaries,
+  getEmbeddedPostgresTestSupport,
   interactionIntents,
   objects,
   proofDependencies,
@@ -29,6 +31,16 @@ import {
 const workspaceId = '00000000-0000-0000-0000-000000000321';
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const describeDb = embeddedSupport.supported ? describe : describe.skip;
+
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[inference:test] skipping intentProofEngine integration tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
 
 async function insertObject(
   db: TestDb,
@@ -263,8 +275,8 @@ async function summarizeWorkspaceCandidates(
       || left.status.localeCompare(right.status));
 }
 
-describe('intent proof engine', () => {
-  let db: TestDb;
+describeDb('intent proof engine', () => {
+  let db: TestDb | undefined;
   let serviceId: string;
   let functionId: string;
 
@@ -281,10 +293,8 @@ describe('intent proof engine', () => {
   });
 
   afterEach(async () => {
-    const client = (db as { $client?: { end?: () => Promise<void> } } | undefined)?.$client;
-    if (client?.end) {
-      await client.end();
-    }
+    await closeTestDb(db);
+    db = undefined;
   });
 
   it('resolveWorkspaceInteractionIntents는 기본 동작에서 입력 intent 순서를 보존해야 한다', async () => {
@@ -2680,6 +2690,79 @@ describe('intent proof engine', () => {
 
     const patches = await db.select().from(proofPatches).where(eq(proofPatches.proofStateId, resolution.proofStateId));
     expect(patches[0]?.validationStatus).toBe('REJECTED');
+  });
+
+  it('dynamic URI signal이 있으면 config binding missing보다 DYNAMIC_URI_UNRESOLVED를 우선해야 한다', async () => {
+    const intentId = generateId();
+    await db.insert(functionSummaries).values({
+      id: generateId(),
+      workspaceId,
+      functionId,
+      serviceId,
+      summaryKind: 'http',
+      outboundHttp: {
+        method: 'GET',
+        path: '/orders/{id}',
+        dynamicPath: true,
+      },
+      flags: {
+        dynamicPath: true,
+      },
+      aliasHints: ['client.orders.url'],
+      sourceHash: 'summary-dynamic-uri-frontier',
+      confidence: 0.9,
+    });
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      hostHint: 'ORDERS_API',
+      configKeys: ['client.orders.url'],
+      intentHash: 'intent-dynamic-uri-frontier',
+      anchorHash: 'anchor-dynamic-uri-frontier',
+    });
+
+    const result = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+
+    expect(result.status).toBe('FRONTIER');
+    expect(result.frontierReason).toBe('DYNAMIC_URI_UNRESOLVED');
+  });
+
+  it('path만 남은 HTTP intent는 PATH_ONLY_TARGET_UNRESOLVED로 분류해야 한다', async () => {
+    const intentId = generateId();
+    await db.insert(functionSummaries).values({
+      id: generateId(),
+      workspaceId,
+      functionId,
+      serviceId,
+      summaryKind: 'http',
+      outboundHttp: {
+        method: 'GET',
+        path: '/orders/{id}',
+      },
+      sourceHash: 'summary-path-only-frontier',
+      confidence: 0.88,
+    });
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      intentHash: 'intent-path-only-frontier',
+      anchorHash: 'anchor-path-only-frontier',
+    });
+
+    const result = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+
+    expect(result.status).toBe('FRONTIER');
+    expect(result.frontierReason).toBe('PATH_ONLY_TARGET_UNRESOLVED');
   });
 
   it('frontier와 무관한 weak alias patch는 REJECTED여야 한다', async () => {
