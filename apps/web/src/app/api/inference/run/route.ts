@@ -263,6 +263,7 @@ export async function POST(req: NextRequest) {
         config: runStats['config'] ?? null,
         code: runStats['code'] ?? null,
         db: runStats['db'] ?? null,
+        bootstrap: runStats['bootstrap'] ?? null,
         proofResolution: runStats['proofResolution'] ?? null,
         frontierAgent,
         requestedAgentPatches,

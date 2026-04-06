@@ -67,7 +67,14 @@
 - [x] `docs/spec/12-inference-run-orchestration-spec.md`에 기본/호환 실행 계약, 분리 집계 규칙을 반영.
 
 ### 다음 실행 예정
-- [ ] Phase 1: scan/run 공통 bootstrap 모듈화 설계 및 인터페이스 확정
+- [x] Phase 1: scan/run 공통 bootstrap 모듈화 설계 및 인터페이스 확정
 - [ ] Phase 2: 동적 URI 추출 규칙 확장 및 partial evidence 저장 포맷 구현
 - [ ] Phase 3: frontier reason 확장 + route-family proof 상태 보강
 - [ ] Phase 4: compat mode 운영 노출 범위/UX 정책 확정
+
+
+### Phase 1 구현 반영 파일
+- `packages/inference/src/orchestration/commonBootstrap.ts`
+- `packages/inference/src/orchestration/inferenceRuns.ts`
+- `apps/web/src/app/api/scan/route.ts`
+- `apps/web/src/app/api/inference/run/route.ts`

@@ -59,6 +59,7 @@ import {
   type SmartSummaryEnhancementProposal,
 } from '../agent/smartSummaryEnhancer';
 import { buildIntentProofResolverContext, resolveInteractionIntentProof } from './intentProofEngine';
+import { runCommonBootstrapForRepo } from './commonBootstrap';
 import { buildProofEngineSummaryForRun } from './proofEngineRun';
 import { buildIntentProofCutoverArtifact } from './intentProofCutoverReport';
 import { findFiles } from '../utils/fileDiscovery';
@@ -1044,6 +1045,18 @@ export async function executeInferenceRun(
     fallbackRepoRoots: [] as string[],
     scanFailures: [] as Array<{ filePath: string; reason: string; language: string }>,
   };
+  const bootstrapResult = {
+    analyzedRepoCount: 0,
+    signalCount: 0,
+    candidateCount: 0,
+    createdEndpointCount: 0,
+    createdTopicCount: 0,
+    createdQueueCount: 0,
+    createdDatabaseCount: 0,
+    createdDbTableCount: 0,
+    createdAtomicCount: 0,
+    warnings: [] as string[],
+  };
   let dbResult:
     | null
     | {
@@ -1825,6 +1838,31 @@ export async function executeInferenceRun(
           codeResult.scanFailures.push(...result.scanFailures);
         }
         successfulCodeRepoCount += 1;
+
+        try {
+          const bootstrap = await runCommonBootstrapForRepo(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            skipExtraction: true,
+            bootstrapOnly: true,
+          });
+          bootstrapResult.analyzedRepoCount += 1;
+          bootstrapResult.signalCount += bootstrap.signalCount;
+          bootstrapResult.candidateCount += bootstrap.candidateCount;
+          bootstrapResult.createdEndpointCount += bootstrap.createdEndpointCount;
+          bootstrapResult.createdTopicCount += bootstrap.createdTopicCount;
+          bootstrapResult.createdQueueCount += bootstrap.createdQueueCount;
+          bootstrapResult.createdDatabaseCount += bootstrap.createdDatabaseCount;
+          bootstrapResult.createdDbTableCount += bootstrap.createdDbTableCount;
+          bootstrapResult.createdAtomicCount += bootstrap.createdAtomicCount;
+          if (bootstrap.warning) {
+            bootstrapResult.warnings.push(`[code:${localSource.repoRoot}] ${bootstrap.warning}`);
+          }
+        } catch (bootstrapError) {
+          bootstrapResult.warnings.push(
+            `[code:${localSource.repoRoot}] bootstrap 실패: ${bootstrapError instanceof Error ? bootstrapError.message : 'unknown'}`,
+          );
+        }
       } catch (error) {
         sourceHasError = true;
         errors.push({
@@ -1936,6 +1974,9 @@ export async function executeInferenceRun(
   const finalStatus: InferenceRunStatus =
     !hasAnySuccess && errors.length > 0 ? 'FAILED' : 'SUCCEEDED';
   const errorMessage = errors[0]?.message ?? null;
+  if (bootstrapResult.warnings.length > 0) {
+    warnings.push(...bootstrapResult.warnings);
+  }
   const stats = {
     engine: proofSummary.engine,
     requestedAgentPatches,
@@ -1945,6 +1986,7 @@ export async function executeInferenceRun(
     config: configResult,
     code: codeResult,
     db: dbResult,
+    bootstrap: bootstrapResult,
     proofResolution,
     frontierAgent,
     summary: {
