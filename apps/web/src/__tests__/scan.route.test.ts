@@ -1,6 +1,6 @@
 // @vitest-environment node
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { join } from 'node:path';
 import { eq } from 'drizzle-orm';
 
@@ -31,17 +31,33 @@ vi.mock('@archi-navi/inference', async () => {
   };
 });
 
-import { createTestDb as createEmbeddedTestDb, objects, workspaces } from '@archi-navi/db';
+import {
+  closeTestDb,
+  createTestDb as createEmbeddedTestDb,
+  getEmbeddedPostgresTestSupport,
+  objects,
+  workspaces,
+} from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
 import { bootstrapScannedProjects, registerProjects } from '@/app/api/scan/route';
 
 const workspaceId = '00000000-0000-0000-0000-000000000081';
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const describeDb = embeddedSupport.supported ? describe : describe.skip;
 
 async function createTestDb() {
   return await createEmbeddedTestDb();
 }
 
-describe('registerProjects', () => {
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[web:test] skipping scan.route DB tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
+
+describeDb('registerProjects', () => {
   let db: Awaited<ReturnType<typeof createTestDb>>;
 
   beforeEach(async () => {
@@ -49,6 +65,10 @@ describe('registerProjects', () => {
     getDbMock.mockResolvedValue(db);
     await db.insert(workspaces).values({ id: workspaceId, name: 'scan-route-test' });
   }, 30_000);
+
+  afterEach(async () => {
+    await closeTestDb(db);
+  });
 
   it('기존 서비스가 있으면 scanPath metadata를 최신 값으로 갱신해야 한다', async () => {
     const serviceId = generateId();
@@ -159,6 +179,7 @@ describe('registerProjects', () => {
         },
       ],
       false,
+      false,
     );
 
     expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(db, {
@@ -169,6 +190,8 @@ describe('registerProjects', () => {
     expect(inferRelationsFromCodeSignalsMock).toHaveBeenCalledWith(db, {
       workspaceId,
       repoRoot: process.cwd(),
+      bootstrapOnly: true,
+      enableDbScan: false,
     });
     expect(summary).toEqual({
       analyzedProjectCount: 1,

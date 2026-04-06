@@ -10,9 +10,8 @@ const execFileAsync = promisify(execFile);
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as os from 'node:os';
-import { getDb } from '@archi-navi/db';
-import { objects } from '@archi-navi/db';
-import { eq, and } from 'drizzle-orm';
+import { domainInferenceProfiles, getDb, objects } from '@archi-navi/db';
+import { eq, and, sql } from 'drizzle-orm';
 import {
   runCommonBootstrapForRepoRoots,
 } from '@archi-navi/inference';
@@ -115,6 +114,66 @@ interface ScanBootstrapSummary {
   createdEndpointCount: number;
   createdAtomicCount: number;
   warnings: string[];
+}
+
+interface ScanConfig {
+  enableDbScan: boolean;
+}
+
+const DEFAULT_SCAN_CONFIG: ScanConfig = {
+  enableDbScan: false,
+};
+
+function extractQueryRows<Row>(result: { rows?: Row[] } | Row[]): Row[] {
+  if (Array.isArray(result)) return result;
+  if (Array.isArray(result.rows)) return result.rows;
+  return [];
+}
+
+function asScanConfig(value: unknown): ScanConfig {
+  const record = value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+  return {
+    enableDbScan: typeof record['enableDbScan'] === 'boolean'
+      ? record['enableDbScan']
+      : DEFAULT_SCAN_CONFIG.enableDbScan,
+  };
+}
+
+function isMissingColumnError(error: unknown, columns: string[]): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const message = Reflect.get(error, 'message');
+  if (typeof message !== 'string') return false;
+
+  const normalized = message.toLowerCase();
+  const hasRequestedColumn = columns.some((column) => normalized.includes(column.toLowerCase()));
+  if (!hasRequestedColumn) return false;
+
+  const code = Reflect.get(error, 'code');
+  return code === '42703' || normalized.includes('does not exist');
+}
+
+async function resolveDefaultScanConfig(workspaceId: string): Promise<ScanConfig> {
+  const db = await getDb();
+
+  try {
+    const result = await db.execute<{ scan_config: unknown }>(sql`
+      select scan_config
+      from ${domainInferenceProfiles}
+      where workspace_id = ${workspaceId}
+      order by is_default desc, updated_at desc
+      limit 1
+    `);
+    const rows = extractQueryRows(result);
+    return asScanConfig(rows[0]?.scan_config);
+  } catch (error) {
+    if (!isMissingColumnError(error, ['scan_config'])) {
+      throw error;
+    }
+    return DEFAULT_SCAN_CONFIG;
+  }
 }
 
 
@@ -264,6 +323,7 @@ export async function bootstrapScannedProjects(
   workspaceId: string,
   projects: DiscoveredProject[],
   dryRun: boolean,
+  enableDbScan: boolean,
   onProgress?: (message: string) => void,
 ): Promise<ScanBootstrapSummary | null> {
   if (dryRun || projects.length === 0) return null;
@@ -287,7 +347,8 @@ export async function bootstrapScannedProjects(
     // 스캔 직후 bootstrap은 즉시성/안정성이 우선이므로 AST/WASM 의존성을 피한다.
     codeEngine: 'regex',
     bootstrapOnly: true,
-    onProgress: (repoRoot, index, total) => {
+    enableDbScan,
+    onProgress: (repoRoot: string, index: number, total: number) => {
       onProgress?.(`코드 1차 분석 중... ${path.basename(repoRoot)} (${index + 1} / ${total})`);
     },
   });
@@ -323,6 +384,10 @@ export async function POST(req: NextRequest) {
   if (!target) {
     return NextResponse.json({ error: 'target은 필수입니다' }, { status: 400 });
   }
+
+  const enableDbScan = typeof body.enableDbScan === 'boolean'
+    ? body.enableDbScan
+    : (await resolveDefaultScanConfig(workspaceId)).enableDbScan;
 
   const encoder = new TextEncoder();
 
@@ -434,6 +499,7 @@ export async function POST(req: NextRequest) {
           workspaceId,
           projects,
           dryRun,
+          enableDbScan,
           (message) => send({
             type: 'progress',
             current: projects.length,
