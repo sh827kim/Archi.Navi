@@ -21,6 +21,7 @@ export interface SaveRelationCandidateParams {
   objectId: string;
   confidence: number;
   metadata: Record<string, unknown>;
+  generationMode?: 'compat_deterministic';
 }
 
 function mergeSpecializedRelationMetadata(
@@ -53,7 +54,21 @@ export async function saveRelationCandidate(
   params: SaveRelationCandidateParams,
   evidenceId: string,
 ): Promise<{ created: boolean }> {
-  const { workspaceId, relationType, subjectObjectId, objectId, confidence, metadata } = params;
+  const {
+    workspaceId,
+    relationType,
+    subjectObjectId,
+    objectId,
+    confidence,
+    metadata,
+    generationMode,
+  } = params;
+  const candidateMetadata = generationMode
+    ? {
+        ...metadata,
+        generationMode,
+      }
+    : metadata;
 
   const manualRelation = await db
     .select({ id: objectRelations.id })
@@ -96,8 +111,8 @@ export async function saveRelationCandidate(
 
   const pending = existingCandidates.find((candidate) => candidate.status === 'PENDING');
   const effectiveMetadata = pending
-    ? mergeSpecializedRelationMetadata(metadata, pending.metadata)
-    : metadata;
+    ? mergeSpecializedRelationMetadata(candidateMetadata, pending.metadata)
+    : candidateMetadata;
   const adjustedParams = await applyFeedbackToRelationCandidateInput(db, {
     ...params,
     metadata: effectiveMetadata,

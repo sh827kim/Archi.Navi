@@ -20,6 +20,8 @@ const DEFAULT_PROOF_CONFIDENCE_PROFILE_VERSION = 'v1';
 export interface ProofEngineSummary {
   engine: ProofEngineName;
   intentCount: number;
+  dynamicUriIntentCount: number;
+  pathOnlyIntentCount: number;
   gatewayRouteSeedCount: number;
   derivedEndpointProofCount: number;
   proofClosedAtomicCount: number;
@@ -34,6 +36,7 @@ export interface ProofEngineSummary {
   confidenceProfileVersion: string | null;
   functionSummaryExtractionBreakdown: Record<string, number>;
   frontierBreakdown: Record<string, number>;
+  frontierReasonBreakdown: Record<string, number>;
   targetBreakdown: Record<string, number>;
   smartMode: SmartModeSummary;
 }
@@ -47,6 +50,8 @@ export function buildEmptyProofEngineSummary(): ProofEngineSummary {
   return {
     engine: 'intent_proof',
     intentCount: 0,
+    dynamicUriIntentCount: 0,
+    pathOnlyIntentCount: 0,
     gatewayRouteSeedCount: 0,
     derivedEndpointProofCount: 0,
     proofClosedAtomicCount: 0,
@@ -65,6 +70,7 @@ export function buildEmptyProofEngineSummary(): ProofEngineSummary {
       legacy_edges_fallback: 0,
     },
     frontierBreakdown: {},
+    frontierReasonBreakdown: {},
     targetBreakdown: {},
     smartMode: buildEmptySmartModeSummary(false),
   };
@@ -88,6 +94,10 @@ export async function buildProofEngineSummaryForRun(
     .select({
       id: interactionIntents.id,
       intentType: interactionIntents.intentType,
+      sourceFunctionId: interactionIntents.sourceFunctionId,
+      methodHint: interactionIntents.methodHint,
+      externalPathHint: interactionIntents.externalPathHint,
+      hostHint: interactionIntents.hostHint,
     })
     .from(interactionIntents)
     .where(
@@ -188,7 +198,10 @@ export async function buildProofEngineSummaryForRun(
       .where(eq(relationCandidates.workspaceId, input.workspaceId)),
     db
       .select({
+        functionId: functionSummaries.functionId,
         extractionStrategy: functionSummaries.extractionStrategy,
+        outboundHttp: functionSummaries.outboundHttp,
+        flags: functionSummaries.flags,
       })
       .from(functionSummaries)
       .where(
@@ -245,7 +258,12 @@ export async function buildProofEngineSummaryForRun(
   const projectedCandidateCount = candidates.filter((candidate) => {
     const metadata = candidate.metadata as Record<string, unknown> | null;
     const proofStateId = typeof metadata?.['proofStateId'] === 'string' ? metadata['proofStateId'] : null;
-    return proofStateId !== null && trackedStateIds.has(proofStateId);
+    const generationMode = typeof metadata?.['generationMode'] === 'string' ? metadata['generationMode'] : null;
+    return (
+      proofStateId !== null
+      && trackedStateIds.has(proofStateId)
+      && generationMode !== 'compat_deterministic'
+    );
   }).length;
 
   const frontierBreakdown: Record<string, number> = {};
@@ -268,6 +286,70 @@ export async function buildProofEngineSummaryForRun(
     const key = summary.extractionStrategy;
     functionSummaryExtractionBreakdown[key] = (functionSummaryExtractionBreakdown[key] ?? 0) + 1;
   }
+
+  const dynamicSummaryFunctionIds = new Set(
+    updatedSummaries
+      .filter((summary) => {
+        const flags = asRecord(summary.flags);
+        const outboundHttp = asRecord(summary.outboundHttp);
+        return (
+          flags?.['dynamicPath'] === true
+          || flags?.['dynamicHost'] === true
+          || outboundHttp?.['dynamicPath'] === true
+          || outboundHttp?.['dynamicHost'] === true
+        );
+      })
+      .map((summary) => summary.functionId)
+      .filter((functionId): functionId is string => typeof functionId === 'string'),
+  );
+  const pathOnlySummaryFunctionIds = new Set(
+    updatedSummaries
+      .filter((summary) => {
+        const outboundHttp = asRecord(summary.outboundHttp);
+        if (!outboundHttp) return false;
+        const path = asString(outboundHttp['path']);
+        const hostAlias = asString(outboundHttp['hostAlias']) ?? asString(outboundHttp['hostHint']);
+        const configKeys = Array.isArray(outboundHttp['configKeys']) ? outboundHttp['configKeys'] : [];
+        const dynamicPath = outboundHttp['dynamicPath'] === true;
+        const dynamicHost = outboundHttp['dynamicHost'] === true;
+        return (
+          path !== null
+          && hostAlias === null
+          && configKeys.length === 0
+          && !dynamicPath
+          && !dynamicHost
+        );
+      })
+      .map((summary) => summary.functionId)
+      .filter((functionId): functionId is string => typeof functionId === 'string'),
+  );
+
+  const stateIntentIdByProofStateId = new Map(
+    states.map((state) => [state.id, state.intentId]),
+  );
+  const dynamicIntentIds = new Set(
+    runIntents
+      .filter((intent) => intent.intentType === 'http_call' && intent.sourceFunctionId && dynamicSummaryFunctionIds.has(intent.sourceFunctionId))
+      .map((intent) => intent.id),
+  );
+  const pathOnlyIntentIds = new Set(
+    runIntents
+      .filter((intent) => intent.intentType === 'http_call' && intent.sourceFunctionId && pathOnlySummaryFunctionIds.has(intent.sourceFunctionId))
+      .map((intent) => intent.id),
+  );
+  for (const frontier of frontiers) {
+    const intentId = stateIntentIdByProofStateId.get(frontier.proofStateId);
+    if (!intentId) continue;
+    if (frontier.frontierReason === 'DYNAMIC_URI_UNRESOLVED') {
+      dynamicIntentIds.add(intentId);
+    }
+    if (frontier.frontierReason === 'PATH_ONLY_TARGET_UNRESOLVED') {
+      pathOnlyIntentIds.add(intentId);
+    }
+  }
+
+  const dynamicUriIntentCount = dynamicIntentIds.size;
+  const pathOnlyIntentCount = pathOnlyIntentIds.size;
 
   const confidenceProfileSnapshots = states
     .map((state) => asRecord(state.confidenceBreakdown))
@@ -332,6 +414,8 @@ export async function buildProofEngineSummaryForRun(
   return {
     engine: 'intent_proof',
     intentCount: runIntents.length,
+    dynamicUriIntentCount,
+    pathOnlyIntentCount,
     gatewayRouteSeedCount: gatewayRouteIntentIds.size,
     derivedEndpointProofCount: states.filter(
       (state) =>
@@ -360,6 +444,7 @@ export async function buildProofEngineSummaryForRun(
     confidenceProfileVersion,
     functionSummaryExtractionBreakdown,
     frontierBreakdown,
+    frontierReasonBreakdown: frontierBreakdown,
     targetBreakdown,
     smartMode,
   };

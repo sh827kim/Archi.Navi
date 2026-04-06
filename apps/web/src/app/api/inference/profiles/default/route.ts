@@ -22,6 +22,10 @@ interface CrossValidationConfig {
   penaltyFactor: number;
 }
 
+interface ScanConfig {
+  enableDbScan: boolean;
+}
+
 interface ProofConfidenceWeights {
   summaryQuality: number;
   slotCompleteness: number;
@@ -69,6 +73,10 @@ const DEFAULT_CROSS_VALIDATION_CONFIG: CrossValidationConfig = {
   enabled: true,
   boostFactor: 0.3,
   penaltyFactor: 0.85,
+};
+
+const DEFAULT_SCAN_CONFIG: ScanConfig = {
+  enableDbScan: false,
 };
 
 const DEFAULT_PROOF_CONFIDENCE: ProofConfidenceConfig = {
@@ -161,6 +169,7 @@ interface ProfileResponse {
   edgeWMsg: number | null;
   enabledLayers: unknown;
   crossValidation?: unknown;
+  scanConfig?: unknown;
   proofConfidence?: unknown;
   smartProofConfig?: unknown;
   feedbackConfig?: unknown;
@@ -200,6 +209,7 @@ interface UpdateProfileBody {
   edgeWMsg?: number;
   enabledLayers?: string[];
   crossValidation?: Partial<CrossValidationConfig>;
+  scanConfig?: Partial<ScanConfig>;
   proofConfidence?: Partial<ProofConfidenceConfig> & {
     weights?: Partial<ProofConfidenceWeights>;
     slotWeights?: {
@@ -248,6 +258,18 @@ function asCrossValidationConfig(value: unknown): CrossValidationConfig {
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function asScanConfig(value: unknown): ScanConfig {
+  const record = value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+
+  return {
+    enableDbScan: typeof record['enableDbScan'] === 'boolean'
+      ? record['enableDbScan']
+      : DEFAULT_SCAN_CONFIG.enableDbScan,
+  };
 }
 
 function normalizeWeight(value: unknown, fallback: number): number {
@@ -507,6 +529,7 @@ function toPublicProfile(
       ? (row.enabledLayers as unknown[]).filter((v): v is string => typeof v === 'string')
       : ['call', 'db', 'msg', 'code'],
     crossValidation,
+    scanConfig: asScanConfig(row.scanConfig),
     proofConfidence,
     smartProofConfig,
     relationFeedbackConfig,
@@ -533,6 +556,7 @@ async function selectProfileJsonState(
   profileId: string,
 ): Promise<{
   crossValidation: unknown;
+  scanConfig: unknown;
   proofConfidence: unknown;
   smartProofConfig: unknown;
   feedbackConfig: unknown;
@@ -543,6 +567,7 @@ async function selectProfileJsonState(
   try {
     const state = await db.execute<{
       cross_validation: unknown;
+      scan_config: unknown;
       proof_confidence_config: unknown;
       smart_proof_config: unknown;
       feedback_config: unknown;
@@ -552,6 +577,7 @@ async function selectProfileJsonState(
     }>(sql`
       select
         cross_validation,
+        scan_config,
         proof_confidence_config,
         smart_proof_config,
         feedback_config,
@@ -566,6 +592,7 @@ async function selectProfileJsonState(
 
     return {
       crossValidation: rows[0]?.cross_validation,
+      scanConfig: rows[0]?.scan_config,
       proofConfidence: rows[0]?.proof_confidence_config,
       smartProofConfig: rows[0]?.smart_proof_config,
       feedbackConfig: rows[0]?.feedback_config,
@@ -575,6 +602,7 @@ async function selectProfileJsonState(
     };
   } catch (error) {
     if (!isMissingColumnError(error, [
+      'scan_config',
       'proof_confidence_config',
       'smart_proof_config',
       'domain_feedback_config',
@@ -606,6 +634,7 @@ async function selectProfileJsonState(
 
     return {
       crossValidation: rows[0]?.cross_validation,
+      scanConfig: undefined,
       proofConfidence: rows[0]?.proof_confidence_config,
       smartProofConfig: rows[0]?.smart_proof_config,
       feedbackConfig: rows[0]?.feedback_config,
@@ -639,6 +668,7 @@ async function selectProfileJsonState(
 
     return {
       crossValidation: rows[0]?.cross_validation,
+      scanConfig: undefined,
       proofConfidence: rows[0]?.proof_confidence_config,
       smartProofConfig: rows[0]?.smart_proof_config,
       feedbackConfig: undefined,
@@ -652,6 +682,7 @@ async function selectProfileJsonState(
     }
     return {
       crossValidation: undefined,
+      scanConfig: undefined,
       proofConfidence: undefined,
       smartProofConfig: undefined,
       feedbackConfig: undefined,
@@ -726,6 +757,7 @@ async function selectDefaultProfile(workspaceId: string): Promise<ProfileRespons
   return {
     ...row,
     crossValidation: state.crossValidation,
+    scanConfig: state.scanConfig,
     proofConfidence: state.proofConfidence,
     smartProofConfig: state.smartProofConfig,
     feedbackConfig: state.feedbackConfig,
@@ -745,6 +777,7 @@ async function selectAnyProfile(workspaceId: string): Promise<ProfileResponse | 
   return {
     ...row,
     crossValidation: state.crossValidation,
+    scanConfig: state.scanConfig,
     proofConfidence: state.proofConfidence,
     smartProofConfig: state.smartProofConfig,
     feedbackConfig: state.feedbackConfig,
@@ -872,6 +905,13 @@ export async function PUT(req: NextRequest) {
         ? clamp(crossValidationInput.penaltyFactor, 0, 1)
         : currentCrossValidation.penaltyFactor,
     };
+    const currentScanConfig = asScanConfig(current.scanConfig);
+    const scanConfigInput = body.scanConfig ?? {};
+    const scanConfig = {
+      enableDbScan: typeof scanConfigInput.enableDbScan === 'boolean'
+        ? scanConfigInput.enableDbScan
+        : currentScanConfig.enableDbScan,
+    };
     const currentProofConfidence = asProofConfidenceConfig(current.proofConfidence);
     const proofConfidenceInput = body.proofConfidence ?? {};
     const proofConfidence = asProofConfidenceConfig({
@@ -985,6 +1025,18 @@ export async function PUT(req: NextRequest) {
         set cross_validation = ${JSON.stringify(crossValidation)}::jsonb
         where id = ${current.id}
       `);
+
+      try {
+        await tx.execute(sql`
+          update ${domainInferenceProfiles}
+          set scan_config = ${JSON.stringify(scanConfig)}::jsonb
+          where id = ${current.id}
+        `);
+      } catch (error) {
+        if (!isMissingColumnError(error, ['scan_config'])) {
+          throw error;
+        }
+      }
 
       try {
         await tx.execute(sql`

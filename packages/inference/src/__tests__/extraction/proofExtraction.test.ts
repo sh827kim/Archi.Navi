@@ -5,11 +5,13 @@ import { tmpdir } from 'node:os';
 import { and, eq } from 'drizzle-orm';
 import {
   aliasBindings,
+  closeTestDb,
   codeArtifacts,
   codeCallEdges,
   createTestDb,
   evidences,
   functionSummaries,
+  getEmbeddedPostgresTestSupport,
   interactionIntents,
   objects,
   proofStates,
@@ -32,6 +34,16 @@ import type { GatewayRouteTransformPlugin } from '@/extraction/routeTransforms';
 const workspaceId = '00000000-0000-0000-0000-000000000654';
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const describeDb = embeddedSupport.supported ? describe : describe.skip;
+
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[inference:test] skipping proof extraction integration tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
 
 async function insertObject(
   db: TestDb,
@@ -62,9 +74,9 @@ async function insertObject(
   return id;
 }
 
-describe('proof extraction', () => {
+describeDb('proof extraction', () => {
   let db: TestDb;
-  let repoRoot: string;
+  let repoRoot: string | null = null;
 
   beforeEach(async () => {
     db = await createTestDb();
@@ -72,8 +84,12 @@ describe('proof extraction', () => {
     repoRoot = mkdtempSync(join(tmpdir(), 'archi-proof-'));
   });
 
-  afterEach(() => {
-    rmSync(repoRoot, { recursive: true, force: true });
+  afterEach(async () => {
+    if (repoRoot) {
+      rmSync(repoRoot, { recursive: true, force: true });
+      repoRoot = null;
+    }
+    await closeTestDb(db);
   });
 
   it('path-only HTTP call도 function summary와 interaction intent로 보존해야 한다', async () => {

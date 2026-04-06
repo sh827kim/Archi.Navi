@@ -20,7 +20,8 @@ import {
   asRecord,
   asString,
   extractHost,
-  extractPath,
+  extractHttpHostHint,
+  extractHttpPathHint,
   normalizeHint,
   normalizeMethod,
   normalizeOptionalUuid,
@@ -494,13 +495,16 @@ export async function extractInteractionIntentsFromCodeSignals(
     const messageHints = intentType === 'message_publish' || intentType === 'message_consume'
       ? extractMessageHints(metadata, row.calleeSymbol.trim())
       : { brokerKind: null, topicHints: [] as string[], queueHints: [] as string[], routingKeyHints: [] as string[] };
+    const httpMethodHint = normalizeMethod(metadata['method']) ?? normalizeMethod(metadata['methodHint']);
+    const httpPathHint = extractHttpPathHint(row.calleeSymbol, metadata);
+    const httpHostHint = extractHttpHostHint(row.calleeSymbol, metadata);
     const seed: IntentSeed = {
       intentType,
       sourceServiceId: source.serviceId,
       sourceFunctionId: source.functionId,
       sourceFilePath: row.filePath,
-      methodHint: intentType === 'db_access' ? normalizeDbAction(kind) : normalizeMethod(metadata['method']),
-      externalPathHint: intentType === 'http_call' ? extractPath(row.calleeSymbol) : null,
+      methodHint: intentType === 'db_access' ? normalizeDbAction(kind) : httpMethodHint,
+      externalPathHint: intentType === 'http_call' ? httpPathHint : null,
       gatewayKind: null,
       routeScopeKind: null,
       externalRoutePattern: null,
@@ -508,7 +512,7 @@ export async function extractInteractionIntentsFromCodeSignals(
       targetServiceHint: null,
       routeTransformRefs: [],
       methodConstraint: null,
-      hostHint: intentType === 'http_call' ? extractHost(row.calleeSymbol) : null,
+      hostHint: intentType === 'http_call' ? httpHostHint : null,
       resourceHint: rawResourceHint,
       dbSchemaHint: dbHints.schemaHint ?? asString(metadata['schema']),
       dbTableHints: dbHints.tableHints,

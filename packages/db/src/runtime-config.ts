@@ -41,6 +41,30 @@ export function resolveDefaultEmbeddedPostgresDataDir(): string {
   return resolve(homedir(), '.archi-navi', 'db');
 }
 
+function parseWorkerIndex(value: string | undefined): number | null {
+  if (!value) return null;
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+export function resolveTestEmbeddedPostgresDefaults(input?: {
+  baseDataDir?: string;
+  basePort?: number;
+}): { dataDir: string; port: number } {
+  const workerIndex =
+    parseWorkerIndex(process.env['VITEST_WORKER_ID'])
+    ?? parseWorkerIndex(process.env['JEST_WORKER_ID'])
+    ?? 1;
+  const baseDataDir = input?.baseDataDir ?? resolve(homedir(), '.archi-navi', 'test-db');
+  const basePort = input?.basePort ?? DEFAULT_EMBEDDED_POSTGRES_PORT;
+  const pidOffset = Math.abs(process.pid % 20);
+
+  return {
+    dataDir: resolve(baseDataDir, `worker-${workerIndex}`, `pid-${process.pid}`),
+    port: basePort + ((Math.max(workerIndex - 1, 0) * 20) + pidOffset),
+  };
+}
+
 export function resolveEmbeddedPostgresRuntimeConfigFromEnv(input: {
   dataDirEnvVar: string;
   portEnvVar: string;

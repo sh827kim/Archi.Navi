@@ -142,6 +142,7 @@ function createTransactionDb(
   updated: ReturnType<typeof createProfileRow>,
   currentState: {
     cross_validation: unknown;
+    scan_config?: unknown;
     proof_confidence_config?: unknown;
     smart_proof_config?: unknown;
     feedback_config: unknown;
@@ -151,6 +152,7 @@ function createTransactionDb(
   },
   updatedState: {
     cross_validation: unknown;
+    scan_config?: unknown;
     proof_confidence_config?: unknown;
     smart_proof_config?: unknown;
     feedback_config: unknown;
@@ -219,6 +221,9 @@ describe('inference profile default route', () => {
     expect(response.status).toBe(200);
     const payload = await response.json();
     expect(payload).toEqual(expect.objectContaining({
+      scanConfig: {
+        enableDbScan: false,
+      },
       proofConfidence: createDefaultProofConfidence(),
       smartProofConfig: createDefaultSmartProofConfig(),
       relationFeedbackConfig: {
@@ -251,6 +256,57 @@ describe('inference profile default route', () => {
     expect(payload).not.toHaveProperty('relationFeedbackEntries');
     expect(payload).not.toHaveProperty('domainFeedbackEntries');
     expect(db.select).not.toHaveBeenCalled();
+  });
+
+  it('PUT은 scanConfig.enableDbScan을 저장하고 응답에 반영해야 한다', async () => {
+    const current = createProfileRow();
+    const updated = createProfileRow();
+    const { db, transactionExecuteMock } = createTransactionDb(
+      current,
+      updated,
+      {
+        cross_validation: null,
+        scan_config: { enableDbScan: false },
+        proof_confidence_config: null,
+        smart_proof_config: null,
+        feedback_config: null,
+        feedback_adjustments: null,
+        domain_feedback_config: null,
+        domain_feedback_adjustments: null,
+      },
+      {
+        cross_validation: null,
+        scan_config: { enableDbScan: true },
+        proof_confidence_config: null,
+        smart_proof_config: null,
+        feedback_config: null,
+        feedback_adjustments: null,
+        domain_feedback_config: null,
+        domain_feedback_adjustments: null,
+      },
+    );
+    getDbMock.mockResolvedValue(db);
+
+    const response = await PUT(new NextRequest('http://localhost/api/inference/profiles/default', {
+      method: 'PUT',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        scanConfig: {
+          enableDbScan: true,
+        },
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    const payload = await response.json();
+    expect(payload).toEqual(expect.objectContaining({
+      scanConfig: {
+        enableDbScan: true,
+      },
+    }));
+
+    const scanConfigStatement = getExecutedSql(transactionExecuteMock, 1);
+    expect(scanConfigStatement.strings.join(' ')).toContain('set scan_config = ');
   });
 
   it('GET은 includeFeedbackEntries=true일 때 relation/domain detail list를 각각 정렬해 반환해야 한다', async () => {
@@ -392,8 +448,8 @@ describe('inference profile default route', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
-    const proofConfidenceQuery = getExecutedSql(transactionExecuteMock, 1);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(6);
+    const proofConfidenceQuery = getExecutedSql(transactionExecuteMock, 2);
     expect(proofConfidenceQuery.strings.join('')).toContain('set proof_confidence_config = ');
 
     const payload = await response.json();
@@ -458,8 +514,8 @@ describe('inference profile default route', () => {
     }));
 
     expect(response.status).toBe(200);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
-    const smartProofQuery = getExecutedSql(transactionExecuteMock, 2);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(6);
+    const smartProofQuery = getExecutedSql(transactionExecuteMock, 3);
     expect(smartProofQuery.strings.join('')).toContain('set smart_proof_config = ');
 
     const payload = await response.json();
@@ -519,9 +575,9 @@ describe('inference profile default route', () => {
     ));
 
     expect(response.status).toBe(200);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
-    const relationQuery = getExecutedSql(transactionExecuteMock, 3);
-    const domainQuery = getExecutedSql(transactionExecuteMock, 4);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(6);
+    const relationQuery = getExecutedSql(transactionExecuteMock, 4);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 5);
     expect(relationQuery.strings.join('')).toContain('set feedback_config = ');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');
     expect(domainQuery.strings.join('')).toContain('set domain_feedback_config = ');
@@ -843,6 +899,7 @@ describe('inference profile default route', () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(createMissingColumnError('domain_feedback_config'));
     const db = {
       select: vi.fn(),
@@ -884,9 +941,9 @@ describe('inference profile default route', () => {
     expect(response.status).toBe(200);
     expect(db.select).not.toHaveBeenCalled();
     expect(executeMock).toHaveBeenCalledTimes(6);
-    expect(transactionExecuteMock).toHaveBeenCalledTimes(5);
-    const relationQuery = getExecutedSql(transactionExecuteMock, 3);
-    const domainQuery = getExecutedSql(transactionExecuteMock, 4);
+    expect(transactionExecuteMock).toHaveBeenCalledTimes(6);
+    const relationQuery = getExecutedSql(transactionExecuteMock, 4);
+    const domainQuery = getExecutedSql(transactionExecuteMock, 5);
     expect(relationQuery.strings.join('')).toContain('feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('domain_feedback_config');
     expect(relationQuery.strings.join('')).not.toContain('feedback_adjustments =');

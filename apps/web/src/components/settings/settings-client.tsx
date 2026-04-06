@@ -2018,6 +2018,8 @@ export function ScanSettings({ workspaceId }: { workspaceId: string }) {
     'workspace-dir',
   );
   const [target, setTarget] = useState('');
+  const [enableDbScan, setEnableDbScan] = useState(false);
+  const [savingScanConfig, setSavingScanConfig] = useState(false);
   const [scanning, setScanning] = useState(false);
   const [result, setResult] = useState<ScanApiResult | null>(null);
   // 스캔 진행 상태 (모달 표시용)
@@ -2056,6 +2058,16 @@ export function ScanSettings({ workspaceId }: { workspaceId: string }) {
       })
       .catch(() => { /* 실패 시 무시 */ });
   // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [workspaceId]);
+
+  useEffect(() => {
+    if (!workspaceId) return;
+    fetch(`/api/inference/profiles/default?workspaceId=${encodeURIComponent(workspaceId)}`)
+      .then((res) => res.json())
+      .then((data: { scanConfig?: { enableDbScan?: boolean } }) => {
+        setEnableDbScan(data.scanConfig?.enableDbScan === true);
+      })
+      .catch(() => { /* 실패 시 기본값(false) 유지 */ });
   }, [workspaceId]);
 
   // 디렉토리 자동완성 fetch (로컬 모드 전용)
@@ -2151,7 +2163,13 @@ export function ScanSettings({ workspaceId }: { workspaceId: string }) {
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ workspaceId, mode, target: target.trim(), dryRun }),
+        body: JSON.stringify({
+          workspaceId,
+          mode,
+          target: target.trim(),
+          dryRun,
+          enableDbScan,
+        }),
       });
 
       // HTTP 에러 (스트림 시작 전)
@@ -2224,6 +2242,29 @@ export function ScanSettings({ workspaceId }: { workspaceId: string }) {
       setProgress(0);
       setProgressMessage('');
       window.removeEventListener('beforeunload', handleBeforeUnload);
+    }
+  };
+
+  const saveScanConfig = async () => {
+    setSavingScanConfig(true);
+    try {
+      const res = await fetch('/api/inference/profiles/default', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          scanConfig: {
+            enableDbScan,
+          },
+        }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as { error?: string };
+      if (!res.ok) throw new Error(payload.error ?? '스캔 설정 저장 실패');
+      toast.success('스캔 기본 설정 저장됨');
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : '스캔 설정 저장 실패');
+    } finally {
+      setSavingScanConfig(false);
     }
   };
 
@@ -2328,6 +2369,22 @@ export function ScanSettings({ workspaceId }: { workspaceId: string }) {
               gh CLI 로그인이 필요합니다 (gh auth login)
             </div>
           )}
+
+          <div className="flex items-center justify-between rounded-lg border border-border/70 px-4 py-3">
+            <div>
+              <div className="text-sm font-medium text-foreground">DB 스캔 활성화</div>
+              <div className="text-xs text-muted-foreground mt-0.5">
+                끄면 코드 스캔 단계에서 database/db_table bootstrap을 만들지 않습니다
+              </div>
+            </div>
+            <Switch checked={enableDbScan} onCheckedChange={setEnableDbScan} />
+          </div>
+
+          <div className="flex justify-end">
+            <Button variant="outline" onClick={() => void saveScanConfig()} disabled={savingScanConfig}>
+              {savingScanConfig ? '저장 중...' : '스캔 설정 저장'}
+            </Button>
+          </div>
 
           {/* 대상 입력 — 로컬 모드: 자동완성 드롭다운 포함 */}
           <div className="space-y-1.5">

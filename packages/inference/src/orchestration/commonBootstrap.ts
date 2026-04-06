@@ -39,6 +39,7 @@ interface RunCommonBootstrapForRepoInput {
   forceRescan?: boolean;
   skipExtraction?: boolean;
   bootstrapOnly?: boolean;
+  enableDbScan?: boolean;
 }
 
 interface RunCommonBootstrapForRepoRootsInput {
@@ -47,6 +48,7 @@ interface RunCommonBootstrapForRepoRootsInput {
   codeEngine?: CodeSignalEngine;
   forceRescan?: boolean;
   bootstrapOnly?: boolean;
+  enableDbScan?: boolean;
   onProgress?: (repoRoot: string, index: number, total: number) => void;
 }
 
@@ -66,7 +68,7 @@ export async function runCommonBootstrapForRepo(
       workspaceId: input.workspaceId,
       repoRoot: input.repoRoot,
       codeEngine: input.codeEngine ?? 'regex',
-      forceRescan: input.forceRescan,
+      ...(input.forceRescan !== undefined ? { forceRescan: input.forceRescan } : {}),
     });
     signalCount = extracted.signalCount;
     warning = extracted.warning ?? null;
@@ -77,6 +79,7 @@ export async function runCommonBootstrapForRepo(
     workspaceId: input.workspaceId,
     repoRoot: input.repoRoot,
     bootstrapOnly,
+    ...(input.enableDbScan !== undefined ? { enableDbScan: input.enableDbScan } : {}),
   });
 
   return {
@@ -125,9 +128,10 @@ export async function runCommonBootstrapForRepoRoots(
       const result = await runCommonBootstrapForRepo(db, {
         workspaceId: input.workspaceId,
         repoRoot,
-        codeEngine: input.codeEngine,
-        forceRescan: input.forceRescan,
-        bootstrapOnly: input.bootstrapOnly,
+        ...(input.codeEngine !== undefined ? { codeEngine: input.codeEngine } : {}),
+        ...(input.forceRescan !== undefined ? { forceRescan: input.forceRescan } : {}),
+        ...(input.bootstrapOnly !== undefined ? { bootstrapOnly: input.bootstrapOnly } : {}),
+        ...(input.enableDbScan !== undefined ? { enableDbScan: input.enableDbScan } : {}),
       });
 
       summary.analyzedRepoCount += 1;

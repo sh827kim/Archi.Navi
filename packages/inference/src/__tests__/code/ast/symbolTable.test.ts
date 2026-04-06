@@ -132,6 +132,37 @@ public class PaymentClient {
     expect(calls[0]?.symbol).toBe('/charge');
   });
 
+  it('RestClient.create(baseUrl)도 symbol table call evidence로 보존해야 한다', async () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const srcDir = join(repoRoot, 'src');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(
+      join(srcDir, 'PaymentClient.java'),
+      `package com.example.payment;
+public class PaymentClient {
+  public ResponseEntity charge() {
+    String baseUrl;
+    return RestClient.create(baseUrl);
+  }
+}`,
+    );
+
+    const table = await buildProjectSymbolTable({ repoRoot });
+    const calls = table.methodCallsByType.get('com.example.payment.PaymentClient')?.get('charge') ?? [];
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.symbol).toBe('baseUrl');
+    expect(calls[0]?.metadata).toMatchObject({
+      client: 'RestClient',
+      method: 'create',
+      baseUrlVar: 'baseUrl',
+      dynamicHost: true,
+      unsupportedPattern: true,
+    });
+  });
+
   it('Kotlin constructor 타입 주석의 콜론은 inheritance로 해석하지 않아야 한다', async () => {
     const repoRoot = createTempRepoRoot();
     tempDirs.push(repoRoot);

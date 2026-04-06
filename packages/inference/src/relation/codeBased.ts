@@ -29,6 +29,8 @@ export interface CodeCandidateInferenceOptions {
   repoRoot: string;
   serviceIds?: string[];
   bootstrapOnly?: boolean;
+  candidateGenerationMode?: 'compat_deterministic';
+  enableDbScan?: boolean;
 }
 
 export interface CodeCandidateInferenceResult {
@@ -626,6 +628,8 @@ export async function inferRelationsFromCodeSignals(
   options: CodeCandidateInferenceOptions,
 ): Promise<CodeCandidateInferenceResult> {
   const { workspaceId, repoRoot } = options;
+  const candidateGenerationMode = options.candidateGenerationMode;
+  const enableDbScan = options.enableDbScan !== false;
   const serviceIds = Array.from(
     new Set((options.serviceIds ?? []).filter((value): value is string => value.length > 0)),
   );
@@ -832,6 +836,7 @@ export async function inferRelationsFromCodeSignals(
             targetServiceId,
             path: targetPath,
           },
+          ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
         evidenceId,
       );
@@ -874,6 +879,7 @@ export async function inferRelationsFromCodeSignals(
             channel: channelName,
             repoRoot,
           },
+          ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
         evidenceId,
       );
@@ -882,6 +888,11 @@ export async function inferRelationsFromCodeSignals(
     }
 
     if (kind === 'db_mapping' || kind === 'db_read' || kind === 'db_write') {
+      if (!enableDbScan) {
+        skippedEdgeCount += 1;
+        continue;
+      }
+
       const serviceName = serviceNameById.get(ownerContext.serviceId);
       if (!serviceName) {
         skippedEdgeCount += 1;
@@ -937,6 +948,7 @@ export async function inferRelationsFromCodeSignals(
             table: normalized,
             repoRoot,
           },
+          ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
         evidenceId,
       );
