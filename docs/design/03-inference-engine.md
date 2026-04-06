@@ -1,7 +1,7 @@
 # Archi.Navi — 추론 엔진
 
 작성일: 2026-02-22
-최종 갱신: 2026-03-31
+최종 갱신: 2026-04-06
 문서 버전: v4.0
 
 ---
@@ -24,6 +24,21 @@
 - 자동 추론 결과는 승인 전까지 `candidate` 상태로만 존재한다.
 - 신뢰도는 신호 품질과 교차 검증 결과에 따라 조정된다.
 - 실행 기록은 운영 대상이며, 단순한 내부 로그가 아니다.
+
+### 1.1 제품 기본 커널과 호환 경로 정렬 (Phase 0, 2026-04-06)
+
+문서상 “표준 추론” 범위는 유지하되, **제품 기본 truth path**는 아래처럼 고정한다.
+
+| 구분 | 역할 | 기본값 | 후보 생성 규칙 |
+|----|------|------|------|
+| **Proof Engine Kernel** | Intent seed → atomic proof closure | 기본 경로 | closed proof만 candidate로 투영 |
+| **Deterministic Bootstrap/Compat** | endpoint/topic/queue bootstrap + 운영 보조 경로 | 비기본(옵션) | bootstrap 보강 또는 compat 결과로만 집계 |
+
+정렬 원칙:
+
+- 기본 run은 `proof-engine-first`를 유지한다.
+- deterministic candidate generator는 기본 truth path가 아니라 bootstrap/diagnostic/compat 용도로만 사용한다.
+- compat 모드 결과는 기본 결과와 분리해 통계/경고로 명시한다.
 
 ---
 
@@ -71,6 +86,7 @@ Delta Rollup + UI refresh
   - 빠른 수동 실행에 적합
   - run entity 없이도 사용 가능
   - `config`, `code`, `db` 모드를 직접 조합한다
+  - 기본 커널은 proof-engine이며, deterministic candidate generator는 compat 활성화 시에만 확장 경로로 사용한다
 
 ## 3.2 Async Run
 
@@ -149,15 +165,15 @@ config 신호는 서비스 간 관계, DB/Broker 연결, endpoint binding 보강
 ```text
 source 해석(local / githubRepo / githubOrg)
   ↓
-config/code/db collector 실행
+공통 bootstrap(endpoint/topic/queue + proof 입력 정규화)
   ↓
-candidate 생성
+proof-engine kernel 실행(intent seed → atomic closure)
   ↓
-config-code binding
+(옵션) compat deterministic 후보 생성기 실행
   ↓
-cross-signal validation
+proof 결과/compat 결과 분리 집계
   ↓
-relation_candidates 저장
+relation_candidates 저장(기본은 proof 결과)
 ```
 
 ### 5.1 source 해석 규칙
@@ -170,7 +186,9 @@ relation_candidates 저장
 
 - `config`, `code`, `db` 모드를 독립 또는 조합 실행할 수 있다.
 - code engine은 `ast`, `regex`, `hybrid`, `auto` 중 선택 가능하다.
+- 기본 candidate 생성은 proof closure 결과를 기준으로 한다.
 - `crossValidatePendingRelationCandidates`로 support/contradiction 기반 신뢰도 조정이 가능하다.
+- config/code 기반 deterministic 생성기는 compat 모드에서만 기본 결과와 분리 집계한다.
 - config로 생성된 compound 후보는 `configCodeBinding`으로 endpoint 단위로 더 세분화될 수 있다.
 
 ### 5.3 저장 단위
