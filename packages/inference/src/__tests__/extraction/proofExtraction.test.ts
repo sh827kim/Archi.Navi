@@ -521,6 +521,36 @@ describeDb('proof extraction', () => {
     expect(bindings.some((binding) => binding.status === 'SUPERSEDED' && binding.resolvedServiceId === orderServiceId)).toBe(true);
   });
 
+  it('config key suffix와 env placeholder에서 service alias를 보강 해석해야 한다', async () => {
+    await insertObject(db, { objectType: 'service', name: 'api-gateway' });
+    const missionServiceId = await insertObject(db, { objectType: 'service', name: 'rb-mission-mgt' });
+
+    writeFileSync(
+      join(repoRoot, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'makers:',
+        '  api:',
+        '    rbMissionMgt:',
+        '      url: ${API_MISSION_MGT}',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    await extractAliasBindingsFromConfig(db, { workspaceId, repoRoot, runId: 'run-config-key-suffix' });
+
+    const bindings = await db
+      .select()
+      .from(aliasBindings)
+      .where(and(eq(aliasBindings.workspaceId, workspaceId), eq(aliasBindings.aliasKey, 'makers.api.rbMissionMgt.url')));
+
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.resolvedServiceId).toBe(missionServiceId);
+    expect(bindings[0]?.resolvedHost).toBe('${API_MISSION_MGT}');
+  });
+
   it('route transform 재추출 시 config에서 사라진 이전 transform을 정리해야 한다', async () => {
     await insertObject(db, { objectType: 'service', name: 'api-gateway' });
     await insertObject(db, { objectType: 'service', name: 'order-service' });

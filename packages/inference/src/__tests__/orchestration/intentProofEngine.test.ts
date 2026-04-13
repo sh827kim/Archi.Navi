@@ -2765,6 +2765,55 @@ describeDb('intent proof engine', () => {
     expect(result.frontierReason).toBe('PATH_ONLY_TARGET_UNRESOLVED');
   });
 
+  it('host/config 힌트가 없어도 path-only endpoint inventory로 provider를 보강해 닫아야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'subscription-service' });
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /v1/subscriptions/{id}',
+      parentId: providerServiceId,
+      metadata: { method: 'GET', path: '/v1/subscriptions/{id}' },
+    });
+
+    const intentId = generateId();
+    await db.insert(functionSummaries).values({
+      id: generateId(),
+      workspaceId,
+      functionId,
+      serviceId,
+      summaryKind: 'http',
+      outboundHttp: {
+        method: 'GET',
+        path: '/v1/subscriptions/123',
+        dynamicPath: true,
+      },
+      flags: { dynamicPath: true },
+      sourceHash: 'summary-path-only-provider-recovery',
+      confidence: 0.9,
+    });
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/v1/subscriptions/123',
+      intentHash: 'intent-path-only-provider-recovery',
+      anchorHash: 'anchor-path-only-provider-recovery',
+    });
+
+    const result = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+
+    expect(result.status).toBe('CLOSED_ATOMIC');
+    expect(result.targetObjectId).toBe(endpointId);
+
+    const [state] = await db
+      .select()
+      .from(proofStates)
+      .where(eq(proofStates.id, result.proofStateId));
+    expect(state?.providerServiceId).toBe(providerServiceId);
+  });
+
   it('frontier와 무관한 weak alias patch는 REJECTED여야 한다', async () => {
     const unrelatedServiceId = await insertObject(db, { objectType: 'service', name: 'billing-api' });
     const intentId = generateId();

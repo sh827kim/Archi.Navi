@@ -161,6 +161,23 @@ restClient.get().uri("http://payment-service/pay").retrieve();
         expect(call?.symbol).toBe('http://payment-service/pay');
     });
 
+    it('webClient uri 동적 getter 호출에서 serviceNameHint/configKeys를 보존해야 한다', async () => {
+        const content = `
+webClient.get().uri(apiConfig.getSubscriptionManager() + "/v1/subscriptions").retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/SubscriptionClient.java', content);
+        const call = result.signals.find(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'WebClient',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.metadata).toMatchObject({
+            serviceNameHint: 'SubscriptionManager',
+            configKeys: ['apiConfig.subscriptionManager'],
+        });
+        expect(call?.symbol).toBe('/v1/subscriptions');
+    });
+
     it('@FeignClient 인터페이스에서 메서드별 call 신호를 추출해야 한다', async () => {
         const content = `
 @FeignClient(name = "payment-service")

@@ -156,10 +156,15 @@ function buildPartialHttpMetadata(
     receiverName: string,
     argText: string,
 ): Record<string, unknown> {
+  const decapitalize = (value: string): string => (value.length > 0 ? `${value[0]!.toLowerCase()}${value.slice(1)}` : value);
   const stringLiterals = [...argText.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]!.trim());
-  const configKeys = [...new Set(
+  const placeholderConfigKeys = [...new Set(
     [...argText.matchAll(/\$\{([^}:]+)(?::[^}]*)?\}/g)].map((match) => match[1]!.trim()).filter(Boolean),
   )];
+  const getterConfigKeys = [...argText.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*get([A-Z][A-Za-z0-9_]*)\s*\(/g)]
+    .map((match) => `${match[1]}.${decapitalize(match[2] ?? '')}`)
+    .filter((key) => key.length > 0);
+  const configKeys = [...new Set([...placeholderConfigKeys, ...getterConfigKeys])];
   const expressionText = argText
     .replace(/"(?:\\.|[^"\\])*"/g, ' ')
     .replace(/'(?:\\.|[^'\\])*'/g, ' ')
@@ -171,13 +176,15 @@ function buildPartialHttpMetadata(
     ?? null;
   const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\b/);
   const serviceNameHintMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_-]*service[A-Za-z0-9_-]*)\b/i);
-  const hasConfigPlaceholder = configKeys.length > 0;
+  const getterServiceHintMatch = [...argText.matchAll(/\bget([A-Z][A-Za-z0-9]*(?:Service|Manager|Client|Api|Gateway|Mgt)[A-Za-z0-9]*)\s*\(/g)][0]?.[1];
+  const serviceNameHint = getterServiceHintMatch ?? serviceNameHintMatch?.[1] ?? null;
+  const hasConfigPlaceholder = placeholderConfigKeys.length > 0;
 
   return {
     methodHint: inferHttpMethodFromReceiver(receiverName),
     ...(pathHint ? { pathHint } : {}),
     ...(hostLiteral ? { hostHint: hostLiteral } : {}),
-    ...(serviceNameHintMatch ? { serviceNameHint: serviceNameHintMatch[1] } : {}),
+    ...(serviceNameHint ? { serviceNameHint } : {}),
     ...(baseUrlVarMatch ? { baseUrlVar: baseUrlVarMatch[1] } : {}),
     ...(configKeys.length > 0 ? { configKeys } : {}),
     dynamicPath: pathHint !== null

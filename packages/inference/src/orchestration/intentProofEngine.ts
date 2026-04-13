@@ -792,6 +792,23 @@ function extractComparablePath(path: string): string {
   return pathOnly.toLowerCase();
 }
 
+function collectProviderPathHints(input: {
+  intent: typeof interactionIntents.$inferSelect;
+  summaryHttp: JsonRecord | null;
+  acceptedPatchHints: AcceptedPatchHints;
+}): string[] {
+  return uniqueSortedStrings([
+    asString(input.acceptedPatchHints.externalPathOverride),
+    asString(input.intent.externalPathHint),
+    asString(input.summaryHttp?.['pathHint']),
+    asString(input.summaryHttp?.['externalPath']),
+    asString(input.summaryHttp?.['path']),
+    asString(input.summaryHttp?.['url']),
+  ])
+    .map((value) => normalizePath(value))
+    .filter((value) => value.length > 0);
+}
+
 function normalizePathSegment(segment: string): string {
   let decoded = segment;
   try {
@@ -2654,6 +2671,50 @@ async function resolveHttpIntent(
       const tokens = new Set(getServiceTokens(service));
       if ([...candidateHosts].map((host) => normalizeServiceToken(host)).some((host) => host && tokens.has(host))) {
         candidateProviderIds.add(service.id);
+      }
+    }
+  }
+
+  if (candidateProviderIds.size === 0) {
+    const providerPathHints = collectProviderPathHints({
+      intent,
+      summaryHttp,
+      acceptedPatchHints,
+    });
+    if (providerPathHints.length > 0) {
+      const allEndpoints = resolverContext
+        ? [...resolverContext.providerEndpointsByServiceId.values()].flat()
+        : await db
+          .select()
+          .from(objects)
+          .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'api_endpoint')));
+      const endpointPathMatches = allEndpoints
+        .map((endpoint) => ({ endpoint, match: getEndpointMethodPath(endpoint) }))
+        .filter((row) =>
+          row.endpoint.parentId !== null
+          && row.endpoint.parentId !== intent.sourceServiceId
+          && row.match.path !== null
+          && providerPathHints.some((pathHint) => isEndpointPathCompatible(pathHint, row.match.path!)),
+        );
+      const pathMatchedProviderIds = uniqueSortedStrings(endpointPathMatches.map((row) => row.endpoint.parentId));
+      if (pathMatchedProviderIds.length === 1) {
+        candidateProviderIds.add(pathMatchedProviderIds[0]!);
+        await appendProofStep(
+          db,
+          proofStateId,
+          'resolveHostAlias',
+          'APPLIED',
+          {
+            hostHints: slots.hostHints,
+            configKeys: slots.configKeys,
+          },
+          {
+            providerServiceId: pathMatchedProviderIds[0],
+            resolutionMode: 'path_only_endpoint_inventory',
+            pathHints: providerPathHints,
+          },
+          'Host/config alias가 부족한 경우 endpoint inventory path 힌트로 provider service를 보강했습니다.',
+        );
       }
     }
   }
