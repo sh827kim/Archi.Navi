@@ -158,6 +158,9 @@ export const domainInferenceProfiles = pgTable(
       boostFactor: 0.3,
       penaltyFactor: 0.85,
     }),
+    scanConfig: jsonb('scan_config').default({
+      enableDbScan: false,
+    }),
     proofConfidenceConfig: jsonb('proof_confidence_config').default(DEFAULT_PROOF_CONFIDENCE_CONFIG),
     smartProofConfig: jsonb('smart_proof_config').default(DEFAULT_SMART_PROOF_CONFIG),
 

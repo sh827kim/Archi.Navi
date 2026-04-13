@@ -16,6 +16,8 @@ export interface ScanRequest {
   lang?: string;
   /** true면 등록 없이 발견 목록만 반환 */
   dryRun?: boolean;
+  /** true일 때만 DB 관련 bootstrap을 허용 */
+  enableDbScan?: boolean;
 }
 
 /** 프로젝트 감지 결과 */

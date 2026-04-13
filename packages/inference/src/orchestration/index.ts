@@ -9,9 +9,20 @@ export {
 } from './inferenceRuns';
 
 export {
+  runCommonBootstrapForRepo,
+  runCommonBootstrapForRepoRoots,
+} from './commonBootstrap';
+
+export {
   buildEmptyProofEngineSummary,
   buildProofEngineSummaryForRun,
 } from './proofEngineRun';
+
+export type {
+  CommonBootstrapRepoResult,
+  CommonBootstrapSummary,
+} from './commonBootstrap';
+
 export {
   resolveInteractionIntentProof,
   validateAndApplyProofPatch,
@@ -41,6 +52,7 @@ export type {
 } from './inferenceRuns';
 
 export type { ProofEngineSummary, ProofEngineName } from './proofEngineRun';
+
 export type {
   IntentProofType,
   ProofLifecycleStatus,

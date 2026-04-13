@@ -62,6 +62,8 @@ interface HttpResolutionSlots {
   hostHints: string[];
   configKeys: string[];
   contradictionReasons: string[];
+  dynamicPath: boolean;
+  dynamicHost: boolean;
   unsupportedPattern: boolean;
   truncated: boolean;
 }
@@ -2543,6 +2545,8 @@ async function resolveHttpIntent(
     hostHints: [],
     configKeys: [],
     contradictionReasons: [],
+    dynamicPath: false,
+    dynamicHost: false,
     unsupportedPattern: asBoolean(summaryFlags?.['unsupportedPattern']),
     truncated: asBoolean(summaryFlags?.['truncated']),
   };
@@ -2574,6 +2578,14 @@ async function resolveHttpIntent(
   ];
   slots.hostHints = [...new Set(hostHints)];
   slots.configKeys = [...new Set(configKeys)];
+  slots.dynamicPath =
+    asBoolean(summaryFlags?.['dynamicPath'])
+    || asBoolean(summaryHttp?.['dynamicPath'])
+    || false;
+  slots.dynamicHost =
+    asBoolean(summaryFlags?.['dynamicHost'])
+    || asBoolean(summaryHttp?.['dynamicHost'])
+    || false;
 
   await appendProofStep(
     db,
@@ -2593,6 +2605,8 @@ async function resolveHttpIntent(
       signalSources: asStringArray(summary?.signalSources),
       unsupportedPattern: slots.unsupportedPattern,
       truncated: slots.truncated,
+      dynamicPath: slots.dynamicPath,
+      dynamicHost: slots.dynamicHost,
     },
     'HTTP summary와 hint를 기반으로 resolver 슬롯을 보강했습니다.',
   );
@@ -2690,11 +2704,25 @@ async function resolveHttpIntent(
 
   const resolvedProviderId = [...candidateProviderIds][0] ?? null;
   if (!resolvedProviderId) {
-    const frontierReason = slots.configKeys.length > 0 ? 'CONFIG_BINDING_MISSING' : 'HOST_ALIAS_UNRESOLVED';
+    const frontierReason =
+      slots.dynamicHost || slots.dynamicPath
+        ? 'DYNAMIC_URI_UNRESOLVED'
+        : (
+            slots.hostHints.length === 0
+            && slots.configKeys.length === 0
+            && (
+              slots.externalPathResolved
+              || asString(intent.externalPathHint)
+            )
+          )
+          ? 'PATH_ONLY_TARGET_UNRESOLVED'
+          : (slots.configKeys.length > 0 ? 'CONFIG_BINDING_MISSING' : 'HOST_ALIAS_UNRESOLVED');
     await updateProofStateContext(db, proofStateId, {
       slotState: {
         hostHints: slots.hostHints,
         configKeys: slots.configKeys,
+        dynamicPath: slots.dynamicPath,
+        dynamicHost: slots.dynamicHost,
       },
     });
     await setFrontier(db, {
@@ -2767,18 +2795,21 @@ async function resolveHttpIntent(
   }
 
   if (!externalPathResolved) {
+    const frontierReason = slots.dynamicPath ? 'DYNAMIC_URI_UNRESOLVED' : 'PATH_TEMPLATE_UNKNOWN';
     await updateProofStateContext(db, proofStateId, {
       providerServiceId: slots.providerServiceId,
       methodResolved,
       slotState: {
         hostHints: slots.hostHints,
         configKeys: slots.configKeys,
+        dynamicPath: slots.dynamicPath,
+        dynamicHost: slots.dynamicHost,
       },
     });
     await setFrontier(db, {
       workspaceId,
       proofStateId,
-      frontierReason: 'PATH_TEMPLATE_UNKNOWN',
+      frontierReason,
       frontierClass: 'METHOD_PATH',
       retryStrategy: 'agent_patch',
       priority: 80,
@@ -2790,14 +2821,14 @@ async function resolveHttpIntent(
       'normalizeMethodAndPath',
       'FAILED',
       { externalPathHint: intent.externalPathHint, summaryPath: summaryPathSource },
-      { frontierReason: 'PATH_TEMPLATE_UNKNOWN' },
+      { frontierReason },
       'HTTP path를 정규화하지 못했습니다.',
     );
-    await appendSkippedHttpSteps(db, proofStateId, 4, 'PATH_TEMPLATE_UNKNOWN');
+    await appendSkippedHttpSteps(db, proofStateId, 4, frontierReason);
     return {
       proofStateId,
       status: 'FRONTIER',
-      frontierReason: 'PATH_TEMPLATE_UNKNOWN',
+      frontierReason,
       targetObjectId: null,
       relationType: null,
     };
@@ -2813,6 +2844,8 @@ async function resolveHttpIntent(
       hostHints: slots.hostHints,
       configKeys: slots.configKeys,
       contradictionReasons: slots.contradictionReasons,
+      dynamicPath: slots.dynamicPath,
+      dynamicHost: slots.dynamicHost,
       unsupportedPattern: slots.unsupportedPattern,
       truncated: slots.truncated,
     },

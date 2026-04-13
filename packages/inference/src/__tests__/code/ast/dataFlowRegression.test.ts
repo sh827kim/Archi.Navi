@@ -74,6 +74,54 @@ restClient
         expect(call?.symbol).toBe('/api/payments/{id}');
     });
 
+    it('dynamic URI도 partial metadata와 함께 call 신호로 보존해야 한다', async () => {
+        const content = `
+String baseUrl = "http://payment-service";
+String dynamicPath = "/api/payments/" + paymentId;
+webClient
+    .get()
+    .uri(baseUrl + dynamicPath)
+    .retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/PaymentClient.java', content);
+        const call = result.signals.find(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'WebClient',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.metadata).toMatchObject({
+            client: 'WebClient',
+            method: 'GET',
+            dynamicPath: true,
+            dynamicHost: true,
+            unsupportedPattern: true,
+        });
+        expect(call?.symbol).toBe('baseUrl + dynamicPath');
+    });
+
+    it('RestClient.create(baseUrl)에서 unresolved base URL을 partial metadata로 보존해야 한다', async () => {
+        const content = `
+class PaymentClient {
+    void call() {
+        String baseUrl;
+        RestClient.create(baseUrl);
+    }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/PaymentClient.java', content);
+        const call = result.signals.find((s) => s.kind === 'call' && s.metadata['client'] === 'RestClient');
+
+        expect(call).toBeDefined();
+        expect(call?.symbol).toBe('baseUrl');
+        expect(call?.metadata).toMatchObject({
+            client: 'RestClient',
+            method: 'create',
+            baseUrlVar: 'baseUrl',
+            dynamicHost: true,
+            unsupportedPattern: true,
+        });
+    });
+
     it('Kafka 토픽 상수 + 직접 리터럴 혼합 시 둘 다 추출해야 한다', async () => {
         const content = `
 private static final String ORDER_TOPIC = "order.created";

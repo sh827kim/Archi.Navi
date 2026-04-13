@@ -1,8 +1,10 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { eq } from 'drizzle-orm';
 import {
   aliasBindings,
+  closeTestDb,
   createTestDb,
+  getEmbeddedPostgresTestSupport,
   interactionIntents,
   objects,
   proofFrontiers,
@@ -20,6 +22,16 @@ import { resolveInteractionIntentProof } from '@/orchestration/intentProofEngine
 const workspaceId = '00000000-0000-0000-0000-000000000654';
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const describeDb = embeddedSupport.supported ? describe : describe.skip;
+
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[inference:test] skipping frontierAgent integration tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
 
 async function insertObject(
   db: TestDb,
@@ -50,12 +62,17 @@ async function insertObject(
   return id;
 }
 
-describe('frontier agent', () => {
-  let db: TestDb;
+describeDb('frontier agent', () => {
+  let db: TestDb | undefined;
 
   beforeEach(async () => {
     db = await createTestDb();
     await db.insert(workspaces).values({ id: workspaceId, name: 'frontier-agent-test' });
+  });
+
+  afterEach(async () => {
+    await closeTestDb(db);
+    db = undefined;
   });
 
   it('alias frontier에서 단일 service 힌트가 있으면 alias_binding patch를 제안해야 한다', async () => {

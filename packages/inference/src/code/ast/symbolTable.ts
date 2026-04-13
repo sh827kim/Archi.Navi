@@ -380,7 +380,10 @@ function resolveStringArg(
 ): { value: string; resolvedVia: 'literal' | 'variable' | 'property' } | null {
   if (argNode.type === 'string_literal') {
     const value = extractStringValue(argNode);
-    return value ? { value, resolvedVia: 'literal' } : null;
+    if (!value || value.includes('${')) {
+      return null;
+    }
+    return { value, resolvedVia: 'literal' };
   }
   if (argNode.type === 'identifier') {
     const value = valueMap.values.get(argNode.text);
@@ -391,6 +394,47 @@ function resolveStringArg(
     };
   }
   return null;
+}
+
+function inferHttpMethodFromReceiver(receiverName: string): string | null {
+  const match = receiverName.match(/\.(get|post|put|delete|patch)\s*\(/i);
+  return match ? match[1]!.toUpperCase() : null;
+}
+
+function buildPartialHttpMetadata(
+  receiverName: string,
+  argText: string,
+): Record<string, unknown> {
+  const stringLiterals = [...argText.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]!.trim());
+  const configKeys = [...new Set(
+    [...argText.matchAll(/\$\{([^}:]+)(?::[^}]*)?\}/g)].map((match) => match[1]!.trim()).filter(Boolean),
+  )];
+  const expressionText = argText
+    .replace(/"(?:\\.|[^"\\])*"/g, ' ')
+    .replace(/'(?:\\.|[^'\\])*'/g, ' ')
+    .replace(/\$\{[^}]+\}/g, ' ');
+  const pathParts = stringLiterals.filter((value) => value.startsWith('/'));
+  const pathHint = pathParts.length > 0 ? pathParts.join('') : null;
+  const hostLiteral = stringLiterals.find((value) => /^[a-z][a-z0-9+.-]*:\/\//i.test(value))
+    ?? stringLiterals.find((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !value.startsWith('/'))
+    ?? null;
+  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\b/);
+  const serviceNameHintMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_-]*service[A-Za-z0-9_-]*)\b/i);
+  const hasConfigPlaceholder = configKeys.length > 0;
+
+  return {
+    methodHint: inferHttpMethodFromReceiver(receiverName),
+    ...(pathHint ? { pathHint } : {}),
+    ...(hostLiteral ? { hostHint: hostLiteral } : {}),
+    ...(serviceNameHintMatch ? { serviceNameHint: serviceNameHintMatch[1] } : {}),
+    ...(baseUrlVarMatch ? { baseUrlVar: baseUrlVarMatch[1] } : {}),
+    ...(configKeys.length > 0 ? { configKeys } : {}),
+    dynamicPath: pathHint !== null
+      || /[+{]|UriComponentsBuilder|toUriString\s*\(/.test(expressionText)
+      || hasConfigPlaceholder,
+    dynamicHost: /[+{]|baseUrl|host|uriBuilder/i.test(expressionText) || hasConfigPlaceholder,
+    unsupportedPattern: true,
+  };
 }
 
 function getFirstArg(argList: SyntaxNode): SyntaxNode | null {
@@ -502,10 +546,29 @@ function collectJavaMethodDirectHttpCalls(
         confidence: 0.9,
         metadata: {
           client: 'WebClient',
-          method: methodName,
+          method: inferHttpMethodFromReceiver(objectName) ?? methodName,
           resolvedUrl: url,
           resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
         },
+      });
+      continue;
+    }
+
+    if (methodName === 'uri' && /webClient/i.test(objectName) && firstArg) {
+      const metadata: Record<string, unknown> = {
+        client: 'WebClient',
+        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
+        ...buildPartialHttpMetadata(objectName, firstArg.text),
+      };
+      const fallbackSymbol = firstArg.type === 'string_literal'
+        ? extractStringValue(firstArg) ?? firstArg.text
+        : firstArg.text;
+      calls.push({
+        symbol: typeof metadata['pathHint'] === 'string'
+          ? metadata['pathHint'] as string
+          : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol),
+        confidence: 0.9,
+        metadata,
       });
       continue;
     }
@@ -516,10 +579,29 @@ function collectJavaMethodDirectHttpCalls(
         confidence: 0.9,
         metadata: {
           client: 'RestClient',
-          method: methodName,
+          method: inferHttpMethodFromReceiver(objectName) ?? methodName,
           resolvedUrl: url,
           resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
         },
+      });
+      continue;
+    }
+
+    if (methodName === 'uri' && /restClient/i.test(objectName) && firstArg) {
+      const metadata: Record<string, unknown> = {
+        client: 'RestClient',
+        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
+        ...buildPartialHttpMetadata(objectName, firstArg.text),
+      };
+      const fallbackSymbol = firstArg.type === 'string_literal'
+        ? extractStringValue(firstArg) ?? firstArg.text
+        : firstArg.text;
+      calls.push({
+        symbol: typeof metadata['pathHint'] === 'string'
+          ? metadata['pathHint'] as string
+          : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol),
+        confidence: 0.9,
+        metadata,
       });
       continue;
     }
@@ -534,6 +616,25 @@ function collectJavaMethodDirectHttpCalls(
           resolvedUrl: url,
           resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
         },
+      });
+      continue;
+    }
+
+    if (objectName === 'RestClient' && methodName === 'create' && firstArg) {
+      const metadata: Record<string, unknown> = {
+        client: 'RestClient',
+        method: 'create',
+        ...buildPartialHttpMetadata(objectName, firstArg.text),
+      };
+      const fallbackSymbol = firstArg.type === 'string_literal'
+        ? extractStringValue(firstArg) ?? firstArg.text
+        : firstArg.text;
+      calls.push({
+        symbol: typeof metadata['pathHint'] === 'string'
+          ? metadata['pathHint'] as string
+          : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol),
+        confidence: 0.9,
+        metadata,
       });
     }
   }

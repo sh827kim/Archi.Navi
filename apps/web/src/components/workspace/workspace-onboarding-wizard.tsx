@@ -89,6 +89,7 @@ export function WorkspaceOnboardingWizard() {
   const [scanMode, setScanMode] = useState<ScanMode>('workspace-dir');
   const [scanTarget, setScanTarget] = useState('');
   const [scanDryRun, setScanDryRun] = useState(false);
+  const [scanEnableDb, setScanEnableDb] = useState(false);
   const [scanMessage, setScanMessage] = useState('');
 
   const progressLabels = ['제목', '추론 설정', '레이어', '태그', '코드 스캔'] as const;
@@ -242,6 +243,7 @@ export function WorkspaceOnboardingWizard() {
         mode: scanMode,
         target: scanTarget.trim(),
         dryRun: scanDryRun,
+        enableDbScan: scanEnableDb,
       }),
     });
 
@@ -285,6 +287,24 @@ export function WorkspaceOnboardingWizard() {
     router.push('/home');
   };
 
+  const saveScanConfig = async (id: string) => {
+    const res = await fetch('/api/inference/profiles/default', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: id,
+        scanConfig: {
+          enableDbScan: scanEnableDb,
+        },
+      }),
+    });
+
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({}))) as { error?: string };
+      throw new Error(err.error ?? '스캔 설정 저장에 실패했습니다.');
+    }
+  };
+
   const handleNext = async () => {
     setPending(true);
     try {
@@ -305,6 +325,7 @@ export function WorkspaceOnboardingWizard() {
         setStep(4);
       } else if (step === 4) {
         if (!workspaceId) throw new Error('워크스페이스가 생성되지 않았습니다.');
+        await saveScanConfig(workspaceId);
         const scanResult = await runScan(workspaceId);
         if (scanResult) {
           const bootstrapSuffix = scanResult.bootstrap && scanResult.bootstrap.createdAtomicCount > 0
@@ -330,6 +351,7 @@ export function WorkspaceOnboardingWizard() {
     if (!workspaceId) return;
     setPending(true);
     try {
+      await saveScanConfig(workspaceId);
       toast.success('코드 스캔을 건너뛰고 설정을 완료했습니다.');
       await finalize(workspaceId);
     } finally {
@@ -580,6 +602,15 @@ export function WorkspaceOnboardingWizard() {
                 <div className="flex items-center justify-between rounded-lg border border-border/70 px-3 py-2">
                   <p className="text-sm text-muted-foreground">미리보기(dry-run)</p>
                   <Switch checked={scanDryRun} onCheckedChange={setScanDryRun} disabled={pending} />
+                </div>
+                <div className="flex items-center justify-between rounded-lg border border-border/70 px-3 py-2">
+                  <div>
+                    <p className="text-sm text-muted-foreground">DB 스캔 활성화</p>
+                    <p className="text-xs text-muted-foreground">
+                      끄면 코드 스캔 단계에서 database/db_table bootstrap을 만들지 않습니다.
+                    </p>
+                  </div>
+                  <Switch checked={scanEnableDb} onCheckedChange={setScanEnableDb} disabled={pending} />
                 </div>
                 {scanMessage && (
                   <p className="text-xs text-muted-foreground">{scanMessage}</p>

@@ -113,3 +113,18 @@ export function isLikelyServiceName(value: string): boolean {
   if (/^[a-z][a-z0-9+.-]*:\/\//i.test(trimmed)) return false;
   return /^[a-z0-9][a-z0-9._-]*$/i.test(trimmed);
 }
+
+export function extractHttpPathHint(value: string | null, metadata?: JsonRecord | null): string | null {
+  const metadataPath =
+    asString(metadata?.['pathHint'])
+    ?? asString(metadata?.['path'])
+    ?? asString(metadata?.['externalPath']);
+  return metadataPath ? normalizePath(metadataPath) : (value ? extractPath(value) : null);
+}
+
+export function extractHttpHostHint(value: string | null, metadata?: JsonRecord | null): string | null {
+  return asString(metadata?.['hostHint'])
+    ?? asString(metadata?.['hostAlias'])
+    ?? asString(metadata?.['serviceNameHint'])
+    ?? (value ? extractHost(value) : null);
+}

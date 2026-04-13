@@ -29,6 +29,7 @@ import { saveRelationCandidate } from './candidateStore';
 export interface ConfigCodeBindingOptions {
     workspaceId: string;
     repoRoots?: string[];
+    candidateGenerationMode?: 'compat_deterministic';
 }
 
 export interface ConfigCodeBindingResult {
@@ -91,6 +92,7 @@ export async function bindConfigToCodeEndpoints(
 ): Promise<ConfigCodeBindingResult> {
     const { workspaceId } = options;
     const scopedRepoRoots = normalizeRepoRoots(options.repoRoots);
+    const candidateGenerationMode = options.candidateGenerationMode;
 
     // 1) service→service PENDING call 후보 조회
     const allCompoundCandidates = await db
@@ -235,6 +237,7 @@ export async function bindConfigToCodeEndpoints(
                             targetType: 'api_endpoint',
                             targetServiceId,
                         },
+                        ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
                     },
                     evidenceId,
                 );

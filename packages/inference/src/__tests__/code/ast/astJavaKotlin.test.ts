@@ -479,6 +479,45 @@ class HealthController {}
         expect(call?.metadata).toMatchObject({ client: 'RestClient' });
     });
 
+    it('RestClient.create(baseUrl)에서 unresolved base URL을 partial metadata로 보존해야 한다', async () => {
+        const content = `
+class PaymentClient {
+    void call() {
+        String baseUrl;
+        RestClient.create(baseUrl);
+    }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/PaymentClient.java', content);
+
+        const call = result.signals.find((s) => s.kind === 'call' && s.metadata['client'] === 'RestClient');
+        expect(call).toBeDefined();
+        expect(call?.symbol).toBe('baseUrl');
+        expect(call?.metadata).toMatchObject({
+            client: 'RestClient',
+            method: 'create',
+            baseUrlVar: 'baseUrl',
+            dynamicHost: true,
+            unsupportedPattern: true,
+        });
+    });
+
+    it('RestClient.create("${...}")는 config-binding 힌트를 partial metadata로 보존해야 한다', async () => {
+        const content = 'RestClient restClient = RestClient.create("${payment.base-url}");';
+        const result = await scanJavaKotlinAst('/src/PaymentClient.java', content);
+
+        const call = result.signals.find((s) => s.kind === 'call' && s.metadata['client'] === 'RestClient');
+        expect(call).toBeDefined();
+        expect(call?.symbol).toBe('${payment.base-url}');
+        expect(call?.metadata).toMatchObject({
+            client: 'RestClient',
+            method: 'create',
+            configKeys: ['payment.base-url'],
+            dynamicHost: true,
+            unsupportedPattern: true,
+        });
+    });
+
     it('lineStart/lineEnd 정보가 정확해야 한다', async () => {
         const content = `package com.example;
 

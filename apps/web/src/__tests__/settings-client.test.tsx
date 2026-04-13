@@ -537,4 +537,55 @@ describe('EngineSettings', () => {
       expect(screen.getByDisplayValue('/Users/spark/workspace/project-a')).toBeTruthy();
     });
   });
+
+  it('코드 스캔 설정에서 DB 스캔 기본값을 저장해야 한다', async () => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      const method = init?.method ?? 'GET';
+
+      if (url === '/api/inference/profiles/default?workspaceId=ws-1') {
+        return Promise.resolve(jsonResponse({
+          id: 'profile-1',
+          scanConfig: {
+            enableDbScan: false,
+          },
+        }));
+      }
+      if (url === '/api/scan/paths?workspaceId=ws-1') {
+        return Promise.resolve(jsonResponse({ paths: [], parentDirs: [] }));
+      }
+      if (url === '/api/inference/profiles/default' && method === 'PUT') {
+        return Promise.resolve(jsonResponse({ id: 'profile-1' }));
+      }
+
+      throw new Error(`unexpected fetch: ${method} ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ScanSettings workspaceId="ws-1" />);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/inference/profiles/default?workspaceId=ws-1');
+    });
+
+    fireEvent.click(screen.getByLabelText('switch'));
+    fireEvent.click(screen.getByRole('button', { name: '스캔 설정 저장' }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        '/api/inference/profiles/default',
+        expect.objectContaining({ method: 'PUT' }),
+      );
+    });
+
+    const saveCall = fetchMock.mock.calls.find(
+      (call) => call[0] === '/api/inference/profiles/default' && (call[1]?.method ?? 'GET') === 'PUT',
+    );
+    expect(JSON.parse(String(saveCall?.[1]?.body))).toMatchObject({
+      workspaceId: 'ws-1',
+      scanConfig: {
+        enableDbScan: true,
+      },
+    });
+  });
 });

@@ -22,6 +22,7 @@ interface RunInferenceRequest {
   incremental?: boolean;
   forceRescan?: boolean;
   codeEngine?: string;
+  compatDeterministicCandidates?: boolean;
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number;
   smartProof?: boolean | SmartProofConfig;
@@ -222,6 +223,9 @@ export async function POST(req: NextRequest) {
       workspaceId,
       modes,
       ...(body.codeEngine != null ? { codeEngine: body.codeEngine } : {}),
+      ...(body.compatDeterministicCandidates !== undefined
+        ? { compatDeterministicCandidates: body.compatDeterministicCandidates === true }
+        : {}),
       incremental: body.forceRescan === true ? false : body.incremental !== false,
       triggerType: 'INTENT_PROOF_ENGINE',
       ...(body.smartProof !== undefined ? { smartProof: body.smartProof } : {}),
@@ -242,7 +246,7 @@ export async function POST(req: NextRequest) {
       ...(smartGenerateFn ? { smartGenerateFn } : {}),
     });
     const runStats = (detail.run.stats ?? {}) as Record<string, unknown>;
-    const rawProofSummary = (runStats['proofSummary'] ?? buildEmptyProofEngineSummary()) as Record<string, unknown>;
+    const rawProofSummary = (runStats['proofSummary'] ?? buildEmptyProofEngineSummary()) as unknown as Record<string, unknown>;
     const proofSummary = withRequestedSmartMode(rawProofSummary, body.smartProof);
     const frontierAgent = (runStats['frontierAgent'] ?? null) as Record<string, unknown> | null;
     const requestedAgentPatches = (runStats['requestedAgentPatches'] ?? {
@@ -263,7 +267,9 @@ export async function POST(req: NextRequest) {
         config: runStats['config'] ?? null,
         code: runStats['code'] ?? null,
         db: runStats['db'] ?? null,
+        bootstrap: runStats['bootstrap'] ?? null,
         proofResolution: runStats['proofResolution'] ?? null,
+        summary: runStats['summary'] ?? null,
         frontierAgent,
         requestedAgentPatches,
         requestedSmartProof: normalizeSmartProofConfig(body.smartProof),
