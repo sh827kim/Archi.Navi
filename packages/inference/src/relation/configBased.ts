@@ -12,6 +12,7 @@ import { eq, and, inArray } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { objects, evidences, codeArtifacts } from '@archi-navi/db';
 import { generateId, buildUrn } from '@archi-navi/shared';
+import { detectPlugins, parseConfigWithPluginParsers } from '@/code';
 import { parseApplicationYml } from './parsers/applicationYml';
 import { parseDockerCompose } from './parsers/dockerCompose';
 import { parseK8sManifest } from './parsers/k8sManifest';
@@ -60,13 +61,13 @@ export interface ConfigInferenceResult {
 
 // ─── 파일 탐색 유틸리티 ───────────────────────────────────────────────────────
 
-/** application*.yml 파일 탐색 */
-function findApplicationYmls(repoRoot: string): string[] {
+/** application* config 파일 탐색 (yaml/json) */
+function findApplicationConfigs(repoRoot: string): string[] {
   return findFiles(repoRoot, (p) => {
     const base = p.split('/').pop() ?? '';
     return (
       (base.startsWith('application') || base.startsWith('bootstrap')) &&
-      (base.endsWith('.yml') || base.endsWith('.yaml'))
+      (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json'))
     );
   });
 }
@@ -591,6 +592,77 @@ async function processAppYmlSignal(
   }
 }
 
+async function processJsonConfigEntries(
+  filePath: string,
+  entries: Array<{ key: string; value: string }>,
+  ctx: ProcessContext,
+  stats: ProcessStats,
+): Promise<void> {
+  const { db, workspaceId, repoRoot, allServices } = ctx;
+  const byKey = new Map(entries.map((entry) => [entry.key.toLowerCase(), entry.value]));
+  const serviceName =
+    byKey.get('spring.application.name')
+    ?? byKey.get('service.name')
+    ?? byKey.get('app.name')
+    ?? null;
+  if (!serviceName) return;
+  const serviceId = await findServiceByName(db, workspaceId, serviceName, allServices);
+  if (!serviceId) return;
+
+  const produceAddresses = entries
+    .filter((entry) => /address\..*produce|topic|kafka/i.test(entry.key))
+    .map((entry) => entry.value.trim())
+    .filter((value) => value.length > 0);
+  const consumeAddresses = entries
+    .filter((entry) => /address\..*consume|queue|rabbit/i.test(entry.key))
+    .map((entry) => entry.value.trim())
+    .filter((value) => value.length > 0);
+
+  for (const address of produceAddresses) {
+    const evidenceId = await saveEvidence(db, workspaceId, filePath, `config.produce=${address}`);
+    const topic = await upsertTopic(db, workspaceId, address);
+    stats.objectCount += Number(topic.isNew);
+    const result = await saveRelationCandidate(
+      db,
+      {
+        workspaceId,
+        relationType: 'produce',
+        subjectObjectId: serviceId,
+        objectId: topic.id,
+        confidence: CONFIDENCE.KAFKA_PRODUCE,
+        metadata: withCandidateGenerationMode(
+          withConfigProvenance({ source: 'application_json', configKey: 'address.produce' }, repoRoot, filePath),
+          ctx.candidateGenerationMode,
+        ),
+      },
+      evidenceId,
+    );
+    stats.candidateCount += Number(result.created);
+  }
+
+  for (const address of consumeAddresses) {
+    const evidenceId = await saveEvidence(db, workspaceId, filePath, `config.consume=${address}`);
+    const topic = await upsertTopic(db, workspaceId, address);
+    stats.objectCount += Number(topic.isNew);
+    const result = await saveRelationCandidate(
+      db,
+      {
+        workspaceId,
+        relationType: 'consume',
+        subjectObjectId: serviceId,
+        objectId: topic.id,
+        confidence: CONFIDENCE.KAFKA_CONSUME,
+        metadata: withCandidateGenerationMode(
+          withConfigProvenance({ source: 'application_json', configKey: 'address.consume' }, repoRoot, filePath),
+          ctx.candidateGenerationMode,
+        ),
+      },
+      evidenceId,
+    );
+    stats.candidateCount += Number(result.created);
+  }
+}
+
 /**
  * docker-compose.yml 신호 처리
  * - depends_on → depend_on relation
@@ -853,18 +925,20 @@ export async function inferRelationsFromConfig(
   const stats: ProcessStats = { candidateCount: 0, objectCount: 0 };
   const serviceInventoryHash = hashServiceInventory(allServices);
 
-  const appYmlFiles = findApplicationYmls(repoRoot);
+  const appConfigFiles = findApplicationConfigs(repoRoot);
   const dockerComposeFiles = findDockerComposeFiles(repoRoot);
   const k8sFiles = findK8sManifests(repoRoot);
 
-  const allConfigFiles = [...appYmlFiles, ...dockerComposeFiles, ...k8sFiles];
+  const allConfigFiles = [...appConfigFiles, ...dockerComposeFiles, ...k8sFiles];
   const artifactMap = await loadConfigArtifactMap(db, workspaceId, allConfigFiles);
 
   let processedFileCount = 0;
   let skippedFileCount = 0;
 
-  // 1. application.yml 파일 처리
-  for (const filePath of appYmlFiles) {
+  const detectedPlugins = detectPlugins(repoRoot);
+
+  // 1. application.* 파일 처리 (yaml/json)
+  for (const filePath of appConfigFiles) {
     let content: string;
     try {
       content = readFileSync(filePath, 'utf-8');
@@ -880,8 +954,18 @@ export async function inferRelationsFromConfig(
       continue;
     }
 
-    const signal = parseApplicationYml(filePath, content);
-    await processAppYmlSignal(signal, ctx, stats);
+    if (filePath.endsWith('.yml') || filePath.endsWith('.yaml')) {
+      const signal = parseApplicationYml(filePath, content);
+      await processAppYmlSignal(signal, ctx, stats);
+    } else if (filePath.endsWith('.json')) {
+      const parsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
+      await processJsonConfigEntries(
+        filePath,
+        parsed.entries.map((entry) => ({ key: entry.key, value: entry.value })),
+        ctx,
+        stats,
+      );
+    }
     const artifactId = await upsertConfigArtifact(db, {
       workspaceId,
       repoRoot,

@@ -87,28 +87,57 @@ function createVertxScanResult(filePath: string, content: string): FileScanResul
   const lines = content.split('\n');
   const signals: ExtractedSignal[] = [];
 
+  const readStringLiteral = (expr: string): string | null => {
+    const match = expr.trim().match(/^["'`]([^"'`]+)["'`]$/);
+    return match?.[1] ?? null;
+  };
+  const extractConfigKey = (expr: string): string | null => {
+    const literal = readStringLiteral(expr);
+    if (literal && /\./.test(literal)) return literal;
+    const getterMatch = expr.match(/getString\(\s*["'`]([^"'`]+)["'`]\s*\)/);
+    return getterMatch?.[1] ?? null;
+  };
+  const extractPathHint = (expr: string): string | null => {
+    const pathMatch = expr.match(/["'`]([^"'`]*\/[^"'`]*)["'`]/);
+    return pathMatch?.[1] ?? null;
+  };
+
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index] ?? '';
     const trimmed = line.trim();
 
-    const requestAbsMatch = trimmed.match(/\b\w+\.requestAbs\(\s*["']([^"']+)["']/);
+    const requestAbsMatch = trimmed.match(/\b\w+\.requestAbs\(\s*([^,]+)\s*,\s*([^)]+)\)/);
     if (requestAbsMatch) {
+      const rawTarget = requestAbsMatch[2]!.trim();
+      const literalTarget = readStringLiteral(rawTarget);
+      const configKey = extractConfigKey(rawTarget);
       signals.push({
         kind: 'call',
-        symbol: requestAbsMatch[1]!,
+        symbol: literalTarget ?? extractPathHint(rawTarget) ?? rawTarget,
         lineStart: index + 1,
         lineEnd: index + 1,
         excerpt: trimmed,
         confidence: 0.78,
-        metadata: { framework: 'vertx', client: 'VertxWebClient', method: 'REQUEST_ABS' },
+        metadata: {
+          framework: 'vertx',
+          client: 'VertxWebClient',
+          method: 'REQUEST_ABS',
+          ...(extractPathHint(rawTarget) ? { pathHint: extractPathHint(rawTarget) } : {}),
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          dynamicPath: literalTarget === null,
+          unsupportedPattern: true,
+        },
       });
     }
 
-    const absMethodMatch = trimmed.match(/\b\w+\.(getAbs|postAbs|putAbs|deleteAbs|patchAbs)\(\s*["']([^"']+)["']/i);
+    const absMethodMatch = trimmed.match(/\b\w+\.(getAbs|postAbs|putAbs|deleteAbs|patchAbs)\(\s*([^)]+)\)/i);
     if (absMethodMatch) {
+      const rawTarget = absMethodMatch[2]!.trim();
+      const literalTarget = readStringLiteral(rawTarget);
+      const configKey = extractConfigKey(rawTarget);
       signals.push({
         kind: 'call',
-        symbol: absMethodMatch[2]!,
+        symbol: literalTarget ?? extractPathHint(rawTarget) ?? rawTarget,
         lineStart: index + 1,
         lineEnd: index + 1,
         excerpt: trimmed,
@@ -117,20 +146,57 @@ function createVertxScanResult(filePath: string, content: string): FileScanResul
           framework: 'vertx',
           client: 'VertxWebClient',
           method: absMethodMatch[1]!.replace('Abs', '').toUpperCase(),
+          ...(extractPathHint(rawTarget) ? { pathHint: extractPathHint(rawTarget) } : {}),
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          dynamicPath: literalTarget === null,
+          unsupportedPattern: true,
         },
       });
     }
 
-    const eventBusMatch = trimmed.match(/\beventBus\.(send|request)\(\s*["']([^"']+)["']/i);
+    const eventBusMatch = trimmed.match(/(?:\bvertx\.)?eventBus\(\)\.(send|request)\(\s*([^,\n]+)/i)
+      ?? trimmed.match(/\beventBus\.(send|request)\(\s*([^,\n]+)/i);
     if (eventBusMatch) {
+      const rawAddress = eventBusMatch[2]!.trim();
+      const literalAddress = readStringLiteral(rawAddress);
+      const configKey = extractConfigKey(rawAddress);
       signals.push({
         kind: 'produce',
-        symbol: eventBusMatch[2]!,
+        symbol: literalAddress ?? rawAddress,
         lineStart: index + 1,
         lineEnd: index + 1,
         excerpt: trimmed,
         confidence: 0.77,
-        metadata: { framework: 'vertx', client: 'EventBus', pattern: eventBusMatch[1] },
+        metadata: {
+          framework: 'vertx',
+          client: 'EventBus',
+          pattern: eventBusMatch[1],
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          dynamicPath: literalAddress === null,
+          unsupportedPattern: true,
+        },
+      });
+    }
+
+    const producerFactoryMatch = trimmed.match(/\.(publish|produce)\(\s*([^,\n]+)/i);
+    if (producerFactoryMatch && /MessageProducerFactory|ProducerFactory|producerFactory/i.test(trimmed)) {
+      const rawAddress = producerFactoryMatch[2]!.trim();
+      const literalAddress = readStringLiteral(rawAddress);
+      const configKey = extractConfigKey(rawAddress);
+      signals.push({
+        kind: 'produce',
+        symbol: literalAddress ?? rawAddress,
+        lineStart: index + 1,
+        lineEnd: index + 1,
+        excerpt: trimmed,
+        confidence: 0.76,
+        metadata: {
+          framework: 'vertx',
+          client: 'MessageProducerFactory',
+          pattern: producerFactoryMatch[1].toLowerCase(),
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          unsupportedPattern: true,
+        },
       });
     }
 

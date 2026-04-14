@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { FrameworkPlugin } from '@/code';
-import { parseConfigWithPluginParsers, scanFileWithAstPlugins, scanFileWithHybridPlugins } from '@/code';
+import type { FrameworkPlugin } from '@/code/plugins/types';
+import { parseConfigWithPluginParsers, scanFileWithAstPlugins, scanFileWithHybridPlugins } from '@/code/plugins/runtime';
 
 describe('plugin runtime', () => {
   it('AST 전용 경로는 plugin 예외를 상위로 전파해야 한다', async () => {

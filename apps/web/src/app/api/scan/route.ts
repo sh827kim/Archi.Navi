@@ -13,6 +13,7 @@ import * as os from 'node:os';
 import { domainInferenceProfiles, getDb, objects } from '@archi-navi/db';
 import { eq, and, sql } from 'drizzle-orm';
 import {
+  calibrateMultiModuleServiceBoundaries,
   runCommonBootstrapForRepoRoots,
 } from '@archi-navi/inference';
 import {
@@ -85,6 +86,24 @@ function detectProjects(rootDir: string): DiscoveredProject[] {
       results.push({ name: entry.name, path: subDir, language: marker.language, markerFile: marker.markerFile });
     }
   }
+
+  // Gradle 멀티모듈은 실행 모듈만 서비스 후보로 보강한다.
+  const calibratedModules = calibrateMultiModuleServiceBoundaries(resolved)
+    .filter((module) => module.classification === 'service_candidate');
+  for (const module of calibratedModules) {
+    const modulePath = path.join(resolved, module.modulePath);
+    const marker = detectMarker(modulePath);
+    if (!marker) continue;
+    const alreadyIncluded = results.some((project) => path.resolve(project.path) === path.resolve(modulePath));
+    if (alreadyIncluded) continue;
+    results.push({
+      name: path.basename(modulePath),
+      path: modulePath,
+      language: marker.language,
+      markerFile: marker.markerFile,
+    });
+  }
+
   return results;
 }
 

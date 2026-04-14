@@ -169,10 +169,26 @@ function applyConfigBindingHints(seed: IntentSeed, configRegistry: Map<string, s
     }
 
     const loweredKey = rawKey.toLowerCase();
-    if ((loweredKey.includes('topic') || loweredKey.includes('kafka')) && !messageTopicHints.includes(trimmed)) {
+    if (
+      (
+        loweredKey.includes('topic')
+        || loweredKey.includes('kafka')
+        || loweredKey.includes('address.produce')
+        || loweredKey.includes('.produce')
+      )
+      && !messageTopicHints.includes(trimmed)
+    ) {
       messageTopicHints.push(trimmed);
     }
-    if ((loweredKey.includes('queue') || loweredKey.includes('rabbit')) && !messageQueueHints.includes(trimmed)) {
+    if (
+      (
+        loweredKey.includes('queue')
+        || loweredKey.includes('rabbit')
+        || loweredKey.includes('address.consume')
+        || loweredKey.includes('.consume')
+      )
+      && !messageQueueHints.includes(trimmed)
+    ) {
       messageQueueHints.push(trimmed);
     }
   }
