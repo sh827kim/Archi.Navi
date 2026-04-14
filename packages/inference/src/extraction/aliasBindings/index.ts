@@ -467,7 +467,7 @@ export async function extractAliasBindingsFromConfig(
         resolvedServiceId: resolvedService?.id ?? null,
         resolvedHost,
         evidenceIds: [],
-        confidence: entry.sourceType === 'yaml' ? 0.9 : 0.85,
+        confidence: 0.85,
       });
       bindingCount += 1;
     }
