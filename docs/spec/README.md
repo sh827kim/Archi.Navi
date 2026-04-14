@@ -70,6 +70,14 @@
 - [26-api-contract-diff-spec.md](./26-api-contract-diff-spec.md)
 - [27-architecture-health-score-spec.md](./27-architecture-health-score-spec.md)
 
+### Signal Coverage Program (Proposed)
+- [93-common-http-signal-extraction-coverage-spec.md](./93-common-http-signal-extraction-coverage-spec.md)
+- [94-framework-specific-code-scanner-spec.md](./94-framework-specific-code-scanner-spec.md)
+- [95-framework-config-parser-hook-spec.md](./95-framework-config-parser-hook-spec.md)
+- [96-config-code-binding-completeness-spec.md](./96-config-code-binding-completeness-spec.md)
+- [97-multi-module-service-boundary-calibration-spec.md](./97-multi-module-service-boundary-calibration-spec.md)
+- [98-bootstrap-engine-policy-alignment-spec.md](./98-bootstrap-engine-policy-alignment-spec.md)
+
 ## Deprecated
 - [deprecated/19-llm-inference-boost-spec.md](./deprecated/19-llm-inference-boost-spec.md)
 - [deprecated/29-cross-signal-validation-phase1-spec.md](./deprecated/29-cross-signal-validation-phase1-spec.md)
