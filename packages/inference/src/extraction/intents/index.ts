@@ -13,6 +13,7 @@ import {
   relationCandidates,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { detectPlugins, parseConfigWithPluginParsers } from '@/code';
 import { preferredSignalOwnerId, resolveExistingSignalOwnerId } from '@/code/ownerResolution';
 import { parseApplicationYml } from '@/relation/parsers/applicationYml';
 import { findFiles } from '@/utils/fileDiscovery';
@@ -100,9 +101,90 @@ function findApplicationYmls(repoRoot: string): string[] {
     const base = filePath.split('/').pop() ?? '';
     return (
       (base.startsWith('application') || base.startsWith('bootstrap'))
-      && (base.endsWith('.yml') || base.endsWith('.yaml'))
+      && (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json'))
     );
   });
+}
+
+function normalizeConfigKey(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function loadConfigRegistry(repoRoot: string): Map<string, string> {
+  const files = findApplicationYmls(repoRoot);
+  const detectedPlugins = detectPlugins(repoRoot);
+  const registry = new Map<string, string>();
+
+  for (const filePath of files) {
+    const content = readFileSync(filePath, 'utf-8');
+    const parsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
+    for (const entry of parsed.entries) {
+      const normalizedKey = normalizeConfigKey(entry.key);
+      if (!registry.has(normalizedKey)) {
+        registry.set(normalizedKey, entry.value);
+      }
+    }
+
+    if (filePath.endsWith('.yml') || filePath.endsWith('.yaml')) {
+      const signal = parseApplicationYml(filePath, content);
+      for (const entry of signal.propertyEntries) {
+        const normalizedKey = normalizeConfigKey(entry.key);
+        if (!registry.has(normalizedKey)) {
+          registry.set(normalizedKey, entry.value);
+        }
+      }
+    }
+  }
+
+  return registry;
+}
+
+function applyConfigBindingHints(seed: IntentSeed, configRegistry: Map<string, string>): IntentSeed {
+  if (seed.configKeys.length === 0) return seed;
+
+  let hostHint = seed.hostHint;
+  let externalPathHint = seed.externalPathHint;
+  let resourceHint = seed.resourceHint;
+  const messageTopicHints = [...seed.messageTopicHints];
+  const messageQueueHints = [...seed.messageQueueHints];
+
+  for (const rawKey of seed.configKeys) {
+    const resolved = configRegistry.get(normalizeConfigKey(rawKey));
+    if (!resolved || resolved.trim().length === 0) continue;
+    const trimmed = resolved.trim();
+
+    if (!hostHint && /^https?:\/\//i.test(trimmed)) {
+      hostHint = extractHost(trimmed);
+      if (!externalPathHint) {
+        try {
+          externalPathHint = new URL(trimmed).pathname || null;
+        } catch {
+          externalPathHint = externalPathHint ?? null;
+        }
+      }
+    }
+
+    if (!resourceHint && seed.intentType === 'db_access' && !/^https?:\/\//i.test(trimmed)) {
+      resourceHint = trimmed;
+    }
+
+    const loweredKey = rawKey.toLowerCase();
+    if ((loweredKey.includes('topic') || loweredKey.includes('kafka')) && !messageTopicHints.includes(trimmed)) {
+      messageTopicHints.push(trimmed);
+    }
+    if ((loweredKey.includes('queue') || loweredKey.includes('rabbit')) && !messageQueueHints.includes(trimmed)) {
+      messageQueueHints.push(trimmed);
+    }
+  }
+
+  return {
+    ...seed,
+    hostHint,
+    externalPathHint,
+    resourceHint,
+    messageTopicHints: uniqueSortedStrings(messageTopicHints),
+    messageQueueHints: uniqueSortedStrings(messageQueueHints),
+  };
 }
 
 function normalizeGatewayPathHint(value: string | null): string | null {
@@ -462,6 +544,7 @@ export async function extractInteractionIntentsFromCodeSignals(
   );
   const knownOwnerIds = new Set(sourceContexts.keys());
   const summaryMap = await loadSummaryMap(db, options.workspaceId);
+  const configRegistry = loadConfigRegistry(options.repoRoot);
 
   let intentCount = 0;
   const extractedIntentHashes = new Set<string>();
@@ -498,7 +581,7 @@ export async function extractInteractionIntentsFromCodeSignals(
     const httpMethodHint = normalizeMethod(metadata['method']) ?? normalizeMethod(metadata['methodHint']);
     const httpPathHint = extractHttpPathHint(row.calleeSymbol, metadata);
     const httpHostHint = extractHttpHostHint(row.calleeSymbol, metadata);
-    const seed: IntentSeed = {
+    const seed = applyConfigBindingHints({
       intentType,
       sourceServiceId: source.serviceId,
       sourceFunctionId: source.functionId,
@@ -524,7 +607,7 @@ export async function extractInteractionIntentsFromCodeSignals(
       configKeys,
       evidenceIds: uniqueSortedStrings([row.evidenceId]),
       summaryRefs: uniqueSortedStrings(summaryRefs),
-    };
+    }, configRegistry);
 
     if (!hasDownstreamHint(seed)) continue;
 
@@ -560,6 +643,9 @@ export async function extractInteractionIntentsFromConfigRoutes(
   let gatewayRouteSeedCount = 0;
 
   for (const filePath of applicationFiles) {
+    if (!(filePath.endsWith('.yml') || filePath.endsWith('.yaml'))) {
+      continue;
+    }
     const signal = parseApplicationYml(filePath, readFileSync(filePath, 'utf-8'));
     const sourceServiceId = signal.serviceName
       ? (serviceIdByAlias.get(signal.serviceName.toLowerCase().replace(/[-_]/g, '')) ?? null)
