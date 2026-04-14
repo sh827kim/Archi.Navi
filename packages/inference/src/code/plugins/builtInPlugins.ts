@@ -193,7 +193,7 @@ function createVertxScanResult(filePath: string, content: string): FileScanResul
         metadata: {
           framework: 'vertx',
           client: 'MessageProducerFactory',
-          pattern: producerFactoryMatch[1].toLowerCase(),
+          pattern: producerFactoryMatch[1]!.toLowerCase(),
           ...(configKey ? { configKeys: [configKey] } : {}),
           unsupportedPattern: true,
         },
