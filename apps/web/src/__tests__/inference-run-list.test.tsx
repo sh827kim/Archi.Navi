@@ -335,6 +335,7 @@ describe('InferenceRunList', () => {
     render(<InferenceRunList />);
 
     await screen.findByText('후보 5개 생성');
+    expect(screen.getByText(/파이프라인: reinforced/)).toBeTruthy();
     expect(screen.getByText('intent 7개')).toBeTruthy();
     expect(screen.getByText('route-family seed 2개')).toBeTruthy();
     expect(screen.getByText('derived endpoint proof 5개')).toBeTruthy();
@@ -348,6 +349,7 @@ describe('InferenceRunList', () => {
     fireEvent.click(screen.getByRole('button', { name: /성공/ }));
 
     expect(await screen.findByText('Proof/Frontier 요약')).toBeTruthy();
+    expect(screen.getAllByText(/pipeline reinforced/).length).toBeGreaterThan(0);
     expect(screen.getByText('patch 적용 1개')).toBeTruthy();
     expect(screen.getByText('Proof lineage (1)')).toBeTruthy();
     expect(screen.getByText('source service: gateway')).toBeTruthy();

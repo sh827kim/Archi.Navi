@@ -48,6 +48,8 @@ describe('proofEngineRun', () => {
   it('proof engine summary 기본값은 Smart 메트릭 블록을 포함해야 한다', () => {
     expect(buildEmptyProofEngineSummary()).toMatchObject({
       engine: 'intent_proof',
+      pipeline: 'reinforced',
+      pipelineVersion: 'reinforced-v1',
       smartMode: {
         enabled: false,
         llmCallCount: 0,
@@ -59,6 +61,48 @@ describe('proofEngineRun', () => {
         pendingReviewCount: 0,
         skippedCount: 0,
       },
+    });
+  });
+
+  itDb('run stats에 pipeline 메타가 있으면 intent가 없어도 summary에 반영해야 한다', async () => {
+    const workspaceId = generateId();
+    const runId = generateId();
+
+    await db!.insert(workspaces).values({
+      id: workspaceId,
+      name: 'Pipeline Summary Test',
+    });
+    await db!.insert(inferenceRuns).values({
+      id: runId,
+      workspaceId,
+      triggerType: 'MANUAL',
+      status: 'SUCCEEDED',
+      requestedModes: ['config'],
+      requestedIncremental: true,
+      sourceSummary: {},
+      stats: {
+        requestedPipeline: {
+          name: 'redesign',
+          source: 'request',
+        },
+        effectivePipeline: {
+          name: 'redesign',
+          version: 'redesign-v1',
+        },
+      },
+      warnings: [],
+      errors: [],
+    });
+
+    const summary = await buildProofEngineSummaryForRun(db!, {
+      workspaceId,
+      runId,
+    });
+
+    expect(summary).toMatchObject({
+      engine: 'intent_proof',
+      pipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
     });
   });
 

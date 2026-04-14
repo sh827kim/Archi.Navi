@@ -7,6 +7,7 @@ import {
   aliasBindings,
   createTestDb,
   functionSummaries,
+  getEmbeddedPostgresTestSupport,
   inferenceRunEvents,
   inferenceRuns,
   inferenceRunSources,
@@ -29,10 +30,285 @@ import * as frontierAgentModule from '@/agent/frontierAgent';
 import * as intentProofCutoverReportModule from '@/orchestration/intentProofCutoverReport';
 import * as intentProofEngineModule from '@/orchestration/intentProofEngine';
 import {
+  buildInferencePipelineExecutionSpec,
+  buildPipelineSelectedEventPayload,
+  buildPipelineStageEventPayload,
+  normalizeInferencePipeline,
+  readEffectivePipelineSettingsFromRunStats,
+  readRequestedPipelineSettingsFromRunStats,
+  resolveEffectiveInferencePipelineSettings,
+} from '@/orchestration/pipelineSelector';
+import {
   createInferenceRun,
   executeInferenceRun,
   retryInferenceRun,
 } from '@/orchestration/inferenceRuns';
+
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const describeDb = embeddedSupport.supported ? describe : describe.skip;
+
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[inference:test] skipping inferenceRuns DB integration tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
+
+describe('pipeline selector contract', () => {
+  it('기본 pipeline은 reinforced로 정규화되어야 한다', () => {
+    expect(normalizeInferencePipeline(undefined)).toEqual({
+      name: 'reinforced',
+      source: 'default',
+    });
+  });
+
+  it('redesign + regex는 hybrid 승격과 경고를 함께 반환해야 한다', () => {
+    const result = resolveEffectiveInferencePipelineSettings({
+      pipeline: 'redesign',
+      codeEngine: 'regex',
+      compatDeterministicCandidates: false,
+    });
+
+    expect(result.requestedPipeline).toEqual({
+      name: 'redesign',
+      source: 'request',
+    });
+    expect(result.effectivePipeline).toMatchObject({
+      name: 'redesign',
+      version: 'redesign-v1',
+      codeEngine: 'hybrid',
+    });
+    expect(result.warnings).toContain(
+      'pipeline redesign does not support regex-only extraction; effective codeEngine upgraded to hybrid',
+    );
+  });
+
+  it('redesign + compatDeterministicCandidates는 허용되지 않아야 한다', () => {
+    expect(() =>
+      resolveEffectiveInferencePipelineSettings({
+        pipeline: 'redesign',
+        codeEngine: 'hybrid',
+        compatDeterministicCandidates: true,
+      }),
+    ).toThrow('compatDeterministicCandidates is only supported for pipeline=reinforced');
+  });
+
+  it('requested/effective pipeline stats는 round-trip 되어야 한다', () => {
+    const stats = {
+      requestedPipeline: {
+        name: 'redesign',
+        source: 'request',
+      },
+      effectivePipeline: {
+        name: 'redesign',
+        version: 'redesign-v1',
+        codeEngine: 'hybrid',
+      },
+    };
+
+    expect(readRequestedPipelineSettingsFromRunStats(stats)).toEqual({
+      name: 'redesign',
+      source: 'request',
+    });
+    expect(readEffectivePipelineSettingsFromRunStats(stats)).toEqual({
+      name: 'redesign',
+      version: 'redesign-v1',
+      codeEngine: 'hybrid',
+    });
+  });
+
+  it('pipeline execution spec는 reinforced와 redesign을 명시적으로 구분해야 한다', () => {
+    const reinforced = buildInferencePipelineExecutionSpec('reinforced');
+    const redesign = buildInferencePipelineExecutionSpec('redesign');
+
+    expect(reinforced).toMatchObject({
+      pipeline: 'reinforced',
+      version: 'reinforced-v1',
+      strategyName: 'linear_replay',
+      stageOrder: [
+        'source_extraction',
+        'db_extraction',
+        'proof_resolution',
+        'smart_resolution',
+        'compat_deterministic',
+      ],
+    });
+    expect(reinforced.stages).toEqual([
+      {
+        stage: 'source_extraction',
+        failureMode: 'continue',
+        role: 'ingest',
+        description: '원본 source를 수집하고 code/config 신호를 추출한다.',
+      },
+      {
+        stage: 'db_extraction',
+        failureMode: 'continue',
+        role: 'schema_scan',
+        description: 'DB schema 신호를 별도 경로로 스캔한다.',
+      },
+      {
+        stage: 'proof_resolution',
+        failureMode: 'continue',
+        role: 'proof_replay',
+        description: '기존 intent proof 경로를 순차적으로 재실행한다.',
+      },
+      {
+        stage: 'smart_resolution',
+        failureMode: 'continue',
+        role: 'smart_interop',
+        description: 'frontier proof에 대해 smart 보정 단계를 수행한다.',
+      },
+      {
+        stage: 'compat_deterministic',
+        failureMode: 'continue',
+        role: 'compat_backfill',
+        description: '하위 호환용 deterministic candidate 생성을 보강한다.',
+      },
+    ]);
+    expect(redesign).toMatchObject({
+      pipeline: 'redesign',
+      version: 'redesign-v1',
+      strategyName: 'snapshot_closure',
+      stageOrder: [
+        'evidence_intake',
+        'binding_synthesis',
+        'proof_graph_build',
+        'atomic_closure',
+        'projection',
+        'smart_interop',
+      ],
+    });
+    expect(redesign.stages).toEqual([
+      {
+        stage: 'evidence_intake',
+        failureMode: 'halt',
+        role: 'evidence_collection',
+        description: 'code/config/db evidence를 한 번에 수집하고 재사용 가능한 입력으로 고정한다.',
+      },
+      {
+        stage: 'binding_synthesis',
+        failureMode: 'halt',
+        role: 'plan_synthesis',
+        description: '증거를 바탕으로 impacted intent와 resolver plan을 합성한다.',
+      },
+      {
+        stage: 'proof_graph_build',
+        failureMode: 'halt',
+        role: 'graph_materialization',
+        description: 'plan을 proof graph worklist와 dependency snapshot으로 구체화한다.',
+      },
+      {
+        stage: 'atomic_closure',
+        failureMode: 'continue',
+        role: 'atomic_closure',
+        description: 'graph worklist를 따라 intent proof를 원자적으로 닫는다.',
+      },
+      {
+        stage: 'projection',
+        failureMode: 'continue',
+        role: 'projection_materialization',
+        description: 'closure 결과를 smart interop용 projection snapshot으로 변환한다.',
+      },
+      {
+        stage: 'smart_interop',
+        failureMode: 'continue',
+        role: 'smart_interop',
+        description: 'projection snapshot을 바탕으로 smart 보정과 후속 interop을 수행한다.',
+      },
+    ]);
+    expect(redesign.stages.filter((stage) => stage.failureMode === 'halt').map((stage) => stage.stage)).toEqual([
+      'evidence_intake',
+      'binding_synthesis',
+      'proof_graph_build',
+    ]);
+  });
+
+  it('pipeline selected/stage payload는 strategy와 stageOrder를 노출해야 한다', () => {
+    const executionSpec = buildInferencePipelineExecutionSpec('redesign');
+    const selectedPayload = buildPipelineSelectedEventPayload({
+      requestedPipeline: {
+        name: 'redesign',
+        source: 'request',
+      },
+      effectivePipeline: {
+        name: 'redesign',
+        version: 'redesign-v1',
+        codeEngine: 'hybrid',
+      },
+      requestedCodeEngine: 'regex',
+      effectiveCodeEngine: 'hybrid',
+      executionSpec,
+    });
+    const stagePayload = buildPipelineStageEventPayload({
+      executionSpec,
+      stage: 'binding_synthesis',
+      metrics: {
+        impactedIntentCount: 3,
+      },
+    });
+
+    expect(selectedPayload).toMatchObject({
+      requestedPipeline: 'redesign',
+      requestedPipelineSource: 'request',
+      effectivePipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
+      pipelineStrategy: 'snapshot_closure',
+      stageOrder: [
+        'evidence_intake',
+        'binding_synthesis',
+        'proof_graph_build',
+        'atomic_closure',
+        'projection',
+        'smart_interop',
+      ],
+      requestedCodeEngine: 'regex',
+      effectiveCodeEngine: 'hybrid',
+    });
+    expect(stagePayload).toMatchObject({
+      pipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
+      pipelineStrategy: 'snapshot_closure',
+      stage: 'binding_synthesis',
+      impactedIntentCount: 3,
+    });
+  });
+
+  it('redesign projection payload는 intermediate plan/projection 메트릭을 그대로 노출해야 한다', () => {
+    const executionSpec = buildInferencePipelineExecutionSpec('redesign');
+    const projectionPayload = buildPipelineStageEventPayload({
+      executionSpec,
+      stage: 'projection',
+      metrics: {
+        closedAtomicCount: 2,
+        projectedCandidateFloor: 2,
+      },
+    });
+
+    expect(executionSpec.stageOrder).toEqual([
+      'evidence_intake',
+      'binding_synthesis',
+      'proof_graph_build',
+      'atomic_closure',
+      'projection',
+      'smart_interop',
+    ]);
+    expect(executionSpec.stages).toContainEqual({
+      stage: 'projection',
+      failureMode: 'continue',
+      role: 'projection_materialization',
+      description: 'closure 결과를 smart interop용 projection snapshot으로 변환한다.',
+    });
+    expect(projectionPayload).toMatchObject({
+      pipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
+      pipelineStrategy: 'snapshot_closure',
+      stage: 'projection',
+      closedAtomicCount: 2,
+      projectedCandidateFloor: 2,
+    });
+  });
+});
 
 vi.mock('@/code/codeSignalEngine', async () => {
   const actual = await vi.importActual<typeof import('@/code/codeSignalEngine')>('@/code/codeSignalEngine');
@@ -201,7 +477,7 @@ function createRetryRaceDb() {
   };
 }
 
-describe('inference orchestration runs', () => {
+describeDb('inference orchestration runs', () => {
   let db: TestDb;
   let tempDir: string;
 
@@ -370,6 +646,250 @@ describe('inference orchestration runs', () => {
       .where(eq(relationCandidates.workspaceId, workspaceId));
     expect(candidates).toHaveLength(1);
     expect(candidates[0]?.metadata).toMatchObject({ proofStateId: expect.any(String) });
+  });
+
+  it('selector를 생략하면 reinforced 기본값과 pipeline stats를 남겨야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    orders:',
+        '      path: /api/orders/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const run = await createInferenceRun(
+      db,
+      {
+        workspaceId,
+        modes: ['config'],
+        sources: [{ type: 'local', ref: tempDir }],
+      } as any,
+    );
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const stats = detail.run.stats as Record<string, unknown>;
+
+    expect(detail.run.status).toBe('SUCCEEDED');
+    expect(stats['requestedPipeline']).toMatchObject({ name: 'reinforced' });
+    expect(stats['effectivePipeline']).toMatchObject({ name: 'reinforced' });
+    expect(stats['pipelineExecution']).toMatchObject({
+      selectedPipeline: 'reinforced',
+      pipelineVersion: 'reinforced-v1',
+      strategyName: 'linear_replay',
+      stageOrder: [
+        'source_extraction',
+        'db_extraction',
+        'proof_resolution',
+        'smart_resolution',
+        'compat_deterministic',
+      ],
+    });
+    expect(stats['proofSummary']).toMatchObject({
+      engine: 'intent_proof',
+      pipeline: 'reinforced',
+      pipelineVersion: 'reinforced-v1',
+    });
+
+    const selectedEvent = await db
+      .select({
+        payload: inferenceRunEvents.payload,
+      })
+      .from(inferenceRunEvents)
+      .where(
+        and(
+          eq(inferenceRunEvents.workspaceId, workspaceId),
+          eq(inferenceRunEvents.runId, run.id),
+          eq(inferenceRunEvents.eventType, 'PIPELINE_SELECTED'),
+        ),
+      )
+      .limit(1);
+    expect(selectedEvent[0]?.payload).toMatchObject({
+      requestedPipeline: 'reinforced',
+      requestedPipelineSource: 'default',
+      effectivePipeline: 'reinforced',
+      pipelineVersion: 'reinforced-v1',
+      pipelineStrategy: 'linear_replay',
+      stageOrder: [
+        'source_extraction',
+        'db_extraction',
+        'proof_resolution',
+        'smart_resolution',
+        'compat_deterministic',
+      ],
+    });
+  });
+
+  it('redesign 요청 + regex codeEngine은 hybrid 승격 또는 경고 반영을 보여야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    orders:',
+        '      path: /api/orders/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const run = await createInferenceRun(
+      db,
+      {
+        workspaceId,
+        modes: ['config'],
+        sources: [{ type: 'local', ref: tempDir }],
+        pipeline: 'redesign',
+        codeEngine: 'regex',
+        compatDeterministicCandidates: false,
+      } as any,
+    );
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const stats = detail.run.stats as Record<string, unknown>;
+    const effectiveCodeEngine = (stats['effectiveCodeEngine'] ?? stats['codeEngine']) as
+      | string
+      | undefined;
+    const warningText = detail.run.warnings.join('\n');
+
+    expect(stats['requestedPipeline']).toMatchObject({ name: 'redesign' });
+    expect(stats['effectivePipeline']).toMatchObject({ name: 'redesign' });
+    expect(effectiveCodeEngine === 'hybrid' || warningText.includes('hybrid')).toBe(true);
+    expect(stats['proofSummary']).toMatchObject({
+      pipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
+    });
+  });
+
+  it('redesign 경로의 최소 성공 케이스는 SUCCEEDED와 redesign summary 메타를 남겨야 한다', async () => {
+    await seedProofIntent(db);
+    writeFileSync(
+      join(tempDir, 'application.yml'),
+      [
+        'spring:',
+        '  application:',
+        '    name: api-gateway',
+        'zuul:',
+        '  routes:',
+        '    orders:',
+        '      path: /api/orders/**',
+        '      serviceId: order-service',
+      ].join('\n'),
+      'utf-8',
+    );
+
+    const run = await createInferenceRun(
+      db,
+      {
+        workspaceId,
+        modes: ['config'],
+        sources: [{ type: 'local', ref: tempDir }],
+        pipeline: 'redesign',
+        compatDeterministicCandidates: false,
+      } as any,
+    );
+    const detail = await executeInferenceRun(db, { workspaceId, runId: run.id });
+    const stats = detail.run.stats as Record<string, unknown>;
+
+    expect(detail.run.status).toBe('SUCCEEDED');
+    expect(stats['requestedPipeline']).toMatchObject({ name: 'redesign' });
+    expect(stats['effectivePipeline']).toMatchObject({
+      name: 'redesign',
+      version: 'redesign-v1',
+    });
+    expect(stats['pipelineExecution']).toMatchObject({
+      selectedPipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
+      strategyName: 'snapshot_closure',
+      stageOrder: [
+        'evidence_intake',
+        'binding_synthesis',
+        'proof_graph_build',
+        'atomic_closure',
+        'projection',
+        'smart_interop',
+      ],
+    });
+    expect((stats['pipelineExecution'] as Record<string, unknown>)['stages']).toEqual([
+      expect.objectContaining({
+        stage: 'evidence_intake',
+        status: 'SUCCEEDED',
+      }),
+      expect.objectContaining({
+        stage: 'binding_synthesis',
+        status: 'SUCCEEDED',
+        metrics: expect.objectContaining({
+          impactedIntentCount: 1,
+        }),
+      }),
+      expect.objectContaining({
+        stage: 'proof_graph_build',
+        status: 'SUCCEEDED',
+      }),
+      expect.objectContaining({
+        stage: 'atomic_closure',
+        status: 'SUCCEEDED',
+        metrics: expect.objectContaining({
+          intentCount: 1,
+          closedAtomicCount: 1,
+        }),
+      }),
+      expect.objectContaining({
+        stage: 'projection',
+        status: 'SUCCEEDED',
+        metrics: expect.objectContaining({
+          closedAtomicCount: 1,
+          projectedCandidateFloor: 1,
+        }),
+      }),
+      expect.objectContaining({
+        stage: 'smart_interop',
+        status: 'SUCCEEDED',
+      }),
+    ]);
+    expect(stats['proofSummary']).toMatchObject({
+      engine: 'intent_proof',
+      pipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
+    });
+
+    const selectedEvent = await db
+      .select({
+        payload: inferenceRunEvents.payload,
+      })
+      .from(inferenceRunEvents)
+      .where(
+        and(
+          eq(inferenceRunEvents.workspaceId, workspaceId),
+          eq(inferenceRunEvents.runId, run.id),
+          eq(inferenceRunEvents.eventType, 'PIPELINE_SELECTED'),
+        ),
+      )
+      .limit(1);
+    expect(selectedEvent[0]?.payload).toMatchObject({
+      requestedPipeline: 'redesign',
+      requestedPipelineSource: 'request',
+      effectivePipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
+      pipelineStrategy: 'snapshot_closure',
+      stageOrder: [
+        'evidence_intake',
+        'binding_synthesis',
+        'proof_graph_build',
+        'atomic_closure',
+        'projection',
+        'smart_interop',
+      ],
+    });
   });
 
   it('proof resolution이 실패하면 legacy count로 summary를 위장하지 않아야 한다', async () => {

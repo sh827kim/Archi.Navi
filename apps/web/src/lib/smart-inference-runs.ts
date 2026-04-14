@@ -39,7 +39,7 @@ export async function getSmartInferenceRunDetail(input: {
   }
 
   const stats = asRecord(detail.run.stats);
-  const summaryRecord = asRecord(stats?.proofSummary) ?? buildEmptyProofEngineSummary() as Record<string, unknown>;
+  const summaryRecord = asRecord(stats?.proofSummary) ?? buildEmptyProofEngineSummary() as unknown as Record<string, unknown>;
   const smartModeRecord = asRecord(summaryRecord.smartMode);
   const requestedSmartProof = normalizeSmartProofConfig(stats?.requestedSmartProof as boolean | SmartProofConfig | undefined);
   const summary = {

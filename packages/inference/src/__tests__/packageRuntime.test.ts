@@ -56,6 +56,8 @@ describe('@archi-navi/inference package runtime', () => {
       expect('bindConfigToCodeEndpoints' in inferencePackage).toBe(false);
       expect(inferencePackage.buildEmptyProofEngineSummary()).toMatchObject({
         engine: 'intent_proof',
+        pipeline: 'reinforced',
+        pipelineVersion: 'reinforced-v1',
         intentCount: 0,
         gatewayRouteSeedCount: 0,
         projectedCandidateCount: 0,

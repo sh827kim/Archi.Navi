@@ -65,11 +65,52 @@ import { buildIntentProofResolverContext, resolveInteractionIntentProof } from '
 import { runCommonBootstrapForRepo } from './commonBootstrap';
 import { buildProofEngineSummaryForRun } from './proofEngineRun';
 import { buildIntentProofCutoverArtifact } from './intentProofCutoverReport';
+import {
+  buildPipelineSelectedEventPayload,
+  buildPipelineStageEventPayload,
+  readEffectivePipelineSettingsFromRunStats,
+  readRequestedPipelineSettingsFromRunStats,
+  buildInferencePipelineExecutionSpec,
+  resolveEffectiveInferencePipelineSettings,
+  type InferencePipelineExecutionSpec,
+  type InferencePipelineName,
+  type InferencePipelineStageFailureMode,
+  type InferencePipelineStageName,
+} from './pipelineSelector';
 import { findFiles } from '../utils/fileDiscovery';
 
 export type InferenceMode = 'config' | 'code' | 'db';
+export type { InferencePipelineName } from './pipelineSelector';
 export type InferenceSourceType = 'local' | 'githubRepo' | 'githubOrg';
 export type InferenceRunStatus = 'QUEUED' | 'RUNNING' | 'SUCCEEDED' | 'FAILED' | 'CANCELED';
+
+type PipelineStageStatus = 'SUCCEEDED' | 'FAILED' | 'SKIPPED';
+
+interface PipelineStageStats {
+  stage: string;
+  status: PipelineStageStatus;
+  durationMs: number;
+  warningCount: number;
+  errorCount: number;
+  metrics: Record<string, number | string | boolean | null>;
+}
+
+interface PipelineExecutionStats {
+  selectedPipeline: InferencePipelineName;
+  pipelineVersion: string;
+  strategyName: InferencePipelineExecutionSpec['strategyName'];
+  stageOrder: InferencePipelineStageName[];
+  stages: PipelineStageStats[];
+}
+
+interface PipelineStageDefinition {
+  stage: InferencePipelineStageName;
+  failureMode: InferencePipelineStageFailureMode;
+  execute: () => Promise<void>;
+  metrics: () => Record<string, number | string | boolean | null>;
+  skipped?: boolean;
+  skipMessage?: string;
+}
 
 async function collectImpactedIntentIdsForRun(
   db: DbClient,
@@ -318,6 +359,7 @@ export interface InferenceRunSourceInput {
 export interface CreateInferenceRunInput {
   workspaceId: string;
   modes?: string[];
+  pipeline?: string | null;
   codeEngine?: string | null;
   incremental?: boolean;
   compatDeterministicCandidates?: boolean;
@@ -569,6 +611,23 @@ function readCompatDeterministicSettingsFromRunStats(
   });
 }
 
+function buildMetricRecord(
+  input: Record<string, unknown>,
+): Record<string, number | string | boolean | null> {
+  const entries = Object.entries(input).flatMap(([key, value]) => {
+    if (
+      value === null
+      || typeof value === 'number'
+      || typeof value === 'string'
+      || typeof value === 'boolean'
+    ) {
+      return [[key, value] as const];
+    }
+    return [];
+  });
+  return Object.fromEntries(entries);
+}
+
 async function getInferenceRunStatus(
   db: DbClient,
   input: { workspaceId: string; runId: string },
@@ -602,7 +661,12 @@ export async function createInferenceRun(
   input: CreateInferenceRunInput,
 ): Promise<InferenceRunListItem> {
   const modes = normalizeModes(input.modes);
-  const codeEngine: CodeSignalEngine = normalizeCodeSignalEngine(input.codeEngine ?? null);
+  const pipelineResolution = resolveEffectiveInferencePipelineSettings({
+    ...(input.pipeline !== undefined ? { pipeline: input.pipeline } : {}),
+    codeEngine: input.codeEngine ?? null,
+    compatDeterministicCandidates: input.compatDeterministicCandidates ?? null,
+  });
+  const codeEngine: CodeSignalEngine = pipelineResolution.requestedCodeEngine;
   const normalizedSources = (input.sources ?? [])
     .map((source) => ({
       type: source.type,
@@ -657,11 +721,13 @@ export async function createInferenceRun(
       idempotencyKey: input.idempotencyKey ?? null,
       sourceSummary: summarizeSources(uniqueSources.map((source) => ({ sourceType: source.type }))),
       stats: {
+        requestedPipeline: pipelineResolution.requestedPipeline,
+        effectivePipeline: pipelineResolution.effectivePipeline,
         requestedAgentPatches,
         requestedSmartProof,
         requestedCompatDeterministic,
       },
-      warnings: [],
+      warnings: pipelineResolution.warnings,
       errors: [],
     })
     .returning();
@@ -687,13 +753,15 @@ export async function createInferenceRun(
     runId: run.id,
     eventType: 'RUN_CREATED',
     message: 'Inference run이 생성되었습니다.',
-    payload: {
-      modes,
-      codeEngine,
-      sourceCount: uniqueSources.length,
-      requestedAgentPatches,
-      requestedSmartProof,
-      requestedCompatDeterministic,
+      payload: {
+        modes,
+        requestedPipeline: pipelineResolution.requestedPipeline,
+        effectivePipeline: pipelineResolution.effectivePipeline,
+        codeEngine,
+        sourceCount: uniqueSources.length,
+        requestedAgentPatches,
+        requestedSmartProof,
+        requestedCompatDeterministic,
     },
   });
 
@@ -1027,13 +1095,18 @@ export async function executeInferenceRun(
       ),
     );
 
-  const warnings: string[] = [];
+  const warnings: string[] = Array.isArray(run.warnings)
+    ? run.warnings.filter((warning): warning is string => typeof warning === 'string')
+    : [];
   const errors: Array<{ mode: InferenceMode | 'source'; repoRoot?: string; message: string }> = [];
   const modeSet = new Set<InferenceMode>(
     Array.isArray(run.requestedModes)
       ? (run.requestedModes as string[]).filter(isInferenceMode)
       : ['config', 'db'],
   );
+  const requestedPipeline = readRequestedPipelineSettingsFromRunStats(run.stats);
+  const effectivePipeline = readEffectivePipelineSettingsFromRunStats(run.stats);
+  const pipelineExecutionSpec = buildInferencePipelineExecutionSpec(effectivePipeline.name);
 
   const sourceResolution = await resolveRunnableSources(db, {
     workspaceId: input.workspaceId,
@@ -1059,7 +1132,7 @@ export async function executeInferenceRun(
     interactionIntentCount: 0,
     gatewayRouteSeedCount: 0,
   };
-  const codeEngine = normalizeCodeSignalEngine(run.requestedCodeEngine);
+  const codeEngine = effectivePipeline.codeEngine;
   const codeResult = {
     repoCount: 0,
     fileCount: 0,
@@ -1074,6 +1147,13 @@ export async function executeInferenceRun(
     fallbackCount: 0,
     fallbackRepoRoots: [] as string[],
     scanFailures: [] as Array<{ filePath: string; reason: string; language: string }>,
+  };
+  const pipelineExecution: PipelineExecutionStats = {
+    selectedPipeline: effectivePipeline.name,
+    pipelineVersion: effectivePipeline.version,
+    strategyName: pipelineExecutionSpec.strategyName,
+    stageOrder: [],
+    stages: [],
   };
   const bootstrapResult = {
     analyzedRepoCount: 0,
@@ -1198,7 +1278,223 @@ export async function executeInferenceRun(
 
   const deletedRouteTransformOwnerServiceIdsForRun = new Set<string>();
   let didDeleteGlobalRouteTransformForRun = false;
-  const resolveWorkspaceProofsForRun = async () => {
+  type RedesignEvidenceState = {
+    configRepoCount: number;
+    codeRepoCount: number;
+    dbTableCount: number;
+    signalCount: number;
+    artifactCount: number;
+    bootstrapCandidateCount: number;
+    bootstrapAtomicCount: number;
+    sourceCount: number;
+  };
+  type RedesignBindingPlanState = {
+    impactedIntentIds: string[];
+    orderedIntentIds: string[];
+    resolverContext: Awaited<ReturnType<typeof buildIntentProofResolverContext>>;
+    aliasBindingCount: number;
+    routeTransformCount: number;
+    functionSummaryCount: number;
+    dependencyCount: number;
+  };
+  type RedesignGraphWorkItem = {
+    intentId: string;
+    proofStateId: string | null;
+    frontierReason: string | null;
+    priority: number;
+    dependencyCount: number;
+    hasFrontier: boolean;
+  };
+  type RedesignProofGraphState = {
+    impactedIntentIds: string[];
+    orderedIntentIds: string[];
+    workItems: RedesignGraphWorkItem[];
+    frontierProofStateIds: string[];
+    frontierReasonCounts: Record<string, number>;
+    proofStateCount: number;
+    frontierCount: number;
+    dependencyCount: number;
+  };
+  type RedesignClosureState = {
+    resolvedIntentIds: string[];
+    closedAtomicCount: number;
+    frontierCount: number;
+    rejectedCount: number;
+    refreshedResolverContextCount: number;
+    frontierProofStateIds: Set<string>;
+  };
+  type RedesignProjectionState = {
+    projectedIntentIds: string[];
+    projectedFrontierStateIds: string[];
+    projectedAtomicCount: number;
+    projectedFrontierCount: number;
+    projectedCandidateFloor: number;
+    workItemCount: number;
+  };
+  type RedesignPipelineState = {
+    evidence: RedesignEvidenceState | null;
+    plan: RedesignBindingPlanState | null;
+    graph: RedesignProofGraphState | null;
+    closure: RedesignClosureState | null;
+    projection: RedesignProjectionState | null;
+  };
+  const redesignPipelineState: RedesignPipelineState = {
+    evidence: null,
+    plan: null,
+    graph: null,
+    closure: null,
+    projection: null,
+  };
+
+  const countStringValues = (values: Array<string | null | undefined>): Record<string, number> => {
+    const counts: Record<string, number> = {};
+    for (const value of values) {
+      if (typeof value !== 'string' || value.length === 0) continue;
+      counts[value] = (counts[value] ?? 0) + 1;
+    }
+    return counts;
+  };
+
+  const buildRedesignBindingPlan = async () => {
+    const impactedIntentIds = await collectImpactedIntentIdsForRun(db, {
+      workspaceId: input.workspaceId,
+      runId: run.id,
+      incremental: run.requestedIncremental,
+      deletedRouteTransformOwnerServiceIds: [...deletedRouteTransformOwnerServiceIdsForRun],
+      didDeleteGlobalRouteTransform: didDeleteGlobalRouteTransformForRun,
+    });
+
+    const plan: RedesignBindingPlanState = {
+      impactedIntentIds,
+      orderedIntentIds: impactedIntentIds,
+      resolverContext: await buildIntentProofResolverContext(db, { workspaceId: input.workspaceId }),
+      aliasBindingCount: configResult.aliasBindingCount + codeResult.aliasBindingCount,
+      routeTransformCount: configResult.routeTransformCount,
+      functionSummaryCount: codeResult.functionSummaryCount,
+      dependencyCount: 0,
+    };
+
+    redesignPipelineState.plan = plan;
+    return plan;
+  };
+
+  const buildRedesignProofGraph = async () => {
+    const plan = redesignPipelineState.plan ?? await buildRedesignBindingPlan();
+    if (plan.impactedIntentIds.length === 0) {
+      const emptyGraph: RedesignProofGraphState = {
+        impactedIntentIds: [],
+        orderedIntentIds: [],
+        workItems: [],
+        frontierProofStateIds: [],
+        frontierReasonCounts: {},
+        proofStateCount: 0,
+        frontierCount: 0,
+        dependencyCount: 0,
+      };
+      redesignPipelineState.graph = emptyGraph;
+      return emptyGraph;
+    }
+
+    const proofStateRows = await db
+      .select({
+        id: proofStates.id,
+        intentId: proofStates.intentId,
+      })
+      .from(proofStates)
+      .where(
+        and(
+          eq(proofStates.workspaceId, input.workspaceId),
+          inArray(proofStates.intentId, plan.impactedIntentIds),
+        ),
+      );
+
+    const frontierRows = await db
+      .select({
+        proofStateId: proofFrontiers.proofStateId,
+        intentId: proofStates.intentId,
+        frontierReason: proofFrontiers.frontierReason,
+        priority: proofFrontiers.priority,
+      })
+      .from(proofFrontiers)
+      .innerJoin(proofStates, eq(proofStates.id, proofFrontiers.proofStateId))
+      .where(
+        and(
+          eq(proofFrontiers.workspaceId, input.workspaceId),
+          inArray(proofStates.intentId, plan.impactedIntentIds),
+        ),
+      )
+      .orderBy(
+        desc(proofFrontiers.priority),
+        desc(proofFrontiers.updatedAt),
+        proofFrontiers.proofStateId,
+      );
+
+    const dependencyRows = await db
+      .select({
+        intentId: proofStates.intentId,
+        dependencyKind: proofDependencies.dependencyKind,
+        dependencyKey: proofDependencies.dependencyKey,
+      })
+      .from(proofDependencies)
+      .innerJoin(proofStates, eq(proofStates.id, proofDependencies.proofStateId))
+      .where(
+        and(
+          eq(proofDependencies.workspaceId, input.workspaceId),
+          inArray(proofStates.intentId, plan.impactedIntentIds),
+        ),
+      );
+
+    const proofStateByIntentId = new Map<string, string>();
+    for (const row of proofStateRows) {
+      if (!proofStateByIntentId.has(row.intentId)) {
+        proofStateByIntentId.set(row.intentId, row.id);
+      }
+    }
+
+    const frontierProofStateIds = [...new Set(frontierRows.map((row) => row.proofStateId))];
+    const frontierIntentIdsInOrder = [...new Set(frontierRows.map((row) => row.intentId))];
+    const orderedIntentIds = [
+      ...frontierIntentIdsInOrder,
+      ...plan.impactedIntentIds.filter((intentId) => !frontierIntentIdsInOrder.includes(intentId)),
+    ];
+    const dependencyCountByIntent = new Map<string, number>();
+    for (const row of dependencyRows) {
+      dependencyCountByIntent.set(row.intentId, (dependencyCountByIntent.get(row.intentId) ?? 0) + 1);
+    }
+    const frontierReasonCounts = countStringValues(frontierRows.map((row) => row.frontierReason));
+
+    const workItems: RedesignGraphWorkItem[] = orderedIntentIds.map((intentId) => {
+      const frontierRow = frontierRows.find((row) => row.intentId === intentId) ?? null;
+      return {
+        intentId,
+        proofStateId: proofStateByIntentId.get(intentId) ?? null,
+        frontierReason: frontierRow?.frontierReason ?? null,
+        priority: frontierRow?.priority ?? 0,
+        dependencyCount: dependencyCountByIntent.get(intentId) ?? 0,
+        hasFrontier: frontierRow !== null,
+      };
+    });
+
+    const graph: RedesignProofGraphState = {
+      impactedIntentIds: plan.impactedIntentIds,
+      orderedIntentIds,
+      workItems,
+      frontierProofStateIds,
+      frontierReasonCounts,
+      proofStateCount: proofStateRows.length,
+      frontierCount: frontierRows.length,
+      dependencyCount: dependencyRows.length,
+    };
+    redesignPipelineState.graph = graph;
+    redesignPipelineState.plan = {
+      ...plan,
+      orderedIntentIds,
+      dependencyCount: dependencyRows.length,
+    };
+    return graph;
+  };
+
+  const resolveReinforcedWorkspaceProofsForRun = async () => {
     const impactedIntentIds = await collectImpactedIntentIdsForRun(db, {
       workspaceId: input.workspaceId,
       runId: run.id,
@@ -1330,7 +1626,201 @@ export async function executeInferenceRun(
     }
   };
 
-  const runSmartProofPass = async () => {
+  const resolveRedesignWorkspaceProofsForRun = async () => {
+    const plan = redesignPipelineState.plan ?? await buildRedesignBindingPlan();
+    const graph = redesignPipelineState.graph ?? await buildRedesignProofGraph();
+    if (graph.workItems.length === 0) {
+      redesignPipelineState.closure = {
+        resolvedIntentIds: [],
+        closedAtomicCount: 0,
+        frontierCount: 0,
+        rejectedCount: 0,
+        refreshedResolverContextCount: 0,
+        frontierProofStateIds: new Set<string>(),
+      };
+      return;
+    }
+
+    let resolverContext = plan.resolverContext;
+    const closureState: RedesignClosureState = {
+      resolvedIntentIds: [],
+      closedAtomicCount: 0,
+      frontierCount: 0,
+      rejectedCount: 0,
+      refreshedResolverContextCount: 0,
+      frontierProofStateIds: new Set<string>(),
+    };
+
+    for (const workItem of graph.workItems) {
+      let resolution = await resolveInteractionIntentProof(db, {
+        workspaceId: input.workspaceId,
+        intentId: workItem.intentId,
+        resolverContext,
+      });
+      if (resolution.status === 'FRONTIER') {
+        if (!frontierAgent.enabled) {
+          frontierAgent.skippedCount += 1;
+          await appendRunEvent(db, {
+            workspaceId: input.workspaceId,
+            runId: run.id,
+            eventType: 'FRONTIER_AGENT_PATCH',
+            message: 'frontier agent patch를 스킵했습니다: agent disabled',
+            payload: {
+              intentId: workItem.intentId,
+              proofStateId: resolution.proofStateId,
+              frontierReason: resolution.frontierReason,
+              outcome: 'disabled',
+              graphPriority: workItem.priority,
+              dependencyCount: workItem.dependencyCount,
+            },
+          });
+        } else if (frontierAgent.attemptedFrontierCount >= frontierAgent.maxFrontiers) {
+          frontierAgent.skippedCount += 1;
+          await appendRunEvent(db, {
+            workspaceId: input.workspaceId,
+            runId: run.id,
+            eventType: 'FRONTIER_AGENT_PATCH',
+            message: 'frontier agent patch를 스킵했습니다: frontier limit reached',
+            payload: {
+              intentId: workItem.intentId,
+              proofStateId: resolution.proofStateId,
+              frontierReason: resolution.frontierReason,
+              outcome: 'limit_exceeded',
+              maxFrontiers: frontierAgent.maxFrontiers,
+              graphPriority: workItem.priority,
+              dependencyCount: workItem.dependencyCount,
+            },
+          });
+        } else {
+          frontierAgent.attemptedFrontierCount += 1;
+          const agentResult = await runFrontierAgentPass(db, {
+            workspaceId: input.workspaceId,
+            proofStateId: resolution.proofStateId,
+            runId: run.id,
+          });
+          if (agentResult.proposal) {
+            frontierAgent.proposalCount += 1;
+            if (agentResult.validationStatus === 'ACCEPTED') {
+              frontierAgent.acceptedCount += 1;
+              if (agentResult.proposal.patchType === 'route_transform_patch') {
+                resolverContext = await buildIntentProofResolverContext(db, { workspaceId: input.workspaceId });
+                closureState.refreshedResolverContextCount += 1;
+              }
+            } else if (agentResult.validationStatus === 'REJECTED') {
+              frontierAgent.rejectedCount += 1;
+            }
+            await appendRunEvent(db, {
+              workspaceId: input.workspaceId,
+              runId: run.id,
+              level: agentResult.validationStatus === 'REJECTED' ? 'WARN' : 'INFO',
+              eventType: 'FRONTIER_AGENT_PATCH',
+              message:
+                agentResult.validationStatus === 'REJECTED'
+                  ? `frontier agent patch가 거절되었습니다: ${agentResult.proposal.patchType}`
+                  : `frontier agent patch를 적용했습니다: ${agentResult.proposal.patchType}`,
+              payload: {
+                intentId: workItem.intentId,
+                proofStateId: resolution.proofStateId,
+                frontierReason: agentResult.frontierReason,
+                patchType: agentResult.proposal.patchType,
+                validationStatus: agentResult.validationStatus,
+                rationale: agentResult.proposal.rationale,
+                errors: agentResult.errors,
+                graphPriority: workItem.priority,
+                dependencyCount: workItem.dependencyCount,
+              },
+            });
+          } else {
+            frontierAgent.noProposalCount += 1;
+            await appendRunEvent(db, {
+              workspaceId: input.workspaceId,
+              runId: run.id,
+              eventType: 'FRONTIER_AGENT_PATCH',
+              message: 'frontier agent patch proposal이 없어 frontier를 유지했습니다.',
+              payload: {
+                intentId: workItem.intentId,
+                proofStateId: resolution.proofStateId,
+                frontierReason: agentResult.frontierReason,
+                outcome: 'no_proposal',
+                graphPriority: workItem.priority,
+                dependencyCount: workItem.dependencyCount,
+              },
+            });
+          }
+          if (agentResult.resolution) {
+            resolution = agentResult.resolution;
+          }
+        }
+      }
+
+      await db
+        .update(interactionIntents)
+        .set({
+          updatedRunId: run.id,
+          updatedAt: new Date(),
+        })
+        .where(eq(interactionIntents.id, workItem.intentId));
+
+      closureState.resolvedIntentIds.push(workItem.intentId);
+      proofResolution.intentCount += 1;
+      if (resolution.status === 'CLOSED_ATOMIC') {
+        closureState.closedAtomicCount += 1;
+        proofResolution.closedAtomicCount += 1;
+        continue;
+      }
+      if (resolution.status === 'FRONTIER') {
+        closureState.frontierCount += 1;
+        closureState.frontierProofStateIds.add(resolution.proofStateId);
+        proofResolution.frontierCount += 1;
+        smartFrontierProofStateIds.add(resolution.proofStateId);
+        continue;
+      }
+      if (resolution.status === 'REJECTED') {
+        closureState.rejectedCount += 1;
+        proofResolution.rejectedCount += 1;
+      }
+    }
+
+    redesignPipelineState.closure = closureState;
+  };
+
+  const projectRedesignWorkspaceProofsForRun = async () => {
+    const graph = redesignPipelineState.graph ?? await buildRedesignProofGraph();
+    const closure = redesignPipelineState.closure ?? {
+      resolvedIntentIds: [],
+      closedAtomicCount: 0,
+      frontierCount: 0,
+      rejectedCount: 0,
+      refreshedResolverContextCount: 0,
+      frontierProofStateIds: new Set<string>(),
+    };
+
+    const projectedFrontierStateIds = [...closure.frontierProofStateIds];
+    const projectedIntentIds = closure.resolvedIntentIds.length > 0
+      ? closure.resolvedIntentIds
+      : graph.orderedIntentIds;
+    const projection: RedesignProjectionState = {
+      projectedIntentIds,
+      projectedFrontierStateIds,
+      projectedAtomicCount: closure.closedAtomicCount,
+      projectedFrontierCount: closure.frontierCount,
+      projectedCandidateFloor: closure.closedAtomicCount + projectedFrontierStateIds.length,
+      workItemCount: graph.workItems.length,
+    };
+
+    redesignPipelineState.projection = projection;
+    smartFrontierProofStateIds.clear();
+    for (const proofStateId of projectedFrontierStateIds) {
+      smartFrontierProofStateIds.add(proofStateId);
+    }
+
+    return projection;
+  };
+
+  const runSmartProofPass = async (smartInteropInput?: {
+    frontierStateIds?: string[];
+    attemptedFrontierCount?: number;
+  }) => {
     if (!requestedSmartProof.enabled) {
       await appendRunEvent(db, {
         workspaceId: input.workspaceId,
@@ -1348,8 +1838,8 @@ export async function executeInferenceRun(
 
     smartProof.attempted = true;
 
-    smartProof.attemptedFrontierCount = proofResolution.frontierCount;
-    const frontierStateIds = Array.from(smartFrontierProofStateIds);
+    smartProof.attemptedFrontierCount = smartInteropInput?.attemptedFrontierCount ?? proofResolution.frontierCount;
+    const frontierStateIds = smartInteropInput?.frontierStateIds ?? Array.from(smartFrontierProofStateIds);
     const contradictionCandidates = requestedSmartProof.categories.contradictionDetection
       ? await loadSmartContradictionCandidates(db, {
           workspaceId: input.workspaceId,
@@ -1779,151 +2269,287 @@ export async function executeInferenceRun(
     });
   };
 
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
+  const appendPipelineStageEvent = async (
+    eventType: string,
+    message: string,
+    payload: Record<string, unknown>,
+    level: 'INFO' | 'WARN' | 'ERROR' = 'INFO',
+  ) => {
+    await appendRunEvent(db, {
+      workspaceId: input.workspaceId,
+      runId: run.id,
+      level,
+      eventType,
+      message,
+      payload,
+    });
+  };
 
-  for (const localSource of sourceResolution.localSources) {
-    let sourceHasError = false;
+  const runTrackedPipelineStage = async (
+    stage: InferencePipelineStageName,
+    execute: () => Promise<void>,
+    metrics: () => Record<string, number | string | boolean | null>,
+    options?: { skipped?: boolean; skipMessage?: string },
+  ): Promise<PipelineStageStats> => {
+    pipelineExecution.stageOrder.push(stage);
+    const warningBaseline = warnings.length;
+    const errorBaseline = errors.length;
 
-    if (modeSet.has('config')) {
-      try {
-        const configFileCounts = countConfigFiles(localSource.repoRoot);
-        const aliasResult = await extractAliasBindingsFromConfig(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-          runId: run.id,
-        });
-        const routeTransformResult = await extractRouteTransformsFromConfig(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-          runId: run.id,
-        });
-        for (const ownerServiceId of routeTransformResult.deletedOwnerServiceIds) {
-          deletedRouteTransformOwnerServiceIdsForRun.add(ownerServiceId);
-        }
-        if (routeTransformResult.deletedGlobalTransformCount > 0) {
-          didDeleteGlobalRouteTransformForRun = true;
-        }
-        const configIntentResult = await extractInteractionIntentsFromConfigRoutes(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-          runId: run.id,
-        });
-        configResult.repoCount += 1;
-        configResult.fileCount += configFileCounts.fileCount;
-        configResult.processedFileCount += configFileCounts.processedFileCount;
-        configResult.skippedFileCount += configFileCounts.skippedFileCount;
-        configResult.aliasBindingCount += aliasResult.bindingCount;
-        configResult.routeTransformCount += routeTransformResult.routeTransformCount;
-        configResult.interactionIntentCount += configIntentResult.intentCount;
-        configResult.gatewayRouteSeedCount += configIntentResult.gatewayRouteSeedCount ?? 0;
-      } catch (error) {
-        sourceHasError = true;
-        errors.push({
-          mode: 'config',
-          repoRoot: localSource.repoRoot,
-          message: error instanceof Error ? error.message : 'unknown config error',
-        });
+    if (options?.skipped) {
+      const stageStats: PipelineStageStats = {
+        stage,
+        status: 'SKIPPED',
+        durationMs: 0,
+        warningCount: 0,
+        errorCount: 0,
+        metrics: metrics(),
+      };
+      pipelineExecution.stages.push(stageStats);
+      await appendPipelineStageEvent(
+        'PIPELINE_STAGE_SKIPPED',
+        options.skipMessage ?? `${stage} 단계를 건너뛰었습니다.`,
+        buildPipelineStageEventPayload({
+          executionSpec: pipelineExecutionSpec,
+          stage: stage as InferencePipelineStageName,
+          metrics: stageStats.metrics,
+        }),
+      );
+      return stageStats;
+    }
+
+    await appendPipelineStageEvent(
+      'PIPELINE_STAGE_STARTED',
+      `${stage} 단계를 시작했습니다.`,
+      buildPipelineStageEventPayload({
+        executionSpec: pipelineExecutionSpec,
+        stage: stage as InferencePipelineStageName,
+      }),
+    );
+
+    const startedAt = Date.now();
+    try {
+      await execute();
+      const warningCount = warnings.length - warningBaseline;
+      const errorCount = errors.length - errorBaseline;
+      const stageStats: PipelineStageStats = {
+        stage,
+        status: errorCount > 0 ? 'FAILED' : 'SUCCEEDED',
+        durationMs: Date.now() - startedAt,
+        warningCount,
+        errorCount,
+        metrics: metrics(),
+      };
+      pipelineExecution.stages.push(stageStats);
+      await appendPipelineStageEvent(
+        stageStats.status === 'FAILED' ? 'PIPELINE_STAGE_FAILED' : 'PIPELINE_STAGE_COMPLETED',
+        stageStats.status === 'FAILED'
+          ? `${stage} 단계에서 일부 오류가 발생했습니다.`
+          : `${stage} 단계를 완료했습니다.`,
+        buildPipelineStageEventPayload({
+          executionSpec: pipelineExecutionSpec,
+          stage: stage as InferencePipelineStageName,
+          metrics: {
+            durationMs: stageStats.durationMs,
+            warningCount: stageStats.warningCount,
+            errorCount: stageStats.errorCount,
+            ...stageStats.metrics,
+          },
+        }),
+        stageStats.status === 'FAILED' ? 'WARN' : 'INFO',
+      );
+      return stageStats;
+    } catch (error) {
+      const stageStats: PipelineStageStats = {
+        stage,
+        status: 'FAILED',
+        durationMs: Date.now() - startedAt,
+        warningCount: warnings.length - warningBaseline,
+        errorCount: (errors.length - errorBaseline) + 1,
+        metrics: metrics(),
+      };
+      pipelineExecution.stages.push(stageStats);
+      await appendPipelineStageEvent(
+        'PIPELINE_STAGE_FAILED',
+        `${stage} 단계가 실패했습니다.`,
+        buildPipelineStageEventPayload({
+          executionSpec: pipelineExecutionSpec,
+          stage: stage as InferencePipelineStageName,
+          metrics: {
+            durationMs: stageStats.durationMs,
+            warningCount: stageStats.warningCount,
+            errorCount: stageStats.errorCount,
+            errorMessage: error instanceof Error ? error.message : 'unknown',
+            ...stageStats.metrics,
+          },
+        }),
+        'ERROR',
+      );
+      return stageStats;
+    }
+  };
+
+  const runPipelineStageDefinitions = async (stageDefinitions: PipelineStageDefinition[]) => {
+    let pipelineAborted = false;
+    for (const definition of stageDefinitions) {
+      const skipped = pipelineAborted || definition.skipped === true;
+      const stageStats = await runTrackedPipelineStage(
+        definition.stage,
+        definition.execute,
+        definition.metrics,
+        skipped
+          ? {
+              skipped: true,
+              skipMessage:
+                definition.skipMessage ?? `${definition.stage} 단계를 이전 실패로 건너뛰었습니다.`,
+            }
+          : undefined,
+      );
+      if (stageStats.status === 'FAILED' && definition.failureMode === 'halt') {
+        pipelineAborted = true;
       }
     }
+  };
 
-    if (await isRunCanceled()) {
-      return await returnCurrentRunDetail(true);
-    }
+  const runSourceExtractionAndBootstrap = async () => {
+    for (const localSource of sourceResolution.localSources) {
+      let sourceHasError = false;
 
-    if (modeSet.has('code')) {
-      try {
-        const result = await extractCodeSignalsWithEngine(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-          codeEngine,
-          forceRescan: run.requestedIncremental ? false : true,
-        });
-        const functionSummaryResult = await extractFunctionSummariesFromCodeSignals(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-          runId: run.id,
-        });
-        const aliasResult = await extractAliasBindingsFromCodeSignals(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-          runId: run.id,
-        });
-        const intentResult = await extractInteractionIntentsFromCodeSignals(db, {
-          workspaceId: input.workspaceId,
-          repoRoot: localSource.repoRoot,
-          runId: run.id,
-        });
-        codeResult.repoCount += 1;
-        codeResult.fileCount += result.fileCount;
-        codeResult.artifactCount += result.artifactCount;
-        codeResult.signalCount += result.signalCount;
-        codeResult.skippedCount += result.skippedCount;
-        codeResult.aliasBindingCount += aliasResult.bindingCount;
-        codeResult.functionSummaryCount += functionSummaryResult.summaryCount;
-        codeResult.interactionIntentCount += intentResult.intentCount;
-        if (!codeResult.enginesUsed.includes(result.engineUsed)) {
-          codeResult.enginesUsed.push(result.engineUsed);
-        }
-        if (result.fallbackUsed) {
-          codeResult.fallbackCount += 1;
-          codeResult.fallbackRepoRoots.push(localSource.repoRoot);
-        }
-        if (result.warning) warnings.push(`[code:${localSource.repoRoot}] ${result.warning}`);
-        if (result.scanFailures && result.scanFailures.length > 0) {
-          codeResult.scanFailures.push(...result.scanFailures);
-        }
-        successfulCodeRepoCount += 1;
-
+      if (modeSet.has('config')) {
         try {
-          const bootstrap = await runCommonBootstrapForRepo(db, {
+          const configFileCounts = countConfigFiles(localSource.repoRoot);
+          const aliasResult = await extractAliasBindingsFromConfig(db, {
             workspaceId: input.workspaceId,
             repoRoot: localSource.repoRoot,
-            skipExtraction: true,
-            bootstrapOnly: true,
+            runId: run.id,
           });
-          bootstrapResult.analyzedRepoCount += 1;
-          bootstrapResult.signalCount += bootstrap.signalCount;
-          bootstrapResult.candidateCount += bootstrap.candidateCount;
-          bootstrapResult.createdEndpointCount += bootstrap.createdEndpointCount;
-          bootstrapResult.createdTopicCount += bootstrap.createdTopicCount;
-          bootstrapResult.createdQueueCount += bootstrap.createdQueueCount;
-          bootstrapResult.createdDatabaseCount += bootstrap.createdDatabaseCount;
-          bootstrapResult.createdDbTableCount += bootstrap.createdDbTableCount;
-          bootstrapResult.createdAtomicCount += bootstrap.createdAtomicCount;
-          if (bootstrap.warning) {
-            bootstrapResult.warnings.push(`[code:${localSource.repoRoot}] ${bootstrap.warning}`);
+          const routeTransformResult = await extractRouteTransformsFromConfig(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            runId: run.id,
+          });
+          for (const ownerServiceId of routeTransformResult.deletedOwnerServiceIds) {
+            deletedRouteTransformOwnerServiceIdsForRun.add(ownerServiceId);
           }
-        } catch (bootstrapError) {
-          bootstrapResult.warnings.push(
-            `[code:${localSource.repoRoot}] bootstrap 실패: ${bootstrapError instanceof Error ? bootstrapError.message : 'unknown'}`,
-          );
+          if (routeTransformResult.deletedGlobalTransformCount > 0) {
+            didDeleteGlobalRouteTransformForRun = true;
+          }
+          const configIntentResult = await extractInteractionIntentsFromConfigRoutes(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            runId: run.id,
+          });
+          configResult.repoCount += 1;
+          configResult.fileCount += configFileCounts.fileCount;
+          configResult.processedFileCount += configFileCounts.processedFileCount;
+          configResult.skippedFileCount += configFileCounts.skippedFileCount;
+          configResult.aliasBindingCount += aliasResult.bindingCount;
+          configResult.routeTransformCount += routeTransformResult.routeTransformCount;
+          configResult.interactionIntentCount += configIntentResult.intentCount;
+          configResult.gatewayRouteSeedCount += configIntentResult.gatewayRouteSeedCount ?? 0;
+        } catch (error) {
+          sourceHasError = true;
+          errors.push({
+            mode: 'config',
+            repoRoot: localSource.repoRoot,
+            message: error instanceof Error ? error.message : 'unknown config error',
+          });
         }
-      } catch (error) {
-        sourceHasError = true;
-        errors.push({
-          mode: 'code',
-          repoRoot: localSource.repoRoot,
-          message: error instanceof Error ? error.message : 'unknown code error',
-        });
       }
+
+      if (await isRunCanceled()) {
+        return;
+      }
+
+      if (modeSet.has('code')) {
+        try {
+          const result = await extractCodeSignalsWithEngine(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            codeEngine,
+            forceRescan: run.requestedIncremental ? false : true,
+          });
+          const functionSummaryResult = await extractFunctionSummariesFromCodeSignals(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            runId: run.id,
+          });
+          const aliasResult = await extractAliasBindingsFromCodeSignals(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            runId: run.id,
+          });
+          const intentResult = await extractInteractionIntentsFromCodeSignals(db, {
+            workspaceId: input.workspaceId,
+            repoRoot: localSource.repoRoot,
+            runId: run.id,
+          });
+          codeResult.repoCount += 1;
+          codeResult.fileCount += result.fileCount;
+          codeResult.artifactCount += result.artifactCount;
+          codeResult.signalCount += result.signalCount;
+          codeResult.skippedCount += result.skippedCount;
+          codeResult.aliasBindingCount += aliasResult.bindingCount;
+          codeResult.functionSummaryCount += functionSummaryResult.summaryCount;
+          codeResult.interactionIntentCount += intentResult.intentCount;
+          if (!codeResult.enginesUsed.includes(result.engineUsed)) {
+            codeResult.enginesUsed.push(result.engineUsed);
+          }
+          if (result.fallbackUsed) {
+            codeResult.fallbackCount += 1;
+            codeResult.fallbackRepoRoots.push(localSource.repoRoot);
+          }
+          if (result.warning) warnings.push(`[code:${localSource.repoRoot}] ${result.warning}`);
+          if (result.scanFailures && result.scanFailures.length > 0) {
+            codeResult.scanFailures.push(...result.scanFailures);
+          }
+          successfulCodeRepoCount += 1;
+
+          try {
+            const bootstrap = await runCommonBootstrapForRepo(db, {
+              workspaceId: input.workspaceId,
+              repoRoot: localSource.repoRoot,
+              skipExtraction: true,
+              bootstrapOnly: true,
+            });
+            bootstrapResult.analyzedRepoCount += 1;
+            bootstrapResult.signalCount += bootstrap.signalCount;
+            bootstrapResult.candidateCount += bootstrap.candidateCount;
+            bootstrapResult.createdEndpointCount += bootstrap.createdEndpointCount;
+            bootstrapResult.createdTopicCount += bootstrap.createdTopicCount;
+            bootstrapResult.createdQueueCount += bootstrap.createdQueueCount;
+            bootstrapResult.createdDatabaseCount += bootstrap.createdDatabaseCount;
+            bootstrapResult.createdDbTableCount += bootstrap.createdDbTableCount;
+            bootstrapResult.createdAtomicCount += bootstrap.createdAtomicCount;
+            if (bootstrap.warning) {
+              bootstrapResult.warnings.push(`[code:${localSource.repoRoot}] ${bootstrap.warning}`);
+            }
+          } catch (bootstrapError) {
+            bootstrapResult.warnings.push(
+              `[code:${localSource.repoRoot}] bootstrap 실패: ${bootstrapError instanceof Error ? bootstrapError.message : 'unknown'}`,
+            );
+          }
+        } catch (error) {
+          sourceHasError = true;
+          errors.push({
+            mode: 'code',
+            repoRoot: localSource.repoRoot,
+            message: error instanceof Error ? error.message : 'unknown code error',
+          });
+        }
+      }
+
+      if (await isRunCanceled()) {
+        return;
+      }
+
+      sourceExecutionResult.set(localSource.sourceId, sourceHasError);
     }
 
-    if (await isRunCanceled()) {
-      return await returnCurrentRunDetail(true);
-    }
+    await flushSourceStatuses(false);
+  };
 
-    sourceExecutionResult.set(localSource.sourceId, sourceHasError);
-  }
-
-  await flushSourceStatuses(false);
-
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
-
-  if (modeSet.has('db')) {
+  const runDbExtractionStage = async () => {
+    if (!modeSet.has('db')) return;
     try {
       dbResult = await extractDbSchemaSignals(db, {
         workspaceId: input.workspaceId,
@@ -1935,50 +2561,29 @@ export async function executeInferenceRun(
         message: error instanceof Error ? error.message : 'unknown db error',
       });
     }
-  }
+  };
 
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
-
-  const allSelectedModesSucceeded = didAllSelectedModesSucceed({
-    modeSet,
-    expectedLocalSourceCount: sourceResolution.localSources.length,
-    successfulConfigRepoCount: configResult.repoCount,
-    successfulCodeRepoCount,
-    dbSucceeded: dbResult !== null,
-  });
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
-
-  if ((modeSet.has('config') || modeSet.has('code') || modeSet.has('db')) && allSelectedModesSucceeded) {
-    try {
-      await resolveWorkspaceProofsForRun();
-    } catch (error) {
-      warnings.push(
-        `intent proof resolution 실패: ${error instanceof Error ? error.message : 'unknown'}`,
-      );
+  const runProofResolutionStage = async () => {
+    const allSelectedModesSucceeded = didAllSelectedModesSucceed({
+      modeSet,
+      expectedLocalSourceCount: sourceResolution.localSources.length,
+      successfulConfigRepoCount: configResult.repoCount,
+      successfulCodeRepoCount,
+      dbSucceeded: dbResult !== null,
+    });
+    if ((modeSet.has('config') || modeSet.has('code') || modeSet.has('db')) && allSelectedModesSucceeded) {
+      try {
+        await resolveReinforcedWorkspaceProofsForRun();
+      } catch (error) {
+        warnings.push(
+          `intent proof resolution 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+        );
+      }
     }
-  }
+  };
 
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
-
-  try {
-    await runSmartProofPass();
-  } catch (error) {
-    warnings.push(
-      `smart proof pass 실패: ${error instanceof Error ? error.message : 'unknown'}`,
-    );
-  }
-
-  if (await isRunCanceled()) {
-    return await returnCurrentRunDetail(true);
-  }
-
-  if (requestedCompatDeterministic.enabled) {
+  const runCompatDeterministicStage = async () => {
+    if (!requestedCompatDeterministic.enabled) return;
     for (const localSource of sourceResolution.localSources) {
       try {
         if (modeSet.has('config')) {
@@ -2012,6 +2617,212 @@ export async function executeInferenceRun(
         );
       }
     }
+  };
+
+  if (await isRunCanceled()) {
+    return await returnCurrentRunDetail(true);
+  }
+
+  await appendPipelineStageEvent(
+    'PIPELINE_SELECTED',
+    `pipeline ${effectivePipeline.name}을(를) 선택했습니다.`,
+    buildPipelineSelectedEventPayload({
+      requestedPipeline,
+      effectivePipeline,
+      requestedCodeEngine: run.requestedCodeEngine ? normalizeCodeSignalEngine(run.requestedCodeEngine) : codeEngine,
+      effectiveCodeEngine: codeEngine,
+      executionSpec: pipelineExecutionSpec,
+    }),
+  );
+
+  if (effectivePipeline.name === 'redesign') {
+    await runPipelineStageDefinitions([
+      {
+        stage: 'evidence_intake',
+        failureMode: 'halt',
+        execute: async () => {
+          await runSourceExtractionAndBootstrap();
+          await runDbExtractionStage();
+          redesignPipelineState.evidence = {
+            configRepoCount: configResult.repoCount,
+            codeRepoCount: codeResult.repoCount,
+            dbTableCount: dbResult?.tableCount ?? 0,
+            signalCount: codeResult.signalCount,
+            artifactCount: codeResult.artifactCount,
+            bootstrapCandidateCount: bootstrapResult.candidateCount,
+            bootstrapAtomicCount: bootstrapResult.createdAtomicCount,
+            sourceCount: sourceResolution.localSources.length,
+          };
+        },
+        metrics: () => buildMetricRecord({
+          sourceCount: redesignPipelineState.evidence?.sourceCount ?? sourceResolution.localSources.length,
+          configRepoCount: configResult.repoCount,
+          codeRepoCount: codeResult.repoCount,
+          dbTableCount: redesignPipelineState.evidence?.dbTableCount ?? 0,
+          signalCount: redesignPipelineState.evidence?.signalCount ?? 0,
+          artifactCount: redesignPipelineState.evidence?.artifactCount ?? 0,
+          bootstrapCandidateCount: redesignPipelineState.evidence?.bootstrapCandidateCount ?? 0,
+          bootstrapAtomicCount: redesignPipelineState.evidence?.bootstrapAtomicCount ?? 0,
+        }),
+      },
+      {
+        stage: 'binding_synthesis',
+        failureMode: 'halt',
+        execute: async () => {
+          await buildRedesignBindingPlan();
+        },
+        metrics: () => buildMetricRecord({
+          aliasBindingCount: redesignPipelineState.plan?.aliasBindingCount ?? (configResult.aliasBindingCount + codeResult.aliasBindingCount),
+          routeTransformCount: redesignPipelineState.plan?.routeTransformCount ?? configResult.routeTransformCount,
+          functionSummaryCount: redesignPipelineState.plan?.functionSummaryCount ?? codeResult.functionSummaryCount,
+          impactedIntentCount: redesignPipelineState.plan?.impactedIntentIds.length ?? 0,
+          orderedIntentCount: redesignPipelineState.plan?.orderedIntentIds.length ?? 0,
+          dependencyCount: redesignPipelineState.plan?.dependencyCount ?? 0,
+        }),
+      },
+      {
+        stage: 'proof_graph_build',
+        failureMode: 'halt',
+        execute: async () => {
+          await buildRedesignProofGraph();
+        },
+        metrics: () => buildMetricRecord({
+          proofStateCount: redesignPipelineState.graph?.proofStateCount ?? 0,
+          frontierCount: redesignPipelineState.graph?.frontierCount ?? 0,
+          dependencyCount: redesignPipelineState.graph?.dependencyCount ?? 0,
+          workItemCount: redesignPipelineState.graph?.workItems.length ?? 0,
+          frontierReasonKinds: Object.keys(redesignPipelineState.graph?.frontierReasonCounts ?? {}).length,
+        }),
+      },
+      {
+        stage: 'atomic_closure',
+        failureMode: 'continue',
+        execute: async () => {
+          await resolveRedesignWorkspaceProofsForRun();
+        },
+        metrics: () => buildMetricRecord({
+          intentCount: proofResolution.intentCount,
+          closedAtomicCount: redesignPipelineState.closure?.closedAtomicCount ?? 0,
+          frontierCount: redesignPipelineState.closure?.frontierCount ?? 0,
+          rejectedCount: redesignPipelineState.closure?.rejectedCount ?? 0,
+          refreshedResolverContextCount: redesignPipelineState.closure?.refreshedResolverContextCount ?? 0,
+        }),
+      },
+      {
+        stage: 'projection',
+        failureMode: 'continue',
+        execute: async () => {
+          await projectRedesignWorkspaceProofsForRun();
+        },
+        metrics: () => buildMetricRecord({
+          projectedIntentCount: redesignPipelineState.projection?.projectedIntentIds.length ?? 0,
+          projectedFrontierCount: redesignPipelineState.projection?.projectedFrontierCount ?? 0,
+          projectedAtomicCount: redesignPipelineState.projection?.projectedAtomicCount ?? 0,
+          projectedCandidateFloor: redesignPipelineState.projection?.projectedCandidateFloor ?? 0,
+          workItemCount: redesignPipelineState.projection?.workItemCount ?? 0,
+        }),
+      },
+      {
+        stage: 'smart_interop',
+        failureMode: 'continue',
+        execute: async () => {
+          try {
+            const projection = redesignPipelineState.projection ?? await projectRedesignWorkspaceProofsForRun();
+            await runSmartProofPass({
+              frontierStateIds: projection.projectedFrontierStateIds,
+              attemptedFrontierCount: projection.projectedFrontierCount,
+            });
+          } catch (error) {
+            warnings.push(
+              `smart proof pass 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+            );
+          }
+        },
+        metrics: () => buildMetricRecord({
+          enabled: smartProof.enabled,
+          projectedFrontierCount: redesignPipelineState.projection?.projectedFrontierCount ?? 0,
+          attemptedFrontierCount: smartProof.attemptedFrontierCount,
+          acceptedSummaryEnhancementCount: smartProof.acceptedSummaryEnhancementCount,
+        }),
+      },
+    ]);
+  } else {
+    await runPipelineStageDefinitions([
+      {
+        stage: 'source_extraction',
+        failureMode: 'continue',
+        execute: async () => {
+          await runSourceExtractionAndBootstrap();
+        },
+        metrics: () => buildMetricRecord({
+          configRepoCount: configResult.repoCount,
+          codeRepoCount: codeResult.repoCount,
+          signalCount: codeResult.signalCount,
+          artifactCount: codeResult.artifactCount,
+          createdAtomicCount: bootstrapResult.createdAtomicCount,
+        }),
+      },
+      {
+        stage: 'db_extraction',
+        failureMode: 'continue',
+        execute: async () => {
+          await runDbExtractionStage();
+        },
+        metrics: () => buildMetricRecord({
+          tableCount: dbResult?.tableCount ?? 0,
+          fkCandidateCount: dbResult?.fkCandidateCount ?? 0,
+          implicitFkCandidateCount: dbResult?.implicitFkCandidateCount ?? 0,
+        }),
+        skipped: !modeSet.has('db'),
+        skipMessage: 'db mode가 비활성화되어 db_extraction 단계를 건너뛰었습니다.',
+      },
+      {
+        stage: 'proof_resolution',
+        failureMode: 'continue',
+        execute: async () => {
+          await runProofResolutionStage();
+        },
+        metrics: () => buildMetricRecord({
+          intentCount: proofResolution.intentCount,
+          closedAtomicCount: proofResolution.closedAtomicCount,
+          frontierCount: proofResolution.frontierCount,
+          rejectedCount: proofResolution.rejectedCount,
+        }),
+      },
+      {
+        stage: 'smart_resolution',
+        failureMode: 'continue',
+        execute: async () => {
+          try {
+            await runSmartProofPass();
+          } catch (error) {
+            warnings.push(
+              `smart proof pass 실패: ${error instanceof Error ? error.message : 'unknown'}`,
+            );
+          }
+        },
+        metrics: () => buildMetricRecord({
+          enabled: smartProof.enabled,
+          attemptedFrontierCount: smartProof.attemptedFrontierCount,
+          acceptedSummaryEnhancementCount: smartProof.acceptedSummaryEnhancementCount,
+        }),
+      },
+      {
+        stage: 'compat_deterministic',
+        failureMode: 'continue',
+        execute: async () => {
+          await runCompatDeterministicStage();
+        },
+        metrics: () => buildMetricRecord({
+          enabled: compatDeterministic.enabled,
+          configCandidatesCreated: compatDeterministic.configCandidatesCreated,
+          codeCandidatesCreated: compatDeterministic.codeCandidatesCreated,
+          boundEndpointCandidatesCreated: compatDeterministic.boundEndpointCandidatesCreated,
+        }),
+        skipped: !requestedCompatDeterministic.enabled,
+        skipMessage: 'compat deterministic mode가 비활성화되어 compat_deterministic 단계를 건너뛰었습니다.',
+      },
+    ]);
   }
 
   if (await isRunCanceled()) {
@@ -2045,6 +2856,8 @@ export async function executeInferenceRun(
     cutoverArtifact = await buildIntentProofCutoverArtifact(db, {
       workspaceId: input.workspaceId,
       label: `run:${run.id}`,
+      pipeline: effectivePipeline.name,
+      pipelineVersion: effectivePipeline.version,
       failedChecks: artifactFailedChecks,
     });
   } catch (error) {
@@ -2061,6 +2874,9 @@ export async function executeInferenceRun(
   }
   const stats = {
     engine: proofSummary.engine,
+    requestedPipeline,
+    effectivePipeline,
+    pipelineExecution,
     requestedAgentPatches,
     requestedSmartProof,
     requestedCompatDeterministic,

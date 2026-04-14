@@ -20,8 +20,11 @@ import {
   type DashboardInferenceRunDetail,
 } from '@/actions/inference-runs';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { extractInferencePipelineMeta } from '@/lib/inference-pipeline';
 
 interface RunCardSummary {
+  pipeline: string;
+  pipelineVersion: string;
   projectedCandidateCount: number;
   atomicProjectedCandidateCount: number;
   gatewayRouteSeedCount: number;
@@ -212,12 +215,15 @@ function SourceSummary({ summary }: { summary: Record<string, number> }) {
 /** 일반 run / smart run 공통 summary 추출 */
 function extractRunCardSummary(stats: Record<string, unknown>): RunCardSummary {
   const summary = asRecord(stats['summary']) ?? asRecord(stats['proofSummary']);
+  const pipeline = extractInferencePipelineMeta(stats);
   const hasProofSummary = Boolean(summary?.['engine']) || asFiniteNumber(summary?.['intentCount']) !== null;
   const projectedCandidateCount = asFiniteNumber(summary?.projectedCandidateCount) ?? 0;
   const serviceTargetProjectionCount = asFiniteNumber(summary?.serviceTargetProjectionCount) ?? 0;
   const hasProjectionInvariantViolation = serviceTargetProjectionCount > 0;
 
   return {
+    pipeline: pipeline.name,
+    pipelineVersion: pipeline.version,
     projectedCandidateCount,
     atomicProjectedCandidateCount: Math.max(projectedCandidateCount - serviceTargetProjectionCount, 0),
     gatewayRouteSeedCount: asFiniteNumber(summary?.gatewayRouteSeedCount) ?? 0,
@@ -426,6 +432,9 @@ export function InferenceRunList() {
                       엔진: {run.requestedCodeEngine}
                     </span>
                   )}
+                  <Badge variant="outline" className="text-xs">
+                    파이프라인: {summary.pipeline} · {summary.pipelineVersion}
+                  </Badge>
                 </div>
                 <div className="flex items-center gap-3 shrink-0">
                   <div className="text-right text-xs text-muted-foreground">
@@ -460,6 +469,9 @@ export function InferenceRunList() {
                     <span>rejected {summary.proofRejectedCount}개</span>
                   </>
                 )}
+                <Badge variant="outline" className="text-xs">
+                  pipeline {summary.pipeline} ({summary.pipelineVersion})
+                </Badge>
                 {frontierAgent.requestedEnabled && (
                   <>
                     <span>agent 시도 {frontierAgent.attemptedFrontierCount}개</span>
@@ -539,8 +551,10 @@ export function InferenceRunList() {
                   <>
                     <div className="space-y-2">
                       <h4 className="text-xs font-semibold text-muted-foreground">Proof/Frontier 요약</h4>
-                      <div className="grid gap-2 md:grid-cols-2">
-                        <div className="rounded-lg bg-muted/20 px-3 py-2 text-xs space-y-1">
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="rounded-lg bg-muted/20 px-3 py-2 text-xs space-y-1">
+                          <div>pipeline {summary.pipeline}</div>
+                          <div>pipeline version {summary.pipelineVersion}</div>
                           <div>intent {summary.intentCount}개</div>
                           <div>closed {summary.proofClosedAtomicCount}개</div>
                           <div>frontier {summary.proofFrontierCount}개</div>

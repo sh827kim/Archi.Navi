@@ -12,6 +12,13 @@ import {
   type SmartProofConfig,
 } from '@archi-navi/inference';
 import { createGenerateSmartResolutionFn, getInferenceModel } from '@/lib/inference-llm';
+import {
+  buildInferencePipelineMeta,
+  decoratePipelineSummary,
+  extractEffectiveInferencePipelineMeta,
+  extractRequestedInferencePipelineMeta,
+  isInferencePipelineValidationError,
+} from '@/lib/inference-pipeline';
 
 interface SmartRunRequest {
   workspaceId?: string;
@@ -19,10 +26,18 @@ interface SmartRunRequest {
   useServiceMetadataPaths?: boolean;
   async?: boolean;
   analysisMode?: string;
+  pipeline?: string;
+  pipelineVersion?: string;
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number;
   forceRescan?: boolean;
   smartProof?: boolean | SmartProofConfig;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : null;
 }
 
 function dedupeNestedRepoRoots(repoRoots: string[]) {
@@ -39,12 +54,6 @@ function dedupeNestedRepoRoots(repoRoots: string[]) {
   }
 
   return deduped;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === 'object' && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : null;
 }
 
 async function collectSmartRepoRoots(
@@ -94,9 +103,15 @@ function extractProofSummary(detail: Awaited<ReturnType<typeof getInferenceRunDe
   const stats = asRecord(detail.run.stats);
   const proofSummary = asRecord(stats?.['proofSummary']);
   if (proofSummary) {
-    return withRequestedSmartMode(proofSummary, stats?.['requestedSmartProof'] as boolean | SmartProofConfig | undefined);
+    return withRequestedSmartMode(
+      proofSummary,
+      stats?.['requestedSmartProof'] as boolean | SmartProofConfig | undefined,
+    );
   }
-  return withRequestedSmartMode(buildEmptyProofEngineSummary() as Record<string, unknown>, stats?.['requestedSmartProof'] as boolean | SmartProofConfig | undefined);
+  return withRequestedSmartMode(
+    buildEmptyProofEngineSummary() as unknown as Record<string, unknown>,
+    stats?.['requestedSmartProof'] as boolean | SmartProofConfig | undefined,
+  );
 }
 
 function withRequestedSmartMode(
@@ -140,13 +155,26 @@ export async function GET(req: Request) {
 
     const db = await getDb();
     const detail = await getInferenceRunDetail(db, { workspaceId, runId });
-    const proofSummary = extractProofSummary(detail);
+    const requestedPipeline = extractRequestedInferencePipelineMeta(detail.run.stats);
+    const effectivePipeline = extractEffectiveInferencePipelineMeta(detail.run.stats);
+    const proofSummary = decoratePipelineSummary(
+      extractProofSummary(detail),
+      effectivePipeline,
+      requestedPipeline,
+    );
 
     return NextResponse.json({
       success: true,
       engine: 'intent_proof',
+      pipeline: proofSummary.pipeline,
+      pipelineVersion: proofSummary.pipelineVersion,
+      requestedPipeline: proofSummary.requestedPipeline,
+      effectivePipeline: proofSummary.effectivePipeline,
       summary: proofSummary,
-      run: detail.run,
+      run: {
+        ...detail.run,
+        stats: detail.run.stats,
+      },
       sources: detail.sources,
       events: detail.events,
       data: {
@@ -198,6 +226,7 @@ export async function POST(req: Request) {
         { status: 400 },
       );
     }
+    const pipeline = buildInferencePipelineMeta(body.pipeline);
 
     const { db, validRoots } = await collectSmartRepoRoots(workspaceId, body);
     if (validRoots.length === 0) {
@@ -228,7 +257,7 @@ export async function POST(req: Request) {
       );
     }
 
-    const run = await createInferenceRun(db, {
+    const runInput = {
       workspaceId,
       triggerType: 'INTENT_PROOF_ENGINE',
       modes: ['config', 'code'],
@@ -241,7 +270,13 @@ export async function POST(req: Request) {
         ? { maxAgentFrontiers: body.maxAgentFrontiers }
         : {}),
       sources: validRoots.map((repoRoot) => ({ type: 'local', ref: repoRoot })),
-    });
+      pipeline: pipeline.name,
+      pipelineVersion: pipeline.version,
+    } as Parameters<typeof createInferenceRun>[1] & {
+      pipeline?: string;
+      pipelineVersion?: string;
+    };
+    const run = await createInferenceRun(db, runInput);
     const smartGenerateFn = modelInfo
       ? createGenerateSmartResolutionFn(modelInfo.model, modelInfo.modelName)
       : undefined;
@@ -252,21 +287,35 @@ export async function POST(req: Request) {
           workspaceId,
           runId: run.id,
           ...(smartGenerateFn ? { smartGenerateFn } : {}),
-        }).catch((error) => {
-          console.error('[POST /api/inference/smart] async execute failed', error);
-        });
+        })
+          .catch((error) => {
+            console.error('[POST /api/inference/smart] async execute failed', error);
+          });
       });
 
       const detail = await getInferenceRunDetail(db, { workspaceId, runId: run.id });
-      const proofSummary = withRequestedSmartMode(extractProofSummary(detail) as Record<string, unknown>, body.smartProof);
+      const requestedPipeline = extractRequestedInferencePipelineMeta(detail.run.stats, pipeline);
+      const effectivePipeline = extractEffectiveInferencePipelineMeta(detail.run.stats, pipeline);
+      const proofSummary = decoratePipelineSummary(
+        withRequestedSmartMode(extractProofSummary(detail) as Record<string, unknown>, body.smartProof),
+        effectivePipeline,
+        requestedPipeline,
+      );
       return NextResponse.json(
         {
           success: true,
           engine: 'intent_proof',
+          pipeline: effectivePipeline.name,
+          pipelineVersion: effectivePipeline.version,
+          requestedPipeline,
+          effectivePipeline,
           queued: true,
           runId: run.id,
           summary: proofSummary,
-          run: detail.run,
+          run: {
+            ...detail.run,
+            stats: detail.run.stats,
+          },
           sources: detail.sources,
         },
         { status: 202 },
@@ -278,14 +327,27 @@ export async function POST(req: Request) {
       runId: run.id,
       ...(smartGenerateFn ? { smartGenerateFn } : {}),
     });
-    const proofSummary = withRequestedSmartMode(extractProofSummary(detail) as Record<string, unknown>, body.smartProof);
+    const requestedPipeline = extractRequestedInferencePipelineMeta(detail.run.stats, pipeline);
+    const effectivePipeline = extractEffectiveInferencePipelineMeta(detail.run.stats, pipeline);
+    const proofSummary = decoratePipelineSummary(
+      withRequestedSmartMode(extractProofSummary(detail) as Record<string, unknown>, body.smartProof),
+      effectivePipeline,
+      requestedPipeline,
+    );
 
     return NextResponse.json({
       success: true,
       engine: 'intent_proof',
+      pipeline: effectivePipeline.name,
+      pipelineVersion: effectivePipeline.version,
+      requestedPipeline,
+      effectivePipeline,
       summary: proofSummary,
       runId: run.id,
-      run: detail.run,
+      run: {
+        ...detail.run,
+        stats: detail.run.stats,
+      },
       sources: detail.sources,
       events: detail.events,
       data: {
@@ -294,6 +356,18 @@ export async function POST(req: Request) {
       },
     });
   } catch (error) {
+    if (isInferencePipelineValidationError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: 'BAD_REQUEST',
+            message: error.message,
+          },
+        },
+        { status: 400 },
+      );
+    }
     console.error('[POST /api/inference/smart]', error);
     return NextResponse.json(
       {

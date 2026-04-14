@@ -17,11 +17,17 @@ import {
   getInferenceRunDetail,
   type InferenceRunListItem,
 } from '@archi-navi/inference';
+import {
+  extractInferencePipelineMeta,
+  type InferencePipelineName,
+} from '@/lib/inference-pipeline';
 
 export interface DashboardInferenceRunItem {
   id: string;
   status: string;
   triggerType: string;
+  pipeline: InferencePipelineName;
+  pipelineVersion: string;
   requestedModes: string[];
   requestedCodeEngine: string | null;
   requestedIncremental: boolean;
@@ -38,10 +44,13 @@ export interface DashboardInferenceRunItem {
 }
 
 function serializeRunItem(item: InferenceRunListItem): DashboardInferenceRunItem {
+  const pipeline = extractInferencePipelineMeta(item.stats);
   return {
     id: item.id,
     status: item.status,
     triggerType: item.triggerType,
+    pipeline: pipeline.name,
+    pipelineVersion: pipeline.version,
     requestedModes: Array.isArray(item.requestedModes) ? (item.requestedModes as string[]) : [],
     requestedCodeEngine: item.requestedCodeEngine,
     requestedIncremental: item.requestedIncremental,

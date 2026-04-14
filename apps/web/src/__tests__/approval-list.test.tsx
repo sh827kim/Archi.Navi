@@ -644,6 +644,8 @@ describe('ApprovalList', () => {
           repoRoots: ['/tmp', '/tmp/orders-service'],
           useServiceMetadataPaths: true,
           async: true,
+          pipeline: 'reinforced',
+          pipelineVersion: 'reinforced-v1',
         }),
       }),
     );
@@ -669,12 +671,16 @@ describe('ApprovalList', () => {
           success: true,
           queued: true,
           runId: 'smart-run-1',
+          pipeline: 'reinforced',
+          pipelineVersion: 'reinforced-v1',
           run: {
             id: 'smart-run-1',
             status: 'QUEUED',
           },
           summary: {
             engine: 'intent_proof',
+            pipeline: 'reinforced',
+            pipelineVersion: 'reinforced-v1',
             intentCount: 0,
             gatewayRouteSeedCount: 0,
             derivedEndpointProofCount: 0,
@@ -695,6 +701,8 @@ describe('ApprovalList', () => {
       if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-1')) {
         return Promise.resolve(jsonResponse({
           success: true,
+          pipeline: 'reinforced',
+          pipelineVersion: 'reinforced-v1',
           run: {
             id: 'smart-run-1',
             status: 'SUCCEEDED',
@@ -702,6 +710,8 @@ describe('ApprovalList', () => {
             stats: {
               proofSummary: {
                 engine: 'intent_proof',
+                pipeline: 'reinforced',
+                pipelineVersion: 'reinforced-v1',
                 intentCount: 6,
                 gatewayRouteSeedCount: 2,
                 derivedEndpointProofCount: 4,
@@ -742,6 +752,8 @@ describe('ApprovalList', () => {
     });
     const viewer = await screen.findByTestId('smart-trace-viewer');
     expect(viewer.textContent).toContain('Intent Proof Summary');
+    expect(viewer.textContent).toContain('pipeline reinforced');
+    expect(viewer.textContent).toContain('reinforced-v1');
     expect(viewer.textContent).toContain('intent 6개');
     expect(viewer.textContent).toContain('route-family seed 2개');
     expect(viewer.textContent).toContain('derived endpoint proof 4개');
@@ -770,6 +782,8 @@ describe('ApprovalList', () => {
           success: true,
           queued: true,
           runId: 'smart-run-2',
+          pipeline: 'reinforced',
+          pipelineVersion: 'reinforced-v1',
           run: {
             id: 'smart-run-2',
             status: 'QUEUED',
@@ -780,6 +794,8 @@ describe('ApprovalList', () => {
       if (url.includes('/api/inference/smart?workspaceId=ws-1&runId=smart-run-2')) {
         return Promise.resolve(jsonResponse({
           success: true,
+          pipeline: 'reinforced',
+          pipelineVersion: 'reinforced-v1',
           run: {
             id: 'smart-run-2',
             status: 'SUCCEEDED',
@@ -787,6 +803,8 @@ describe('ApprovalList', () => {
             stats: {
               proofSummary: {
                 engine: 'intent_proof',
+                pipeline: 'reinforced',
+                pipelineVersion: 'reinforced-v1',
                 intentCount: 1,
                 gatewayRouteSeedCount: 1,
                 derivedEndpointProofCount: 0,
@@ -822,6 +840,7 @@ describe('ApprovalList', () => {
       );
     });
     const viewer = await screen.findByTestId('smart-trace-viewer');
+    expect(viewer.textContent).toContain('pipeline reinforced');
     expect(viewer.textContent).toContain('이번 실행에서 추가 breakdown 정보가 없습니다.');
   });
 
@@ -897,6 +916,13 @@ describe('ApprovalList', () => {
       const optionLabels = Array.from(selector.options).map((option) => option.textContent);
       expect(optionValues).toEqual(['standard', 'smart']);
       expect(optionLabels).toEqual(['정적 분석', 'Smart Proof Engine']);
+    }
+    const pipelineSelectors = screen.getAllByLabelText('파이프라인') as HTMLSelectElement[];
+    for (const selector of pipelineSelectors) {
+      const optionValues = Array.from(selector.options).map((option) => option.value);
+      const optionLabels = Array.from(selector.options).map((option) => option.textContent);
+      expect(optionValues).toEqual(['reinforced', 'redesign']);
+      expect(optionLabels).toEqual(['보강형', '재설계']);
     }
   });
 

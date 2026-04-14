@@ -21,6 +21,7 @@ import {
   type CrossValidationContradiction,
 } from '@/lib/cross-validation';
 import { getClientAiRequestHeaders } from '@/lib/client-ai-settings';
+import { buildInferencePipelineMeta, extractInferencePipelineMeta } from '@/lib/inference-pipeline';
 
 /** 후보 관계 타입 (API 응답) */
 interface RelationCandidate {
@@ -273,6 +274,8 @@ function formatYesNo(value: boolean | null): string {
 
 interface SmartInferenceSummary {
   engine: 'intent_proof';
+  pipeline: 'reinforced' | 'redesign';
+  pipelineVersion: string;
   intentCount: number;
   gatewayRouteSeedCount: number;
   derivedEndpointProofCount: number;
@@ -300,6 +303,7 @@ function getSmartInferenceSummary(payload: unknown): SmartInferenceSummary {
   const proofSummary = asRecord(runStats?.proofSummary)
     ?? directSummary
     ?? nestedSummary;
+  const pipeline = extractInferencePipelineMeta(record ?? runStats ?? proofSummary);
   const frontierBreakdownRecord = asRecord(proofSummary?.frontierBreakdown);
   const targetBreakdownRecord = asRecord(proofSummary?.targetBreakdown);
 
@@ -323,6 +327,8 @@ function getSmartInferenceSummary(payload: unknown): SmartInferenceSummary {
 
   return {
     engine: 'intent_proof',
+    pipeline: pipeline.name,
+    pipelineVersion: pipeline.version,
     intentCount: asFiniteNumber(proofSummary?.intentCount) ?? (proofClosedAtomicCount + proofFrontierCount + proofRejectedCount),
     gatewayRouteSeedCount: asFiniteNumber(proofSummary?.gatewayRouteSeedCount) ?? 0,
     derivedEndpointProofCount: asFiniteNumber(proofSummary?.derivedEndpointProofCount) ?? 0,
@@ -423,6 +429,9 @@ function SmartTraceViewer({ summary }: { summary: SmartInferenceSummary }) {
       className="mb-3 rounded-xl border border-sky-500/30 bg-sky-500/5 p-4"
     >
       <div className="text-sm font-medium text-foreground">Intent Proof Summary</div>
+      <div className="mt-1 text-xs text-muted-foreground">
+        pipeline {summary.pipeline} · {summary.pipelineVersion}
+      </div>
       <div className="mt-1 text-xs text-muted-foreground">
         intent {summary.intentCount}개 · route-family seed {summary.gatewayRouteSeedCount}개 · derived endpoint proof {summary.derivedEndpointProofCount}개 · closed {summary.proofClosedAtomicCount}개 · frontier {summary.proofFrontierCount}개 · rejected {summary.proofRejectedCount}개 · projected {summary.projectedCandidateCount}개 · atomic {summary.atomicCandidateCount}개
       </div>
@@ -795,6 +804,7 @@ export function ApprovalList() {
 
   // S1-1: 추론 실행 관련 상태
   const [inferenceMode, setInferenceMode] = useState<'standard' | 'smart'>('standard');
+  const [pipeline, setPipeline] = useState<'reinforced' | 'redesign'>('reinforced');
   const [includeDbInference, setIncludeDbInference] = useState(true);
   const [runningLlmFilter, setRunningLlmFilter] = useState(false);
   const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
@@ -904,6 +914,7 @@ export function ApprovalList() {
       if (!workspaceId) throw new Error('workspaceId is required');
       const aiHeaders = getClientAiRequestHeaders();
       const repoRoots = await resolveInferenceRepoRoots(workspaceId);
+      const pipelineMeta = buildInferencePipelineMeta(pipeline);
 
       // S1-1a: Smart Pipeline 모드
       if (inferenceMode === 'smart') {
@@ -915,6 +926,8 @@ export function ApprovalList() {
             repoRoots,
             useServiceMetadataPaths: true,
             async: true,
+            pipeline: pipelineMeta.name,
+            pipelineVersion: pipelineMeta.version,
           }),
         });
         const payload = (await res.json()) as unknown;
@@ -947,6 +960,8 @@ export function ApprovalList() {
         useServiceMetadataPaths: true,
         repoRoots,
         codeEngine: resolveCodeEngine(),
+        pipeline: pipelineMeta.name,
+        pipelineVersion: pipelineMeta.version,
       };
 
       const res = await fetch('/api/inference/run', {
@@ -1286,6 +1301,15 @@ export function ApprovalList() {
             <option value="standard">정적 분석</option>
             <option value="smart">Smart Proof Engine</option>
           </select>
+          <select
+            aria-label="파이프라인"
+            value={pipeline}
+            onChange={(e) => setPipeline(e.target.value as typeof pipeline)}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+          >
+            <option value="reinforced">보강형</option>
+            <option value="redesign">재설계</option>
+          </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <input
               type="checkbox"
@@ -1381,6 +1405,15 @@ export function ApprovalList() {
           >
             <option value="standard">정적 분석</option>
             <option value="smart">Smart Proof Engine</option>
+          </select>
+          <select
+            aria-label="파이프라인"
+            value={pipeline}
+            onChange={(e) => setPipeline(e.target.value as typeof pipeline)}
+            className="rounded-md border border-input bg-background px-3 py-2 text-sm text-foreground"
+          >
+            <option value="reinforced">보강형</option>
+            <option value="redesign">재설계</option>
           </select>
           <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
             <input

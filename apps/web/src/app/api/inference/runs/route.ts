@@ -11,11 +11,18 @@ import {
   type InferenceSourceType,
   type SmartProofConfig,
 } from '@archi-navi/inference';
+import {
+  buildInferencePipelineMeta,
+  decoratePipelineSummary,
+  isInferencePipelineValidationError,
+} from '@/lib/inference-pipeline';
 
 interface InferenceRunRequestBody {
   workspaceId?: string;
   modes?: string[];
   transports?: string[];
+  pipeline?: string;
+  pipelineVersion?: string;
   codeEngine?: string;
   incremental?: boolean;
   forceRescan?: boolean;
@@ -148,6 +155,7 @@ export async function POST(req: NextRequest) {
 
     const modes = normalizeRunModes(body);
     const sources = await collectSources(workspaceId, body);
+    const pipeline = buildInferencePipelineMeta(body.pipeline, body.compatDeterministicCandidates);
 
     const requiresRunnableSource = modes.includes('config') || modes.includes('code');
     const hasRunnableSource = sources.some(
@@ -164,7 +172,7 @@ export async function POST(req: NextRequest) {
     }
 
     const db = await getDb();
-    const run = await createInferenceRun(db, {
+    const runInput = {
       workspaceId,
       modes,
       ...(body.codeEngine != null ? { codeEngine: body.codeEngine } : {}),
@@ -180,22 +188,32 @@ export async function POST(req: NextRequest) {
         ? { maxAgentFrontiers: body.maxAgentFrontiers }
         : {}),
       sources,
-    });
+      pipeline: pipeline.name,
+      pipelineVersion: pipeline.version,
+    } as Parameters<typeof createInferenceRun>[1] & {
+      pipeline?: string;
+      pipelineVersion?: string;
+    };
+    const run = await createInferenceRun(db, runInput);
 
     queueMicrotask(() => {
-      void executeInferenceRun(db, { workspaceId, runId: run.id }).catch((error) => {
-        console.error('[POST /api/inference/runs] executeInferenceRun failed', error);
-      });
+      void executeInferenceRun(db, { workspaceId, runId: run.id })
+        .catch((error) => {
+          console.error('[POST /api/inference/runs] executeInferenceRun failed', error);
+        });
     });
 
     const requestedSmartProof = normalizeSmartProofConfig(body.smartProof);
-    const proofSummary = {
-      ...buildEmptyProofEngineSummary(),
-      smartMode: {
-        ...buildEmptyProofEngineSummary().smartMode,
-        enabled: requestedSmartProof.enabled,
+    const proofSummary = decoratePipelineSummary(
+      {
+        ...buildEmptyProofEngineSummary(),
+        smartMode: {
+          ...buildEmptyProofEngineSummary().smartMode,
+          enabled: requestedSmartProof.enabled,
+        },
       },
-    };
+      pipeline,
+    );
     const requestedAgentPatches = {
       enabled: body.enableAgentPatches === true,
       maxFrontiers: typeof body.maxAgentFrontiers === 'number' ? body.maxAgentFrontiers : null,
@@ -212,6 +230,16 @@ export async function POST(req: NextRequest) {
       {
         ok: true,
         engine: proofSummary.engine,
+        pipeline: pipeline.name,
+        pipelineVersion: pipeline.version,
+        requestedPipeline: {
+          name: pipeline.name,
+          version: pipeline.version,
+        },
+        effectivePipeline: {
+          name: pipeline.name,
+          version: pipeline.version,
+        },
         runId: run.id,
         status: run.status,
         requestedModes: run.requestedModes,
@@ -225,11 +253,22 @@ export async function POST(req: NextRequest) {
           frontierAgent,
           requestedAgentPatches,
           requestedSmartProof,
+          requestedPipeline: {
+            name: pipeline.name,
+            version: pipeline.version,
+          },
+          effectivePipeline: {
+            name: pipeline.name,
+            version: pipeline.version,
+          },
         },
       },
       { status: 202 },
     );
   } catch (error) {
+    if (isInferencePipelineValidationError(error)) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error('[POST /api/inference/runs]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }

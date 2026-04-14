@@ -11,12 +11,21 @@ import {
   type SmartProofConfig,
 } from '@archi-navi/inference';
 import { createGenerateSmartResolutionFn, getInferenceModel } from '@/lib/inference-llm';
+import {
+  buildInferencePipelineMeta,
+  decoratePipelineSummary,
+  extractEffectiveInferencePipelineMeta,
+  extractRequestedInferencePipelineMeta,
+  isInferencePipelineValidationError,
+} from '@/lib/inference-pipeline';
 
 interface RunInferenceRequest {
   workspaceId?: string;
   modes?: string[];
   transports?: string[];
   repoRoots?: string[];
+  pipeline?: string;
+  pipelineVersion?: string;
   sources?: Array<{ type?: string; path?: string; ref?: string; metadata?: Record<string, unknown> }>;
   useServiceMetadataPaths?: boolean;
   incremental?: boolean;
@@ -217,9 +226,10 @@ export async function POST(req: NextRequest) {
         { status: 400 },
       );
     }
+    const pipeline = buildInferencePipelineMeta(body.pipeline, body.compatDeterministicCandidates);
 
     const db = await getDb();
-    const run = await createInferenceRun(db, {
+    const runInput = {
       workspaceId,
       modes,
       ...(body.codeEngine != null ? { codeEngine: body.codeEngine } : {}),
@@ -236,7 +246,13 @@ export async function POST(req: NextRequest) {
         ? { maxAgentFrontiers: body.maxAgentFrontiers }
         : {}),
       sources,
-    });
+      pipeline: pipeline.name,
+      pipelineVersion: pipeline.version,
+    } as Parameters<typeof createInferenceRun>[1] & {
+      pipeline?: string;
+      pipelineVersion?: string;
+    };
+    const run = await createInferenceRun(db, runInput);
     const smartGenerateFn = modelInfo
       ? createGenerateSmartResolutionFn(modelInfo.model, modelInfo.modelName)
       : undefined;
@@ -246,8 +262,14 @@ export async function POST(req: NextRequest) {
       ...(smartGenerateFn ? { smartGenerateFn } : {}),
     });
     const runStats = (detail.run.stats ?? {}) as Record<string, unknown>;
+    const requestedPipeline = extractRequestedInferencePipelineMeta(runStats, pipeline);
+    const effectivePipeline = extractEffectiveInferencePipelineMeta(runStats, pipeline);
     const rawProofSummary = (runStats['proofSummary'] ?? buildEmptyProofEngineSummary()) as unknown as Record<string, unknown>;
-    const proofSummary = withRequestedSmartMode(rawProofSummary, body.smartProof);
+    const proofSummary = decoratePipelineSummary(
+      withRequestedSmartMode(rawProofSummary, body.smartProof),
+      effectivePipeline,
+      requestedPipeline,
+    );
     const frontierAgent = (runStats['frontierAgent'] ?? null) as Record<string, unknown> | null;
     const requestedAgentPatches = (runStats['requestedAgentPatches'] ?? {
       enabled: body.enableAgentPatches === true,
@@ -257,9 +279,16 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json({
       ok: detail.run.status !== 'FAILED',
-      engine: proofSummary['engine'] ?? 'intent_proof',
+      engine: (proofSummary as Record<string, unknown>)['engine'] ?? 'intent_proof',
+      pipeline: pipeline.name,
+      pipelineVersion: pipeline.version,
+      requestedPipeline,
+      effectivePipeline,
       runId: detail.run.id,
-      run: detail.run,
+      run: {
+        ...detail.run,
+        stats: runStats,
+      },
       sources: detail.sources,
       events: detail.events,
       summary: proofSummary,
@@ -273,12 +302,17 @@ export async function POST(req: NextRequest) {
         frontierAgent,
         requestedAgentPatches,
         requestedSmartProof: normalizeSmartProofConfig(body.smartProof),
+        requestedPipeline,
+        effectivePipeline,
       },
       warnings: detail.run.warnings,
       errors: detail.run.errors,
       llmBoost,
     });
   } catch (error) {
+    if (isInferencePipelineValidationError(error)) {
+      return NextResponse.json({ error: error.message }, { status: 400 });
+    }
     console.error('[POST /api/inference/run]', error);
     return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
   }
