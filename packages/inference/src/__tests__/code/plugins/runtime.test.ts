@@ -56,6 +56,60 @@ describe('plugin runtime', () => {
     expect(result.signals[0]?.symbol).toBe('http://payment/pay');
   });
 
+  it('hybrid 경로에서 AST spring 조합 expose가 있으면 regex flat spring expose를 제거해야 한다', async () => {
+    const plugin: FrameworkPlugin = {
+      id: 'hybrid-spring-suppress',
+      displayName: 'Hybrid Spring Suppress',
+      version: '1.0.0',
+      languages: ['java'],
+      regexScanner: () => ({
+        language: 'java',
+        sha256: 'sha',
+        signals: [
+          {
+            kind: 'expose',
+            symbol: '/api/orders',
+            lineStart: 1,
+            lineEnd: 1,
+            excerpt: '@RequestMapping("/api/orders")',
+            confidence: 0.8,
+            metadata: {
+              method: 'ANY',
+              annotation: '@RequestMapping',
+              framework: 'spring',
+              mappingSource: 'regex_annotation_flat',
+            },
+          },
+        ],
+      }),
+      astExtractor: () => ({
+        language: 'java',
+        sha256: 'sha',
+        signals: [
+          {
+            kind: 'expose',
+            symbol: '/api/orders/{id}',
+            lineStart: 2,
+            lineEnd: 2,
+            excerpt: '@GetMapping("/{id}")',
+            confidence: 0.95,
+            metadata: {
+              method: 'GET',
+              path: '/api/orders/{id}',
+              framework: 'spring',
+              mappingSource: 'controller_composed',
+            },
+          },
+        ],
+      }),
+    };
+
+    const result = await scanFileWithHybridPlugins('/tmp/Test.java', 'class Test {}', '/tmp', [plugin]);
+    expect(result.signals).toHaveLength(1);
+    expect(result.signals[0]?.symbol).toBe('/api/orders/{id}');
+    expect(result.signals[0]?.metadata['mappingSource']).toBe('controller_composed');
+  });
+
   it('config parser hook은 파일 matcher에 맞는 parser만 실행해야 한다', () => {
     const plugin: FrameworkPlugin = {
       id: 'config-test',
