@@ -163,6 +163,43 @@ public class PaymentClient {
     });
   });
 
+  it('webClient.uri(baseUrl, uriBuilder -> ...) 패턴도 symbol table call evidence로 보존해야 한다', async () => {
+    const repoRoot = createTempRepoRoot();
+    tempDirs.push(repoRoot);
+
+    const srcDir = join(repoRoot, 'src');
+    mkdirSync(srcDir, { recursive: true });
+    writeFileSync(
+      join(srcDir, 'OrderClient.java'),
+      `package com.example.order;
+public class OrderClient {
+  public String call(String orderId) {
+    return webClient.get()
+      .uri("\${orders.base-url}", uriBuilder -> uriBuilder.path("/v1/orders/{id}").build(orderId))
+      .retrieve()
+      .bodyToMono(String.class)
+      .block();
+  }
+}`,
+    );
+
+    const table = await buildProjectSymbolTable({ repoRoot });
+    const calls = table.methodCallsByType.get('com.example.order.OrderClient')?.get('call') ?? [];
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]?.symbol).toBe('/v1/orders/{id}');
+    expect(calls[0]?.metadata).toMatchObject({
+      client: 'WebClient',
+      method: 'GET',
+      configKeys: ['orders.base-url'],
+      pathHint: '/v1/orders/{id}',
+      dynamicPath: true,
+      dynamicHost: true,
+      unsupportedPattern: true,
+    });
+    expect(calls[0]?.metadata['resolvedUrl']).toBeUndefined();
+  });
+
   it('Kotlin constructor 타입 주석의 콜론은 inheritance로 해석하지 않아야 한다', async () => {
     const repoRoot = createTempRepoRoot();
     tempDirs.push(repoRoot);

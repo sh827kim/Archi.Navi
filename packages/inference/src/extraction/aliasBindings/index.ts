@@ -3,6 +3,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { aliasBindings, codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { detectPlugins, parseConfigWithPluginParsers } from '@/code';
 import { parseApplicationYml } from '@/relation/parsers/applicationYml';
 import { findFiles } from '@/utils/fileDiscovery';
 import {
@@ -102,12 +103,12 @@ function buildConfigAliasCandidates(aliasKey: string, aliasValue: string, resolv
   ]);
 }
 
-function findApplicationYmls(repoRoot: string): string[] {
+function findApplicationConfigFiles(repoRoot: string): string[] {
   return findFiles(repoRoot, (filePath) => {
     const base = filePath.split('/').pop() ?? '';
     return (
       (base.startsWith('application') || base.startsWith('bootstrap'))
-      && (base.endsWith('.yml') || base.endsWith('.yaml'))
+      && (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json'))
     );
   });
 }
@@ -436,11 +437,45 @@ export async function extractAliasBindingsFromConfig(
   options: ExtractAliasBindingsOptions,
 ): Promise<ExtractAliasBindingsResult> {
   const serviceMap = await loadServiceMap(db, options.workspaceId);
-  const applicationFiles = findApplicationYmls(options.repoRoot);
+  const applicationFiles = findApplicationConfigFiles(options.repoRoot);
+  const detectedPlugins = detectPlugins(options.repoRoot);
 
   let bindingCount = 0;
   for (const filePath of applicationFiles) {
-    const signal = parseApplicationYml(filePath, readFileSync(filePath, 'utf-8'));
+    const content = readFileSync(filePath, 'utf-8');
+    const pluginParsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
+    for (const entry of pluginParsed.entries) {
+      if (entry.sourceType !== 'json') continue;
+      const { aliasValue, resolvedHost } = resolveConfigAliasValue(entry.value);
+      if (aliasValue.length === 0) continue;
+      const directResolvedService = resolvedHost
+        ? findServiceByAlias(serviceMap, resolvedHost)
+        : findServiceByAlias(serviceMap, aliasValue);
+      const keyResolvedService = buildConfigAliasCandidates(entry.key, aliasValue, resolvedHost)
+        .map((candidate) => findServiceByAlias(serviceMap, candidate))
+        .find((service): service is ServiceRef => service !== null);
+      const resolvedService = directResolvedService ?? keyResolvedService ?? null;
+      if (!resolvedService && !resolvedHost) continue;
+
+      await upsertAliasBinding(db, {
+        workspaceId: options.workspaceId,
+        runId: options.runId,
+        bindingKind: inferConfigBindingKind(entry.key, aliasValue, resolvedHost),
+        ownerServiceId: null,
+        aliasKey: entry.key,
+        aliasValue,
+        resolvedServiceId: resolvedService?.id ?? null,
+        resolvedHost,
+        evidenceIds: [],
+        confidence: 0.85,
+      });
+      bindingCount += 1;
+    }
+
+    const isYaml = filePath.endsWith('.yml') || filePath.endsWith('.yaml');
+    if (!isYaml) continue;
+
+    const signal = parseApplicationYml(filePath, content);
     const ownerService = signal.serviceName ? findServiceByAlias(serviceMap, signal.serviceName) : null;
 
     for (const entry of signal.propertyEntries) {

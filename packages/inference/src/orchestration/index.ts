@@ -12,6 +12,10 @@ export {
   runCommonBootstrapForRepo,
   runCommonBootstrapForRepoRoots,
 } from './commonBootstrap';
+export {
+  calibrateMultiModuleServiceBoundaries,
+  scoreModuleExecutability,
+} from './moduleBoundaryCalibrator';
 
 export {
   buildEmptyProofEngineSummary,
@@ -22,6 +26,7 @@ export type {
   CommonBootstrapRepoResult,
   CommonBootstrapSummary,
 } from './commonBootstrap';
+export type { ModuleBoundaryScore } from './moduleBoundaryCalibrator';
 
 export {
   resolveInteractionIntentProof,

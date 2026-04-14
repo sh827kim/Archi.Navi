@@ -2,12 +2,16 @@ export { BUILT_IN_FRAMEWORK_PLUGINS, builtInPlugins, getBuiltInPlugins } from '.
 export { PluginRegistry, pluginRegistry, detectPlugins } from './pluginRegistry';
 export {
   detectLanguageFromFilePath,
+  parseConfigWithPluginParsers,
   scanFileWithAstPlugins,
   scanFileWithRegexPlugins,
   scanFileWithHybridPlugins,
 } from './runtime';
 export type {
+  ConfigEntry,
   DetectPluginsOptions,
+  FrameworkConfigParser,
+  FrameworkConfigParserResult,
   FrameworkPluginDetector,
   FrameworkPluginLanguage,
   FrameworkAstScanContext,

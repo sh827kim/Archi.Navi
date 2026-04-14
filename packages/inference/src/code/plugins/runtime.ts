@@ -2,7 +2,13 @@ import { extname } from 'path';
 import type { ExtractedSignal, FileScanResult } from '../codeSignalExtractor';
 import { mergeHybridSignals } from '../hybridSignalMerge';
 import { detectPlugins, pluginRegistry } from './pluginRegistry';
-import type { FrameworkAstScanContext, FrameworkLanguage, FrameworkPlugin } from './types';
+import type {
+  ConfigEntry,
+  FrameworkAstScanContext,
+  FrameworkConfigParserResult,
+  FrameworkLanguage,
+  FrameworkPlugin,
+} from './types';
 
 function signalKey(signal: ExtractedSignal): string {
   return [
@@ -58,6 +64,54 @@ function selectPluginsForFile(filePath: string, detected: FrameworkPlugin[]): Fr
 
   const fallback = pluginRegistry.getFallbackForLanguage(language);
   return fallback ? [fallback] : [];
+}
+
+function configEntryKey(entry: ConfigEntry): string {
+  return `${entry.filePath}::${entry.key}::${entry.value}::${entry.sourceType}`;
+}
+
+export function parseConfigWithPluginParsers(
+  filePath: string,
+  content: string,
+  detectedPlugins: FrameworkPlugin[],
+): FrameworkConfigParserResult {
+  const entries = new Map<string, ConfigEntry>();
+  const derivedSignals: ExtractedSignal[] = [];
+  const metadataByParser: Record<string, unknown> = {};
+
+  for (const plugin of detectedPlugins) {
+    for (const parser of plugin.configParsers ?? []) {
+      const isMatch = parser.fileMatchers.some((matcher) => {
+        try {
+          return matcher(filePath);
+        } catch {
+          return false;
+        }
+      });
+      if (!isMatch) continue;
+
+      let parsed: FrameworkConfigParserResult;
+      try {
+        parsed = parser.parse(filePath, content);
+      } catch {
+        continue;
+      }
+
+      for (const entry of parsed.entries ?? []) {
+        entries.set(configEntryKey(entry), entry);
+      }
+      derivedSignals.push(...(parsed.derivedSignals ?? []));
+      if (parsed.metadata) {
+        metadataByParser[`${plugin.id}:${parser.id}`] = parsed.metadata;
+      }
+    }
+  }
+
+  return {
+    entries: Array.from(entries.values()),
+    derivedSignals,
+    ...(Object.keys(metadataByParser).length > 0 ? { metadata: metadataByParser } : {}),
+  };
 }
 
 export function scanFileWithRegexPlugins(

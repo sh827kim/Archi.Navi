@@ -2,7 +2,7 @@
 
 `docs/design`은 Archi.Navi의 설계 기준과 확장 설계 방향을 관리하는 문서 모음이다.
 
-최종 정리: 2026-03-31
+최종 정리: 2026-04-14
 
 ## 범위
 - 포함: 시스템 구조, 데이터 모델, 추론/쿼리/롤업/뷰 설계, 운영 원칙
@@ -34,6 +34,7 @@
 | [11-intent-centric-proof-engine-resolution-pipeline.md](./11-intent-centric-proof-engine-resolution-pipeline.md) | fixed resolution pipeline, frontier, agent | Proposed |
 | [12-intent-centric-proof-engine-adoption-plan.md](./12-intent-centric-proof-engine-adoption-plan.md) | 구현 교체, UI/운영, cutover 계획 | Proposed |
 | [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md) | Smart Proof Engine LLM escalation 설계 | Proposed |
+| [14-signal-coverage-design-public-edition.md](./14-signal-coverage-design-public-edition.md) | signal coverage 보완을 위한 공개 구현 가이드 | Proposed |
 
 ## Deprecated 문서
 

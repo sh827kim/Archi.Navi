@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import type { FrameworkPlugin } from '@/code';
-import { scanFileWithAstPlugins, scanFileWithHybridPlugins } from '@/code';
+import type { FrameworkPlugin } from '@/code/plugins/types';
+import { parseConfigWithPluginParsers, scanFileWithAstPlugins, scanFileWithHybridPlugins } from '@/code/plugins/runtime';
 
 describe('plugin runtime', () => {
   it('AST 전용 경로는 plugin 예외를 상위로 전파해야 한다', async () => {
@@ -54,5 +54,42 @@ describe('plugin runtime', () => {
 
     expect(result.signals).toHaveLength(1);
     expect(result.signals[0]?.symbol).toBe('http://payment/pay');
+  });
+
+  it('config parser hook은 파일 matcher에 맞는 parser만 실행해야 한다', () => {
+    const plugin: FrameworkPlugin = {
+      id: 'config-test',
+      displayName: 'Config Test',
+      version: '1.0.0',
+      languages: ['java'],
+      configParsers: [
+        {
+          id: 'json-only',
+          fileMatchers: [(filePath) => filePath.endsWith('.json')],
+          parse: (filePath, _content) => ({
+            entries: [{
+              key: 'client.orders.url',
+              value: 'http://orders',
+              sourceType: 'json',
+              filePath,
+            }],
+          }),
+        },
+      ],
+    };
+
+    const parsed = parseConfigWithPluginParsers(
+      '/tmp/application.json',
+      '{"client":{"orders":{"url":"http://orders"}}}',
+      [plugin],
+    );
+    expect(parsed.entries).toEqual([
+      {
+        key: 'client.orders.url',
+        value: 'http://orders',
+        sourceType: 'json',
+        filePath: '/tmp/application.json',
+      },
+    ]);
   });
 });
