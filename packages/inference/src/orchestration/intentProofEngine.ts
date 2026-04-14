@@ -238,6 +238,11 @@ function asString(value: unknown): string | null {
   return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
 }
 
+function uniqueSortedStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => typeof value === 'string' && value.length > 0))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function asBoolean(value: unknown): boolean {
   return value === true;
 }
