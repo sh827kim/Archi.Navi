@@ -78,6 +78,9 @@
 - [97-multi-module-service-boundary-calibration-spec.md](./97-multi-module-service-boundary-calibration-spec.md)
 - [98-bootstrap-engine-policy-alignment-spec.md](./98-bootstrap-engine-policy-alignment-spec.md)
 
+### Pipeline Branching / Transition (Proposed)
+- [99-dual-inference-pipeline-selector-spec.md](./99-dual-inference-pipeline-selector-spec.md)
+
 ## Deprecated
 - [deprecated/19-llm-inference-boost-spec.md](./deprecated/19-llm-inference-boost-spec.md)
 - [deprecated/29-cross-signal-validation-phase1-spec.md](./deprecated/29-cross-signal-validation-phase1-spec.md)

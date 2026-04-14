@@ -21,6 +21,13 @@ export {
   buildEmptyProofEngineSummary,
   buildProofEngineSummaryForRun,
 } from './proofEngineRun';
+export {
+  buildDefaultEffectivePipelineSettings,
+  normalizeInferencePipeline,
+  readEffectivePipelineSettingsFromRunStats,
+  readRequestedPipelineSettingsFromRunStats,
+  resolveEffectiveInferencePipelineSettings,
+} from './pipelineSelector';
 
 export type {
   CommonBootstrapRepoResult,
@@ -55,6 +62,12 @@ export type {
   InferenceRunListItem,
   InferenceRunDetail,
 } from './inferenceRuns';
+export type {
+  EffectivePipelineSettings,
+  InferencePipelineName,
+  InferencePipelineSource,
+  RequestedPipelineSettings,
+} from './pipelineSelector';
 
 export type { ProofEngineSummary, ProofEngineName } from './proofEngineRun';
 

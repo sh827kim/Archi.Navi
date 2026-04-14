@@ -21,6 +21,8 @@ export interface IntentProofCutoverFrontier {
 
 export interface IntentProofCutoverArtifact {
   label: string;
+  pipeline?: string;
+  pipelineVersion?: string;
   relations: IntentProofCutoverRelation[];
   frontiers?: IntentProofCutoverFrontier[];
   approvalCount?: number;
@@ -88,6 +90,8 @@ export interface IntentProofCutoverReport {
 interface BuildIntentProofCutoverArtifactInput {
   workspaceId: string;
   label: string;
+  pipeline?: string;
+  pipelineVersion?: string;
   failedChecks?: string[];
 }
 
@@ -261,6 +265,8 @@ export async function buildIntentProofCutoverArtifact(
 
   return {
     label: input.label,
+    ...(input.pipeline ? { pipeline: input.pipeline } : {}),
+    ...(input.pipelineVersion ? { pipelineVersion: input.pipelineVersion } : {}),
     relations,
     ...(frontiers.length > 0 ? { frontiers } : {}),
     approvalCount: relations.length + frontiers.length,

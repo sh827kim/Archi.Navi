@@ -11,6 +11,11 @@ import {
 } from '@archi-navi/db';
 import { smartProofLlmCalls } from '@archi-navi/db/schema';
 import { buildEmptySmartModeSummary, type SmartModeSummary } from '../agent/smartProofTypes';
+import {
+  buildDefaultEffectivePipelineSettings,
+  readEffectivePipelineSettingsFromRunStats,
+  type InferencePipelineName,
+} from './pipelineSelector';
 
 export type ProofEngineName = 'intent_proof';
 
@@ -19,6 +24,8 @@ const DEFAULT_PROOF_CONFIDENCE_PROFILE_VERSION = 'v1';
 
 export interface ProofEngineSummary {
   engine: ProofEngineName;
+  pipeline: InferencePipelineName;
+  pipelineVersion: string;
   intentCount: number;
   dynamicUriIntentCount: number;
   pathOnlyIntentCount: number;
@@ -47,8 +54,11 @@ interface BuildProofEngineSummaryForRunInput {
 }
 
 export function buildEmptyProofEngineSummary(): ProofEngineSummary {
+  const pipeline = buildDefaultEffectivePipelineSettings();
   return {
     engine: 'intent_proof',
+    pipeline: pipeline.name,
+    pipelineVersion: pipeline.version,
     intentCount: 0,
     dynamicUriIntentCount: 0,
     pathOnlyIntentCount: 0,
@@ -115,9 +125,12 @@ export async function buildProofEngineSummaryForRun(
       .limit(1);
     const runStats = asRecord(runRows[0]?.stats);
     const requestedSmartProof = asRecord(runStats?.['requestedSmartProof']);
+    const effectivePipeline = readEffectivePipelineSettingsFromRunStats(runStats);
 
     return {
       ...buildEmptyProofEngineSummary(),
+      pipeline: effectivePipeline.name,
+      pipelineVersion: effectivePipeline.version,
       smartMode: buildEmptySmartModeSummary(requestedSmartProof?.['enabled'] === true),
     };
   }
@@ -154,9 +167,12 @@ export async function buildProofEngineSummaryForRun(
       .limit(1);
     const runStats = asRecord(runRows[0]?.stats);
     const requestedSmartProof = asRecord(runStats?.['requestedSmartProof']);
+    const effectivePipeline = readEffectivePipelineSettingsFromRunStats(runStats);
 
     return {
       ...buildEmptyProofEngineSummary(),
+      pipeline: effectivePipeline.name,
+      pipelineVersion: effectivePipeline.version,
       smartMode: buildEmptySmartModeSummary(requestedSmartProof?.['enabled'] === true),
     };
   }
@@ -373,6 +389,7 @@ export async function buildProofEngineSummaryForRun(
   const runStats = asRecord(runRows[0]?.stats);
   const requestedSmartProof = asRecord(runStats?.['requestedSmartProof']);
   const smartMode = buildEmptySmartModeSummary(requestedSmartProof?.['enabled'] === true);
+  const effectivePipeline = readEffectivePipelineSettingsFromRunStats(runStats);
   const smartPatchStatusById = new Map(
     smartCallPatchRows.map((patch) => [patch.id, patch.validationStatus]),
   );
@@ -413,6 +430,8 @@ export async function buildProofEngineSummaryForRun(
 
   return {
     engine: 'intent_proof',
+    pipeline: effectivePipeline.name,
+    pipelineVersion: effectivePipeline.version,
     intentCount: runIntents.length,
     dynamicUriIntentCount,
     pathOnlyIntentCount,

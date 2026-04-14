@@ -62,13 +62,16 @@ vi.mock('@archi-navi/db', async () => {
 });
 
 vi.mock('@archi-navi/inference', async () => {
-  const actual = await vi.importActual<typeof import('@archi-navi/inference')>('@archi-navi/inference');
   return {
-    ...actual,
+    buildEmptyProofEngineSummary: buildEmptyProofEngineSummaryMock,
     createInferenceRun: createInferenceRunMock,
     executeInferenceRun: executeInferenceRunMock,
     getInferenceRunDetail: getInferenceRunDetailMock,
-    buildEmptyProofEngineSummary: buildEmptyProofEngineSummaryMock,
+    normalizeSmartProofConfig: (value: unknown) => (
+      typeof value === 'boolean'
+        ? { enabled: value }
+        : { enabled: value && typeof value === 'object' && 'enabled' in value ? (value as { enabled?: boolean }).enabled !== false : false }
+    ),
   };
 });
 
@@ -81,6 +84,7 @@ import { GET, POST } from '@/app/api/inference/smart/route';
 
 function createDbMock(serviceScanPaths: string[] = []) {
   return {
+    update: vi.fn(),
     select: vi.fn(() => ({
       from: vi.fn(() => ({
         where: vi.fn().mockResolvedValue(
@@ -116,9 +120,31 @@ describe('/api/inference/smart', () => {
     });
   });
 
+  it('invalid pipeline 입력은 400을 반환하고 run을 만들지 않아야 한다', async () => {
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
+
+    const response = await POST(new Request('http://localhost/api/inference/smart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        repoRoots: [mkdtempSync(join(tmpdir(), 'smart-proof-invalid-'))],
+        useServiceMetadataPaths: false,
+        pipeline: 'legacy',
+      }),
+    }));
+
+    expect(response.status).toBe(400);
+    expect(createInferenceRunMock).not.toHaveBeenCalled();
+    expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
+
   it('POST는 proof engine run을 생성하고 summary를 반환해야 한다', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-sync-'));
-    getDbMock.mockResolvedValue(createDbMock());
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
     getInferenceModelMock.mockReturnValue({
       model: { provider: 'openai' },
       modelName: 'gpt-4o',
@@ -167,6 +193,7 @@ describe('/api/inference/smart', () => {
         useServiceMetadataPaths: false,
         enableAgentPatches: true,
         maxAgentFrontiers: 4,
+        pipeline: 'redesign',
       }),
     }));
 
@@ -182,6 +209,8 @@ describe('/api/inference/smart', () => {
         enableAgentPatches: true,
         maxAgentFrontiers: 4,
         sources: [{ type: 'local', ref: repoRoot }],
+        pipeline: 'redesign',
+        pipelineVersion: 'redesign-v1',
       }),
     );
     expect(executeInferenceRunMock).toHaveBeenCalledWith(
@@ -195,12 +224,17 @@ describe('/api/inference/smart', () => {
       { provider: 'openai' },
       'gpt-4o',
     );
+    expect(dbMock.update).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       success: true,
+      pipeline: 'redesign',
+      pipelineVersion: 'redesign-v1',
       engine: 'intent_proof',
       runId: 'run-proof-1',
       summary: {
         engine: 'intent_proof',
+        pipeline: 'redesign',
+        pipelineVersion: 'redesign-v1',
         intentCount: 5,
         gatewayRouteSeedCount: 0,
         derivedEndpointProofCount: 0,
@@ -228,7 +262,8 @@ describe('/api/inference/smart', () => {
 
   it('POST async=true는 proof engine run을 큐잉하고 202를 반환해야 한다', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-async-'));
-    getDbMock.mockResolvedValue(createDbMock([repoRoot]));
+    const dbMock = createDbMock([repoRoot]);
+    getDbMock.mockResolvedValue(dbMock);
     const smartGenerateFn = vi.fn();
     getInferenceModelMock.mockReturnValue({
       model: { provider: 'openai' },
@@ -269,6 +304,7 @@ describe('/api/inference/smart', () => {
         workspaceId: 'ws-1',
         useServiceMetadataPaths: true,
         async: true,
+        pipeline: 'reinforced',
       }),
     }));
 
@@ -278,8 +314,11 @@ describe('/api/inference/smart', () => {
       expect.objectContaining({
         smartProof: true,
         sources: [{ type: 'local', ref: repoRoot }],
+        pipeline: 'reinforced',
+        pipelineVersion: 'reinforced-v1',
       }),
     );
+    expect(dbMock.update).not.toHaveBeenCalled();
     expect(executeInferenceRunMock).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({
@@ -290,11 +329,15 @@ describe('/api/inference/smart', () => {
     );
     await expect(response.json()).resolves.toMatchObject({
       success: true,
+      pipeline: 'reinforced',
+      pipelineVersion: 'reinforced-v1',
       engine: 'intent_proof',
       queued: true,
       runId: 'run-proof-async',
       summary: {
         engine: 'intent_proof',
+        pipeline: 'reinforced',
+        pipelineVersion: 'reinforced-v1',
         intentCount: 0,
         smartMode: {
           enabled: true,
@@ -304,7 +347,8 @@ describe('/api/inference/smart', () => {
   });
 
   it('POST는 유효한 repo root가 없으면 NO_REPO_ROOTS를 반환해야 한다', async () => {
-    getDbMock.mockResolvedValue(createDbMock());
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
 
     const response = await POST(new Request('http://localhost/api/inference/smart', {
       method: 'POST',
@@ -323,11 +367,13 @@ describe('/api/inference/smart', () => {
         code: 'NO_REPO_ROOTS',
       },
     });
+    expect(dbMock.update).not.toHaveBeenCalled();
   });
 
   it('POST는 smart generator가 없으면 run을 생성하지 않고 BAD_REQUEST를 반환해야 한다', async () => {
     const repoRoot = mkdtempSync(join(tmpdir(), 'smart-proof-no-model-'));
-    getDbMock.mockResolvedValue(createDbMock());
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
     getInferenceModelMock.mockReturnValue(null);
 
     const response = await POST(new Request('http://localhost/api/inference/smart', {
@@ -344,6 +390,7 @@ describe('/api/inference/smart', () => {
     expect(response.status).toBe(400);
     expect(createInferenceRunMock).not.toHaveBeenCalled();
     expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       success: false,
       error: {
@@ -353,7 +400,8 @@ describe('/api/inference/smart', () => {
   });
 
   it('GET은 proof summary를 우선 반환해야 한다', async () => {
-    getDbMock.mockResolvedValue({});
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
     getInferenceRunDetailMock.mockResolvedValue({
       run: {
         id: 'run-proof-1',
@@ -394,8 +442,12 @@ describe('/api/inference/smart', () => {
     await expect(response.json()).resolves.toMatchObject({
       success: true,
       engine: 'intent_proof',
+      pipeline: 'reinforced',
+      pipelineVersion: 'reinforced-v1',
       summary: {
         engine: 'intent_proof',
+        pipeline: 'reinforced',
+        pipelineVersion: 'reinforced-v1',
         intentCount: 4,
         gatewayRouteSeedCount: 0,
         derivedEndpointProofCount: 0,
@@ -416,5 +468,6 @@ describe('/api/inference/smart', () => {
         },
       },
     });
+    expect(dbMock.update).not.toHaveBeenCalled();
   });
 });

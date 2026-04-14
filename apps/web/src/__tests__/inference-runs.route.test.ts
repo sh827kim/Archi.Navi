@@ -46,6 +46,12 @@ const {
   })),
 }));
 
+function createDbMock() {
+  return {
+    update: vi.fn(),
+  };
+}
+
 vi.mock('@archi-navi/db', async () => {
   const actual = await vi.importActual<typeof import('@archi-navi/db')>('@archi-navi/db');
   return {
@@ -55,13 +61,17 @@ vi.mock('@archi-navi/db', async () => {
 });
 
 vi.mock('@archi-navi/inference', async () => {
-  const actual = await vi.importActual<typeof import('@archi-navi/inference')>('@archi-navi/inference');
   return {
-    ...actual,
+    buildEmptyProofEngineSummary: buildEmptyProofEngineSummaryMock,
     createInferenceRun: createInferenceRunMock,
     executeInferenceRun: executeInferenceRunMock,
     listInferenceRuns: listInferenceRunsMock,
-    buildEmptyProofEngineSummary: buildEmptyProofEngineSummaryMock,
+    normalizeSmartProofConfig: (value: unknown) => (
+      typeof value === 'boolean'
+        ? { enabled: value }
+        : { enabled: value && typeof value === 'object' && 'enabled' in value ? (value as { enabled?: boolean }).enabled !== false : false }
+    ),
+    normalizeInferenceRunModes: (modes: string[]) => Array.from(new Set(modes.map((mode) => mode.trim()).filter((mode) => mode.length > 0))),
   };
 });
 
@@ -75,7 +85,8 @@ describe('POST /api/inference/runs', () => {
 
   it('새 proof-engine 요청 계약을 run 생성 입력으로 정규화해야 한다', async () => {
     process.env['INFERENCE_RUNS_API_TOKEN'] = 'secret-token';
-    getDbMock.mockResolvedValue({ db: 'mock' });
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
     executeInferenceRunMock.mockResolvedValue(undefined);
     createInferenceRunMock.mockResolvedValue({
       id: 'run-1',
@@ -103,7 +114,7 @@ describe('POST /api/inference/runs', () => {
 
     expect(response.status).toBe(202);
     expect(createInferenceRunMock).toHaveBeenCalledWith(
-      { db: 'mock' },
+      dbMock,
       expect.objectContaining({
         workspaceId: 'ws-1',
         modes: ['config', 'code', 'db'],
@@ -112,14 +123,21 @@ describe('POST /api/inference/runs', () => {
         enableAgentPatches: true,
         maxAgentFrontiers: 3,
         sources: [{ type: 'local', ref: '/repo/root' }],
+        pipeline: 'reinforced',
+        pipelineVersion: 'reinforced-v1',
       }),
     );
+    expect(dbMock.update).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       ok: true,
       engine: 'intent_proof',
+      pipeline: 'reinforced',
+      pipelineVersion: 'reinforced-v1',
       runId: 'run-1',
       summary: {
         engine: 'intent_proof',
+        pipeline: 'reinforced',
+        pipelineVersion: 'reinforced-v1',
         intentCount: 0,
         gatewayRouteSeedCount: 0,
         derivedEndpointProofCount: 0,
@@ -144,5 +162,58 @@ describe('POST /api/inference/runs', () => {
         },
       },
     });
+  });
+
+  it('invalid pipeline 입력은 400을 반환하고 run을 만들지 않아야 한다', async () => {
+    process.env['INFERENCE_RUNS_API_TOKEN'] = 'secret-token';
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
+
+    const response = await POST(new Request('http://localhost/api/inference/runs', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        transports: ['http'],
+        sources: [{ type: 'local', path: '/repo/root' }],
+        useServiceMetadataPaths: false,
+        pipeline: 'legacy',
+      }),
+    }) as never);
+
+    expect(response.status).toBe(400);
+    expect(createInferenceRunMock).not.toHaveBeenCalled();
+    expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
+
+  it('redesign + compatDeterministicCandidates=true 이면 400을 반환해야 한다', async () => {
+    process.env['INFERENCE_RUNS_API_TOKEN'] = 'secret-token';
+    const dbMock = createDbMock();
+    getDbMock.mockResolvedValue(dbMock);
+
+    const response = await POST(new Request('http://localhost/api/inference/runs', {
+      method: 'POST',
+      headers: {
+        authorization: 'Bearer secret-token',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        transports: ['http'],
+        sources: [{ type: 'local', path: '/repo/root' }],
+        useServiceMetadataPaths: false,
+        pipeline: 'redesign',
+        compatDeterministicCandidates: true,
+      }),
+    }) as never);
+
+    expect(response.status).toBe(400);
+    expect(createInferenceRunMock).not.toHaveBeenCalled();
+    expect(executeInferenceRunMock).not.toHaveBeenCalled();
+    expect(dbMock.update).not.toHaveBeenCalled();
   });
 });
