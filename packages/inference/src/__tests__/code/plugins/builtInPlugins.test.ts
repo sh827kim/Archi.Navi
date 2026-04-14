@@ -8,6 +8,7 @@ describe('builtInPlugins', () => {
     expect(pluginIds).toEqual(
       expect.arrayContaining([
         'spring-boot',
+        'vertx',
         'java-common',
         'express',
         'nestjs',
@@ -46,5 +47,53 @@ export class OrdersController {
     );
 
     expect(result?.signals.some((signal) => signal.kind === 'expose' && signal.symbol === '/orders/:id')).toBe(true);
+  });
+
+  it('spring-boot plugin은 JSON config parser hook으로 flatten entry를 생성해야 한다', () => {
+    const plugin = getBuiltInPlugins().find((candidate) => candidate.id === 'spring-boot');
+    expect(plugin).toBeDefined();
+
+    const parser = plugin?.configParsers?.find((candidate) =>
+      candidate.fileMatchers.some((matcher) => matcher('/tmp/application.json')));
+    expect(parser).toBeDefined();
+
+    const result = parser?.parse(
+      '/tmp/application.json',
+      '{"client":{"orders":{"url":"http://orders"}},"messaging":{"topics":["order.created"]}}',
+    );
+    expect(result?.entries).toEqual(
+      expect.arrayContaining([
+        {
+          key: 'client.orders.url',
+          value: 'http://orders',
+          sourceType: 'json',
+          filePath: '/tmp/application.json',
+        },
+        {
+          key: 'messaging.topics.0',
+          value: 'order.created',
+          sourceType: 'json',
+          filePath: '/tmp/application.json',
+        },
+      ]),
+    );
+  });
+
+  it('vertx plugin은 requestAbs/getAbs/eventBus/router 패턴을 감지해야 한다', () => {
+    const plugin = getBuiltInPlugins().find((candidate) => candidate.id === 'vertx');
+    expect(plugin).toBeDefined();
+
+    const result = plugin?.scanRegex?.(
+      '/tmp/OrderVertxHandler.java',
+      `router.get("/api/orders/:id").handler(this::getOrder);
+webClient.getAbs("http://orders/api/orders").send();
+webClient.requestAbs("http://orders/api/orders/123").send();
+eventBus.request("orders.fetch", payload);`,
+    );
+
+    expect(result?.signals.some((signal) => signal.kind === 'expose' && signal.symbol === '/api/orders/:id')).toBe(true);
+    expect(result?.signals.some((signal) => signal.kind === 'call' && signal.symbol === 'http://orders/api/orders')).toBe(true);
+    expect(result?.signals.some((signal) => signal.kind === 'call' && signal.symbol === 'http://orders/api/orders/123')).toBe(true);
+    expect(result?.signals.some((signal) => signal.kind === 'produce' && signal.symbol === 'orders.fetch')).toBe(true);
   });
 });
