@@ -83,6 +83,42 @@ public class ProductController {}`;
         expect(expose?.symbol).toBe('/api/v1/products');
     });
 
+    it('클래스 prefix + 메서드 매핑을 조합한 최종 endpoint를 생성해야 한다', async () => {
+        const content = `
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+    @GetMapping("/{id}")
+    public Order getOrder() { return null; }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/OrderController.java', content);
+        const exposeSignals = result.signals.filter((signal) => signal.kind === 'expose');
+
+        expect(exposeSignals).toHaveLength(1);
+        expect(exposeSignals[0]?.symbol).toBe('/api/orders/{id}');
+        expect(exposeSignals[0]?.metadata).toMatchObject({
+            method: 'GET',
+            path: '/api/orders/{id}',
+            framework: 'spring',
+            mappingSource: 'controller_composed',
+        });
+    });
+
+    it('타입/메서드 method restriction 교집합이 없으면 endpoint를 생성하지 않아야 한다', async () => {
+        const content = `
+@RestController
+@RequestMapping(path = "/api/orders", method = RequestMethod.POST)
+public class OrderController {
+    @RequestMapping(path = "/{id}", method = RequestMethod.GET)
+    public Order getOrder() { return null; }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/OrderController.java', content);
+        const exposeSignals = result.signals.filter((signal) => signal.kind === 'expose');
+        expect(exposeSignals).toHaveLength(0);
+    });
+
     // ─── 멀티라인 어노테이션 처리 (Phase 2 핵심 개선) ────────────────────────
 
     it('멀티라인 @GetMapping 어노테이션을 정확히 추출해야 한다', async () => {
