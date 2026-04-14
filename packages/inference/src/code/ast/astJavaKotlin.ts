@@ -156,10 +156,15 @@ function buildPartialHttpMetadata(
     receiverName: string,
     argText: string,
 ): Record<string, unknown> {
+  const decapitalize = (value: string): string => (value.length > 0 ? `${value[0]!.toLowerCase()}${value.slice(1)}` : value);
   const stringLiterals = [...argText.matchAll(/["']([^"']+)["']/g)].map((match) => match[1]!.trim());
-  const configKeys = [...new Set(
+  const placeholderConfigKeys = [...new Set(
     [...argText.matchAll(/\$\{([^}:]+)(?::[^}]*)?\}/g)].map((match) => match[1]!.trim()).filter(Boolean),
   )];
+  const getterConfigKeys = [...argText.matchAll(/\b([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*get([A-Z][A-Za-z0-9_]*)\s*\(/g)]
+    .map((match) => `${match[1]}.${decapitalize(match[2] ?? '')}`)
+    .filter((key) => key.length > 0);
+  const configKeys = [...new Set([...placeholderConfigKeys, ...getterConfigKeys])];
   const expressionText = argText
     .replace(/"(?:\\.|[^"\\])*"/g, ' ')
     .replace(/'(?:\\.|[^'\\])*'/g, ' ')
@@ -171,13 +176,15 @@ function buildPartialHttpMetadata(
     ?? null;
   const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\b/);
   const serviceNameHintMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_-]*service[A-Za-z0-9_-]*)\b/i);
-  const hasConfigPlaceholder = configKeys.length > 0;
+  const getterServiceHintMatch = [...argText.matchAll(/\bget([A-Z][A-Za-z0-9]*(?:Service|Manager|Client|Api|Gateway|Mgt)[A-Za-z0-9]*)\s*\(/g)][0]?.[1];
+  const serviceNameHint = getterServiceHintMatch ?? serviceNameHintMatch?.[1] ?? null;
+  const hasConfigPlaceholder = placeholderConfigKeys.length > 0;
 
   return {
     methodHint: inferHttpMethodFromReceiver(receiverName),
     ...(pathHint ? { pathHint } : {}),
     ...(hostLiteral ? { hostHint: hostLiteral } : {}),
-    ...(serviceNameHintMatch ? { serviceNameHint: serviceNameHintMatch[1] } : {}),
+    ...(serviceNameHint ? { serviceNameHint } : {}),
     ...(baseUrlVarMatch ? { baseUrlVar: baseUrlVarMatch[1] } : {}),
     ...(configKeys.length > 0 ? { configKeys } : {}),
     dynamicPath: pathHint !== null
@@ -210,6 +217,43 @@ function getArgs(argList: SyntaxNode): SyntaxNode[] {
     return getChildren(argList).filter(
         (c) => c.type !== '(' && c.type !== ')' && c.type !== ',' && c.type !== ' ',
     ).map(unwrapArgumentNode);
+}
+
+function buildHttpCallFromUriArgs(input: {
+    argNodes: SyntaxNode[];
+    objectName: string;
+    methodName: string;
+    client: 'WebClient' | 'RestClient';
+}): { symbol: string; metadata: Record<string, unknown> } | null {
+    const { argNodes, objectName, methodName, client } = input;
+    const firstArg = argNodes[0];
+    if (!firstArg) return null;
+
+    const argExpression = argNodes.map((node) => node.text).join(', ');
+    const firstArgIsLiteral = firstArg.type === 'string_literal';
+    const firstArgValue = firstArgIsLiteral ? extractStringValue(firstArg) : null;
+    const hasMultipleArgs = argNodes.length > 1;
+    const firstArgLooksCompleteUrl = typeof firstArgValue === 'string' && /^[a-z][a-z0-9+.-]*:\/\//i.test(firstArgValue);
+
+    const metadata: Record<string, unknown> = {
+        client,
+        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
+        ...buildPartialHttpMetadata(objectName, argExpression),
+    };
+
+    if (!hasMultipleArgs && firstArgLooksCompleteUrl) {
+        metadata['resolvedUrl'] = firstArgValue;
+        metadata['resolvedVia'] = 'literal';
+    }
+
+    const fallbackSymbol = firstArgIsLiteral
+        ? firstArgValue ?? firstArg.text
+        : firstArg.text;
+    const symbol = (typeof metadata['pathHint'] === 'string'
+        ? metadata['pathHint']
+        : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] : fallbackSymbol)) as string;
+
+    return { symbol, metadata };
 }
 
 function isIdentifierNode(node: SyntaxNode): boolean {
@@ -641,38 +685,23 @@ function processMethodInvocations(
         // W-7.4: webClient 체인 감지 — 전체 텍스트에서 webClient 포함 여부로 판단
         // (objectNode.text.split('.')[0]은 체인이 깊어지면 부정확)
         if (methodName === 'uri' && /webClient/i.test(objectName)) {
-            const firstArg = getFirstArg(argList);
-            if (firstArg) {
-                const resolvedArg = resolveStringArg(firstArg, varMap);
-                const url = resolvedArg?.value;
-                const metadata: Record<string, unknown> = url
-                    ? {
-                        client: 'WebClient',
-                        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-                        resolvedUrl: url,
-                        resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
-                      }
-                    : {
-                        client: 'WebClient',
-                        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-                        ...buildPartialHttpMetadata(objectName, firstArg.text),
-                      };
-                const fallbackSymbol = firstArg.type === 'string_literal'
-                    ? extractStringValue(firstArg) ?? firstArg.text
-                    : firstArg.text;
-                const symbol = url
-                    ?? (typeof metadata['pathHint'] === 'string'
-                        ? metadata['pathHint'] as string
-                        : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol));
+            const argNodes = getArgs(argList);
+            const call = buildHttpCallFromUriArgs({
+                argNodes,
+                objectName,
+                methodName,
+                client: 'WebClient',
+            });
+            if (call) {
                 signals.push(
                     makeSignal({
                         kind: 'call',
-                        symbol,
+                        symbol: call.symbol,
                         lineStart: mi.startPosition.row + 1,
                         lineEnd: mi.endPosition.row + 1,
                         excerpt: mi.text.split('\n')[0] || mi.text,
                         confidence: 0.9,
-                        metadata,
+                        metadata: call.metadata,
                     }),
                 );
             }
@@ -680,38 +709,23 @@ function processMethodInvocations(
 
         // restClient 체인 감지 — 동일 패턴 적용
         if (methodName === 'uri' && /restClient/i.test(objectName)) {
-            const firstArg = getFirstArg(argList);
-            if (firstArg) {
-                const resolvedArg = resolveStringArg(firstArg, varMap);
-                const url = resolvedArg?.value;
-                const metadata: Record<string, unknown> = url
-                    ? {
-                        client: 'RestClient',
-                        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-                        resolvedUrl: url,
-                        resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
-                      }
-                    : {
-                        client: 'RestClient',
-                        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-                        ...buildPartialHttpMetadata(objectName, firstArg.text),
-                      };
-                const fallbackSymbol = firstArg.type === 'string_literal'
-                    ? extractStringValue(firstArg) ?? firstArg.text
-                    : firstArg.text;
-                const symbol = url
-                    ?? (typeof metadata['pathHint'] === 'string'
-                        ? metadata['pathHint'] as string
-                        : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol));
+            const argNodes = getArgs(argList);
+            const call = buildHttpCallFromUriArgs({
+                argNodes,
+                objectName,
+                methodName,
+                client: 'RestClient',
+            });
+            if (call) {
                 signals.push(
                     makeSignal({
                         kind: 'call',
-                        symbol,
+                        symbol: call.symbol,
                         lineStart: mi.startPosition.row + 1,
                         lineEnd: mi.endPosition.row + 1,
                         excerpt: mi.text.split('\n')[0] || mi.text,
                         confidence: 0.9,
-                        metadata,
+                        metadata: call.metadata,
                     }),
                 );
             }

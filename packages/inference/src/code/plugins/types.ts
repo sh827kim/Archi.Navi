@@ -33,6 +33,25 @@ export interface FrameworkAstScanContext {
   propertyMap?: AstPropertyMap;
 }
 
+export interface ConfigEntry {
+  key: string;
+  value: string;
+  sourceType: 'yaml' | 'json' | 'properties' | 'other';
+  filePath: string;
+}
+
+export interface FrameworkConfigParserResult {
+  entries: ConfigEntry[];
+  derivedSignals?: ExtractedSignal[];
+  metadata?: Record<string, unknown>;
+}
+
+export interface FrameworkConfigParser {
+  id: string;
+  fileMatchers: Array<(filePath: string) => boolean>;
+  parse: (filePath: string, content: string) => FrameworkConfigParserResult;
+}
+
 export interface FrameworkPlugin {
   id: string;
   displayName: string;
@@ -52,10 +71,7 @@ export interface FrameworkPlugin {
     content: string,
     context: FrameworkAstScanContext,
   ) => FileScanResult | Promise<FileScanResult>;
-  configParsers?: Array<{
-    filePatterns: string[];
-    parse: (content: string, filePath: string) => unknown[];
-  }>;
+  configParsers?: FrameworkConfigParser[];
   confidenceRules?: Array<{
     signalKind: SignalKind;
     condition: (signal: ExtractedSignal) => boolean;

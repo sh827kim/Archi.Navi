@@ -444,11 +444,56 @@ function getFirstArg(argList: SyntaxNode): SyntaxNode | null {
   return argNode ? unwrapArgumentNode(argNode) : null;
 }
 
+function getArgs(argList: SyntaxNode): SyntaxNode[] {
+  return getChildren(argList)
+    .filter((child) => child.type !== '(' && child.type !== ')' && child.type !== ',' && child.type !== ' ')
+    .map(unwrapArgumentNode);
+}
+
 function unwrapArgumentNode(argNode: SyntaxNode): SyntaxNode {
   if (argNode.type !== 'value_argument') return argNode;
   return getChildren(argNode).find(
     (child) => child.type !== '(' && child.type !== ')' && child.type !== ',' && child.type !== ' ',
   ) ?? argNode;
+}
+
+function buildHttpCallFromUriArgs(input: {
+  argNodes: SyntaxNode[];
+  objectName: string;
+  methodName: string;
+  client: 'WebClient' | 'RestClient';
+}): AstDirectHttpCall | null {
+  const { argNodes, objectName, methodName, client } = input;
+  const firstArg = argNodes[0];
+  if (!firstArg) return null;
+
+  const argExpression = argNodes.map((node) => node.text).join(', ');
+  const firstArgIsLiteral = firstArg.type === 'string_literal';
+  const firstArgValue = firstArgIsLiteral ? extractStringValue(firstArg) : null;
+  const hasMultipleArgs = argNodes.length > 1;
+  const firstArgLooksCompleteUrl = typeof firstArgValue === 'string' && /^[a-z][a-z0-9+.-]*:\/\//i.test(firstArgValue);
+
+  const metadata: Record<string, unknown> = {
+    client,
+    method: inferHttpMethodFromReceiver(objectName) ?? methodName,
+    ...buildPartialHttpMetadata(objectName, argExpression),
+  };
+  if (!hasMultipleArgs && firstArgLooksCompleteUrl) {
+    metadata['resolvedUrl'] = firstArgValue;
+    metadata['resolvedVia'] = 'literal';
+  }
+
+  const fallbackSymbol = firstArgIsLiteral
+    ? firstArgValue ?? firstArg.text
+    : firstArg.text;
+
+  return {
+    symbol: typeof metadata['pathHint'] === 'string'
+      ? metadata['pathHint'] as string
+      : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol),
+    confidence: 0.9,
+    metadata,
+  };
 }
 
 interface ParsedMethodInvocation {
@@ -540,69 +585,29 @@ function collectJavaMethodDirectHttpCalls(
       continue;
     }
 
-    if (methodName === 'uri' && /webClient/i.test(objectName) && url) {
-      calls.push({
-        symbol: url,
-        confidence: 0.9,
-        metadata: {
-          client: 'WebClient',
-          method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-          resolvedUrl: url,
-          resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
-        },
-      });
-      continue;
-    }
-
-    if (methodName === 'uri' && /webClient/i.test(objectName) && firstArg) {
-      const metadata: Record<string, unknown> = {
+    if (methodName === 'uri' && /webClient/i.test(objectName) && parsed.argList) {
+      const call = buildHttpCallFromUriArgs({
+        argNodes: getArgs(parsed.argList),
+        objectName,
+        methodName,
         client: 'WebClient',
-        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-        ...buildPartialHttpMetadata(objectName, firstArg.text),
-      };
-      const fallbackSymbol = firstArg.type === 'string_literal'
-        ? extractStringValue(firstArg) ?? firstArg.text
-        : firstArg.text;
-      calls.push({
-        symbol: typeof metadata['pathHint'] === 'string'
-          ? metadata['pathHint'] as string
-          : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol),
-        confidence: 0.9,
-        metadata,
       });
+      if (call) {
+        calls.push(call);
+      }
       continue;
     }
 
-    if (methodName === 'uri' && /restClient/i.test(objectName) && url) {
-      calls.push({
-        symbol: url,
-        confidence: 0.9,
-        metadata: {
-          client: 'RestClient',
-          method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-          resolvedUrl: url,
-          resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
-        },
-      });
-      continue;
-    }
-
-    if (methodName === 'uri' && /restClient/i.test(objectName) && firstArg) {
-      const metadata: Record<string, unknown> = {
+    if (methodName === 'uri' && /restClient/i.test(objectName) && parsed.argList) {
+      const call = buildHttpCallFromUriArgs({
+        argNodes: getArgs(parsed.argList),
+        objectName,
+        methodName,
         client: 'RestClient',
-        method: inferHttpMethodFromReceiver(objectName) ?? methodName,
-        ...buildPartialHttpMetadata(objectName, firstArg.text),
-      };
-      const fallbackSymbol = firstArg.type === 'string_literal'
-        ? extractStringValue(firstArg) ?? firstArg.text
-        : firstArg.text;
-      calls.push({
-        symbol: typeof metadata['pathHint'] === 'string'
-          ? metadata['pathHint'] as string
-          : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] as string : fallbackSymbol),
-        confidence: 0.9,
-        metadata,
       });
+      if (call) {
+        calls.push(call);
+      }
       continue;
     }
 

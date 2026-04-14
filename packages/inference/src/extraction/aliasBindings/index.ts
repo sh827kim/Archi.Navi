@@ -3,6 +3,7 @@ import { and, eq, inArray, isNull } from 'drizzle-orm';
 import type { DbClient } from '@archi-navi/db';
 import { aliasBindings, codeArtifacts, codeCallEdges, evidences, objects } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { detectPlugins, parseConfigWithPluginParsers } from '@/code';
 import { parseApplicationYml } from '@/relation/parsers/applicationYml';
 import { findFiles } from '@/utils/fileDiscovery';
 import {
@@ -30,12 +31,84 @@ interface ServiceRef {
   name: string;
 }
 
-function findApplicationYmls(repoRoot: string): string[] {
+interface IndexedServiceRef extends ServiceRef {
+  normalizedName: string;
+  tokens: string[];
+}
+
+interface ServiceLookupIndex {
+  byNormalizedAlias: Map<string, ServiceRef>;
+  services: IndexedServiceRef[];
+}
+
+function normalizeAlias(value: string): string {
+  return value.toLowerCase().replace(/[-_]/g, '');
+}
+
+function toAliasTokens(value: string): string[] {
+  return uniqueSortedStrings(
+    value
+      .replace(/\$\{([^}:]+)(?::[^}]*)?\}/g, '$1')
+      .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+      .split(/[^A-Za-z0-9]+/)
+      .map((token) => token.trim().toLowerCase())
+      .filter((token) => token.length >= 2),
+  );
+}
+
+function buildConfigAliasCandidates(aliasKey: string, aliasValue: string, resolvedHost: string | null): string[] {
+  const keySegments = aliasKey
+    .replace(/\$\{([^}:]+)(?::[^}]*)?\}/g, '$1')
+    .split(/[.\-_]/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+
+  const keySuffixCandidates: string[] = [];
+  for (let start = Math.max(0, keySegments.length - 4); start < keySegments.length; start += 1) {
+    const suffix = keySegments.slice(start).join('');
+    if (suffix.length > 0) {
+      keySuffixCandidates.push(suffix);
+    }
+  }
+
+  const envPlaceholders = uniqueSortedStrings([
+    ...aliasValue.matchAll(/\$\{([^}:]+)(?::[^}]*)?\}/g),
+    ...(resolvedHost ? [...resolvedHost.matchAll(/\$\{([^}:]+)(?::[^}]*)?\}/g)] : []),
+  ].map((match) => match[1] ?? ''));
+
+  const semanticSegments = keySegments.filter((segment) => ![
+    'api',
+    'apis',
+    'client',
+    'clients',
+    'service',
+    'services',
+    'base',
+    'url',
+    'uri',
+    'host',
+    'http',
+    'https',
+    'config',
+    'properties',
+  ].includes(segment.toLowerCase()));
+
+  return uniqueSortedStrings([
+    aliasKey,
+    aliasValue,
+    ...(resolvedHost ? [resolvedHost] : []),
+    ...envPlaceholders,
+    ...keySuffixCandidates,
+    ...semanticSegments,
+  ]);
+}
+
+function findApplicationConfigFiles(repoRoot: string): string[] {
   return findFiles(repoRoot, (filePath) => {
     const base = filePath.split('/').pop() ?? '';
     return (
       (base.startsWith('application') || base.startsWith('bootstrap'))
-      && (base.endsWith('.yml') || base.endsWith('.yaml'))
+      && (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json'))
     );
   });
 }
@@ -43,30 +116,53 @@ function findApplicationYmls(repoRoot: string): string[] {
 async function loadServiceMap(
   db: DbClient,
   workspaceId: string,
-): Promise<Map<string, ServiceRef>> {
+): Promise<ServiceLookupIndex> {
   const rows = await db
     .select({ id: objects.id, name: objects.name })
     .from(objects)
     .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'service')));
 
   const byName = new Map<string, ServiceRef>();
+  const indexedServices: IndexedServiceRef[] = [];
   for (const row of rows) {
-    const normalized = row.name.toLowerCase().replace(/[-_]/g, '');
+    const normalized = normalizeAlias(row.name);
     byName.set(normalized, row);
+    indexedServices.push({
+      ...row,
+      normalizedName: normalized,
+      tokens: toAliasTokens(row.name),
+    });
   }
-  return byName;
+  return { byNormalizedAlias: byName, services: indexedServices };
 }
 
 function findServiceByAlias(
-  serviceMap: Map<string, ServiceRef>,
+  serviceMap: ServiceLookupIndex,
   alias: string,
 ): ServiceRef | null {
   const trimmed = alias.trim();
   if (trimmed.length === 0) return null;
 
-  const direct = trimmed.toLowerCase().replace(/[-_]/g, '');
-  const hostPrefix = trimmed.split('.')[0]?.toLowerCase().replace(/[-_]/g, '') ?? direct;
-  return serviceMap.get(direct) ?? serviceMap.get(hostPrefix) ?? null;
+  const direct = normalizeAlias(trimmed);
+  const hostPrefix = normalizeAlias(trimmed.split('.')[0] ?? trimmed);
+  const directMatch = serviceMap.byNormalizedAlias.get(direct) ?? serviceMap.byNormalizedAlias.get(hostPrefix);
+  if (directMatch) return directMatch;
+
+  const aliasTokens = toAliasTokens(trimmed);
+  if (aliasTokens.length === 0) return null;
+
+  let bestMatch: IndexedServiceRef | null = null;
+  let bestScore = 0;
+  for (const service of serviceMap.services) {
+    if (service.tokens.length === 0) continue;
+    const overlapCount = aliasTokens.filter((token) => service.tokens.includes(token)).length;
+    const score = overlapCount / aliasTokens.length;
+    if (overlapCount > 0 && score >= 0.5 && (score > bestScore || (score === bestScore && service.tokens.length < (bestMatch?.tokens.length ?? Number.MAX_SAFE_INTEGER)))) {
+      bestMatch = service;
+      bestScore = score;
+    }
+  }
+  return bestMatch ? { id: bestMatch.id, name: bestMatch.name } : null;
 }
 
 async function loadOwnerServiceIdByObjectId(
@@ -341,17 +437,57 @@ export async function extractAliasBindingsFromConfig(
   options: ExtractAliasBindingsOptions,
 ): Promise<ExtractAliasBindingsResult> {
   const serviceMap = await loadServiceMap(db, options.workspaceId);
-  const applicationFiles = findApplicationYmls(options.repoRoot);
+  const applicationFiles = findApplicationConfigFiles(options.repoRoot);
+  const detectedPlugins = detectPlugins(options.repoRoot);
 
   let bindingCount = 0;
   for (const filePath of applicationFiles) {
-    const signal = parseApplicationYml(filePath, readFileSync(filePath, 'utf-8'));
+    const content = readFileSync(filePath, 'utf-8');
+    const pluginParsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
+    for (const entry of pluginParsed.entries) {
+      if (entry.sourceType !== 'json') continue;
+      const { aliasValue, resolvedHost } = resolveConfigAliasValue(entry.value);
+      if (aliasValue.length === 0) continue;
+      const directResolvedService = resolvedHost
+        ? findServiceByAlias(serviceMap, resolvedHost)
+        : findServiceByAlias(serviceMap, aliasValue);
+      const keyResolvedService = buildConfigAliasCandidates(entry.key, aliasValue, resolvedHost)
+        .map((candidate) => findServiceByAlias(serviceMap, candidate))
+        .find((service): service is ServiceRef => service !== null);
+      const resolvedService = directResolvedService ?? keyResolvedService ?? null;
+      if (!resolvedService && !resolvedHost) continue;
+
+      await upsertAliasBinding(db, {
+        workspaceId: options.workspaceId,
+        runId: options.runId,
+        bindingKind: inferConfigBindingKind(entry.key, aliasValue, resolvedHost),
+        ownerServiceId: null,
+        aliasKey: entry.key,
+        aliasValue,
+        resolvedServiceId: resolvedService?.id ?? null,
+        resolvedHost,
+        evidenceIds: [],
+        confidence: 0.85,
+      });
+      bindingCount += 1;
+    }
+
+    const isYaml = filePath.endsWith('.yml') || filePath.endsWith('.yaml');
+    if (!isYaml) continue;
+
+    const signal = parseApplicationYml(filePath, content);
     const ownerService = signal.serviceName ? findServiceByAlias(serviceMap, signal.serviceName) : null;
 
     for (const entry of signal.propertyEntries) {
       const { aliasValue, resolvedHost } = resolveConfigAliasValue(entry.value);
       if (aliasValue.length === 0) continue;
-      const resolvedService = resolvedHost ? findServiceByAlias(serviceMap, resolvedHost) : findServiceByAlias(serviceMap, aliasValue);
+      const directResolvedService = resolvedHost
+        ? findServiceByAlias(serviceMap, resolvedHost)
+        : findServiceByAlias(serviceMap, aliasValue);
+      const keyResolvedService = buildConfigAliasCandidates(entry.key, aliasValue, resolvedHost)
+        .map((candidate) => findServiceByAlias(serviceMap, candidate))
+        .find((service): service is ServiceRef => service !== null);
+      const resolvedService = directResolvedService ?? keyResolvedService ?? null;
       if (!resolvedService && !resolvedHost) continue;
 
       await upsertAliasBinding(db, {

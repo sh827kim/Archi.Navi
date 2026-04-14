@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import yaml from 'js-yaml';
 import { scanJavaKotlin } from '../scanners/javaKotlin';
 import { scanTypeScript } from '../scanners/typeScript';
 import { scanPython } from '../scanners/python';
@@ -80,6 +81,224 @@ function createNestJsScanResult(filePath: string, content: string): FileScanResu
   };
 }
 
+function createVertxScanResult(filePath: string, content: string): FileScanResult {
+  const base = scanJavaKotlin(filePath, content);
+  const sha256 = createHash('sha256').update(content).digest('hex');
+  const lines = content.split('\n');
+  const signals: ExtractedSignal[] = [];
+
+  const readStringLiteral = (expr: string): string | null => {
+    const match = expr.trim().match(/^["'`]([^"'`]+)["'`]$/);
+    return match?.[1] ?? null;
+  };
+  const extractConfigKey = (expr: string): string | null => {
+    const literal = readStringLiteral(expr);
+    if (literal && /\./.test(literal)) return literal;
+    const getterMatch = expr.match(/getString\(\s*["'`]([^"'`]+)["'`]\s*\)/);
+    return getterMatch?.[1] ?? null;
+  };
+  const extractPathHint = (expr: string): string | null => {
+    const pathMatch = expr.match(/["'`]([^"'`]*\/[^"'`]*)["'`]/);
+    return pathMatch?.[1] ?? null;
+  };
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const line = lines[index] ?? '';
+    const trimmed = line.trim();
+
+    const requestAbsMatch = trimmed.match(/\b\w+\.requestAbs\(\s*([^,]+)\s*,\s*([^)]+)\)/);
+    if (requestAbsMatch) {
+      const rawTarget = requestAbsMatch[2]!.trim();
+      const literalTarget = readStringLiteral(rawTarget);
+      const configKey = extractConfigKey(rawTarget);
+      signals.push({
+        kind: 'call',
+        symbol: literalTarget ?? extractPathHint(rawTarget) ?? rawTarget,
+        lineStart: index + 1,
+        lineEnd: index + 1,
+        excerpt: trimmed,
+        confidence: 0.78,
+        metadata: {
+          framework: 'vertx',
+          client: 'VertxWebClient',
+          method: 'REQUEST_ABS',
+          ...(extractPathHint(rawTarget) ? { pathHint: extractPathHint(rawTarget) } : {}),
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          dynamicPath: literalTarget === null,
+          unsupportedPattern: true,
+        },
+      });
+    }
+
+    const absMethodMatch = trimmed.match(/\b\w+\.(getAbs|postAbs|putAbs|deleteAbs|patchAbs)\(\s*([^)]+)\)/i);
+    if (absMethodMatch) {
+      const rawTarget = absMethodMatch[2]!.trim();
+      const literalTarget = readStringLiteral(rawTarget);
+      const configKey = extractConfigKey(rawTarget);
+      signals.push({
+        kind: 'call',
+        symbol: literalTarget ?? extractPathHint(rawTarget) ?? rawTarget,
+        lineStart: index + 1,
+        lineEnd: index + 1,
+        excerpt: trimmed,
+        confidence: 0.8,
+        metadata: {
+          framework: 'vertx',
+          client: 'VertxWebClient',
+          method: absMethodMatch[1]!.replace('Abs', '').toUpperCase(),
+          ...(extractPathHint(rawTarget) ? { pathHint: extractPathHint(rawTarget) } : {}),
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          dynamicPath: literalTarget === null,
+          unsupportedPattern: true,
+        },
+      });
+    }
+
+    const eventBusMatch = trimmed.match(/(?:\bvertx\.)?eventBus\(\)\.(send|request)\(\s*([^,\n]+)/i)
+      ?? trimmed.match(/\beventBus\.(send|request)\(\s*([^,\n]+)/i);
+    if (eventBusMatch) {
+      const rawAddress = eventBusMatch[2]!.trim();
+      const literalAddress = readStringLiteral(rawAddress);
+      const configKey = extractConfigKey(rawAddress);
+      signals.push({
+        kind: 'produce',
+        symbol: literalAddress ?? rawAddress,
+        lineStart: index + 1,
+        lineEnd: index + 1,
+        excerpt: trimmed,
+        confidence: 0.77,
+        metadata: {
+          framework: 'vertx',
+          client: 'EventBus',
+          pattern: eventBusMatch[1],
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          dynamicPath: literalAddress === null,
+          unsupportedPattern: true,
+        },
+      });
+    }
+
+    const producerFactoryMatch = trimmed.match(/\.(publish|produce)\(\s*([^,\n]+)/i);
+    if (producerFactoryMatch && /MessageProducerFactory|ProducerFactory|producerFactory/i.test(trimmed)) {
+      const rawAddress = producerFactoryMatch[2]!.trim();
+      const literalAddress = readStringLiteral(rawAddress);
+      const configKey = extractConfigKey(rawAddress);
+      signals.push({
+        kind: 'produce',
+        symbol: literalAddress ?? rawAddress,
+        lineStart: index + 1,
+        lineEnd: index + 1,
+        excerpt: trimmed,
+        confidence: 0.76,
+        metadata: {
+          framework: 'vertx',
+          client: 'MessageProducerFactory',
+          pattern: producerFactoryMatch[1]!.toLowerCase(),
+          ...(configKey ? { configKeys: [configKey] } : {}),
+          unsupportedPattern: true,
+        },
+      });
+    }
+
+    const routerMatch = trimmed.match(/\brouter\.(route|get|post|put|delete|patch)\(\s*["']([^"']+)["']/i);
+    if (routerMatch) {
+      const method = routerMatch[1]!.toUpperCase();
+      signals.push({
+        kind: 'expose',
+        symbol: routerMatch[2]!,
+        lineStart: index + 1,
+        lineEnd: index + 1,
+        excerpt: trimmed,
+        confidence: 0.8,
+        metadata: { framework: 'vertx', method: method === 'ROUTE' ? 'ANY' : method, annotation: '@VertxRoute' },
+      });
+    }
+  }
+
+  return {
+    language: base.language,
+    sha256,
+    ...(base.packageName ? { packageName: base.packageName } : {}),
+    signals: mergeSignals(base.signals, signals),
+  };
+}
+
+function isApplicationConfigFile(filePath: string): boolean {
+  const base = filePath.split('/').pop()?.toLowerCase() ?? '';
+  return base.startsWith('application') || base.startsWith('bootstrap');
+}
+
+function flattenConfigValue(
+  value: unknown,
+  prefix: string,
+  collector: Array<{ key: string; value: string }>,
+): void {
+  if (value === null || value === undefined) return;
+  if (Array.isArray(value)) {
+    value.forEach((entry, index) => {
+      flattenConfigValue(entry, `${prefix}.${index}`, collector);
+    });
+    return;
+  }
+  if (typeof value === 'object') {
+    for (const [key, nested] of Object.entries(value as Record<string, unknown>)) {
+      const nestedPrefix = prefix.length > 0 ? `${prefix}.${key}` : key;
+      flattenConfigValue(nested, nestedPrefix, collector);
+    }
+    return;
+  }
+  collector.push({ key: prefix, value: String(value) });
+}
+
+function parseJsonConfigEntries(content: string): Array<{ key: string; value: string }> {
+  const parsed = JSON.parse(content) as unknown;
+  const flattened: Array<{ key: string; value: string }> = [];
+  flattenConfigValue(parsed, '', flattened);
+  return flattened.filter((entry) => entry.key.length > 0);
+}
+
+function parseYamlConfigEntries(content: string): Array<{ key: string; value: string }> {
+  const documents = yaml.loadAll(content) as unknown[];
+  const flattened: Array<{ key: string; value: string }> = [];
+  for (const document of documents) {
+    flattenConfigValue(document, '', flattened);
+  }
+  return flattened.filter((entry) => entry.key.length > 0);
+}
+
+const DEFAULT_CONFIG_PARSERS = [
+  {
+    id: 'application-json',
+    fileMatchers: [
+      (filePath: string) => isApplicationConfigFile(filePath) && filePath.toLowerCase().endsWith('.json'),
+    ],
+    parse: (filePath: string, content: string) => ({
+      entries: parseJsonConfigEntries(content).map((entry) => ({
+        ...entry,
+        filePath,
+        sourceType: 'json' as const,
+      })),
+      metadata: { parser: 'application-json' },
+    }),
+  },
+  {
+    id: 'application-yaml',
+    fileMatchers: [
+      (filePath: string) =>
+        isApplicationConfigFile(filePath)
+        && (filePath.toLowerCase().endsWith('.yml') || filePath.toLowerCase().endsWith('.yaml')),
+    ],
+    parse: (filePath: string, content: string) => ({
+      entries: parseYamlConfigEntries(content).map((entry) => ({
+        ...entry,
+        filePath,
+        sourceType: 'yaml' as const,
+      })),
+      metadata: { parser: 'application-yaml' },
+    }),
+  },
+];
+
 export const BUILT_IN_FRAMEWORK_PLUGINS: FrameworkPlugin[] = [
   {
     id: 'spring-boot',
@@ -97,6 +316,25 @@ export const BUILT_IN_FRAMEWORK_PLUGINS: FrameworkPlugin[] = [
     scanRegex: scanJavaKotlin,
     astExtractor: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
     scanAst: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
+    configParsers: DEFAULT_CONFIG_PARSERS,
+  },
+  {
+    id: 'vertx',
+    displayName: 'Vert.x',
+    version: '1.0.0',
+    languages: ['java', 'kotlin'],
+    detector: {
+      manifestMatches: [
+        { fileName: 'pom.xml', pattern: /io\.vertx|vertx-web-client|vertx-core/i },
+        { fileName: 'build.gradle', pattern: /io\.vertx|vertx-web-client|vertx-core/i },
+        { fileName: 'build.gradle.kts', pattern: /io\.vertx|vertx-web-client|vertx-core/i },
+      ],
+    },
+    regexScanner: createVertxScanResult,
+    scanRegex: createVertxScanResult,
+    astExtractor: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
+    scanAst: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
+    configParsers: DEFAULT_CONFIG_PARSERS,
   },
   {
     id: 'java-common',
@@ -107,6 +345,7 @@ export const BUILT_IN_FRAMEWORK_PLUGINS: FrameworkPlugin[] = [
     scanRegex: scanJavaKotlin,
     astExtractor: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
     scanAst: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
+    configParsers: DEFAULT_CONFIG_PARSERS,
     fallback: true,
   },
   {

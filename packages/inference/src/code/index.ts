@@ -17,6 +17,7 @@ export { builtInPlugins, getBuiltInPlugins } from './plugins/builtInPlugins';
 export { PluginRegistry, pluginRegistry, detectPlugins } from './plugins/pluginRegistry';
 export {
     detectLanguageFromFilePath,
+    parseConfigWithPluginParsers,
     scanFileWithAstPlugins,
     scanFileWithRegexPlugins,
     scanFileWithHybridPlugins,
@@ -30,6 +31,9 @@ export type {
     SignalKind,
 } from './codeSignalExtractor';
 export type {
+    ConfigEntry,
+    FrameworkConfigParser,
+    FrameworkConfigParserResult,
     FrameworkPlugin,
     FrameworkPluginDetector,
     FrameworkPluginLanguage,

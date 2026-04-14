@@ -7,6 +7,9 @@ import { inferRelationsFromCodeSignals } from '../relation/codeBased';
 
 export interface CommonBootstrapRepoResult {
   repoRoot: string;
+  engineRequested: CodeSignalEngine;
+  engineUsed: CodeSignalEngine;
+  fallbackUsed: boolean;
   signalCount: number;
   candidateCount: number;
   createdEndpointCount: number;
@@ -62,17 +65,23 @@ export async function runCommonBootstrapForRepo(
   let warning: string | null = null;
   let signalCount = 0;
   let scanFailureCount = 0;
+  let engineRequested: CodeSignalEngine = input.codeEngine ?? 'hybrid';
+  let engineUsed: CodeSignalEngine = input.codeEngine ?? 'hybrid';
+  let fallbackUsed = false;
 
   if (!skipExtraction) {
     const extracted = await extractCodeSignalsWithEngine(db, {
       workspaceId: input.workspaceId,
       repoRoot: input.repoRoot,
-      codeEngine: input.codeEngine ?? 'regex',
+      codeEngine: input.codeEngine ?? 'hybrid',
       ...(input.forceRescan !== undefined ? { forceRescan: input.forceRescan } : {}),
     });
     signalCount = extracted.signalCount;
     warning = extracted.warning ?? null;
     scanFailureCount = Array.isArray(extracted.scanFailures) ? extracted.scanFailures.length : 0;
+    engineRequested = extracted.engineRequested;
+    engineUsed = extracted.engineUsed;
+    fallbackUsed = extracted.fallbackUsed;
   }
 
   const inferred = await inferRelationsFromCodeSignals(db, {
@@ -84,6 +93,9 @@ export async function runCommonBootstrapForRepo(
 
   return {
     repoRoot: input.repoRoot,
+    engineRequested,
+    engineUsed,
+    fallbackUsed,
     signalCount,
     candidateCount: inferred.candidateCount,
     createdEndpointCount: inferred.createdEndpointCount,

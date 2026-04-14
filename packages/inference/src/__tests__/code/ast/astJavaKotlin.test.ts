@@ -161,6 +161,48 @@ restClient.get().uri("http://payment-service/pay").retrieve();
         expect(call?.symbol).toBe('http://payment-service/pay');
     });
 
+    it('webClient uri 동적 getter 호출에서 serviceNameHint/configKeys를 보존해야 한다', async () => {
+        const content = `
+webClient.get().uri(apiConfig.getSubscriptionManager() + "/v1/subscriptions").retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/SubscriptionClient.java', content);
+        const call = result.signals.find(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'WebClient',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.metadata).toMatchObject({
+            serviceNameHint: 'SubscriptionManager',
+            configKeys: ['apiConfig.subscriptionManager'],
+        });
+        expect(call?.symbol).toBe('/v1/subscriptions');
+    });
+
+    it('webClient.uri(baseUrl, uriBuilder -> ...) 패턴에서도 path/config 힌트를 보존해야 한다', async () => {
+        const content = `
+webClient.get()
+  .uri("\${orders.base-url}", uriBuilder -> uriBuilder.path("/v1/orders/{id}").build(orderId))
+  .retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/OrderClient.java', content);
+        const call = result.signals.find(
+            (s) => s.kind === 'call' && s.metadata['client'] === 'WebClient',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.symbol).toBe('/v1/orders/{id}');
+        expect(call?.metadata).toMatchObject({
+            client: 'WebClient',
+            method: 'GET',
+            configKeys: ['orders.base-url'],
+            pathHint: '/v1/orders/{id}',
+            dynamicPath: true,
+            dynamicHost: true,
+            unsupportedPattern: true,
+        });
+        expect(call?.metadata['resolvedUrl']).toBeUndefined();
+    });
+
     it('@FeignClient 인터페이스에서 메서드별 call 신호를 추출해야 한다', async () => {
         const content = `
 @FeignClient(name = "payment-service")
