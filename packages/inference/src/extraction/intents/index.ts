@@ -13,9 +13,15 @@ import {
   relationCandidates,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { detectPlugins, parseConfigWithPluginParsers } from '@/code';
+import { parseConfigWithPluginParsers } from '@/code';
 import { preferredSignalOwnerId, resolveExistingSignalOwnerId } from '@/code/ownerResolution';
 import { parseApplicationYml } from '@/relation/parsers/applicationYml';
+import {
+  describeConfigEntries,
+  resolveConfigKeysAgainstEntries,
+  loadApplicationConfigBundle,
+  type ConfigBindingBundle,
+} from '@/relation/configBinder';
 import { findFiles } from '@/utils/fileDiscovery';
 import {
   asRecord,
@@ -54,6 +60,7 @@ interface IntentSeed {
   methodConstraint: 'unknown' | 'any' | 'exact' | null;
   hostHint: string | null;
   resourceHint: string | null;
+  portHints: string[];
   dbSchemaHint: string | null;
   dbTableHints: string[];
   dbQueryFragmentHash: string | null;
@@ -89,6 +96,8 @@ export interface ExtractInteractionIntentsOptions {
 export interface ExtractInteractionIntentsResult {
   intentCount: number;
   gatewayRouteSeedCount?: number;
+  configBindingCount?: number;
+  configBindingUnresolvedCount?: number;
 }
 
 function buildConfigEvidenceId(repoRoot: string, filePath: string, routeKey: string): string {
@@ -101,95 +110,54 @@ function findApplicationYmls(repoRoot: string): string[] {
     const base = filePath.split('/').pop() ?? '';
     return (
       (base.startsWith('application') || base.startsWith('bootstrap'))
-      && (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json'))
+      && (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json') || base.endsWith('.properties'))
     );
   });
 }
 
-function normalizeConfigKey(value: string): string {
-  return value.trim().toLowerCase();
+function loadConfigRegistry(repoRoot: string) {
+  return loadApplicationConfigBundle(repoRoot);
 }
 
-function loadConfigRegistry(repoRoot: string): Map<string, string> {
-  const files = findApplicationYmls(repoRoot);
-  const detectedPlugins = detectPlugins(repoRoot);
-  const registry = new Map<string, string>();
+function applyConfigBindingHints(seed: IntentSeed, configRegistry: ConfigBindingBundle): IntentSeed {
+  if (seed.configKeys.length === 0) return { ...seed, portHints: uniqueSortedStrings(seed.portHints) };
 
-  for (const filePath of files) {
-    const content = readFileSync(filePath, 'utf-8');
-    const parsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
-    for (const entry of parsed.entries) {
-      const normalizedKey = normalizeConfigKey(entry.key);
-      if (!registry.has(normalizedKey)) {
-        registry.set(normalizedKey, entry.value);
-      }
-    }
-
-    if (filePath.endsWith('.yml') || filePath.endsWith('.yaml')) {
-      const signal = parseApplicationYml(filePath, content);
-      for (const entry of signal.propertyEntries) {
-        const normalizedKey = normalizeConfigKey(entry.key);
-        if (!registry.has(normalizedKey)) {
-          registry.set(normalizedKey, entry.value);
-        }
-      }
-    }
-  }
-
-  return registry;
-}
-
-function applyConfigBindingHints(seed: IntentSeed, configRegistry: Map<string, string>): IntentSeed {
-  if (seed.configKeys.length === 0) return seed;
+  const resolvedBindings = resolveConfigKeysAgainstEntries(seed.configKeys, configRegistry);
 
   let hostHint = seed.hostHint;
   let externalPathHint = seed.externalPathHint;
   let resourceHint = seed.resourceHint;
   const messageTopicHints = [...seed.messageTopicHints];
   const messageQueueHints = [...seed.messageQueueHints];
+  const portHints = [...seed.portHints];
 
-  for (const rawKey of seed.configKeys) {
-    const resolved = configRegistry.get(normalizeConfigKey(rawKey));
-    if (!resolved || resolved.trim().length === 0) continue;
-    const trimmed = resolved.trim();
-
-    if (!hostHint && /^https?:\/\//i.test(trimmed)) {
-      hostHint = extractHost(trimmed);
-      if (!externalPathHint) {
-        try {
-          externalPathHint = new URL(trimmed).pathname || null;
-        } catch {
-          externalPathHint = externalPathHint ?? null;
-        }
+  for (const binding of resolvedBindings.descriptors) {
+    if (binding.hostHints.length > 0 && !hostHint) {
+      hostHint = binding.hostHints[0] ?? hostHint;
+    }
+    if (binding.pathHints.length > 0 && !externalPathHint && seed.intentType === 'http_call') {
+      externalPathHint = binding.pathHints[0] ?? externalPathHint;
+    }
+    if (binding.resolvedUrl && !hostHint) {
+      try {
+        const url = new URL(binding.resolvedUrl);
+        hostHint = url.hostname || hostHint;
+        externalPathHint = externalPathHint ?? (url.pathname || null);
+      } catch {
+        // ignore invalid URL fallback
       }
     }
-
-    if (!resourceHint && seed.intentType === 'db_access' && !/^https?:\/\//i.test(trimmed)) {
-      resourceHint = trimmed;
+    if (!resourceHint && seed.intentType === 'db_access' && binding.value !== null && binding.valueKind !== 'url') {
+      resourceHint = binding.value;
     }
-
-    const loweredKey = rawKey.toLowerCase();
-    if (
-      (
-        loweredKey.includes('topic')
-        || loweredKey.includes('kafka')
-        || loweredKey.includes('address.produce')
-        || loweredKey.includes('.produce')
-      )
-      && !messageTopicHints.includes(trimmed)
-    ) {
-      messageTopicHints.push(trimmed);
+    if (binding.messageTopicHints.length > 0) {
+      messageTopicHints.push(...binding.messageTopicHints);
     }
-    if (
-      (
-        loweredKey.includes('queue')
-        || loweredKey.includes('rabbit')
-        || loweredKey.includes('address.consume')
-        || loweredKey.includes('.consume')
-      )
-      && !messageQueueHints.includes(trimmed)
-    ) {
-      messageQueueHints.push(trimmed);
+    if (binding.messageQueueHints.length > 0) {
+      messageQueueHints.push(...binding.messageQueueHints);
+    }
+    if (binding.portHints.length > 0) {
+      portHints.push(...binding.portHints);
     }
   }
 
@@ -200,6 +168,7 @@ function applyConfigBindingHints(seed: IntentSeed, configRegistry: Map<string, s
     resourceHint,
     messageTopicHints: uniqueSortedStrings(messageTopicHints),
     messageQueueHints: uniqueSortedStrings(messageQueueHints),
+    portHints: uniqueSortedStrings(portHints),
   };
 }
 
@@ -377,6 +346,7 @@ function buildIntentHashes(seed: IntentSeed) {
       normalizeHint(seed.methodConstraint),
       normalizeHint(seed.hostHint),
       normalizeHint(seed.resourceHint),
+      JSON.stringify(uniqueSortedStrings(seed.portHints)),
       normalizeHint(seed.dbSchemaHint),
       JSON.stringify(uniqueSortedStrings(seed.dbTableHints)),
       normalizeHint(seed.dbQueryFragmentHash),
@@ -403,6 +373,7 @@ function hasDownstreamHint(seed: IntentSeed): boolean {
     || seed.methodConstraint !== null
     || seed.hostHint !== null
     || seed.resourceHint !== null
+    || seed.portHints.length > 0
     || seed.dbSchemaHint !== null
     || seed.dbTableHints.length > 0
     || seed.dbQueryFragmentHash !== null
@@ -563,6 +534,8 @@ export async function extractInteractionIntentsFromCodeSignals(
   const configRegistry = loadConfigRegistry(options.repoRoot);
 
   let intentCount = 0;
+  let configBindingCount = 0;
+  let configBindingUnresolvedCount = 0;
   const extractedIntentHashes = new Set<string>();
   for (const row of rows) {
     const metadata = asRecord(row.evidenceMetadata) ?? {};
@@ -584,6 +557,7 @@ export async function extractInteractionIntentsFromCodeSignals(
 
     const summaryRefs = source.functionId ? [summaryMap.get(source.functionId) ?? null] : [];
     const configKeys = extractConfigKeysFromMetadata(metadata);
+    const configBindingBundle = resolveConfigKeysAgainstEntries(configKeys, configRegistry);
     const rawResourceHint =
       intentType === 'db_access' || intentType === 'message_publish' || intentType === 'message_consume'
         ? asString(row.calleeSymbol)
@@ -621,9 +595,12 @@ export async function extractInteractionIntentsFromCodeSignals(
       messageQueueHints: messageHints.queueHints,
       messageRoutingKeyHints: messageHints.routingKeyHints,
       configKeys,
+      portHints: [],
       evidenceIds: uniqueSortedStrings([row.evidenceId]),
       summaryRefs: uniqueSortedStrings(summaryRefs),
-    }, configRegistry);
+    }, configBindingBundle);
+    configBindingCount += configBindingBundle.descriptors.length;
+    configBindingUnresolvedCount += configBindingBundle.unresolved.length;
 
     if (!hasDownstreamHint(seed)) continue;
 
@@ -639,7 +616,7 @@ export async function extractInteractionIntentsFromCodeSignals(
   }
   await retireMissingCodeSignalIntents(db, options, extractedIntentHashes);
 
-  return { intentCount };
+  return { intentCount, configBindingCount, configBindingUnresolvedCount };
 }
 
 export async function extractInteractionIntentsFromConfigRoutes(
@@ -657,6 +634,8 @@ export async function extractInteractionIntentsFromConfigRoutes(
   const applicationFiles = findApplicationYmls(options.repoRoot);
   let intentCount = 0;
   let gatewayRouteSeedCount = 0;
+  let configBindingCount = 0;
+  let configBindingUnresolvedCount = 0;
 
   for (const filePath of applicationFiles) {
     if (!(filePath.endsWith('.yml') || filePath.endsWith('.yaml'))) {
@@ -671,8 +650,17 @@ export async function extractInteractionIntentsFromConfigRoutes(
     for (const route of signal.zuulRoutes) {
       const gatewayKind = 'zuul';
       const externalPathHint = normalizeGatewayPathHint(route.path);
-      const hostHint = route.serviceId ?? extractHost(route.url ?? '') ?? null;
+      const routeBinding = describeConfigEntries([{
+        key: route.serviceId ? `${route.serviceId}.url` : `${gatewayKind}.url`,
+        value: route.url ?? route.serviceId ?? '',
+        sourceType: 'yaml',
+        filePath,
+      }]);
+      const routeDescriptor = routeBinding.descriptors[0] ?? null;
+      const hostHint = routeDescriptor?.hostHints[0] ?? route.serviceId ?? extractHost(route.url ?? '') ?? null;
       if (!externalPathHint && !hostHint) continue;
+      configBindingCount += routeBinding.descriptors.length;
+      configBindingUnresolvedCount += routeBinding.unresolved.length;
 
       await upsertInteractionIntent(db, {
         workspaceId: options.workspaceId,
@@ -692,6 +680,7 @@ export async function extractInteractionIntentsFromConfigRoutes(
         methodConstraint: 'unknown',
         hostHint,
         resourceHint: null,
+        portHints: routeDescriptor?.portHints ?? [],
         dbSchemaHint: null,
         dbTableHints: [],
         dbQueryFragmentHash: null,
@@ -710,8 +699,17 @@ export async function extractInteractionIntentsFromConfigRoutes(
     for (const route of signal.springCloudGatewayRoutes) {
       const gatewayKind = 'spring_cloud_gateway';
       const externalPathHint = normalizeGatewayPathHint(route.path);
-      const hostHint = extractHost(route.uri ?? '') ?? null;
+      const routeBinding = describeConfigEntries([{
+        key: `${gatewayKind}.uri`,
+        value: route.uri ?? '',
+        sourceType: 'yaml',
+        filePath,
+      }]);
+      const routeDescriptor = routeBinding.descriptors[0] ?? null;
+      const hostHint = routeDescriptor?.hostHints[0] ?? extractHost(route.uri ?? '') ?? null;
       if (!externalPathHint && !hostHint) continue;
+      configBindingCount += routeBinding.descriptors.length;
+      configBindingUnresolvedCount += routeBinding.unresolved.length;
 
       await upsertInteractionIntent(db, {
         workspaceId: options.workspaceId,
@@ -731,6 +729,7 @@ export async function extractInteractionIntentsFromConfigRoutes(
         methodConstraint: 'unknown',
         hostHint,
         resourceHint: null,
+        portHints: routeDescriptor?.portHints ?? [],
         dbSchemaHint: null,
         dbTableHints: [],
         dbQueryFragmentHash: null,
@@ -747,5 +746,5 @@ export async function extractInteractionIntentsFromConfigRoutes(
     }
   }
 
-  return { intentCount, gatewayRouteSeedCount };
+  return { intentCount, gatewayRouteSeedCount, configBindingCount, configBindingUnresolvedCount };
 }

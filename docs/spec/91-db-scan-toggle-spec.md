@@ -1,7 +1,9 @@
 # 91. DB Scan Toggle SPEC
 
-상태: Proposed
+상태: Current
 작성일: 2026-04-06
+
+구현 메모: `/api/scan`, 기본 inference profile, 온보딩/설정 UI에 반영된 현재 계약이다.
 
 ## 1. 목적
 

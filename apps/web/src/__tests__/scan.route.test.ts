@@ -6,10 +6,12 @@ import { eq } from 'drizzle-orm';
 
 const {
   getDbMock,
+  runCommonBootstrapForRepoRootsMock,
   extractCodeSignalsWithEngineMock,
   inferRelationsFromCodeSignalsMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
+  runCommonBootstrapForRepoRootsMock: vi.fn(),
   extractCodeSignalsWithEngineMock: vi.fn(),
   inferRelationsFromCodeSignalsMock: vi.fn(),
 }));
@@ -26,6 +28,7 @@ vi.mock('@archi-navi/inference', async () => {
   const actual = await vi.importActual<typeof import('@archi-navi/inference')>('@archi-navi/inference');
   return {
     ...actual,
+    runCommonBootstrapForRepoRoots: runCommonBootstrapForRepoRootsMock,
     extractCodeSignalsWithEngine: extractCodeSignalsWithEngineMock,
     inferRelationsFromCodeSignals: inferRelationsFromCodeSignalsMock,
   };
@@ -152,20 +155,30 @@ describeDb('registerProjects', () => {
       markerFile: 'pom.xml',
     });
   });
+});
 
-  it('스캔 후 1차 코드 분석이 atomic bootstrap 요약을 반환해야 한다', async () => {
-    extractCodeSignalsWithEngineMock.mockResolvedValue({
+describe('bootstrapScannedProjects', () => {
+  beforeEach(() => {
+    getDbMock.mockResolvedValue({} as never);
+  });
+
+  it('스캔 후 1차 코드 분석이 hybrid bootstrap 요약을 반환해야 한다', async () => {
+    runCommonBootstrapForRepoRootsMock.mockResolvedValue({
+      analyzedRepoCount: 1,
+      engineRequested: 'hybrid',
+      enginesUsed: ['hybrid'],
+      fallbackCount: 0,
+      scanFailureCount: 1,
+      fileCount: 42,
       signalCount: 5,
-      warning: null,
-      scanFailures: [],
-    });
-    inferRelationsFromCodeSignalsMock.mockResolvedValue({
       candidateCount: 2,
       createdEndpointCount: 3,
       createdTopicCount: 1,
       createdQueueCount: 0,
       createdDatabaseCount: 1,
       createdDbTableCount: 2,
+      createdAtomicCount: 7,
+      warnings: [],
     });
 
     const summary = await bootstrapScannedProjects(
@@ -182,19 +195,21 @@ describeDb('registerProjects', () => {
       false,
     );
 
-    expect(extractCodeSignalsWithEngineMock).toHaveBeenCalledWith(db, {
+    expect(runCommonBootstrapForRepoRootsMock).toHaveBeenCalledWith({}, {
       workspaceId,
-      repoRoot: process.cwd(),
-      codeEngine: 'regex',
-    });
-    expect(inferRelationsFromCodeSignalsMock).toHaveBeenCalledWith(db, {
-      workspaceId,
-      repoRoot: process.cwd(),
+      repoRoots: [process.cwd()],
+      codeEngine: 'hybrid',
       bootstrapOnly: true,
       enableDbScan: false,
+      onProgress: expect.any(Function),
     });
     expect(summary).toEqual({
       analyzedProjectCount: 1,
+      engineRequested: 'hybrid',
+      enginesUsed: ['hybrid'],
+      fallbackCount: 0,
+      scanFailureCount: 1,
+      fileCount: 42,
       signalCount: 5,
       candidateCount: 2,
       createdEndpointCount: 3,

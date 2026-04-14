@@ -1,6 +1,6 @@
 # 54. Object Detail Layer Assignment SPEC
 
-- 상태: Proposed
+- 상태: Current
 - 작성일: 2026-04-05
 
 ## 배경

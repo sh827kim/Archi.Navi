@@ -29,12 +29,12 @@
 | [06-compound-view.md](./06-compound-view.md) | mapping graph / contributor drill-down UI 기준 문서 | Current |
 | [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) | 추론 고도화 (AST/Cross-Signal/플러그인/피드백은 유효, LLM부스터/파이프라인뷰는 deprecated) | Extension (Partially Deprecated) |
 | [08-developer-productivity.md](./08-developer-productivity.md) | 생산성 기능 로드맵/확장 설계 | Extension |
-| [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md) | intent-first proof engine 개요 | Proposed |
-| [10-intent-centric-proof-engine-state-model.md](./10-intent-centric-proof-engine-state-model.md) | intent/proof 상태 모델과 추출 레이어 | Proposed |
-| [11-intent-centric-proof-engine-resolution-pipeline.md](./11-intent-centric-proof-engine-resolution-pipeline.md) | fixed resolution pipeline, frontier, agent | Proposed |
-| [12-intent-centric-proof-engine-adoption-plan.md](./12-intent-centric-proof-engine-adoption-plan.md) | 구현 교체, UI/운영, cutover 계획 | Proposed |
-| [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md) | Smart Proof Engine LLM escalation 설계 | Proposed |
-| [14-signal-coverage-design-public-edition.md](./14-signal-coverage-design-public-edition.md) | signal coverage 보완을 위한 공개 구현 가이드 | Proposed |
+| [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md) | intent-first proof engine 개요 | Current |
+| [10-intent-centric-proof-engine-state-model.md](./10-intent-centric-proof-engine-state-model.md) | intent/proof 상태 모델과 추출 레이어 | Current |
+| [11-intent-centric-proof-engine-resolution-pipeline.md](./11-intent-centric-proof-engine-resolution-pipeline.md) | fixed resolution pipeline, frontier, agent | Current |
+| [12-intent-centric-proof-engine-adoption-plan.md](./12-intent-centric-proof-engine-adoption-plan.md) | 도입/컷오버 기준을 남긴 전환 문서 | Transition Reference |
+| [13-smart-proof-engine-escalation.md](./13-smart-proof-engine-escalation.md) | Smart Proof Engine LLM escalation 설계 | Current |
+| [14-signal-coverage-design-public-edition.md](./14-signal-coverage-design-public-edition.md) | signal coverage 보완을 위한 공개 구현 가이드 | Current Reference (Partial Rollout) |
 
 ## Deprecated 문서
 
@@ -53,3 +53,5 @@
 - rollup을 full rebuild 중심 설명에서 `delta rebuild + SSE refetch` 기반 운영 모델로 맞췄다.
 - query/chat을 분리해서, 결정론 엔진과 AI assistant가 각각 어떤 책임을 가지는지 명확히 했다.
 - mapping graph를 3D 렌더러, contributor 패널, 실시간 동기화, domain-first 탐색을 포함한 UX 기준으로 갱신했다.
+- `09~13`은 더 이상 순수 제안 문서가 아니라 현재 proof/smart 엔진의 기준 문서이며, `12`만 전환 기록 성격으로 유지한다.
+- `14`는 제품 외부 공유를 고려한 구현 가이드이므로, 세부 진행률은 개별 SPEC(`93~99`)에서 함께 확인한다.

@@ -20,10 +20,17 @@ import {
 import { generateId } from '@archi-navi/shared';
 import { and, eq, inArray, or } from 'drizzle-orm';
 import {
+    describeConfigEntries,
+    describeConfigKeys,
+    mergeConfigBindingBundles,
+    type ConfigBindingBundle,
+} from '@/relation/configBinder';
+import {
     asRecord,
     getBaseCandidateConfidence,
     stripCrossValidationMetadata,
 } from './utils';
+import { asString } from '../extraction/shared';
 import { saveRelationCandidate } from './candidateStore';
 
 export interface ConfigCodeBindingOptions {
@@ -39,6 +46,10 @@ export interface ConfigCodeBindingResult {
     createdEndpointCandidateCount: number;
     /** 타겟 서비스 하위 endpoint가 없어 스킵된 수 */
     skippedNoEndpointCount: number;
+    /** binder로 해석한 config 메타데이터 수 */
+    configBindingCount: number;
+    /** binder에서 unresolved로 남은 수 */
+    configBindingUnresolvedCount: number;
 }
 
 function normalizeRepoRoots(repoRoots?: string[]): string[] {
@@ -161,6 +172,8 @@ export async function bindConfigToCodeEndpoints(
 
     let createdEndpointCandidateCount = 0;
     let skippedNoEndpointCount = 0;
+    let configBindingCount = 0;
+    let configBindingUnresolvedCount = 0;
 
     // 타겟 서비스별 endpoint 캐시
     const endpointCache = new Map<string, Array<{ id: string; name: string }>>();
@@ -197,6 +210,27 @@ export async function bindConfigToCodeEndpoints(
         const evidenceIds = configEvidenceIdsByCandidateId.get(candidate.id) ?? [];
         const baseMeta = stripCrossValidationMetadata((candidate.metadata ?? {}) as Record<string, unknown>);
         const rawCandidateConfidence = getBaseCandidateConfidence(candidate.confidence ?? 0.7, candidate.metadata);
+    const candidateConfigBindingBundle = mergeConfigBindingBundles(
+            describeConfigKeys((Array.isArray(baseMeta['configKeys']) ? baseMeta['configKeys'] : []).map((entry) => asString(entry)).filter((entry): entry is string => entry !== null)),
+            describeConfigEntries(
+                [
+                    asString(baseMeta['resolvedHost']),
+                    asString(baseMeta['targetHostAlias']),
+                    asString(baseMeta['targetServiceHint']),
+                    asString(baseMeta['matchHost']),
+                    asString(baseMeta['routeMountPrefix']),
+                ]
+                    .filter((entry): entry is string => entry !== null)
+                    .map((hint) => ({
+                        key: hint,
+                        value: hint,
+                        sourceType: 'other' as const,
+                        filePath: 'derived://config-code-binding',
+                    })),
+            ),
+        );
+        configBindingCount += candidateConfigBindingBundle.descriptors.length;
+        configBindingUnresolvedCount += candidateConfigBindingBundle.unresolved.length;
 
         for (const endpoint of endpoints) {
             const existingRelation = await db
@@ -230,17 +264,19 @@ export async function bindConfigToCodeEndpoints(
                         subjectObjectId: candidate.subjectObjectId,
                         objectId: endpoint.id,
                         confidence: endpointConfidence,
-                        metadata: {
-                            ...baseMeta,
-                            crossBound: true,
-                            originalCandidateId: candidate.id,
-                            targetType: 'api_endpoint',
-                            targetServiceId,
-                        },
-                        ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
+                    metadata: {
+                        ...baseMeta,
+                        crossBound: true,
+                        originalCandidateId: candidate.id,
+                        targetType: 'api_endpoint',
+                        targetServiceId,
+                        configBindingSummary: candidateConfigBindingBundle.summary,
+                        configBindingUnresolvedReasons: candidateConfigBindingBundle.unresolved.map((entry) => entry.reason),
                     },
-                    evidenceId,
-                );
+                    ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
+                },
+                evidenceId,
+            );
                 created = created || saved.created;
             }
 
@@ -252,5 +288,7 @@ export async function bindConfigToCodeEndpoints(
         compoundCandidateCount: compoundCandidates.length,
         createdEndpointCandidateCount,
         skippedNoEndpointCount,
+        configBindingCount,
+        configBindingUnresolvedCount,
     };
 }

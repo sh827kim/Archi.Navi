@@ -1,9 +1,11 @@
 # 12. Intent-Centric Proof Engine Adoption Plan
 
-상태: Proposed
+상태: Transition Reference
 상위 문서: [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md)
 작성일: 2026-03-31
 최종 정리: 2026-04-04
+
+상태 메모: proof engine 도입 자체는 상당 부분 완료되었고, 이 문서는 컷오버/운영/성능 관점의 전환 기록으로 유지한다.
 
 ---
 

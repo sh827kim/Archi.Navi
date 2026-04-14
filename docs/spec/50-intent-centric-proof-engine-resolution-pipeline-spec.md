@@ -1,11 +1,12 @@
 # 50. Intent-Centric Proof Engine Resolution Pipeline (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P0
 상위 문서: [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
 관련 디자인 문서: [11-intent-centric-proof-engine-resolution-pipeline.md](../design/11-intent-centric-proof-engine-resolution-pipeline.md)
 작성일: 2026-03-31
 최종 정리: 2026-04-04
+구현 메모: `intentProofEngine.ts`와 run orchestration이 따라야 하는 현재 proof closure 계약이다.
 
 ---
 

@@ -1,9 +1,11 @@
 # 11. Intent-Centric Proof Engine Resolution Pipeline
 
-상태: Proposed
+상태: Current
 상위 문서: [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md)
 작성일: 2026-03-31
 최종 정리: 2026-04-04
+
+구현 메모: 현재 `intentProofEngine.ts`와 run orchestration의 proof closure 규칙을 읽을 때 우선 참조하는 문서다.
 
 ---
 

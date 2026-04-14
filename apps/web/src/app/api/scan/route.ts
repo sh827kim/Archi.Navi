@@ -15,6 +15,7 @@ import { eq, and, sql } from 'drizzle-orm';
 import {
   calibrateMultiModuleServiceBoundaries,
   runCommonBootstrapForRepoRoots,
+  type CommonBootstrapSummary,
 } from '@archi-navi/inference';
 import {
   generateId,
@@ -128,6 +129,11 @@ interface GhRepo { name: string; url: string }
 
 interface ScanBootstrapSummary {
   analyzedProjectCount: number;
+  engineRequested: string;
+  enginesUsed: string[];
+  fallbackCount: number;
+  scanFailureCount: number;
+  fileCount: number;
   signalCount: number;
   candidateCount: number;
   createdEndpointCount: number;
@@ -138,6 +144,14 @@ interface ScanBootstrapSummary {
 interface ScanConfig {
   enableDbScan: boolean;
 }
+
+type ScanBootstrapCoreSummary = CommonBootstrapSummary & {
+  engineRequested?: string;
+  enginesUsed?: string[];
+  fallbackCount?: number;
+  scanFailureCount?: number;
+  fileCount?: number;
+};
 
 const DEFAULT_SCAN_CONFIG: ScanConfig = {
   enableDbScan: false,
@@ -363,17 +377,23 @@ export async function bootstrapScannedProjects(
   const summary = await runCommonBootstrapForRepoRoots(db, {
     workspaceId,
     repoRoots,
-    // 스캔 직후 bootstrap은 즉시성/안정성이 우선이므로 AST/WASM 의존성을 피한다.
-    codeEngine: 'regex',
+    // 스캔 직후 bootstrap은 core worker의 기본 hybrid 정책을 그대로 따른다.
+    codeEngine: 'hybrid',
     bootstrapOnly: true,
     enableDbScan,
     onProgress: (repoRoot: string, index: number, total: number) => {
       onProgress?.(`코드 1차 분석 중... ${path.basename(repoRoot)} (${index + 1} / ${total})`);
     },
   });
+  const bootstrapSummary = summary as ScanBootstrapCoreSummary;
 
   return {
     analyzedProjectCount: summary.analyzedRepoCount,
+    engineRequested: bootstrapSummary.engineRequested ?? 'hybrid',
+    enginesUsed: bootstrapSummary.enginesUsed ?? ['hybrid'],
+    fallbackCount: bootstrapSummary.fallbackCount ?? 0,
+    scanFailureCount: bootstrapSummary.scanFailureCount ?? 0,
+    fileCount: bootstrapSummary.fileCount ?? 0,
     signalCount: summary.signalCount,
     candidateCount: summary.candidateCount,
     createdEndpointCount: summary.createdEndpointCount,

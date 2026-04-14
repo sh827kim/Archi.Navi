@@ -1,10 +1,12 @@
 # 09. Intent-Centric Proof Engine Overview
 
-상태: Proposed
+상태: Current
 적용 방식: Full Replacement
 대상: [03-inference-engine.md](./03-inference-engine.md), [07-inference-engine-advanced.md](./07-inference-engine-advanced.md)의 핵심 추론 커널 대체
 작성일: 2026-03-31
 최종 정리: 2026-04-03
+
+구현 메모: `packages/inference/src/orchestration/intentProofEngine.ts`, `proofEngineRun.ts`, `inferenceRuns.ts`의 현재 기본 커널 기준 문서다.
 
 ---
 

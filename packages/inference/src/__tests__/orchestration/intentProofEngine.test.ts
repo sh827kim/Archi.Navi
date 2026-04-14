@@ -22,6 +22,7 @@ import {
 import { generateId } from '@archi-navi/shared';
 import {
   buildIntentProofResolverContext,
+  buildProofDependencySeeds,
   normalizeIntentResolutionConcurrency,
   resolveWorkspaceInteractionIntents,
   resolveInteractionIntentProof,
@@ -1686,6 +1687,117 @@ describeDb('intent proof engine', () => {
     expect(candidates).toHaveLength(0);
   });
 
+  it('HTTP config binding이 부족하면 여러 configKey를 frontier detail과 proof state에 누적해야 한다', async () => {
+    const summaryId = generateId();
+    await db.insert(functionSummaries).values({
+      id: summaryId,
+      workspaceId,
+      functionId,
+      serviceId,
+      summaryKind: 'http',
+      outboundHttp: {
+        method: 'GET',
+        path: '/orders/123',
+        configKeys: ['client.orders.url', 'client.orders.port'],
+      },
+      aliasHints: ['client.orders.url', 'client.orders.port'],
+      sourceHash: 'summary-http-config-frontier',
+      confidence: 0.93,
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      configKeys: ['client.orders.url', 'client.orders.port'],
+      summaryRefs: [summaryId],
+      intentHash: 'intent-http-config-frontier',
+      anchorHash: 'anchor-http-config-frontier',
+    });
+
+    const result = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+
+    expect(result.status).toBe('FRONTIER');
+    expect(result.frontierReason).toBe('CONFIG_BINDING_MISSING');
+
+    const [state] = await db
+      .select()
+      .from(proofStates)
+      .where(eq(proofStates.id, result.proofStateId));
+    expect(state?.slotState).toMatchObject({
+      configKeys: expect.arrayContaining(['client.orders.url', 'client.orders.port']),
+    });
+
+    const [frontier] = await db
+      .select()
+      .from(proofFrontiers)
+      .where(eq(proofFrontiers.proofStateId, result.proofStateId));
+    expect(frontier?.frontierReason).toBe('CONFIG_BINDING_MISSING');
+    expect(frontier?.detail).toMatchObject({
+      configKeys: expect.arrayContaining(['client.orders.url', 'client.orders.port']),
+    });
+  });
+
+  it('message queue intent는 queue configKey binding으로 queue object에 닫혀야 한다', async () => {
+    const queueId = await insertObject(db, {
+      objectType: 'queue',
+      name: 'orders.queue',
+      category: 'CHANNEL',
+      metadata: { brokerKind: 'rabbitmq' },
+    });
+
+    const summaryId = generateId();
+    await db.insert(functionSummaries).values({
+      id: summaryId,
+      workspaceId,
+      functionId,
+      serviceId,
+      summaryKind: 'message',
+      outboundMessage: {
+        action: 'consume',
+        channelType: 'queue',
+        queue: 'orders.queue',
+        brokerKind: 'rabbitmq',
+        queueHints: ['orders.queue'],
+      },
+      aliasHints: ['client.orders.queue'],
+      sourceHash: 'summary-message-queue-binding',
+      confidence: 0.94,
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'message_consume',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      resourceHint: 'orders.queue',
+      configKeys: ['client.orders.queue'],
+      summaryRefs: [summaryId],
+      intentHash: 'intent-message-queue-binding',
+      anchorHash: 'anchor-message-queue-binding',
+    });
+
+    const result = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+
+    expect(result.status).toBe('CLOSED_ATOMIC');
+    expect(result.targetObjectId).toBe(queueId);
+
+    const [state] = await db
+      .select()
+      .from(proofStates)
+      .where(eq(proofStates.id, result.proofStateId));
+    expect(state?.slotState).toMatchObject({
+      configKeys: ['client.orders.queue'],
+    });
+  });
+
   it('HTTP method contradiction은 REJECTED로 전이되고 candidate를 만들지 않아야 한다', async () => {
     const providerServiceId = await insertObject(db, { objectType: 'service', name: 'billing-api' });
     await insertObject(db, {
@@ -3160,8 +3272,17 @@ describeDb('intent proof engine', () => {
       functionId,
       serviceId,
       summaryKind: 'http',
-      outboundHttp: { method: 'GET', path: '/api/orders/123', hostAlias: 'ORDERS_API' },
+      outboundHttp: {
+        method: 'GET',
+        path: '/api/orders/123',
+        pathHint: '/api/orders/{id}',
+        hostAlias: 'ORDERS_API',
+      },
       aliasHints: ['client.orders.url'],
+      flags: {
+        dynamicPath: true,
+        dynamicHost: true,
+      },
       sourceHash: 'summary-orders-dependency',
       confidence: 0.9,
     });
@@ -3202,11 +3323,74 @@ describeDb('intent proof engine', () => {
       .select()
       .from(proofDependencies)
       .where(eq(proofDependencies.proofStateId, result.proofStateId));
+    const pathHintDependencies = dependencies.filter((dependency) => dependency.dependencyKind === 'http_path_hint');
     expect(dependencies).toEqual(expect.arrayContaining([
       expect.objectContaining({ dependencyKind: 'alias_binding', dependencyKey: 'client.orders.url' }),
+      expect.objectContaining({ dependencyKind: 'http_path_hint', dependencyKey: '/api/orders/123' }),
+      expect.objectContaining({ dependencyKind: 'http_path_hint', dependencyKey: '/api/orders/{*}' }),
+      expect.objectContaining({ dependencyKind: 'http_dynamic_path', dependencyKey: 'dynamicPath' }),
+      expect.objectContaining({ dependencyKind: 'http_dynamic_host', dependencyKey: 'dynamicHost' }),
       expect.objectContaining({ dependencyKind: 'function_summary_function', dependencyKey: functionId }),
       expect.objectContaining({ dependencyKind: 'route_transform_owner_service', dependencyKey: serviceId }),
       expect.objectContaining({ dependencyKind: 'route_transform_owner_service', dependencyKey: providerServiceId }),
     ]));
+    expect(pathHintDependencies).toHaveLength(2);
+  });
+});
+
+describe('buildProofDependencySeeds', () => {
+  it('partial HTTP hints는 intent/summary/proof state에서 dedupe되어 dependency seed로 기록되어야 한다', () => {
+    const seeds = buildProofDependencySeeds({
+      intent: {
+        configKeys: ['client.orders.url', 'client.orders.url'],
+        hostHint: 'ORDERS_API',
+        externalPathHint: '/api/orders/123',
+        sourceFunctionId: 'function-1',
+        sourceServiceId: 'service-1',
+      } as typeof interactionIntents.$inferSelect,
+      summary: {
+        sourceHash: 'summary-1',
+        outboundHttp: {
+          pathHint: '/api/orders/{id}',
+          dynamicPath: true,
+          dynamicHost: true,
+        },
+        flags: {
+          dynamicPath: true,
+          dynamicHost: true,
+        },
+        aliasHints: ['client.orders.url'],
+      } as typeof functionSummaries.$inferSelect,
+      state: {
+        externalPathResolved: '/api/orders/123',
+        routeChain: ['route-a'],
+        slotState: {
+          pathHint: '/api/orders/{id}',
+          externalPathResolved: '/api/orders/123',
+          dynamicPath: true,
+          dynamicHost: true,
+        },
+      } as typeof proofStates.$inferSelect,
+    });
+
+    const dependencyKinds = seeds.map((seed) => seed.dependencyKind);
+    const pathSeeds = seeds.filter((seed) => seed.dependencyKind === 'http_path_hint');
+    const dynamicPathSeeds = seeds.filter((seed) => seed.dependencyKind === 'http_dynamic_path');
+    const dynamicHostSeeds = seeds.filter((seed) => seed.dependencyKind === 'http_dynamic_host');
+
+    expect(dependencyKinds).toEqual(expect.arrayContaining([
+      'alias_binding',
+      'http_path_hint',
+      'http_dynamic_path',
+      'http_dynamic_host',
+      'function_summary_function',
+      'route_transform_owner_service',
+    ]));
+    expect(pathSeeds.map((seed) => seed.dependencyKey)).toEqual(
+      expect.arrayContaining(['/api/orders/123', '/api/orders/{*}']),
+    );
+    expect(pathSeeds).toHaveLength(2);
+    expect(dynamicPathSeeds).toHaveLength(1);
+    expect(dynamicHostSeeds).toHaveLength(1);
   });
 });

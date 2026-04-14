@@ -1,6 +1,6 @@
 # 93. Common HTTP Signal Extraction Coverage (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P0
 상위 문서:
 - [11-ast-regex-hybrid-code-signal-spec.md](./11-ast-regex-hybrid-code-signal-spec.md)
@@ -8,6 +8,7 @@
 관련 설계 문서:
 - [14-signal-coverage-design-public-edition.md](../design/14-signal-coverage-design-public-edition.md)
 작성일: 2026-04-14
+상태 메모: partial HTTP metadata 보존, downstream intent/proof 전달, path-only 신호 보존이 구현되었다.
 
 ---
 

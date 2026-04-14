@@ -1,6 +1,6 @@
 # SPEC 문서 목록
 
-`docs/spec`는 기능 단위 구현 계약을 관리한다. 현재 기준은 단순 번호순 나열이 아니라 `Current / Proposed / Deprecated` 상태로 읽는다.
+`docs/spec`는 기능 단위 구현 계약을 관리한다. 현재 기준은 단순 번호순 나열이 아니라 `Current / Transition / Proposed / Deprecated` 상태로 읽는다.
 
 ## 규칙
 1. 기능 SPEC 문서명은 `*-spec.md`를 사용한다.
@@ -47,20 +47,34 @@
 - [44-query-engine-humanized-results-spec.md](./44-query-engine-humanized-results-spec.md)
 - [45-query-engine-input-usability-spec.md](./45-query-engine-input-usability-spec.md)
 - [46-ai-architecture-assistant-scope-expansion-spec.md](./46-ai-architecture-assistant-scope-expansion-spec.md)
+- [91-db-scan-toggle-spec.md](./91-db-scan-toggle-spec.md)
 - [52-embedded-postgres-runtime-migration-spec.md](./52-embedded-postgres-runtime-migration-spec.md)
 - [54-object-detail-layer-assignment-spec.md](./54-object-detail-layer-assignment-spec.md)
 - [55-light-theme-tone-refresh-spec.md](./55-light-theme-tone-refresh-spec.md)
 
 ### Current Architecture Direction
-- [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)
-
-## Proposed
-
-### Active Architecture Direction
 - [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
 - [49-intent-centric-proof-engine-state-model-spec.md](./49-intent-centric-proof-engine-state-model-spec.md)
 - [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md)
+- [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)
+- [99-dual-inference-pipeline-selector-spec.md](./99-dual-inference-pipeline-selector-spec.md)
+
+## Current
+
+### Signal Coverage Program
+- [93-common-http-signal-extraction-coverage-spec.md](./93-common-http-signal-extraction-coverage-spec.md)
+- [94-framework-specific-code-scanner-spec.md](./94-framework-specific-code-scanner-spec.md)
+- [95-framework-config-parser-hook-spec.md](./95-framework-config-parser-hook-spec.md)
+- [96-config-code-binding-completeness-spec.md](./96-config-code-binding-completeness-spec.md)
+- [97-multi-module-service-boundary-calibration-spec.md](./97-multi-module-service-boundary-calibration-spec.md)
+- [98-bootstrap-engine-policy-alignment-spec.md](./98-bootstrap-engine-policy-alignment-spec.md)
+
+## Transition
+
+### Adoption / Cutover Reference
 - [51-intent-centric-proof-engine-adoption-plan-spec.md](./51-intent-centric-proof-engine-adoption-plan-spec.md)
+
+## Proposed
 
 ### Backlog / Productivity
 - [17-inter-procedural-ast-spec.md](./17-inter-procedural-ast-spec.md)
@@ -69,17 +83,7 @@
 - [25-personal-architecture-journal-spec.md](./25-personal-architecture-journal-spec.md)
 - [26-api-contract-diff-spec.md](./26-api-contract-diff-spec.md)
 - [27-architecture-health-score-spec.md](./27-architecture-health-score-spec.md)
-
-### Signal Coverage Program (Proposed)
-- [93-common-http-signal-extraction-coverage-spec.md](./93-common-http-signal-extraction-coverage-spec.md)
-- [94-framework-specific-code-scanner-spec.md](./94-framework-specific-code-scanner-spec.md)
-- [95-framework-config-parser-hook-spec.md](./95-framework-config-parser-hook-spec.md)
-- [96-config-code-binding-completeness-spec.md](./96-config-code-binding-completeness-spec.md)
-- [97-multi-module-service-boundary-calibration-spec.md](./97-multi-module-service-boundary-calibration-spec.md)
-- [98-bootstrap-engine-policy-alignment-spec.md](./98-bootstrap-engine-policy-alignment-spec.md)
-
-### Pipeline Branching / Transition (Proposed)
-- [99-dual-inference-pipeline-selector-spec.md](./99-dual-inference-pipeline-selector-spec.md)
+- [92-compound-scan-ownership-design-spec.md](./92-compound-scan-ownership-design-spec.md)
 
 ## Deprecated
 - [deprecated/19-llm-inference-boost-spec.md](./deprecated/19-llm-inference-boost-spec.md)
@@ -94,3 +98,8 @@
 ## 참고
 - 구현 체크리스트: [docs/checklists/README.md](../checklists/README.md)
 - 설계 기준: [docs/design/README.md](../design/README.md)
+
+## 이번 감사에서 정리한 사항
+- `88`, `89`, `90`, `91-workspace-*`는 권고안/워크스페이스 계획 문서라 `docs/spec`에서 제거했다.
+- 해당 문서들의 살아 있는 요구사항은 `48~53`, `93~99`와 각 README 분류에 통합했다.
+- `48~50`, `53`, `91`, `99`는 현재 코드 기준 문서로 승격했고, `93~98`은 현재 구현 기준 문서로 정리했다.

@@ -755,6 +755,111 @@ describe('inferRelationsFromCodeSignals', () => {
     expect(candidates[0]?.objectId).toBe(endpoint[0]?.id);
   });
 
+  it('calleeSymbol만으로는 못 찾는 call도 hostHint/pathHint metadata로 endpoint 후보를 찾아야 한다', async () => {
+    const callerId = generateId();
+    const targetServiceId = generateId();
+    await db.insert(objects).values([
+      {
+        id: callerId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'review-service',
+        path: `/${callerId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: targetServiceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'orders-service',
+        path: `/${targetServiceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        objectType: 'api_endpoint',
+        category: 'COMPUTE',
+        granularity: 'ATOMIC',
+        name: 'GET /api/orders',
+        displayName: 'GET /api/orders',
+        parentId: targetServiceId,
+        path: `/orders-service/get-api-orders`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { method: 'GET', path: '/api/orders', repoRoot, source: 'CODE' },
+      },
+    ]);
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'java',
+      repoRoot,
+      filePath: 'src/ReviewClient.java',
+      ownerObjectId: callerId,
+      sha256: 'partial-http-signal',
+    });
+
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/ReviewClient.java',
+      lineStart: 1,
+      lineEnd: 1,
+      excerpt: 'requestBuilder.invoke();',
+      metadata: {
+        kind: 'call',
+        confidence: 0.91,
+        hostHint: 'orders-service',
+        pathHint: '/api/orders',
+        configKeys: ['client.orders.base-url'],
+        dynamicHost: true,
+        dynamicPath: true,
+      },
+    });
+
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'requestBuilder.invoke',
+      weight: 1,
+      evidenceId,
+    });
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.candidateCount).toBe(1);
+    expect(result.processedEdgeCount).toBe(1);
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.subjectObjectId).toBe(callerId);
+    expect(candidates[0]?.objectId).toBeTruthy();
+
+    const metadata = candidates[0]?.metadata as Record<string, unknown>;
+    expect(metadata['hostHint']).toBe('orders-service');
+    expect(metadata['pathHint']).toBe('/api/orders');
+    expect(metadata['configKeys']).toEqual(['client.orders.base-url']);
+    expect(metadata['dynamicHost']).toBe(true);
+    expect(metadata['dynamicPath']).toBe(true);
+    expect(metadata['resolvedVia']).toBe('hostHint+pathHint');
+  });
+
   it('produce/consume는 topic Object를 생성하고 후보를 생성해야 한다', async () => {
     const svcId = generateId();
     await db.insert(objects).values({

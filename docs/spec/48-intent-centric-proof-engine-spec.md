@@ -1,10 +1,11 @@
 # 48. Intent-Centric Proof Engine Overview (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P0
 적용 방식: Full Replacement
 작성일: 2026-03-31
 최종 정리: 2026-04-03
+구현 메모: 현재 `intent_proof` 엔진의 상위 기준 문서다.
 관련 디자인 문서:
 - [09-intent-centric-proof-engine-overview.md](../design/09-intent-centric-proof-engine-overview.md)
 - [10-intent-centric-proof-engine-state-model.md](../design/10-intent-centric-proof-engine-state-model.md)
@@ -15,7 +16,7 @@
 
 ## 1. 목적
 
-이 문서는 Archi.Navi의 기존 relation inference 경로를 **Intent-Centric Proof Engine**으로 전면 교체하기 위한 상위 SPEC 개요다.
+이 문서는 Archi.Navi의 현재 relation inference 핵심 경로인 **Intent-Centric Proof Engine**의 상위 SPEC 개요다.
 
 핵심 목표는 하나다.
 

@@ -1,11 +1,12 @@
 # 51. Intent-Centric Proof Engine Adoption Plan (SPEC)
 
-상태: Proposed
+상태: Transition Reference
 우선순위: P0
 상위 문서: [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
 관련 디자인 문서: [12-intent-centric-proof-engine-adoption-plan.md](../design/12-intent-centric-proof-engine-adoption-plan.md)
 작성일: 2026-03-31
 최종 정리: 2026-04-04
+상태 메모: proof engine 전환의 큰 축은 반영되었고, 이 문서는 컷오버/운영 기준을 남긴 전환 기록으로 유지한다.
 
 ---
 

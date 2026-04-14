@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 import {
   aliasBindings,
   closeTestDb,
@@ -20,6 +20,8 @@ import {
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
+import { pluginRegistry } from '@/code/plugins/pluginRegistry';
+import type { FrameworkPlugin } from '@/code/plugins/types';
 import { extractAliasBindingsFromCodeSignals, extractAliasBindingsFromConfig } from '@/extraction/aliasBindings';
 import { extractFunctionSummariesFromCodeSignals } from '@/extraction/functionSummary';
 import {
@@ -1074,6 +1076,279 @@ describeDb('proof extraction', () => {
     expect(intents[0]?.configKeys).toEqual(['spring.datasource.orders']);
     expect(intents[0]?.dbSchemaHint).toBe('public');
     expect(intents[0]?.dbTableHints).toEqual(['orders']);
+  });
+
+  it('nested config key binding은 HTTP/topic/queue/port enrichment와 unresolved accumulation을 유지해야 한다', async () => {
+    const serviceId = await insertObject(db, { objectType: 'service', name: 'gateway' });
+
+    const httpFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.fetchOrder',
+      parentId: serviceId,
+      category: 'CODE',
+    });
+    const publishFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.publishOrder',
+      parentId: serviceId,
+      category: 'CODE',
+    });
+    const consumeFunctionId = await insertObject(db, {
+      objectType: 'function',
+      name: 'GatewayClient.consumeOrder',
+      parentId: serviceId,
+      category: 'CODE',
+    });
+
+    const httpArtifactId = generateId();
+    const publishArtifactId = generateId();
+    const consumeArtifactId = generateId();
+    await db.insert(codeArtifacts).values([
+      {
+        id: httpArtifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath: 'src/http-client.java',
+        ownerObjectId: httpFunctionId,
+        sha256: 'sha-http-binder',
+      },
+      {
+        id: publishArtifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath: 'src/publish-client.java',
+        ownerObjectId: publishFunctionId,
+        sha256: 'sha-publish-binder',
+      },
+      {
+        id: consumeArtifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath: 'src/consume-client.java',
+        ownerObjectId: consumeFunctionId,
+        sha256: 'sha-consume-binder',
+      },
+    ]);
+
+    const httpEvidenceId = generateId();
+    const publishEvidenceId = generateId();
+    const consumeEvidenceId = generateId();
+    await db.insert(evidences).values([
+      {
+        id: httpEvidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: 'src/http-client.java',
+        lineStart: 12,
+        lineEnd: 12,
+        excerpt: 'WebClient.create("${client.orders.url}")',
+        metadata: {
+          kind: 'call',
+          method: 'GET',
+          confidence: 0.91,
+          configKeys: ['client.orders.url', 'client.orders.port'],
+        },
+      },
+      {
+        id: publishEvidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: 'src/publish-client.java',
+        lineStart: 14,
+        lineEnd: 14,
+        excerpt: 'kafkaTemplate.send("orders.created", payload)',
+        metadata: {
+          kind: 'produce',
+          confidence: 0.9,
+          channelType: 'topic',
+          brokerKind: 'kafka',
+          configKeys: ['client.orders.topic'],
+        },
+      },
+      {
+        id: consumeEvidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: 'src/consume-client.java',
+        lineStart: 16,
+        lineEnd: 16,
+        excerpt: 'rabbitTemplate.convertAndSend("orders.queue", payload)',
+        metadata: {
+          kind: 'consume',
+          confidence: 0.9,
+          channelType: 'queue',
+          brokerKind: 'rabbitmq',
+          configKeys: ['client.orders.queue'],
+        },
+      },
+    ]);
+
+    await db.insert(codeCallEdges).values([
+      {
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: httpArtifactId,
+        calleeSymbol: 'http://orders.internal:8080/api/orders',
+        weight: 1,
+        evidenceId: httpEvidenceId,
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: publishArtifactId,
+        calleeSymbol: 'orders.created',
+        weight: 1,
+        evidenceId: publishEvidenceId,
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: consumeArtifactId,
+        calleeSymbol: 'orders.queue',
+        weight: 1,
+        evidenceId: consumeEvidenceId,
+      },
+    ]);
+
+    writeFileSync(
+      join(repoRoot!, 'application.yml'),
+      `
+client:
+  orders:
+    url: http://orders.internal:8080/api/orders
+    topic: orders.created
+    queue: orders.queue
+    port: 8080
+`,
+    );
+
+    await extractFunctionSummariesFromCodeSignals(db, { workspaceId, repoRoot, runId: 'run-config-binder' });
+    await extractInteractionIntentsFromCodeSignals(db, { workspaceId, repoRoot, runId: 'run-config-binder' });
+
+    const summaries = await db
+      .select()
+      .from(functionSummaries)
+      .where(and(eq(functionSummaries.workspaceId, workspaceId), inArray(functionSummaries.functionId, [
+        httpFunctionId,
+        publishFunctionId,
+        consumeFunctionId,
+      ])));
+    expect(summaries).toHaveLength(3);
+
+    const httpSummary = summaries.find((summary) => summary.functionId === httpFunctionId);
+    expect(httpSummary?.summaryKind).toBe('http');
+    expect(httpSummary?.outboundHttp).toMatchObject({
+      method: 'GET',
+      path: '/api/orders',
+      hostAlias: 'orders.internal',
+    });
+    expect(httpSummary?.aliasHints).toEqual(expect.arrayContaining([
+      'client.orders.url',
+      'client.orders.port',
+    ]));
+    expect(httpSummary?.unresolvedReasons).toEqual([]);
+
+    const publishSummary = summaries.find((summary) => summary.functionId === publishFunctionId);
+    expect(publishSummary?.summaryKind).toBe('message');
+    expect(publishSummary?.outboundMessage).toMatchObject({
+      channelType: 'topic',
+      topic: 'orders.created',
+      brokerKind: 'kafka',
+    });
+    expect(publishSummary?.aliasHints).toContain('client.orders.topic');
+    expect(publishSummary?.unresolvedReasons).toEqual([]);
+
+    const consumeSummary = summaries.find((summary) => summary.functionId === consumeFunctionId);
+    expect(consumeSummary?.summaryKind).toBe('message');
+    expect(consumeSummary?.outboundMessage).toMatchObject({
+      channelType: 'queue',
+      queue: 'orders.queue',
+      brokerKind: 'rabbitmq',
+    });
+    expect(consumeSummary?.aliasHints).toContain('client.orders.queue');
+    expect(consumeSummary?.unresolvedReasons).toEqual([]);
+
+    const intents = await db.select().from(interactionIntents).where(eq(interactionIntents.workspaceId, workspaceId));
+    expect(intents).toHaveLength(3);
+
+    expect(intents.find((intent) => intent.sourceFunctionId === httpFunctionId)).toMatchObject({
+      intentType: 'http_call',
+      configKeys: ['client.orders.port', 'client.orders.url'],
+    });
+    expect(intents.find((intent) => intent.sourceFunctionId === publishFunctionId)).toMatchObject({
+      intentType: 'message_publish',
+      configKeys: ['client.orders.topic'],
+      messageBrokerKind: 'kafka',
+      messageTopicHints: ['orders.created'],
+    });
+    expect(intents.find((intent) => intent.sourceFunctionId === consumeFunctionId)).toMatchObject({
+      intentType: 'message_consume',
+      configKeys: ['client.orders.queue'],
+      messageBrokerKind: 'rabbitmq',
+      messageQueueHints: ['orders.queue'],
+    });
+  });
+
+  it('parser derivedSignals는 alias binding downstream에서 실제 소비되어야 한다', async () => {
+    const derivedSignalPlugin: FrameworkPlugin = {
+      id: 'derived-signal-config-plugin',
+      displayName: 'Derived Signal Config Plugin',
+      version: '1.0.0',
+      languages: ['java'],
+      detector: {
+        filePatterns: ['derived-signal.marker'],
+      },
+      configParsers: [
+        {
+          id: 'derived-signal-yaml',
+          fileMatchers: [(filePath) => filePath.endsWith('.yml') || filePath.endsWith('.yaml')],
+          parse: (filePath) => ({
+            entries: [],
+            derivedSignals: [
+              {
+                kind: 'call',
+                symbol: 'http://orders.internal:8080/api/orders',
+                lineStart: 1,
+                lineEnd: 1,
+                excerpt: 'client.orders.url',
+                confidence: 0.93,
+                metadata: {
+                  kind: 'call',
+                  hostHint: 'orders.internal',
+                  pathHint: '/api/orders',
+                  configKeys: ['client.orders.url'],
+                },
+              },
+            ],
+            metadata: {
+              parser: 'derived-signal-yaml',
+              filePath,
+            },
+          }),
+        },
+      ],
+    };
+    pluginRegistry.register(derivedSignalPlugin);
+
+    mkdirSync(join(repoRoot!, 'src'), { recursive: true });
+    writeFileSync(join(repoRoot!, 'src', 'Probe.java'), 'class Probe {}', 'utf-8');
+    writeFileSync(join(repoRoot!, 'derived-signal.marker'), 'enabled', 'utf-8');
+    writeFileSync(join(repoRoot!, 'application.yml'), '', 'utf-8');
+
+    const result = await extractAliasBindingsFromConfig(db, { workspaceId, repoRoot: repoRoot!, runId: 'run-derived-signals' });
+
+    expect(result.bindingCount).toBe(1);
+    expect(result.configBindingCount).toBe(1);
+
+    const bindings = await db
+      .select()
+      .from(aliasBindings)
+      .where(and(eq(aliasBindings.workspaceId, workspaceId), eq(aliasBindings.aliasKey, 'client.orders.url')));
+    expect(bindings).toHaveLength(1);
+    expect(bindings[0]?.resolvedHost).toBe('orders.internal');
   });
 
   it('HTTP host는 code signal에서 service discovery alias binding으로 캐시해야 한다', async () => {

@@ -9,6 +9,33 @@ import { scanPythonAst } from '../ast/astPython';
 import type { ExtractedSignal, FileScanResult } from '../codeSignalExtractor';
 import type { FrameworkPlugin } from './types';
 
+function signalMetadata(signal: ExtractedSignal): Record<string, unknown> {
+  return (signal.metadata ?? {}) as Record<string, unknown>;
+}
+
+function metadataString(metadata: Record<string, unknown>, key: string): string | null {
+  const value = metadata[key];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+function metadataStringArray(metadata: Record<string, unknown>, key: string): string[] {
+  const value = metadata[key];
+  if (Array.isArray(value)) {
+    return value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0);
+  }
+  const singleValue = metadataString(metadata, key);
+  return singleValue ? [singleValue] : [];
+}
+
+function metadataHasAnyToken(metadata: Record<string, unknown>, tokens: string[]): boolean {
+  const keys = [
+    ...metadataStringArray(metadata, 'configKeys'),
+    metadataString(metadata, 'configKey'),
+  ].filter((value): value is string => typeof value === 'string' && value.length > 0);
+
+  return keys.some((key) => tokens.some((token) => key.toLowerCase().includes(token)));
+}
+
 function signalKey(signal: ExtractedSignal): string {
   return `${signal.kind}::${signal.symbol}::${signal.lineStart}::${signal.lineEnd}`;
 }
@@ -225,7 +252,115 @@ function createVertxScanResult(filePath: string, content: string): FileScanResul
 
 function isApplicationConfigFile(filePath: string): boolean {
   const base = filePath.split('/').pop()?.toLowerCase() ?? '';
-  return base.startsWith('application') || base.startsWith('bootstrap');
+  return (
+    (base.startsWith('application') || base.startsWith('bootstrap'))
+    && (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json') || base.endsWith('.properties'))
+  );
+}
+
+function parsePropertiesConfigEntries(content: string): Array<{ key: string; value: string }> {
+  const flattened: Array<{ key: string; value: string }> = [];
+  const lines = content.split(/\r?\n/);
+  let currentKey = '';
+  let currentValue = '';
+  let continuing = false;
+
+  const commitEntry = () => {
+    const key = currentKey.trim();
+    const value = currentValue.trim();
+    if (key.length > 0) {
+      flattened.push({ key, value });
+    }
+    currentKey = '';
+    currentValue = '';
+    continuing = false;
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (line.length === 0 || line.startsWith('#') || line.startsWith('!')) {
+      if (!continuing) commitEntry();
+      continue;
+    }
+
+    if (continuing) {
+      currentValue += line.replace(/\\$/, '');
+      continuing = rawLine.endsWith('\\');
+      if (!continuing) commitEntry();
+      continue;
+    }
+
+    const separatorIndex = line.search(/[:=\s]/);
+    if (separatorIndex <= 0) {
+      currentKey = line;
+      currentValue = '';
+      commitEntry();
+      continue;
+    }
+
+    const key = line.slice(0, separatorIndex).trim();
+    let value = line.slice(separatorIndex + 1).trim();
+    if (value.startsWith('=') || value.startsWith(':')) {
+      value = value.slice(1).trim();
+    }
+    currentKey = key;
+    currentValue = value.replace(/\\$/, '');
+    continuing = rawLine.endsWith('\\');
+    if (!continuing) commitEntry();
+  }
+
+  if (continuing || currentKey.length > 0) {
+    commitEntry();
+  }
+
+  return flattened.filter((entry) => entry.key.length > 0);
+}
+
+function inferConfigDerivedSignalKind(key: string, value: string): ExtractedSignal['kind'] {
+  const normalizedKey = key.toLowerCase();
+  if (normalizedKey.includes('queue')) return 'consume';
+  if (normalizedKey.includes('topic') || normalizedKey.includes('producer')) return 'produce';
+  if (normalizedKey.includes('consumer')) return 'consume';
+  if (normalizedKey.includes('datasource') || normalizedKey.includes('database') || normalizedKey.includes('db')) {
+    return 'db_read';
+  }
+  if (
+    normalizedKey.includes('url')
+    || normalizedKey.includes('uri')
+    || normalizedKey.includes('path')
+    || normalizedKey.includes('host')
+    || normalizedKey.includes('port')
+    || normalizedKey.includes('endpoint')
+  ) {
+    return 'call';
+  }
+  if (/^(http|https|jdbc|amqp|kafka|rabbitmq|redis):/i.test(value)) {
+    return 'call';
+  }
+  return 'call';
+}
+
+function buildDerivedSignalsFromConfigEntries(
+  filePath: string,
+  sourceType: 'yaml' | 'json' | 'properties',
+  entries: Array<{ key: string; value: string }>,
+): ExtractedSignal[] {
+  return entries.map((entry, index) => ({
+    kind: inferConfigDerivedSignalKind(entry.key, entry.value),
+    symbol: entry.value || entry.key,
+    lineStart: index + 1,
+    lineEnd: index + 1,
+    excerpt: `${entry.key}=${entry.value}`.trim(),
+    confidence: 0.62,
+    metadata: {
+      parser: `application-${sourceType}`,
+      sourceType,
+      filePath,
+      configKey: entry.key,
+      configKeys: [entry.key],
+      value: entry.value,
+    },
+  }));
 }
 
 function flattenConfigValue(
@@ -272,14 +407,22 @@ const DEFAULT_CONFIG_PARSERS = [
     fileMatchers: [
       (filePath: string) => isApplicationConfigFile(filePath) && filePath.toLowerCase().endsWith('.json'),
     ],
-    parse: (filePath: string, content: string) => ({
-      entries: parseJsonConfigEntries(content).map((entry) => ({
-        ...entry,
-        filePath,
-        sourceType: 'json' as const,
-      })),
-      metadata: { parser: 'application-json' },
-    }),
+    parse: (filePath: string, content: string) => {
+      const entries = parseJsonConfigEntries(content);
+      return {
+        entries: entries.map((entry) => ({
+          ...entry,
+          filePath,
+          sourceType: 'json' as const,
+        })),
+        derivedSignals: buildDerivedSignalsFromConfigEntries(filePath, 'json', entries),
+        metadata: {
+          parser: 'application-json',
+          entryCount: entries.length,
+          derivedSignalCount: entries.length,
+        },
+      };
+    },
   },
   {
     id: 'application-yaml',
@@ -288,14 +431,45 @@ const DEFAULT_CONFIG_PARSERS = [
         isApplicationConfigFile(filePath)
         && (filePath.toLowerCase().endsWith('.yml') || filePath.toLowerCase().endsWith('.yaml')),
     ],
-    parse: (filePath: string, content: string) => ({
-      entries: parseYamlConfigEntries(content).map((entry) => ({
-        ...entry,
-        filePath,
-        sourceType: 'yaml' as const,
-      })),
-      metadata: { parser: 'application-yaml' },
-    }),
+    parse: (filePath: string, content: string) => {
+      const entries = parseYamlConfigEntries(content);
+      return {
+        entries: entries.map((entry) => ({
+          ...entry,
+          filePath,
+          sourceType: 'yaml' as const,
+        })),
+        derivedSignals: buildDerivedSignalsFromConfigEntries(filePath, 'yaml', entries),
+        metadata: {
+          parser: 'application-yaml',
+          entryCount: entries.length,
+          derivedSignalCount: entries.length,
+        },
+      };
+    },
+  },
+  {
+    id: 'application-properties',
+    fileMatchers: [
+      (filePath: string) =>
+        isApplicationConfigFile(filePath) && filePath.toLowerCase().endsWith('.properties'),
+    ],
+    parse: (filePath: string, content: string) => {
+      const entries = parsePropertiesConfigEntries(content);
+      return {
+        entries: entries.map((entry) => ({
+          ...entry,
+          filePath,
+          sourceType: 'properties' as const,
+        })),
+        derivedSignals: buildDerivedSignalsFromConfigEntries(filePath, 'properties', entries),
+        metadata: {
+          parser: 'application-properties',
+          entryCount: entries.length,
+          derivedSignalCount: entries.length,
+        },
+      };
+    },
   },
 ];
 
@@ -317,6 +491,31 @@ export const BUILT_IN_FRAMEWORK_PLUGINS: FrameworkPlugin[] = [
     astExtractor: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
     scanAst: (filePath, content, context) => scanJavaKotlinAst(filePath, content, context),
     configParsers: DEFAULT_CONFIG_PARSERS,
+    confidenceRules: [
+      {
+        signalKind: 'call',
+        condition: (signal) => {
+          const metadata = signalMetadata(signal);
+          const sourceType = metadataString(metadata, 'sourceType');
+          return (
+            sourceType !== null
+            && ['yaml', 'json', 'properties'].includes(sourceType)
+            && metadataHasAnyToken(metadata, ['url', 'uri', 'endpoint', 'path', 'host', 'port'])
+          );
+        },
+        adjustment: 0.08,
+      },
+      {
+        signalKind: 'produce',
+        condition: (signal) => metadataHasAnyToken(signalMetadata(signal), ['topic', 'queue', 'producer']),
+        adjustment: 0.06,
+      },
+      {
+        signalKind: 'consume',
+        condition: (signal) => metadataHasAnyToken(signalMetadata(signal), ['topic', 'queue', 'consumer']),
+        adjustment: 0.05,
+      },
+    ],
   },
   {
     id: 'vertx',
