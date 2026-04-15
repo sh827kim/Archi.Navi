@@ -45,6 +45,13 @@ const CALL_NODE_TYPES = ['method_invocation', 'call_expression'];
 const METHOD_DECLARATION_NODE_TYPES = ['method_declaration', 'function_declaration'];
 const FIELD_DECLARATION_NODE_TYPES = ['field_declaration', 'property_declaration'];
 const VALUE_ANNOTATION_REGEX = /@(?:field:)?Value\s*\(\s*"([^"]+)"\s*\)/;
+const SPRING_HTTP_FRAMEWORK_TOKENS = new Set([
+    'UriComponentsBuilder',
+    'WebClient',
+    'RestClient',
+    'RestTemplate',
+    'uriBuilder',
+]);
 
 interface ResolvedVariableMap {
     values: VariableMap;
@@ -155,12 +162,63 @@ function resolveStringArg(
             resolvedVia: varMap.propertyBackedVariables.has(argNode.text) ? 'property' : 'variable',
         };
     }
+    if (argNode.type === 'binary_expression' || argNode.type === 'additive_expression') {
+        const parts = argNode.text
+            .split('+')
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0);
+        if (parts.length === 0) return null;
+
+        let resolved = '';
+        let resolvedVia: 'literal' | 'variable' | 'property' = 'literal';
+        for (const part of parts) {
+            const quoted = part.match(/^["']([^"']+)["']$/)?.[1] ?? null;
+            if (quoted !== null) {
+                resolved += quoted;
+                continue;
+            }
+            const variableValue = varMap.values.get(part);
+            if (!variableValue) return null;
+            if (varMap.propertyBackedVariables.has(part)) {
+                resolvedVia = 'property';
+            } else if (resolvedVia !== 'property') {
+                resolvedVia = 'variable';
+            }
+            resolved += variableValue;
+        }
+        if (resolved.includes('${')) return null;
+        return { value: resolved, resolvedVia };
+    }
     return null;
 }
 
 function inferHttpMethodFromReceiver(receiverName: string): string | null {
     const match = receiverName.match(/\.(get|post|put|delete|patch)\s*\(/i);
     return match ? match[1]!.toUpperCase() : null;
+}
+
+function extractComparablePath(rawValue: string): string {
+    try {
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue)) {
+            const url = new URL(rawValue);
+            return url.pathname;
+        }
+    } catch {
+        // noop
+    }
+    return rawValue;
+}
+
+function extractComparableHost(rawValue: string): string | null {
+    try {
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue)) {
+            const url = new URL(rawValue);
+            return url.hostname || null;
+        }
+    } catch {
+        // noop
+    }
+    return null;
 }
 
 function buildPartialHttpMetadata(
@@ -181,28 +239,52 @@ function buildPartialHttpMetadata(
     .replace(/'(?:\\.|[^'\\])*'/g, ' ')
     .replace(/\$\{[^}]+\}/g, ' ');
   const pathParts = stringLiterals.filter((value) => value.startsWith('/'));
-  const pathHint = pathParts.length > 0 ? pathParts.join('') : null;
+  const pathFromBuilder = [...argText.matchAll(/\.path\(\s*["']([^"']+)["']\s*\)/g)].map((match) => match[1]!.trim());
+  const pathSegmentArgs = [...argText.matchAll(/\.pathSegment\(([^)]*)\)/g)]
+    .flatMap((match) => match[1]!.split(',').map((segment) => segment.trim()).filter((segment) => segment.length > 0))
+    .map((segment) => {
+      const literal = segment.match(/^["']([^"']+)["']$/)?.[1];
+      return literal ? literal : '{id}';
+    });
+  const pathHint = normalizeSpringPath([
+    ...pathParts,
+    ...pathFromBuilder,
+    ...(pathSegmentArgs.length > 0 ? [pathSegmentArgs.map((segment) => `/${segment}`).join('')] : []),
+  ].join(''));
   const hostLiteral = stringLiterals.find((value) => /^[a-z][a-z0-9+.-]*:\/\//i.test(value))
-    ?? stringLiterals.find((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !value.startsWith('/'))
+    ?? stringLiterals.find((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !value.startsWith('/') && !SPRING_HTTP_FRAMEWORK_TOKENS.has(value))
     ?? null;
-  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\b/);
+  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*(?:BaseUrl|Host|Url))\b/);
   const serviceNameHintMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_-]*service[A-Za-z0-9_-]*)\b/i);
   const getterServiceHintMatch = [...argText.matchAll(/\bget([A-Z][A-Za-z0-9]*(?:Service|Manager|Client|Api|Gateway|Mgt)[A-Za-z0-9]*)\s*\(/g)][0]?.[1];
   const serviceNameHint = getterServiceHintMatch ?? serviceNameHintMatch?.[1] ?? null;
   const hasConfigPlaceholder = placeholderConfigKeys.length > 0;
 
+  const methodHint = inferHttpMethodFromReceiver(receiverName);
+  const hasStaticPath = pathHint !== '/';
+  const hasStaticHost = hostLiteral !== null || configKeys.length > 0 || baseUrlVarMatch !== null;
+
   return {
     methodHint: inferHttpMethodFromReceiver(receiverName),
-    ...(pathHint ? { pathHint } : {}),
+    ...(hasStaticPath ? { pathHint } : {}),
     ...(hostLiteral ? { hostHint: hostLiteral } : {}),
     ...(serviceNameHint ? { serviceNameHint } : {}),
     ...(baseUrlVarMatch ? { baseUrlVar: baseUrlVarMatch[1] } : {}),
+    clientFamily: /webClient/i.test(receiverName) ? 'WebClient' : /restClient/i.test(receiverName) ? 'RestClient' : /restTemplate/i.test(receiverName) ? 'RestTemplate' : 'HttpClient',
+    pathSource: hasStaticPath ? 'expression' : 'unknown',
+    hostSource: hostLiteral ? 'literal' : (configKeys.length > 0 ? 'config' : (baseUrlVarMatch ? 'variable' : 'unknown')),
+    ...(argText.includes('buildAndExpand(') ? { pathVariables: ['id'] } : {}),
+    ...(argText.includes('queryParam(')
+      ? { queryKeys: [...new Set([...argText.matchAll(/queryParam\(\s*["']([^"']+)["']/g)].map((match) => match[1]!.trim()))] }
+      : {}),
+    ...(baseUrlVarMatch ? { baseUrlExpr: baseUrlVarMatch[1] } : {}),
     ...(configKeys.length > 0 ? { configKeys } : {}),
-    dynamicPath: pathHint !== null
-      || /[+{]|UriComponentsBuilder|toUriString\s*\(/.test(expressionText)
+    dynamicPath: !hasStaticPath
+      && /[+{]|UriComponentsBuilder|toUriString\s*\(/.test(expressionText)
       || hasConfigPlaceholder,
-    dynamicHost: /[+{]|baseUrl|host|uriBuilder/i.test(expressionText) || hasConfigPlaceholder,
-    unsupportedPattern: true,
+    dynamicHost: !hasStaticHost && (/[+{]|baseUrl|host|uriBuilder/i.test(expressionText) || hasConfigPlaceholder),
+    unsupportedPattern: false,
+    ...(methodHint ? { methodHint } : {}),
   };
 }
 
@@ -260,7 +342,7 @@ function buildHttpCallFromUriArgs(input: {
     const fallbackSymbol = firstArgIsLiteral
         ? firstArgValue ?? firstArg.text
         : firstArg.text;
-    const symbol = (typeof metadata['pathHint'] === 'string'
+    const symbol = (typeof metadata['pathHint'] === 'string' && (metadata['pathHint'] as string).length > 1
         ? metadata['pathHint']
         : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] : fallbackSymbol)) as string;
 
@@ -853,7 +935,9 @@ function processMethodInvocations(
 
         // restTemplate.*(url, ...) 처리
         if (/^restTemplate$/i.test(objectName)) {
-            const firstArg = getFirstArg(argList);
+            const args = getArgs(argList);
+            const firstArg = args[0] ?? null;
+            const methodFromSecondArg = args[1]?.text.match(/HttpMethod\.([A-Z]+)/)?.[1] ?? null;
             if (firstArg) {
                 const resolvedArg = resolveStringArg(firstArg, varMap);
                 const url = resolvedArg?.value;
@@ -868,9 +952,33 @@ function processMethodInvocations(
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9 (변수 추적 포함)
                             metadata: {
                                 client: 'RestTemplate',
-                                method: methodName,
+                                method: methodFromSecondArg ?? methodName,
                                 resolvedUrl: url,
                                 resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+                                pathHint: normalizeSpringPath(extractComparablePath(url)),
+                                hostHint: extractComparableHost(url),
+                                clientFamily: 'RestTemplate',
+                                pathSource: 'literal',
+                                hostSource: 'literal',
+                            },
+                        }),
+                    );
+                } else {
+                    const fallbackMetadata = buildPartialHttpMetadata(objectName, args.map((arg) => arg.text).join(', '));
+                    signals.push(
+                        makeSignal({
+                            kind: 'call',
+                            symbol: (fallbackMetadata['pathHint'] as string)
+                                ?? (fallbackMetadata['hostHint'] as string)
+                                ?? firstArg.text,
+                            lineStart: mi.startPosition.row + 1,
+                            lineEnd: mi.endPosition.row + 1,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
+                            confidence: 0.85,
+                            metadata: {
+                                client: 'RestTemplate',
+                                method: methodFromSecondArg ?? methodName,
+                                ...fallbackMetadata,
                             },
                         }),
                     );

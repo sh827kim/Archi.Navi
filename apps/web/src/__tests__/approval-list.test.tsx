@@ -641,7 +641,7 @@ describe('ApprovalList', () => {
       expect.objectContaining({
         body: JSON.stringify({
           workspaceId: 'ws-1',
-          repoRoots: ['/tmp', '/tmp/orders-service'],
+          repoRoots: ['/tmp/orders-service'],
           useServiceMetadataPaths: true,
           async: true,
           pipeline: 'reinforced',
@@ -654,7 +654,7 @@ describe('ApprovalList', () => {
   it('Smart 모드는 proof summary 응답을 성공 토스트와 viewer에 반영해야 한다', async () => {
     let candidateRequestCount = 0;
 
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
       if (url.includes('/api/inference/candidates?')) {
         candidateRequestCount += 1;
@@ -735,7 +735,8 @@ describe('ApprovalList', () => {
         }));
       }
       throw new Error(`Unexpected fetch: ${url}`);
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(<ApprovalList />);
 
@@ -766,7 +767,7 @@ describe('ApprovalList', () => {
   });
 
   it('Smart trace viewer는 breakdown 정보가 없어도 안전하게 렌더링해야 한다', async () => {
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/api/inference/candidates?')) {
         return Promise.resolve(jsonResponse([]));
@@ -824,7 +825,8 @@ describe('ApprovalList', () => {
         }));
       }
       throw new Error(`Unexpected fetch: ${url}`);
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(<ApprovalList />);
 
@@ -845,7 +847,7 @@ describe('ApprovalList', () => {
   });
 
   it('정적 분석 0건이라도 config artifact가 있으면 설정 파일 없음 오진 토스트를 띄우지 않아야 한다', async () => {
-    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
       const url = String(input);
       if (url.includes('/api/inference/candidates?')) {
         return Promise.resolve(jsonResponse([]));
@@ -857,6 +859,12 @@ describe('ApprovalList', () => {
         }));
       }
       if (url === '/api/inference/run') {
+        const parsedBody = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>;
+        expect(parsedBody).toMatchObject({
+          workspaceId: 'ws-1',
+          repoRoots: ['/tmp/orders-service'],
+          useServiceMetadataPaths: true,
+        });
         return Promise.resolve(jsonResponse({
           summary: { relationCandidatesCreated: 0 },
           results: {
@@ -883,7 +891,8 @@ describe('ApprovalList', () => {
         }));
       }
       throw new Error(`Unexpected fetch: ${url}`);
-    }));
+    });
+    vi.stubGlobal('fetch', fetchMock);
 
     render(<ApprovalList />);
 

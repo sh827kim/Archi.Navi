@@ -277,6 +277,34 @@ function mergeUniqueStrings(existing: unknown, additions: Array<string | null | 
   ]);
 }
 
+function extractPathVariables(path: string | null): string[] {
+  if (!path) return [];
+  return uniqueSortedStrings(
+    [...path.matchAll(/\{([^}/]+)\}/g)].map((match) => match[1]?.trim() ?? null),
+  );
+}
+
+function extractQueryKeys(path: string | null): string[] {
+  if (!path || !path.includes('?')) return [];
+  const query = path.split('?')[1] ?? '';
+  return uniqueSortedStrings(
+    query
+      .split('&')
+      .map((pair) => pair.split('=')[0]?.trim() ?? null),
+  );
+}
+
+function isValidAliasHint(value: string | null): boolean {
+  if (!value) return false;
+  const trimmed = value.trim();
+  if (trimmed.length === 0) return false;
+  if (trimmed.startsWith('/')) return false;
+  if (trimmed.includes('{') || trimmed.includes('}')) return false;
+  if (/^https?:\/\//i.test(trimmed)) return true;
+  if (trimmed.includes('/')) return false;
+  return /^[a-z0-9._-]+$/i.test(trimmed);
+}
+
 async function loadSourceContexts(
   db: DbClient,
   workspaceId: string,
@@ -560,28 +588,58 @@ export async function extractFunctionSummariesFromCodeSignals(
       if (kind === 'call' || kind === 'http_call') {
         const path = extractHttpPathHint(row.calleeSymbol, metadata);
         const host = extractHttpHostHint(row.calleeSymbol, metadata);
+        const pathTemplate = asString(metadata['pathTemplate']) ?? path;
+        const pathVariables = uniqueSortedStrings([
+          ...extractPathVariables(pathTemplate),
+          ...(Array.isArray(metadata['pathVariables']) ? metadata['pathVariables'].map((entry) => asString(entry)) : []),
+        ]);
+        const queryKeys = uniqueSortedStrings([
+          ...extractQueryKeys(path),
+          ...(Array.isArray(metadata['queryKeys']) ? metadata['queryKeys'].map((entry) => asString(entry)) : []),
+        ]);
         const serviceNameHint = asString(metadata['serviceNameHint']);
         const baseUrlVar = asString(metadata['baseUrlVar']);
-        if (host) aliasHints.push(host);
-        if (serviceNameHint) aliasHints.push(serviceNameHint);
-        if (baseUrlVar) aliasHints.push(baseUrlVar);
+        const clientFamily = asString(metadata['clientFamily']) ?? asString(metadata['client']);
+        const pathSource = asString(metadata['pathSource']) ?? (asString(metadata['resolvedUrl']) ? 'resolved' : 'hint');
+        const hostSource = asString(metadata['hostSource']) ?? (host ? 'hint' : 'unknown');
+        const baseUrlExpr = asString(metadata['baseUrlExpr']) ?? baseUrlVar;
+        const baseUrlHint = asString(metadata['baseUrlHint']) ?? asString(metadata['resolvedUrl']) ?? asString(metadata['hostHint']);
+        if (host && isValidAliasHint(host)) aliasHints.push(host);
+        if (serviceNameHint && isValidAliasHint(serviceNameHint)) aliasHints.push(serviceNameHint);
+        if (baseUrlVar && isValidAliasHint(baseUrlVar)) aliasHints.push(baseUrlVar);
         if (!outboundHttp) {
           outboundHttp = {
             method: method ?? normalizeMethod(metadata['methodHint']),
             path,
+            pathTemplate,
+            pathVariables,
+            queryKeys,
             hostAlias: host,
             configKeys,
             serviceNameHint,
             baseUrlVar,
+            baseUrlExpr,
+            baseUrlHint,
+            clientFamily,
+            pathSource,
+            hostSource,
             dynamicPath: flags.dynamicPath,
             dynamicHost: flags.dynamicHost,
           };
         } else {
           outboundHttp['method'] = outboundHttp['method'] ?? method ?? normalizeMethod(metadata['methodHint']);
           outboundHttp['path'] = outboundHttp['path'] ?? path;
+          outboundHttp['pathTemplate'] = outboundHttp['pathTemplate'] ?? pathTemplate;
+          outboundHttp['pathVariables'] = mergeUniqueStrings(outboundHttp['pathVariables'], pathVariables);
+          outboundHttp['queryKeys'] = mergeUniqueStrings(outboundHttp['queryKeys'], queryKeys);
           outboundHttp['hostAlias'] = outboundHttp['hostAlias'] ?? host;
           outboundHttp['serviceNameHint'] = outboundHttp['serviceNameHint'] ?? serviceNameHint;
           outboundHttp['baseUrlVar'] = outboundHttp['baseUrlVar'] ?? baseUrlVar;
+          outboundHttp['baseUrlExpr'] = outboundHttp['baseUrlExpr'] ?? baseUrlExpr;
+          outboundHttp['baseUrlHint'] = outboundHttp['baseUrlHint'] ?? baseUrlHint;
+          outboundHttp['clientFamily'] = outboundHttp['clientFamily'] ?? clientFamily;
+          outboundHttp['pathSource'] = outboundHttp['pathSource'] ?? pathSource;
+          outboundHttp['hostSource'] = outboundHttp['hostSource'] ?? hostSource;
           outboundHttp['dynamicPath'] = outboundHttp['dynamicPath'] ?? flags.dynamicPath;
           outboundHttp['dynamicHost'] = outboundHttp['dynamicHost'] ?? flags.dynamicHost;
           outboundHttp['configKeys'] = uniqueSortedStrings([

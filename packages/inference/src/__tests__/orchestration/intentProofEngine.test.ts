@@ -1924,6 +1924,84 @@ describeDb('intent proof engine', () => {
     expect(candidates).toHaveLength(0);
   });
 
+  it('provider endpoint method=ANY 는 concrete method와 호환되어야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'orders-api' });
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'ANY /orders/{id}',
+      parentId: providerServiceId,
+      metadata: { method: 'ANY', path: '/orders/{id}' },
+    });
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: serviceId,
+      aliasKey: 'client.orders.url',
+      aliasValue: 'ORDERS_API',
+      resolvedServiceId: providerServiceId,
+      sourceHash: 'alias-orders-api-any',
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/orders/123',
+      hostHint: 'ORDERS_API',
+      configKeys: ['client.orders.url'],
+      intentHash: 'intent-http-any-method',
+      anchorHash: 'anchor-http-any-method',
+    });
+
+    const result = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(result.status).toBe('CLOSED_ATOMIC');
+    expect(result.targetObjectId).toBe(endpointId);
+  });
+
+  it('path variable 이름이 달라도 shape가 같으면 endpoint match가 가능해야 한다', async () => {
+    const providerServiceId = await insertObject(db, { objectType: 'service', name: 'mission-api' });
+    const endpointId = await insertObject(db, {
+      objectType: 'api_endpoint',
+      name: 'GET /mission/{missionId}',
+      parentId: providerServiceId,
+      metadata: { method: 'GET', path: '/mission/{missionId}' },
+    });
+    await db.insert(aliasBindings).values({
+      id: generateId(),
+      workspaceId,
+      bindingKind: 'property_alias',
+      ownerServiceId: serviceId,
+      aliasKey: 'client.mission.base-url',
+      aliasValue: 'MISSION_API',
+      resolvedServiceId: providerServiceId,
+      sourceHash: 'alias-mission-api-shape',
+    });
+
+    const intentId = generateId();
+    await db.insert(interactionIntents).values({
+      id: intentId,
+      workspaceId,
+      intentType: 'http_call',
+      sourceServiceId: serviceId,
+      sourceFunctionId: functionId,
+      methodHint: 'GET',
+      externalPathHint: '/mission/{id}',
+      hostHint: 'MISSION_API',
+      configKeys: ['client.mission.base-url'],
+      intentHash: 'intent-http-shape-match',
+      anchorHash: 'anchor-http-shape-match',
+    });
+
+    const result = await resolveInteractionIntentProof(db, { workspaceId, intentId });
+    expect(result.status).toBe('CLOSED_ATOMIC');
+    expect(result.targetObjectId).toBe(endpointId);
+  });
+
   it('endpoint_disambiguation patch는 ambiguous frontier를 닫고 target endpoint를 고정해야 한다', async () => {
     const providerServiceId = await insertObject(db, { objectType: 'service', name: 'shipping-api' });
     const endpointA = await insertObject(db, {

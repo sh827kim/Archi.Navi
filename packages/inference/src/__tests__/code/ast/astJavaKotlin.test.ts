@@ -175,6 +175,25 @@ String response = restTemplate.getForObject("http://payment-service/pay", String
         expect(call?.metadata).toMatchObject({ client: 'RestTemplate' });
     });
 
+    it('RestTemplate.exchange(baseUrl + "/mission", HttpMethod.POST, ...)에서 method/path/host를 복원해야 한다', async () => {
+        const content = `
+private static final String BASE_URL = "http://mission-service";
+restTemplate.exchange(BASE_URL + "/mission", HttpMethod.POST, requestEntity, String.class);
+`;
+        const result = await scanJavaKotlinAst('/src/MissionClient.java', content);
+        const call = result.signals.find(
+            (signal) => signal.kind === 'call' && signal.metadata['client'] === 'RestTemplate',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.symbol).toBe('http://mission-service/mission');
+        expect(call?.metadata).toMatchObject({
+            method: 'POST',
+            hostHint: 'mission-service',
+            pathHint: '/mission',
+        });
+    });
+
     it('webClient 체인(uri)에서 call 신호를 추출해야 한다', async () => {
         const content = `
 webClient.get().uri("http://inventory-service/stock").retrieve();
@@ -237,6 +256,28 @@ webClient.get()
             unsupportedPattern: true,
         });
         expect(call?.metadata['resolvedUrl']).toBeUndefined();
+    });
+
+    it('UriComponentsBuilder.pathSegment(id).buildAndExpand(id) 패턴에서 path template를 보존해야 한다', async () => {
+        const content = `
+String endpoint = UriComponentsBuilder.fromUriString(apiProperties.getFoo())
+  .path("/v1/orders")
+  .pathSegment(orderId)
+  .buildAndExpand(orderId)
+  .toUriString();
+webClient.get().uri(endpoint).retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/OrderClient.java', content);
+        const call = result.signals.find(
+            (signal) => signal.kind === 'call' && signal.metadata['client'] === 'WebClient',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.metadata).toMatchObject({
+            pathHint: '/v1/orders/{id}',
+            pathSource: 'expression',
+            dynamicPath: false,
+        });
     });
 
     it('@FeignClient 인터페이스에서 메서드별 call 신호를 추출해야 한다', async () => {

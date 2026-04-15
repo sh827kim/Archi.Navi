@@ -17,9 +17,16 @@ const {
   createGenerateSmartResolutionFnMock: vi.fn(() => vi.fn()),
 }));
 
-function createDbMock() {
+function createDbMock(serviceScanPaths: string[] = []) {
   return {
     update: vi.fn(),
+    select: vi.fn(() => ({
+      from: vi.fn(() => ({
+        where: vi.fn().mockResolvedValue(
+          serviceScanPaths.map((scanPath) => ({ metadata: { scanPath } })),
+        ),
+      })),
+    })),
   };
 }
 
@@ -427,6 +434,69 @@ describe('POST /api/inference/run', () => {
       dbMock,
       expect.objectContaining({
         sources: [{ type: 'local', ref: '/repo/root' }],
+      }),
+    );
+    expect(dbMock.update).not.toHaveBeenCalled();
+  });
+
+  it('service metadata scanPath가 있으면 broad ancestor root를 제거하고 서비스 root를 유지해야 한다', async () => {
+    const dbMock = createDbMock(['/repo/root/orders-service', '/repo/root/billing-service']);
+    getDbMock.mockResolvedValue(dbMock);
+    createInferenceRunMock.mockResolvedValue({
+      id: 'run-3',
+      status: 'QUEUED',
+    });
+    executeInferenceRunMock.mockResolvedValue({
+      run: {
+        id: 'run-3',
+        status: 'SUCCEEDED',
+        stats: {
+          proofSummary: {
+            engine: 'intent_proof',
+            intentCount: 0,
+            gatewayRouteSeedCount: 0,
+            derivedEndpointProofCount: 0,
+            proofClosedAtomicCount: 0,
+            proofFrontierCount: 0,
+            routeFamilyFrontierCount: 0,
+            proofRejectedCount: 0,
+            projectedCandidateCount: 0,
+            serviceTargetProjectionCount: 0,
+            agentFrontierCount: 0,
+            agentPatchedFrontierCount: 0,
+            frontierBreakdown: {},
+            targetBreakdown: {},
+          },
+          config: { repoCount: 2, fileCount: 1, processedFileCount: 1, skippedFileCount: 0 },
+          code: { repoCount: 2, enginesUsed: ['hybrid'], fallbackCount: 0, scanFailures: [] },
+          db: null,
+          proofResolution: { intentCount: 0, closedAtomicCount: 0, frontierCount: 0, rejectedCount: 0 },
+        },
+        warnings: [],
+        errors: [],
+      },
+      sources: [],
+      events: [],
+    });
+
+    const response = await POST(new NextRequest('http://localhost/api/inference/run', {
+      method: 'POST',
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        modes: ['config', 'code'],
+        repoRoots: ['/repo/root', '/repo/root/orders-service'],
+        useServiceMetadataPaths: true,
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createInferenceRunMock).toHaveBeenCalledWith(
+      dbMock,
+      expect.objectContaining({
+        sources: [
+          { type: 'local', ref: '/repo/root/orders-service' },
+          { type: 'local', ref: '/repo/root/billing-service' },
+        ],
       }),
     );
     expect(dbMock.update).not.toHaveBeenCalled();
