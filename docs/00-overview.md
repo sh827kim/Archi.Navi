@@ -91,9 +91,9 @@ MSA/멀티 레포 환경에서는 아래 문제가 반복된다.
 8. 채팅 기록 영속화
 9. 대형 컴포넌트 분할 및 코드 유지보수성 개선
 
-### 5.3 P5: 개발자 생산성 (v3.2+) 📋 설계 완료
+### 5.3 P5: 개발자 생산성 (v3.2+) 📋 Backlog
 
-> S1 완료 후 착수. 상세: `docs/03-roadmap.md` P5 섹션 참조.
+> 설계 문서는 존재하지만 현재 active 구현 우선순위는 아니다. 상세: `docs/03-roadmap.md` P5 섹션 참조.
 
 1. Change Impact Preview (변경 영향도 미리보기)
 2. Architecture Drift Detection (드리프트 감지)

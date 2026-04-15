@@ -1,7 +1,7 @@
 # Archi.Navi — 추론 엔진 고도화
 
 작성일: 2026-03-08
-최종 갱신: 2026-03-31
+최종 갱신: 2026-04-15
 문서 버전: v1.1
 상태: Extension / Partially Shipped / Partially Deprecated
 
@@ -9,6 +9,7 @@
 > 본 문서는 추론 정밀도·품질을 구조적으로 끌어올리기 위한 5가지 핵심 개선을 다룬다.
 >
 > **Note (2026-04-05)**: 섹션 4(LLM 추론 부스터)와 섹션 7(전체 파이프라인 통합 뷰)은 Intent-Centric Proof Engine + Smart Proof Engine으로 대체되어 deprecated 처리되었다. 섹션 2(Inter-procedural AST), 3(Cross-Signal Validation), 5(프레임워크 플러그인), 6(피드백 루프)은 여전히 유효하다.
+> 이 문서는 현행 기준 문서라기보다 확장 reference에 가깝다. 현재 구현 판단에는 `03`, `09~14`, `17`, `18`, `20`, `22`, `53`을 우선 사용한다.
 
 ---
 
@@ -18,7 +19,7 @@
 |------|------|---------|
 | 코드 시그널 정밀도 | 파일 단위 AST (변수 추적 제한) | Inter-procedural 분석 + 프로퍼티 전파 |
 | 시그널 간 정합성 | 독립 수집 → 독립 후보 | 교차 검증으로 신뢰도 동적 조정 |
-| LLM 활용 범위 | 후보 필터링(post-filter)만 | 추론 부스터 + 관계 설명 + 도메인 라벨 정제 |
+| LLM 활용 범위 | 후보 필터링(post-filter)만 | historical goal, 현재 계약은 Smart Proof Engine 문서로 이동 |
 | 프레임워크 확장성 | 패턴 하드코딩 | 플러그인 아키텍처로 커뮤니티 확장 |
 | 학습 능력 | 없음 | 승인/거절 패턴 기반 신뢰도 자동 보정 |
 

@@ -1,7 +1,11 @@
 # 26. API Contract Diff (SPEC) (Roadmap 5-4)
 
-상태: Draft
+상태: Backlog Draft
 작성일: 2026-03-08
+
+현행 메모:
+- expose signal과 caller 조회에 필요한 일부 기반은 존재한다.
+- 그러나 이 문서의 diff report/CLI 계약은 아직 제품 기능이 아니므로 backlog SPEC으로 유지한다.
 
 ## 1. 목적
 

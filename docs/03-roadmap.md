@@ -1,6 +1,6 @@
 # Archi.Navi — v2+ 로드맵
 
-> 작성일: 2026-02-22 | 최종 갱신: 2026-03-30
+> 작성일: 2026-02-22 | 최종 갱신: 2026-04-15
 > v1 구현 현황: `docs/02-implementation-status.md` 참고
 > 추론 엔진 설계: `docs/design/03-inference-engine.md` v3.0, `docs/design/07-inference-engine-advanced.md` v1.0 참고
 
@@ -21,9 +21,21 @@
 > P5 신규 기능보다 **기존 구현의 활성화와 UX 안정화를 우선** 수행한다.
 > 이유: (1) 이미 만든 코드를 살리는 것이 ROI 최대, (2) P5는 정확한 추론 결과에 의존하므로 LLM 추론 활성화가 전제조건.
 
+## 2026-04-15 문서 정렬 기준
+
+현 시점의 문서 분류는 아래 네 가지로 고정한다.
+
+- `Current`: 현재 제품 계약과 구현이 대체로 일치하는 문서
+- `Current Reference / Partial Rollout`: 구현은 살아 있지만 후속 범위나 coverage 제약이 남아 있는 문서
+- `Transition Reference`: 컷오버 이력과 구조 변경 판단을 보존하는 문서
+- `Proposed / Backlog`: 아직 제품 계약으로 승격되지 않은 설계 문서
+
+이 기준에 따라 당장 손봐야 할 문서는 `40`, `53`, `101`, design `03`, `14`이고,
+`17`, `100`, `08`, `23~27`, `92`는 backlog 또는 후속 범위로 분리해 읽는다.
+
 ---
 
-## 현재 상태 요약 (2026-03-29)
+## 현재 상태 요약 (2026-04-15)
 
 | 구간 | 상태 | 비고 |
 |------|------|------|
@@ -31,8 +43,21 @@
 | P2 (2-1 ~ 2-7) | ✅ 완료 | AST hybrid, Evidence Assembler, 비동기 run, Atomic 후보 생성 완료 |
 | P3 (3-1 ~ 3-7) | ✅ 완료 | 증분 리빌드~3D 렌더러 전환까지 완료 |
 | P4 (4-1 ~ 4-6) | ✅ 완료 | Inter-procedural AST, Cross-Validation, LLM Booster, Feedback Loop 구현 완료 |
-| **S1 (안정화)** | **✅ 완료** | **S1-1~S1-20 완료. Query 실행 stage 분리(S1-14) + Evidence context dedupe(S1-15) 반영 완료, 다음 우선순위는 P5** |
-| P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계 완료, S1 이후 착수 |
+| **S1 (안정화)** | **✅ 완료** | **S1-1~S1-20 완료. 다만 frontier/smart coverage와 일부 문서 계약은 후속 정렬이 필요** |
+| P5 (5-1 ~ 5-5) | 📋 Draft | 생산성 기능 설계는 존재하지만, 현재는 backlog로 유지 |
+
+## 다음 실행 우선순위 (Docs First)
+
+1. `40-inference-scan-smart-async-spec`, design `03`, `14`
+   stale 계약과 현행 구현 범위를 먼저 정렬해 active 문서 집합을 안정화한다.
+2. design `08`, spec `23~27`, `92`
+   backlog 문서를 active 계약과 명확히 분리해 이후 구현 우선순위 오염을 막는다.
+3. `101-frontier-review-promotion-spec`
+   frontier reason별 patch form과 review action coverage를 확장한다.
+4. `53-smart-proof-engine-escalation-spec`
+   Smart frontier reason coverage를 넓히고, 지원/미지원 reason 구분을 코드와 문서에 같이 고정한다.
+5. `17-inter-procedural-ast-spec`, `100-spring-request-mapping-atomic-composition-spec`
+   foundation은 있으나 후속 범위가 남은 AST/endpoint 정확도 작업을 이어간다.
 
 ---
 

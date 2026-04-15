@@ -17,7 +17,9 @@
 
 ## Current
 
-### Platform / Visualization
+### Fully Implemented Canonical SPEC
+
+#### Platform / Visualization
 - [01-db-inference-index-unique-spec.md](./01-db-inference-index-unique-spec.md)
 - [02-object-mapping-3d-renderer-spec.md](./02-object-mapping-3d-renderer-spec.md)
 - [03-compound-view-implementation-spec.md](./03-compound-view-implementation-spec.md)
@@ -29,7 +31,7 @@
 - [54-object-detail-layer-assignment-spec.md](./54-object-detail-layer-assignment-spec.md)
 - [55-light-theme-tone-refresh-spec.md](./55-light-theme-tone-refresh-spec.md)
 
-### Standard Inference / Candidate Flow
+#### Standard Inference / Candidate Flow
 - [04-llm-inference-filtering-spec.md](./04-llm-inference-filtering-spec.md)
 - [09-incremental-inference-spec.md](./09-incremental-inference-spec.md)
 - [10-ast-default-code-signal-spec.md](./10-ast-default-code-signal-spec.md)
@@ -47,25 +49,29 @@
 - [91-db-scan-toggle-spec.md](./91-db-scan-toggle-spec.md)
 - [93-common-http-signal-extraction-coverage-spec.md](./93-common-http-signal-extraction-coverage-spec.md)
 - [99-dual-inference-pipeline-selector-spec.md](./99-dual-inference-pipeline-selector-spec.md)
-- [100-spring-request-mapping-atomic-composition-spec.md](./100-spring-request-mapping-atomic-composition-spec.md)
 
-### Proof / Frontier
+#### Proof / Frontier
 - [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
 - [49-intent-centric-proof-engine-state-model-spec.md](./49-intent-centric-proof-engine-state-model-spec.md)
 - [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md)
-- [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)
-- [101-frontier-review-promotion-spec.md](./101-frontier-review-promotion-spec.md)
 
-### UX / Operations
+#### UX / Operations
 - [38-s1-phase2-ux-foundation-spec.md](./38-s1-phase2-ux-foundation-spec.md)
 - [39-workspace-folder-picker-spec.md](./39-workspace-folder-picker-spec.md)
-- [40-inference-scan-smart-async-spec.md](./40-inference-scan-smart-async-spec.md)
 - [41-db-recovery-migration-spec.md](./41-db-recovery-migration-spec.md)
 - [43-inference-run-ops-ux-spec.md](./43-inference-run-ops-ux-spec.md)
 - [44-query-engine-humanized-results-spec.md](./44-query-engine-humanized-results-spec.md)
 - [45-query-engine-input-usability-spec.md](./45-query-engine-input-usability-spec.md)
 - [46-ai-architecture-assistant-scope-expansion-spec.md](./46-ai-architecture-assistant-scope-expansion-spec.md)
 - [52-embedded-postgres-runtime-migration-spec.md](./52-embedded-postgres-runtime-migration-spec.md)
+
+### Current Reference / Partial Rollout
+
+#### Partial Implementation With Active Follow-up
+- [17-inter-procedural-ast-spec.md](./17-inter-procedural-ast-spec.md)
+- [40-inference-scan-smart-async-spec.md](./40-inference-scan-smart-async-spec.md)
+- [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)
+- [101-frontier-review-promotion-spec.md](./101-frontier-review-promotion-spec.md)
 
 ## Transition
 
@@ -75,13 +81,13 @@
 ## Proposed
 
 ### Backlog / Future Exploration
-- [17-inter-procedural-ast-spec.md](./17-inter-procedural-ast-spec.md)
 - [23-change-impact-preview-spec.md](./23-change-impact-preview-spec.md)
 - [24-architecture-drift-detection-spec.md](./24-architecture-drift-detection-spec.md)
 - [25-personal-architecture-journal-spec.md](./25-personal-architecture-journal-spec.md)
 - [26-api-contract-diff-spec.md](./26-api-contract-diff-spec.md)
 - [27-architecture-health-score-spec.md](./27-architecture-health-score-spec.md)
 - [92-compound-scan-ownership-design-spec.md](./92-compound-scan-ownership-design-spec.md)
+- [100-spring-request-mapping-atomic-composition-spec.md](./100-spring-request-mapping-atomic-composition-spec.md)
 
 ## Deprecated
 - [deprecated/README.md](./deprecated/README.md)
@@ -91,6 +97,8 @@
 - `93`은 signal coverage rollout의 단일 canonical SPEC으로 정리했고 `94~98`을 흡수했다.
 - `101`은 현재 구현 상태를 반영해 `Current (Partial Rollout)` 기준으로 업데이트했다.
 - `102`는 `101`에 흡수했다.
+- `17`, `40`, `53`, `101`은 현재 제품에서 살아 있지만 후속 구현이 남아 있어 `Current Reference / Partial Rollout`으로 분리했다.
+- `100`은 active code path가 아니라 후속 설계 범위이므로 `Proposed`로 재분류했다.
 
 ## 참고
 - 구현 체크리스트: [docs/checklists/README.md](../checklists/README.md)

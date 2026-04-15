@@ -7,6 +7,7 @@
 작성일: 2026-03-31
 최종 정리: 2026-04-04
 상태 메모: proof engine 전환의 큰 축은 반영되었고, 이 문서는 컷오버/운영 기준을 남긴 전환 기록으로 유지한다.
+또한 아래 API/summary/패키지 구조 설명 중 일부는 당시 cutover 목표를 설명하는 historical reference이며, literal current contract는 `48`, `49`, `50`, `53`, `99`, `101`을 우선 본다.
 
 ---
 
@@ -177,6 +178,10 @@ route-family child proof spawning은 `ProofResolver` 내부 구현으로 캡슐�
 - `pair_pack`, `agent_assisted`, `full_agent` 모드는 제거된다.
 - agent는 `enableAgentPatches = true`일 때 frontier에만 사용된다.
 
+참고:
+- 위 제거 규칙은 historical cutover 설명이다.
+- 현재 제품 계약은 `smartProof` 기반 wrapper와 frontier-local escalation이며, 상세 기준은 `53`과 `40`을 따른다.
+
 ### 5.4 공통 Response summary
 
 ```json
@@ -223,6 +228,8 @@ route-family child proof spawning은 `ProofResolver` 내부 구현으로 캡슐�
 - `serviceFallbackCount`
 - `fallbackReasonBreakdown`
 - `analysisMode = pair_pack | agent_assisted | full_agent`
+
+위 항목은 제거 이력을 남기기 위한 기록이며, 현행 response contract 정의가 아니다.
 
 ---
 

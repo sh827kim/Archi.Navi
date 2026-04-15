@@ -1,7 +1,11 @@
 # 23. Change Impact Preview (SPEC) (Roadmap 5-1)
 
-상태: Draft
+상태: Backlog Draft
 작성일: 2026-03-08
+
+현행 메모:
+- `IMPACT_ANALYSIS`, `code_artifacts` 같은 기반 요소는 존재한다.
+- 그러나 이 문서가 정의하는 CLI/report 계약은 아직 제품 계약이 아니며, 현재는 backlog SPEC으로 유지한다.
 
 ## 1. 목적
 

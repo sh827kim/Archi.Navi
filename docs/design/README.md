@@ -19,16 +19,22 @@
 
 ## 문서 상태
 
+상태 해석:
+- `Current`: 현재 구현 기준 문서
+- `Current Reference`: 구현은 살아 있으나 범위/진행률 메모가 필요한 문서
+- `Transition Reference`: 컷오버 이력과 구조 변경 판단을 남기는 문서
+- `Roadmap / Backlog Design`: 아직 제품 계약으로 승격되지 않은 확장 설계
+
 | 문서 | 역할 | 상태 |
 |------|------|--------|
 | [01-architecture.md](./01-architecture.md) | 런타임/패키지 구조 기준 문서 | Current |
 | [02-data-model.md](./02-data-model.md) | 스키마와 객체/관계 모델 기준 문서 | Current |
-| [03-inference-engine.md](./03-inference-engine.md) | 표준 추론 + Smart Proof Engine 운영 모델 기준 문서 | Current |
+| [03-inference-engine.md](./03-inference-engine.md) | 표준 추론 + Smart Proof Engine 운영 모델 기준 문서 | Current Reference (Needs Refresh) |
 | [04-query-engine.md](./04-query-engine.md) | 결정론 쿼리 엔진과 AI assistant 결합 방식 기준 문서 | Current |
 | [05-rollup-and-graph.md](./05-rollup-and-graph.md) | rollup generation, delta rebuild, 실시간 갱신 기준 문서 | Current |
 | [06-compound-view.md](./06-compound-view.md) | mapping graph / contributor drill-down UI 기준 문서 | Current |
-| [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) | 추론 고도화 (AST/Cross-Signal/플러그인/피드백은 유효, LLM부스터/파이프라인뷰는 deprecated) | Extension (Partially Deprecated) |
-| [08-developer-productivity.md](./08-developer-productivity.md) | 생산성 기능 로드맵/확장 설계 | Extension |
+| [07-inference-engine-advanced.md](./07-inference-engine-advanced.md) | 추론 고도화 (AST/Cross-Signal/플러그인/피드백은 유효, LLM부스터/파이프라인뷰는 deprecated) | Extension / Partial Rollout / Partial Legacy |
+| [08-developer-productivity.md](./08-developer-productivity.md) | 생산성 기능 로드맵/확장 설계 | Roadmap / Backlog Design |
 | [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md) | intent-first proof engine 개요 | Current |
 | [10-intent-centric-proof-engine-state-model.md](./10-intent-centric-proof-engine-state-model.md) | intent/proof 상태 모델과 추출 레이어 | Current |
 | [11-intent-centric-proof-engine-resolution-pipeline.md](./11-intent-centric-proof-engine-resolution-pipeline.md) | fixed resolution pipeline, frontier, agent | Current |
@@ -54,3 +60,5 @@
 - mapping graph를 3D 렌더러, contributor 패널, 실시간 동기화, domain-first 탐색을 포함한 UX 기준으로 갱신했다.
 - `09~13`은 더 이상 순수 제안 문서가 아니라 현재 proof/smart 엔진의 기준 문서이며, `12`만 전환 기록 성격으로 유지한다.
 - `14`는 제품 외부 공유를 고려한 구현 가이드이므로, 세부 진행률은 canonical SPEC인 `93`, `99`에서 함께 확인한다.
+- `03`, `07`, `14`는 현재 코드와 범위 차이가 남아 있으므로 README에서 진행 상태를 분리해 추적한다.
+- `08`은 shipped 기준 문서가 아니라 backlog 성격의 확장 설계로 유지한다.

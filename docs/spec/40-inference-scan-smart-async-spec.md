@@ -1,12 +1,14 @@
 # 40. Inference Scan Bootstrap + Smart Async SPEC
 
-상태: Implemented (부분 Legacy 포함, 2026-04-05 기준)
+상태: Current Reference (Partial, 2026-04-15 기준)
 우선순위: S1
-로드맵 범위: 정적 추론 안정화 / 스캔 UX / Smart Pipeline 운영 UX
+로드맵 범위: 정적 추론 안정화 / 스캔 UX / Smart Proof Engine 운영 UX
 
 현행 메모:
-- `/api/inference/smart`의 비동기 실행 경로는 유지되지만, 현재 Smart 실행 계약은 pair-first `analysisMode`가 아니라 proof-engine 기반 wrapper를 사용한다.
+- `/api/inference/smart`의 비동기 실행 경로는 유지되지만, 현재 Smart 실행 계약은 pair-first `analysisMode`가 아니라 `run + smartProof` 기반 wrapper를 사용한다.
 - 따라서 이 문서에서 유효한 범위는 `scan bootstrap`, `repoRoot 안정화`, `async run queueing`이며, 구식 Smart 분석 모드 계약은 더 이상 기준이 아니다.
+- `analysisMode`, pair-first Smart 단계 구분, 별도 Smart 엔진 가정은 본 문서의 현행 범위에서 제외한다.
+- 이 문서는 신규 기능 착수용 SPEC이 아니라, 이미 반영된 안정화 범위와 남은 follow-up 경계를 고정하는 reference다.
 
 ## 1. 문제 정의
 

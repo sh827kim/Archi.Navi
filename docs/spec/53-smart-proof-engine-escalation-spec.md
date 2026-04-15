@@ -1,6 +1,6 @@
 # 53. Smart Proof Engine Escalation (SPEC)
 
-상태: Current
+상태: Current (Partial Rollout)
 우선순위: P0
 상위 문서:
 - [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
@@ -10,6 +10,10 @@
 - [11-intent-centric-proof-engine-resolution-pipeline.md](../design/11-intent-centric-proof-engine-resolution-pipeline.md)
 - [13-smart-proof-engine-escalation.md](../design/13-smart-proof-engine-escalation.md)
 작성일: 2026-04-05
+
+상태 메모:
+- Smart escalation 실행 경로와 기본 validator 연동은 구현되었다.
+- 다만 frontier reason coverage는 부분 롤아웃 상태이며, 일부 reason은 현재 read-only 또는 미지원으로 남아 있다.
 
 ---
 
@@ -55,7 +59,7 @@ proof engine 공통 원칙은 `48/50`을 따른다.
 - frontier-local structured patch proposal
 - validator 기반 acceptance/review/skip 흐름
 - Smart 호출 감사 로그, 예산, 메트릭
-- 1차 frontier reason 범위 정의
+- 1차 frontier reason 범위 정의와 지원/미지원 구분
 
 ### 3.2 제외
 
