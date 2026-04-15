@@ -604,9 +604,9 @@ export async function extractFunctionSummariesFromCodeSignals(
         const hostSource = asString(metadata['hostSource']) ?? (host ? 'hint' : 'unknown');
         const baseUrlExpr = asString(metadata['baseUrlExpr']) ?? baseUrlVar;
         const baseUrlHint = asString(metadata['baseUrlHint']) ?? asString(metadata['resolvedUrl']) ?? asString(metadata['hostHint']);
-        if (isValidAliasHint(host)) aliasHints.push(host);
-        if (isValidAliasHint(serviceNameHint)) aliasHints.push(serviceNameHint);
-        if (isValidAliasHint(baseUrlVar)) aliasHints.push(baseUrlVar);
+        if (host && isValidAliasHint(host)) aliasHints.push(host);
+        if (serviceNameHint && isValidAliasHint(serviceNameHint)) aliasHints.push(serviceNameHint);
+        if (baseUrlVar && isValidAliasHint(baseUrlVar)) aliasHints.push(baseUrlVar);
         if (!outboundHttp) {
           outboundHttp = {
             method: method ?? normalizeMethod(metadata['methodHint']),

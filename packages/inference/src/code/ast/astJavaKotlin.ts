@@ -937,11 +937,11 @@ function processMethodInvocations(
         if (/^restTemplate$/i.test(objectName)) {
             const args = getArgs(argList);
             const firstArg = args[0] ?? null;
+            const methodFromSecondArg = args[1]?.text.match(/HttpMethod\.([A-Z]+)/)?.[1] ?? null;
             if (firstArg) {
                 const resolvedArg = resolveStringArg(firstArg, varMap);
                 const url = resolvedArg?.value;
                 if (url) {
-                    const methodFromSecondArg = args[1]?.text.match(/HttpMethod\.([A-Z]+)/)?.[1] ?? null;
                     signals.push(
                         makeSignal({
                             kind: 'call',
