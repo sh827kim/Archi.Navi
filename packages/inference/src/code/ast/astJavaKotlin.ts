@@ -45,10 +45,28 @@ const CALL_NODE_TYPES = ['method_invocation', 'call_expression'];
 const METHOD_DECLARATION_NODE_TYPES = ['method_declaration', 'function_declaration'];
 const FIELD_DECLARATION_NODE_TYPES = ['field_declaration', 'property_declaration'];
 const VALUE_ANNOTATION_REGEX = /@(?:field:)?Value\s*\(\s*"([^"]+)"\s*\)/;
+const SPRING_HTTP_FRAMEWORK_TOKENS = new Set([
+    'UriComponentsBuilder',
+    'WebClient',
+    'RestClient',
+    'RestTemplate',
+    'uriBuilder',
+]);
 
 interface ResolvedVariableMap {
     values: VariableMap;
     propertyBackedVariables: Set<string>;
+}
+
+interface SpringRequestMappingInfo {
+    paths: string[];
+    methods: string[] | null;
+    annotation: string;
+}
+
+interface SpringMappingExtraction {
+    info: SpringRequestMappingInfo;
+    annotationNode: SyntaxNode;
 }
 
 // ─── 변수 추적 (Data-Flow) ─────────────────────────────────────────────────────
@@ -144,12 +162,63 @@ function resolveStringArg(
             resolvedVia: varMap.propertyBackedVariables.has(argNode.text) ? 'property' : 'variable',
         };
     }
+    if (argNode.type === 'binary_expression' || argNode.type === 'additive_expression') {
+        const parts = argNode.text
+            .split('+')
+            .map((part) => part.trim())
+            .filter((part) => part.length > 0);
+        if (parts.length === 0) return null;
+
+        let resolved = '';
+        let resolvedVia: 'literal' | 'variable' | 'property' = 'literal';
+        for (const part of parts) {
+            const quoted = part.match(/^["']([^"']+)["']$/)?.[1] ?? null;
+            if (quoted !== null) {
+                resolved += quoted;
+                continue;
+            }
+            const variableValue = varMap.values.get(part);
+            if (!variableValue) return null;
+            if (varMap.propertyBackedVariables.has(part)) {
+                resolvedVia = 'property';
+            } else if (resolvedVia !== 'property') {
+                resolvedVia = 'variable';
+            }
+            resolved += variableValue;
+        }
+        if (resolved.includes('${')) return null;
+        return { value: resolved, resolvedVia };
+    }
     return null;
 }
 
 function inferHttpMethodFromReceiver(receiverName: string): string | null {
     const match = receiverName.match(/\.(get|post|put|delete|patch)\s*\(/i);
     return match ? match[1]!.toUpperCase() : null;
+}
+
+function extractComparablePath(rawValue: string): string {
+    try {
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue)) {
+            const url = new URL(rawValue);
+            return url.pathname;
+        }
+    } catch {
+        // noop
+    }
+    return rawValue;
+}
+
+function extractComparableHost(rawValue: string): string | null {
+    try {
+        if (/^[a-z][a-z0-9+.-]*:\/\//i.test(rawValue)) {
+            const url = new URL(rawValue);
+            return url.hostname || null;
+        }
+    } catch {
+        // noop
+    }
+    return null;
 }
 
 function buildPartialHttpMetadata(
@@ -170,28 +239,52 @@ function buildPartialHttpMetadata(
     .replace(/'(?:\\.|[^'\\])*'/g, ' ')
     .replace(/\$\{[^}]+\}/g, ' ');
   const pathParts = stringLiterals.filter((value) => value.startsWith('/'));
-  const pathHint = pathParts.length > 0 ? pathParts.join('') : null;
+  const pathFromBuilder = [...argText.matchAll(/\.path\(\s*["']([^"']+)["']\s*\)/g)].map((match) => match[1]!.trim());
+  const pathSegmentArgs = [...argText.matchAll(/\.pathSegment\(([^)]*)\)/g)]
+    .flatMap((match) => match[1]!.split(',').map((segment) => segment.trim()).filter((segment) => segment.length > 0))
+    .map((segment) => {
+      const literal = segment.match(/^["']([^"']+)["']$/)?.[1];
+      return literal ? literal : '{id}';
+    });
+  const pathHint = normalizeSpringPath([
+    ...pathParts,
+    ...pathFromBuilder,
+    ...(pathSegmentArgs.length > 0 ? [pathSegmentArgs.map((segment) => `/${segment}`).join('')] : []),
+  ].join(''));
   const hostLiteral = stringLiterals.find((value) => /^[a-z][a-z0-9+.-]*:\/\//i.test(value))
-    ?? stringLiterals.find((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !value.startsWith('/'))
+    ?? stringLiterals.find((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !value.startsWith('/') && !SPRING_HTTP_FRAMEWORK_TOKENS.has(value))
     ?? null;
-  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*)\b/);
+  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*(?:BaseUrl|Host|Url))\b/);
   const serviceNameHintMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_-]*service[A-Za-z0-9_-]*)\b/i);
   const getterServiceHintMatch = [...argText.matchAll(/\bget([A-Z][A-Za-z0-9]*(?:Service|Manager|Client|Api|Gateway|Mgt)[A-Za-z0-9]*)\s*\(/g)][0]?.[1];
   const serviceNameHint = getterServiceHintMatch ?? serviceNameHintMatch?.[1] ?? null;
   const hasConfigPlaceholder = placeholderConfigKeys.length > 0;
 
+  const methodHint = inferHttpMethodFromReceiver(receiverName);
+  const hasStaticPath = pathHint !== '/';
+  const hasStaticHost = hostLiteral !== null || configKeys.length > 0 || baseUrlVarMatch !== null;
+
   return {
     methodHint: inferHttpMethodFromReceiver(receiverName),
-    ...(pathHint ? { pathHint } : {}),
+    ...(hasStaticPath ? { pathHint } : {}),
     ...(hostLiteral ? { hostHint: hostLiteral } : {}),
     ...(serviceNameHint ? { serviceNameHint } : {}),
     ...(baseUrlVarMatch ? { baseUrlVar: baseUrlVarMatch[1] } : {}),
+    clientFamily: /webClient/i.test(receiverName) ? 'WebClient' : /restClient/i.test(receiverName) ? 'RestClient' : /restTemplate/i.test(receiverName) ? 'RestTemplate' : 'HttpClient',
+    pathSource: hasStaticPath ? 'expression' : 'unknown',
+    hostSource: hostLiteral ? 'literal' : (configKeys.length > 0 ? 'config' : (baseUrlVarMatch ? 'variable' : 'unknown')),
+    ...(argText.includes('buildAndExpand(') ? { pathVariables: ['id'] } : {}),
+    ...(argText.includes('queryParam(')
+      ? { queryKeys: [...new Set([...argText.matchAll(/queryParam\(\s*["']([^"']+)["']/g)].map((match) => match[1]!.trim()))] }
+      : {}),
+    ...(baseUrlVarMatch ? { baseUrlExpr: baseUrlVarMatch[1] } : {}),
     ...(configKeys.length > 0 ? { configKeys } : {}),
-    dynamicPath: pathHint !== null
-      || /[+{]|UriComponentsBuilder|toUriString\s*\(/.test(expressionText)
+    dynamicPath: !hasStaticPath
+      && /[+{]|UriComponentsBuilder|toUriString\s*\(/.test(expressionText)
       || hasConfigPlaceholder,
-    dynamicHost: /[+{]|baseUrl|host|uriBuilder/i.test(expressionText) || hasConfigPlaceholder,
-    unsupportedPattern: true,
+    dynamicHost: !hasStaticHost && (/[+{]|baseUrl|host|uriBuilder/i.test(expressionText) || hasConfigPlaceholder),
+    unsupportedPattern: false,
+    ...(methodHint ? { methodHint } : {}),
   };
 }
 
@@ -249,7 +342,7 @@ function buildHttpCallFromUriArgs(input: {
     const fallbackSymbol = firstArgIsLiteral
         ? firstArgValue ?? firstArg.text
         : firstArg.text;
-    const symbol = (typeof metadata['pathHint'] === 'string'
+    const symbol = (typeof metadata['pathHint'] === 'string' && (metadata['pathHint'] as string).length > 1
         ? metadata['pathHint']
         : (typeof metadata['hostHint'] === 'string' ? metadata['hostHint'] : fallbackSymbol)) as string;
 
@@ -446,6 +539,230 @@ function extractFirstFromArray(arrayNode: SyntaxNode): string | null {
 
 // ─── @Mapping 어노테이션 처리 ──────────────────────────────────────────────────
 
+const SUPPORTED_ENDPOINT_METHODS = new Set(['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'ANY']);
+const CONTROLLER_ANNOTATIONS = new Set(['Controller', 'RestController']);
+
+function toArrayLiteralValues(node: SyntaxNode | null): string[] {
+    if (!node) return [];
+    if (node.type === 'string_literal') {
+        const value = extractStringValue(node);
+        return value ? [value] : [];
+    }
+    if (node.type !== 'element_value_array_initializer') return [];
+    return getChildren(node)
+        .filter((child) => child.type === 'string_literal')
+        .map((child) => extractStringValue(child))
+        .filter((value): value is string => value !== null);
+}
+
+function normalizeHttpMethod(method: string): string {
+    const upper = method.toUpperCase();
+    return SUPPORTED_ENDPOINT_METHODS.has(upper) ? upper : 'ANY';
+}
+
+function toMethodValues(node: SyntaxNode | null): string[] {
+    if (!node) return [];
+    const extractRequestMethod = (text: string): string | null => {
+        const lastToken = text.split('.').pop()?.trim();
+        return lastToken ? normalizeHttpMethod(lastToken) : null;
+    };
+
+    if (node.type === 'field_access') {
+        const value = extractRequestMethod(node.text);
+        return value ? [value] : [];
+    }
+    if (node.type === 'identifier') {
+        return [normalizeHttpMethod(node.text)];
+    }
+    if (node.type !== 'element_value_array_initializer') return [];
+
+    return getChildren(node)
+        .filter((child) => child.type === 'field_access' || child.type === 'identifier')
+        .map((child) => extractRequestMethod(child.text))
+        .filter((value): value is string => value !== null);
+}
+
+function normalizeSpringPath(path: string): string {
+    const trimmed = path.trim();
+    if (trimmed.length === 0 || trimmed === '/') return '/';
+    const prefixed = trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+    return prefixed.replace(/\/+/g, '/').replace(/\/$/, '') || '/';
+}
+
+function combineSpringPaths(typePath: string, methodPath: string): string {
+    const normalizedType = normalizeSpringPath(typePath);
+    const normalizedMethod = normalizeSpringPath(methodPath);
+    if (normalizedType === '/') return normalizedMethod;
+    if (normalizedMethod === '/') return normalizedType;
+    return normalizeSpringPath(`${normalizedType}/${normalizedMethod}`);
+}
+
+function findAnnotationsWithNames(node: SyntaxNode, names: Set<string>): SyntaxNode[] {
+    return findNodes(node, 'annotation').filter((ann) => {
+        const annName = getChildren(ann).find((child) => child.type === 'identifier')?.text;
+        return annName ? names.has(annName) : false;
+    });
+}
+
+function extractRequestMappingInfo(annotation: SyntaxNode): SpringRequestMappingInfo | null {
+    const annName = getChildren(annotation).find((child) => child.type === 'identifier')?.text;
+    if (!annName) return null;
+
+    const shortcutMethod = MAPPING_ANNOTATIONS[annName];
+    if (!shortcutMethod && annName !== 'RequestMapping') return null;
+
+    const argList = findChildByType(annotation, 'annotation_argument_list');
+    const args = argList ? extractAnnotationArgs(argList) : new Map<string, SyntaxNode>();
+    const pathNode = args.get('path') ?? args.get('value') ?? null;
+    const firstString = argList
+        ? getChildren(argList).find((child) => child.type === 'string_literal') ?? null
+        : null;
+    const rawPaths = toArrayLiteralValues(pathNode).length > 0
+        ? toArrayLiteralValues(pathNode)
+        : toArrayLiteralValues(firstString);
+    const paths = rawPaths.length > 0 ? rawPaths.map(normalizeSpringPath) : ['/'];
+
+    const methods = annName === 'RequestMapping'
+        ? (() => {
+            const parsedMethods = toMethodValues(args.get('method') ?? null);
+            return parsedMethods.length > 0 ? parsedMethods : null;
+          })()
+        : [normalizeHttpMethod(shortcutMethod ?? 'ANY')];
+
+    return {
+        annotation: annName,
+        paths,
+        methods,
+    };
+}
+
+function extractTypeLevelSpringMapping(typeDecl: SyntaxNode): SpringMappingExtraction | null {
+    const annotations = findAnnotationsWithNames(typeDecl, new Set(['RequestMapping']));
+    if (annotations.length === 0) return null;
+    const first = annotations[0]!;
+    const info = extractRequestMappingInfo(first);
+    return info ? { info, annotationNode: first } : null;
+}
+
+function extractMethodLevelSpringMappings(methodDecl: SyntaxNode): SpringMappingExtraction[] {
+    return findAnnotationsWithNames(methodDecl, new Set(Object.keys(MAPPING_ANNOTATIONS)))
+        .map((annotationNode) => {
+            const info = extractRequestMappingInfo(annotationNode);
+            return info ? { info, annotationNode } : null;
+        })
+        .filter((value): value is SpringMappingExtraction => value !== null);
+}
+
+function isSpringControllerType(typeDecl: SyntaxNode, methodMappings: SpringMappingExtraction[]): boolean {
+    if (methodMappings.length > 0) return true;
+    return findAnnotationsWithNames(typeDecl, CONTROLLER_ANNOTATIONS).length > 0;
+}
+
+function combineSpringMappings(
+    typeInfo: SpringRequestMappingInfo,
+    methodInfo: SpringRequestMappingInfo,
+): Array<{ method: string; path: string }> {
+    const paths: string[] = [];
+    for (const typePath of typeInfo.paths) {
+        for (const methodPath of methodInfo.paths) {
+            paths.push(combineSpringPaths(typePath, methodPath));
+        }
+    }
+    const uniquePaths = [...new Set(paths)];
+
+    const mergedMethods = typeInfo.methods && methodInfo.methods
+        ? methodInfo.methods.filter((method) => typeInfo.methods?.includes(method))
+        : (methodInfo.methods ?? typeInfo.methods ?? ['ANY']);
+    const methods = [...new Set(mergedMethods.length > 0 ? mergedMethods : [])];
+    if (methods.length === 0) return [];
+
+    return methods.flatMap((method) => uniquePaths.map((path) => ({ method, path })));
+}
+
+/* c8 ignore start */
+function processSpringControllerMappings(
+    root: SyntaxNode,
+    signals: ExtractedSignal[],
+): void {
+    const typeDeclarations = [
+        ...findNodes(root, 'class_declaration'),
+        ...findNodes(root, 'interface_declaration'),
+    ];
+
+    for (const typeDecl of typeDeclarations) {
+        const methodMappings = findNodes(typeDecl, 'method_declaration')
+            .flatMap((methodDecl) =>
+                extractMethodLevelSpringMappings(methodDecl).map((mapping) => ({ methodDecl, mapping })),
+            );
+        if (!isSpringControllerType(typeDecl, methodMappings.map((entry) => entry.mapping))) continue;
+
+        const typeMapping = extractTypeLevelSpringMapping(typeDecl);
+        const typeInfo = typeMapping?.info ?? {
+            paths: ['/'],
+            methods: null,
+            annotation: 'RequestMapping',
+        };
+        const ownerTypeName = extractTypeName(typeDecl);
+
+        if (methodMappings.length === 0) {
+            if (!typeMapping) continue;
+            const methods = typeInfo.methods ?? ['ANY'];
+            for (const method of methods) {
+                for (const path of typeInfo.paths) {
+                    signals.push(
+                        makeSignal({
+                            kind: 'expose',
+                            symbol: path,
+                            lineStart: typeMapping.annotationNode.startPosition.row + 1,
+                            lineEnd: typeMapping.annotationNode.endPosition.row + 1,
+                            excerpt: typeMapping.annotationNode.text.split('\n')[0] || typeMapping.annotationNode.text,
+                            confidence: 0.95,
+                            metadata: {
+                                method,
+                                path,
+                                annotation: `@${typeInfo.annotation}`,
+                                framework: 'spring',
+                                mappingSource: 'controller_composed',
+                                typeLevelPath: path,
+                                methodLevelPath: null,
+                                ...(ownerTypeName ? { ownerTypeName } : {}),
+                            },
+                        }),
+                    );
+                }
+            }
+            continue;
+        }
+
+        for (const { methodDecl, mapping } of methodMappings) {
+            const combined = combineSpringMappings(typeInfo, mapping.info);
+            for (const endpoint of combined) {
+                signals.push(
+                    makeSignal({
+                        kind: 'expose',
+                        symbol: endpoint.path,
+                        lineStart: mapping.annotationNode.startPosition.row + 1,
+                        lineEnd: mapping.annotationNode.endPosition.row + 1,
+                        excerpt: mapping.annotationNode.text.split('\n')[0] || mapping.annotationNode.text,
+                        confidence: 0.95,
+                        metadata: {
+                            method: endpoint.method,
+                            path: endpoint.path,
+                            annotation: `@${mapping.info.annotation}`,
+                            framework: 'spring',
+                            mappingSource: 'controller_composed',
+                            typeLevelPath: typeInfo.paths[0] ?? null,
+                            methodLevelPath: mapping.info.paths[0] ?? null,
+                            ...(ownerTypeName ? { ownerTypeName } : {}),
+                        },
+                    }),
+                );
+            }
+        }
+    }
+}
+/* c8 ignore stop */
+
 /* c8 ignore start */
 function processSpringMappingAnnotations(
     root: SyntaxNode,
@@ -461,45 +778,6 @@ function processSpringMappingAnnotations(
         const annName = nameNode.text;
         // W-7.1: excerpt 빈 문자열 체크에서 ?? → || 사용 (빈 문자열은 falsy)
         const excerpt = ann.text.split('\n')[0] || ann.text;
-
-        // @GetMapping/@PostMapping/... 처리
-        if (annName in MAPPING_ANNOTATIONS) {
-            const method = MAPPING_ANNOTATIONS[annName] ?? 'ANY';
-            const argList = findChildByType(ann, 'annotation_argument_list');
-
-            let path: string | null = null;
-
-            if (argList) {
-                // @RequestMapping(value = "/path") 또는 @GetMapping("/path")
-                const args = extractAnnotationArgs(argList);
-                const valueNode = args.get('value') ?? args.get('path');
-                if (valueNode) {
-                    if (valueNode.type === 'string_literal') {
-                        path = extractStringValue(valueNode);
-                    } else if (valueNode.type === 'element_value_array_initializer') {
-                        path = extractFirstFromArray(valueNode);
-                    }
-                } else {
-                    // 단순 @GetMapping("/path") 형태
-                    const firstString = getChildren(argList).find((c) => c.type === 'string_literal');
-                    if (firstString) path = extractStringValue(firstString);
-                }
-            }
-
-            if (path) {
-                signals.push(
-                    makeSignal({
-                        kind: 'expose',
-                        symbol: path,
-                        lineStart: ann.startPosition.row + 1,
-                        lineEnd: ann.endPosition.row + 1,
-                        excerpt,
-                        confidence: 0.95, // Phase 1: 0.8 → Phase 2: 0.95
-                        metadata: { method, annotation: `@${annName}` },
-                    }),
-                );
-            }
-        }
 
         // @GetExchange/@PostExchange/... (Spring HttpInterface) 처리
         if (annName in EXCHANGE_ANNOTATIONS) {
@@ -657,11 +935,13 @@ function processMethodInvocations(
 
         // restTemplate.*(url, ...) 처리
         if (/^restTemplate$/i.test(objectName)) {
-            const firstArg = getFirstArg(argList);
+            const args = getArgs(argList);
+            const firstArg = args[0] ?? null;
             if (firstArg) {
                 const resolvedArg = resolveStringArg(firstArg, varMap);
                 const url = resolvedArg?.value;
                 if (url) {
+                    const methodFromSecondArg = args[1]?.text.match(/HttpMethod\.([A-Z]+)/)?.[1] ?? null;
                     signals.push(
                         makeSignal({
                             kind: 'call',
@@ -672,9 +952,33 @@ function processMethodInvocations(
                             confidence: 0.9, // Phase 1: 0.7 → Phase 2: 0.9 (변수 추적 포함)
                             metadata: {
                                 client: 'RestTemplate',
-                                method: methodName,
+                                method: methodFromSecondArg ?? methodName,
                                 resolvedUrl: url,
                                 resolvedVia: resolvedArg?.resolvedVia ?? 'literal',
+                                pathHint: normalizeSpringPath(extractComparablePath(url)),
+                                hostHint: extractComparableHost(url),
+                                clientFamily: 'RestTemplate',
+                                pathSource: 'literal',
+                                hostSource: 'literal',
+                            },
+                        }),
+                    );
+                } else {
+                    const fallbackMetadata = buildPartialHttpMetadata(objectName, args.map((arg) => arg.text).join(', '));
+                    signals.push(
+                        makeSignal({
+                            kind: 'call',
+                            symbol: (fallbackMetadata['pathHint'] as string)
+                                ?? (fallbackMetadata['hostHint'] as string)
+                                ?? firstArg.text,
+                            lineStart: mi.startPosition.row + 1,
+                            lineEnd: mi.endPosition.row + 1,
+                            excerpt: mi.text.split('\n')[0] || mi.text,
+                            confidence: 0.85,
+                            metadata: {
+                                client: 'RestTemplate',
+                                method: methodFromSecondArg ?? methodName,
+                                ...fallbackMetadata,
                             },
                         }),
                     );
@@ -1152,6 +1456,7 @@ export async function scanJavaKotlinAst(
     const varMap = buildVariableMap(root, options?.propertyMap);
     const signals: ExtractedSignal[] = [];
 
+    processSpringControllerMappings(root, signals);
     processSpringMappingAnnotations(root, signals);
     processFeignClientInterfaces(root, signals);
     processMethodInvocations(root, varMap, signals);

@@ -36,6 +36,20 @@ function mergeSignals(...groups: ExtractedSignal[][]): ExtractedSignal[] {
   return Array.from(merged.values());
 }
 
+function isSpringComposedExpose(signal: ExtractedSignal): boolean {
+  return signal.kind === 'expose'
+    && signal.metadata['framework'] === 'spring'
+    && signal.metadata['mappingSource'] === 'controller_composed';
+}
+
+function isFlatSpringExpose(signal: ExtractedSignal): boolean {
+  if (signal.kind !== 'expose') return false;
+  if (signal.metadata['framework'] === 'spring') return true;
+  const annotation = signal.metadata['annotation'];
+  if (typeof annotation !== 'string') return false;
+  return /^@(Get|Post|Put|Delete|Patch|Request)Mapping$/.test(annotation);
+}
+
 function clampConfidence(value: number): number {
   return Math.min(1, Math.max(0, value));
 }
@@ -336,12 +350,16 @@ export async function scanFileWithHybridPlugins(
   }
 
   const base = astResults[0] ?? regexResults[0]!;
+  const mergedAstSignals = mergeSignals(...astResults.map((result) => result.signals));
+  const hasAstSpringComposedExpose = mergedAstSignals.some(isSpringComposedExpose);
+  const mergedRegexSignals = mergeSignals(...regexResults.map((result) => result.signals))
+    .filter((signal) => !(hasAstSpringComposedExpose && isFlatSpringExpose(signal)));
   const mergedSignals = mergeHybridSignals([
-    ...mergeSignals(...regexResults.map((result) => result.signals)).map((signal) => ({
+    ...mergedRegexSignals.map((signal) => ({
       source: 'regex' as const,
       signal,
     })),
-    ...mergeSignals(...astResults.map((result) => result.signals)).map((signal) => ({
+    ...mergedAstSignals.map((signal) => ({
       source: 'ast' as const,
       signal,
     })),

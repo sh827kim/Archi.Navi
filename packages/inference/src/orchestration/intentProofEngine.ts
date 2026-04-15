@@ -82,7 +82,10 @@ function buildConfigBindingContext(input: {
   configKeys: string[];
   aliasHints: string[];
 }): ConfigBindingBundle {
-  const aliasEntries = uniqueSortedStrings(input.aliasHints).map((hint) => ({
+  const expandedAliasHints = uniqueSortedStrings(input.aliasHints)
+    .flatMap((hint) => expandLookupCandidates(hint))
+    .filter((hint) => hint.length > 0);
+  const aliasEntries = uniqueSortedStrings(expandedAliasHints).map((hint) => ({
     key: hint,
     value: hint,
     sourceType: 'other' as const,
@@ -208,7 +211,7 @@ export interface IntentProofWorkspaceIndex {
 
 export type IntentProofResolverContext = IntentProofWorkspaceIndex;
 
-const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD']);
+const HTTP_METHODS = new Set(['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS', 'HEAD', 'ANY']);
 const FUNCTION_SUMMARY_SOURCE_HASH_VERSION = 'function-summary-v3';
 const HTTP_STEP_TYPES = [
   'anchorIntent',
@@ -823,11 +826,32 @@ function buildFunctionSummarySourceHash(payload: JsonRecord): string {
 }
 
 function normalizeLookupToken(value: string): string {
-  return value.trim().toLowerCase();
+  return value
+    .trim()
+    .replace(/([a-z0-9])([A-Z])/g, '$1-$2')
+    .replace(/[_\s]+/g, '-')
+    .replace(/-+/g, '-')
+    .toLowerCase();
 }
 
 function normalizeServiceName(value: string): string {
   return value.trim().toLowerCase().replace(/[-_]/g, '');
+}
+
+function expandLookupCandidates(value: string): string[] {
+  const normalized = normalizeLookupToken(value);
+  if (normalized.length === 0) return [];
+  const suffixRemoved = normalized.replace(/(?:-?base)?-?url$|(?:-?base)?-?host$|-?service$|-?client$/g, '');
+  const compact = normalized.replace(/[-_.]/g, '');
+  const segments = normalized.split(/[./-]+/).filter((segment) => segment.length > 0);
+  const expanded = [
+    normalized,
+    compact,
+    suffixRemoved,
+    suffixRemoved.replace(/[-_.]/g, ''),
+    ...segments,
+  ];
+  return uniqueSortedStrings(expanded);
 }
 
 function normalizeMethod(value: unknown): string | null {
@@ -920,35 +944,64 @@ function isLikelyDynamicPathSegment(segment: string): boolean {
 }
 
 function isEndpointPathCompatible(callPath: string, endpointPath: string): boolean {
+  return computeEndpointPathCompatibilityScore(callPath, endpointPath) >= 0.75;
+}
+
+function computeEndpointPathCompatibilityScore(callPath: string, endpointPath: string): number {
   const callSegments = splitNormalizedPathSegments(callPath);
   const endpointSegments = splitNormalizedPathSegments(endpointPath);
-  if (callSegments.length !== endpointSegments.length) {
-    return false;
+  if (callSegments.length === 0 && endpointSegments.length === 0) {
+    return extractComparablePath(callPath) === extractComparablePath(endpointPath) ? 1 : 0;
   }
-  if (callSegments.length === 0) {
-    return extractComparablePath(callPath) === extractComparablePath(endpointPath);
+  if (endpointSegments.at(-1) === '{*}') {
+    const prefix = endpointSegments.slice(0, -1);
+    const prefixMatches = prefix.every((segment, index) => callSegments[index] === segment || segment === '{*}');
+    return prefixMatches ? 0.55 : 0;
+  }
+  if (callSegments.length !== endpointSegments.length) {
+    const delta = Math.abs(callSegments.length - endpointSegments.length);
+    if (delta > 1) return 0;
   }
 
+  const comparableLength = Math.min(callSegments.length, endpointSegments.length);
+  let total = 0;
   for (let i = 0; i < endpointSegments.length; i += 1) {
     const callSegment = callSegments[i];
     const endpointSegment = endpointSegments[i];
-    if (!callSegment || !endpointSegment) return false;
+    if (!endpointSegment) continue;
+    if (!callSegment) {
+      total -= 0.4;
+      continue;
+    }
 
     if (endpointSegment === '{*}') {
       if (callSegment === '{*}' || isLikelyDynamicPathSegment(callSegment)) {
-        continue;
+        total += 0.9;
+      } else {
+        total += 0.5;
       }
-      return false;
+      continue;
     }
     if (callSegment === '{*}') {
-      return false;
+      total += 0.7;
+      continue;
     }
     if (callSegment !== endpointSegment) {
-      return false;
+      total -= 0.4;
+      continue;
     }
+    total += 1;
   }
 
-  return true;
+  const lengthPenalty = Math.abs(callSegments.length - endpointSegments.length) * 0.2;
+  return Math.max(0, (total / Math.max(1, comparableLength)) - lengthPenalty);
+}
+
+function isMethodCompatible(resolvedMethod: string, endpointMethod: string | null): boolean {
+  if (!endpointMethod) return false;
+  if (endpointMethod === resolvedMethod) return true;
+  if (endpointMethod === 'ANY') return true;
+  return false;
 }
 
 function normalizeRouteScopeKind(value: string | null): 'exact' | 'prefix' | 'regex' | null {
@@ -1148,7 +1201,7 @@ function findMatchingAliasBindings(
 ): Array<typeof aliasBindings.$inferSelect> {
   const lookupKeys = new Set(
     hints
-      .map((entry) => normalizeLookupToken(entry))
+      .flatMap((entry) => expandLookupCandidates(entry))
       .filter((entry) => entry.length > 0),
   );
 
@@ -1157,10 +1210,14 @@ function findMatchingAliasBindings(
   }
 
   return bindings.filter((binding) => {
-    const aliasKey = normalizeLookupToken(binding.aliasKey);
-    const aliasValue = normalizeLookupToken(binding.aliasValue);
-    const resolvedHost = normalizeLookupToken(binding.resolvedHost ?? '');
-    return lookupKeys.has(aliasKey) || lookupKeys.has(aliasValue) || (resolvedHost.length > 0 && lookupKeys.has(resolvedHost));
+    const aliasKeyCandidates = expandLookupCandidates(binding.aliasKey);
+    const aliasValueCandidates = expandLookupCandidates(binding.aliasValue);
+    const resolvedHostCandidates = expandLookupCandidates(binding.resolvedHost ?? '');
+    return (
+      aliasKeyCandidates.some((candidate) => lookupKeys.has(candidate))
+      || aliasValueCandidates.some((candidate) => lookupKeys.has(candidate))
+      || resolvedHostCandidates.some((candidate) => lookupKeys.has(candidate))
+    );
   });
 }
 
@@ -2732,7 +2789,7 @@ async function resolveHttpIntent(
   const bindingMatches = findMatchingAliasBindings(scopedBindings, [...slots.hostHints, ...slots.configKeys]);
   const lookupKeys = new Set(
     [...slots.hostHints, ...slots.configKeys]
-      .map((entry) => normalizeLookupToken(entry))
+      .flatMap((entry) => expandLookupCandidates(entry))
       .filter((entry) => entry.length > 0),
   );
 
@@ -2746,6 +2803,7 @@ async function resolveHttpIntent(
   const directServiceMatches = services.filter((service) => {
     const tokens = new Set(getServiceTokens(service));
     return [...lookupKeys]
+      .flatMap((entry) => expandLookupCandidates(entry))
       .map((entry) => normalizeServiceToken(entry))
       .filter((entry): entry is string => entry !== null)
       .some((entry) => tokens.has(entry));
@@ -2782,11 +2840,22 @@ async function resolveHttpIntent(
           row.endpoint.parentId !== null
           && row.endpoint.parentId !== intent.sourceServiceId
           && row.match.path !== null
-          && providerPathHints.some((pathHint) => isEndpointPathCompatible(pathHint, row.match.path!)),
+          && providerPathHints.some((pathHint) => computeEndpointPathCompatibilityScore(pathHint, row.match.path!) >= 0.75),
         );
-      const pathMatchedProviderIds = uniqueSortedStrings(endpointPathMatches.map((row) => row.endpoint.parentId));
-      if (pathMatchedProviderIds.length === 1) {
-        candidateProviderIds.add(pathMatchedProviderIds[0]!);
+      const providerScores = new Map<string, number>();
+      for (const row of endpointPathMatches) {
+        const providerId = row.endpoint.parentId;
+        if (!providerId || !row.match.path) continue;
+        const methodScore = isMethodCompatible(slots.methodResolved ?? 'ANY', row.match.method) ? 0.3 : 0;
+        const pathScore = Math.max(...providerPathHints.map((pathHint) => computeEndpointPathCompatibilityScore(pathHint, row.match.path!)));
+        const totalScore = pathScore + methodScore;
+        providerScores.set(providerId, Math.max(providerScores.get(providerId) ?? 0, totalScore));
+      }
+      const rankedProviders = [...providerScores.entries()].sort((a, b) => b[1] - a[1]);
+      const topProvider = rankedProviders[0] ?? null;
+      const secondProvider = rankedProviders[1] ?? null;
+      if (topProvider && (!secondProvider || topProvider[1] - secondProvider[1] >= 0.2) && topProvider[1] >= 0.9) {
+        candidateProviderIds.add(topProvider[0]);
         await appendProofStep(
           db,
           proofStateId,
@@ -2798,9 +2867,10 @@ async function resolveHttpIntent(
             portHints: slots.portHints,
           },
           {
-            providerServiceId: pathMatchedProviderIds[0],
+            providerServiceId: topProvider[0],
             resolutionMode: 'path_only_endpoint_inventory',
             pathHints: providerPathHints,
+            providerScores: Object.fromEntries(rankedProviders),
           },
           'Host/config alias가 부족한 경우 endpoint inventory path 힌트로 provider service를 보강했습니다.',
         );
@@ -3528,7 +3598,7 @@ async function resolveHttpIntent(
   const routeFamilyMethodMatches = routeFamilyIntent
     ? targetEndpointRecords.filter(
         (row) =>
-          row.match.method === slots.methodResolved
+          isMethodCompatible(slots.methodResolved!, row.match.method)
           && isRouteFamilyEndpointReachable(
             routeScopeKind,
             slots.routeFamilyCompositionPaths.length > 0 ? slots.routeFamilyCompositionPaths : slots.internalPathResolved!,
@@ -3540,7 +3610,7 @@ async function resolveHttpIntent(
     ? routeFamilyMethodMatches
     : targetEndpointRecords.filter(
         (row) =>
-          row.match.method === slots.methodResolved
+          isMethodCompatible(slots.methodResolved!, row.match.method)
           && normalizePath(row.match.path!) === slots.internalPathResolved,
       );
   const compatibleMatches = routeFamilyIntent
@@ -3550,8 +3620,8 @@ async function resolveHttpIntent(
         ? exactMatches
         : targetEndpointRecords.filter(
             (row) =>
-              row.match.method === slots.methodResolved
-              && isEndpointPathCompatible(slots.internalPathResolved!, row.match.path!),
+              isMethodCompatible(slots.methodResolved!, row.match.method)
+              && computeEndpointPathCompatibilityScore(slots.internalPathResolved!, row.match.path!) >= 0.75,
           )
     );
 
@@ -3573,6 +3643,15 @@ async function resolveHttpIntent(
         providerServiceId: slots.providerServiceId,
         methodResolved: slots.methodResolved,
         internalPathResolved: slots.internalPathResolved,
+        rejectedEndpointCandidates: targetEndpointRecords.map((row) => ({
+          endpointId: row.endpoint.id,
+          endpointMethod: row.match.method,
+          endpointPath: row.match.path,
+          methodCompatible: isMethodCompatible(slots.methodResolved!, row.match.method),
+          pathCompatibilityScore: row.match.path
+            ? computeEndpointPathCompatibilityScore(slots.internalPathResolved!, row.match.path)
+            : 0,
+        })),
       },
     });
     await appendProofStep(

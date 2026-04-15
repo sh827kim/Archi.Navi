@@ -83,6 +83,42 @@ public class ProductController {}`;
         expect(expose?.symbol).toBe('/api/v1/products');
     });
 
+    it('클래스 prefix + 메서드 매핑을 조합한 최종 endpoint를 생성해야 한다', async () => {
+        const content = `
+@RestController
+@RequestMapping("/api/orders")
+public class OrderController {
+    @GetMapping("/{id}")
+    public Order getOrder() { return null; }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/OrderController.java', content);
+        const exposeSignals = result.signals.filter((signal) => signal.kind === 'expose');
+
+        expect(exposeSignals).toHaveLength(1);
+        expect(exposeSignals[0]?.symbol).toBe('/api/orders/{id}');
+        expect(exposeSignals[0]?.metadata).toMatchObject({
+            method: 'GET',
+            path: '/api/orders/{id}',
+            framework: 'spring',
+            mappingSource: 'controller_composed',
+        });
+    });
+
+    it('타입/메서드 method restriction 교집합이 없으면 endpoint를 생성하지 않아야 한다', async () => {
+        const content = `
+@RestController
+@RequestMapping(path = "/api/orders", method = RequestMethod.POST)
+public class OrderController {
+    @RequestMapping(path = "/{id}", method = RequestMethod.GET)
+    public Order getOrder() { return null; }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/OrderController.java', content);
+        const exposeSignals = result.signals.filter((signal) => signal.kind === 'expose');
+        expect(exposeSignals).toHaveLength(0);
+    });
+
     // ─── 멀티라인 어노테이션 처리 (Phase 2 핵심 개선) ────────────────────────
 
     it('멀티라인 @GetMapping 어노테이션을 정확히 추출해야 한다', async () => {
@@ -137,6 +173,25 @@ String response = restTemplate.getForObject("http://payment-service/pay", String
         expect(call?.symbol).toBe('http://payment-service/pay');
         expect(call?.confidence).toBeCloseTo(0.9); // Phase 1: 0.7 → Phase 2: 0.9
         expect(call?.metadata).toMatchObject({ client: 'RestTemplate' });
+    });
+
+    it('RestTemplate.exchange(baseUrl + "/mission", HttpMethod.POST, ...)에서 method/path/host를 복원해야 한다', async () => {
+        const content = `
+private static final String BASE_URL = "http://mission-service";
+restTemplate.exchange(BASE_URL + "/mission", HttpMethod.POST, requestEntity, String.class);
+`;
+        const result = await scanJavaKotlinAst('/src/MissionClient.java', content);
+        const call = result.signals.find(
+            (signal) => signal.kind === 'call' && signal.metadata['client'] === 'RestTemplate',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.symbol).toBe('http://mission-service/mission');
+        expect(call?.metadata).toMatchObject({
+            method: 'POST',
+            hostHint: 'mission-service',
+            pathHint: '/mission',
+        });
     });
 
     it('webClient 체인(uri)에서 call 신호를 추출해야 한다', async () => {
@@ -201,6 +256,28 @@ webClient.get()
             unsupportedPattern: true,
         });
         expect(call?.metadata['resolvedUrl']).toBeUndefined();
+    });
+
+    it('UriComponentsBuilder.pathSegment(id).buildAndExpand(id) 패턴에서 path template를 보존해야 한다', async () => {
+        const content = `
+String endpoint = UriComponentsBuilder.fromUriString(apiProperties.getFoo())
+  .path("/v1/orders")
+  .pathSegment(orderId)
+  .buildAndExpand(orderId)
+  .toUriString();
+webClient.get().uri(endpoint).retrieve();
+`;
+        const result = await scanJavaKotlinAst('/src/OrderClient.java', content);
+        const call = result.signals.find(
+            (signal) => signal.kind === 'call' && signal.metadata['client'] === 'WebClient',
+        );
+
+        expect(call).toBeDefined();
+        expect(call?.metadata).toMatchObject({
+            pathHint: '/v1/orders/{id}',
+            pathSource: 'expression',
+            dynamicPath: false,
+        });
     });
 
     it('@FeignClient 인터페이스에서 메서드별 call 신호를 추출해야 한다', async () => {
