@@ -1,7 +1,11 @@
 # 25. Personal Architecture Journal (SPEC) (Roadmap 5-3)
 
-상태: Draft
+상태: Backlog Draft
 작성일: 2026-03-08
+
+현행 메모:
+- 현재 제품에는 `object_notes` 저장소나 대응 API/UI 계약이 없다.
+- 따라서 이 문서는 backlog SPEC이며, 활성 기능 문서로 읽지 않는다.
 
 ## 1. 목적
 

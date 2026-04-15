@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-03-30
+> 최종 점검일: 2026-04-15
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -16,8 +16,12 @@
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 추론 엔진 고도화 (P4) | ✅ | 4-1~4-6 구현 완료 |
-| **안정화 (S1)** | **✅** | **S1-1~S1-20 완료. Query 실행 파이프라인 stage 분리(S1-14)와 Evidence context dedupe(S1-15)까지 반영 완료. 다음은 P5 생산성 기능 우선순위 조정** |
-| 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff 설계 완료 |
+| **안정화 (S1)** | **✅** | **S1-1~S1-20 완료. 다만 frontier/smart coverage와 문서 계약 정렬은 후속 범위로 남아 있다.** |
+| 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff는 backlog 설계 상태이며 현재 shipped 계약은 아니다. |
+
+현행 메모:
+- 현재 제품 기준의 다음 우선순위는 P5 신규 기능 착수가 아니라, active 문서 정렬과 frontier/smart coverage 보강이다.
+- P5 항목은 기반 요소가 일부 존재해도 아직 제품 계약으로 승격되지 않았으므로 backlog로 유지한다.
 
 ---
 
@@ -118,7 +122,7 @@
 ## 2) ⚠️ Dead Feature — UI 연결 전환 현황
 
 > P4까지 백엔드 구현이 완료되었으나 프론트엔드에서 호출하지 않거나 운영 UX가 부족했던 항목 목록.
-> S1(안정화)에서 순차 연결 중이며, 현재 `S1-1`~`S1-13`이 완료됐다. 상세는 `docs/03-roadmap.md` S1 섹션 참조.
+> S1(안정화) 항목은 현재 모두 완료되었고, 남은 범위는 coverage 보강과 문서 정렬이다. 상세는 `docs/03-roadmap.md` 참조.
 
 ### 2.1 🔴 Critical — 핵심 기능 상태
 
@@ -194,7 +198,7 @@
 | S1-19. AI 아키텍처 어시스턴트 범주 확장 | AI 고도화 | ✅ 완료 |
 | S1-20. Smart Gateway/Proxy Route-Aware Atomic Recovery | AI 고도화 | ✅ 완료 |
 
-### 4.2 P5: 개발자 생산성 기능 (v3.2+) — S1 완료 후 착수
+### 4.2 P5: 개발자 생산성 기능 (v3.2+) — Backlog
 
 | 항목 | SPEC | 상태 |
 |------|------|------|
@@ -204,6 +208,10 @@
 | 5-4. API Contract Diff | `docs/spec/26-api-contract-diff-spec.md` | 📋 Draft |
 | 5-5. Architecture Health Score | `docs/spec/27-architecture-health-score-spec.md` | 📋 Draft |
 | 5-6. 구조적 개선 (서비스 레이어/커버리지/공유/Watcher) | `docs/design/08-developer-productivity.md` §7 | 📋 Draft |
+
+메모:
+- 위 항목들은 설계 문서가 존재하지만, 현재 제품의 active 구현 우선순위는 아니다.
+- 실제 착수 전까지는 roadmap/backlog로만 관리한다.
 
 ---
 

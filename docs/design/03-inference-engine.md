@@ -1,8 +1,13 @@
 # Archi.Navi — 추론 엔진
 
 작성일: 2026-02-22
-최종 갱신: 2026-04-06
+최종 갱신: 2026-04-15
 문서 버전: v4.0
+문서 상태: Current Reference (Needs Refresh)
+
+현행 메모:
+- 이 문서는 현재 추론 엔진의 큰 구조를 설명하는 기준 문서다.
+- 다만 세부 coverage와 rollout 진행률은 `40`, `53`, `93`, `99`, `101`, design `14`를 함께 봐야 한다.
 
 ---
 
@@ -46,7 +51,7 @@
 
 ```text
 Signal Collection
-  - code / config / db / openapi
+  - code / config / db
         ↓
 Standard Inference
   - relation inference
@@ -149,13 +154,11 @@ config 신호는 서비스 간 관계, DB/Broker 연결, endpoint binding 보강
   - DB 테이블 사용 근거 생성
   - relation candidate 및 evidence 저장 보강
 
-## 4.4 OpenAPI 신호
+## 4.4 OpenAPI 경로 정리 메모
 
-- 모듈: `packages/inference/src/openapi/*`
-- 역할:
-  - OpenAPI spec import
-  - provider endpoint bootstrap
-  - Smart pipeline의 Phase 1 입력
+- 과거에는 `packages/inference/src/openapi/*` 기반 runtime 경로를 두었지만, 현재 제품 코드에서는 제거되었다.
+- 따라서 OpenAPI import는 현행 추론 엔진의 기본 신호 수집 레이어가 아니다.
+- 향후 OpenAPI bootstrap을 다시 도입하려면 새 canonical SPEC과 runtime 계약을 다시 정의해야 한다.
 
 ---
 

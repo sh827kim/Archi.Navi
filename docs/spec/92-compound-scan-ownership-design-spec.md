@@ -1,7 +1,11 @@
 # 92. Compound Scan Ownership Design SPEC
 
-상태: Proposed
+상태: Backlog Proposed
 작성일: 2026-04-06
+
+현행 메모:
+- 이 문서는 아직 구현에 착수하지 않은 backlog 설계다.
+- 현재 스캔/ownership 제품 계약의 기준 문서가 아니며, 실제 착수 전까지는 active SPEC처럼 해석하지 않는다.
 
 ## 1. 문제
 

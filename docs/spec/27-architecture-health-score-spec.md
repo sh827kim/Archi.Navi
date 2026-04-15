@@ -1,7 +1,11 @@
 # 27. Architecture Health Score (SPEC) (Roadmap 5-5)
 
-상태: Draft
+상태: Backlog Draft
 작성일: 2026-03-08
+
+현행 메모:
+- 일부 계산 재료는 현재 모델에서 얻을 수 있다.
+- 다만 건강도 점수, 추천 메시지, API/UI/CLI 계약은 아직 shipped 범위가 아니므로 backlog SPEC으로만 유지한다.
 
 ## 1. 목적
 

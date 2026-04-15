@@ -2,7 +2,13 @@
 
 작성일: 2026-04-14
 상태: Public Shareable Implementation Guide
-구현 상태: Current Reference
+구현 상태: Current Reference (Partial Rollout)
+
+현행 메모:
+- core lifecycle, plugin hook, binding 방향은 현재 구현과 맞는다.
+- 다만 본문이 설명하는 framework coverage 폭은 shipped baseline보다 넓으므로, 일부 항목은 현재 계약이 아니라 목표 구조로 읽어야 한다.
+- 현재 shipped baseline 판단은 canonical SPEC `93`, `99`와 현재 코드 경로를 우선한다.
+- 따라서 이 문서는 `현재 baseline + 목표 구조`를 함께 담는 public reference로 읽는다.
 
 ---
 
