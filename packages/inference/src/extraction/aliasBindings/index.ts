@@ -5,6 +5,13 @@ import { aliasBindings, codeArtifacts, codeCallEdges, evidences, objects } from 
 import { generateId } from '@archi-navi/shared';
 import { detectPlugins, parseConfigWithPluginParsers } from '@/code';
 import { parseApplicationYml } from '@/relation/parsers/applicationYml';
+import {
+  describeConfigEntries,
+  loadApplicationConfigBundle,
+  materializeConfigEntriesFromSignals,
+  mergeConfigBindingBundles,
+  resolveConfigKeysAgainstEntries,
+} from '@/relation/configBinder';
 import { findFiles } from '@/utils/fileDiscovery';
 import {
   asRecord,
@@ -24,6 +31,8 @@ export interface ExtractAliasBindingsOptions {
 
 export interface ExtractAliasBindingsResult {
   bindingCount: number;
+  configBindingCount?: number;
+  configBindingUnresolvedCount?: number;
 }
 
 interface ServiceRef {
@@ -111,6 +120,10 @@ function findApplicationConfigFiles(repoRoot: string): string[] {
       && (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json'))
     );
   });
+}
+
+function loadConfigRegistry(repoRoot: string) {
+  return loadApplicationConfigBundle(repoRoot);
 }
 
 async function loadServiceMap(
@@ -363,6 +376,7 @@ export async function extractAliasBindingsFromCodeSignals(
   options: ExtractAliasBindingsOptions,
 ): Promise<ExtractAliasBindingsResult> {
   const serviceMap = await loadServiceMap(db, options.workspaceId);
+  const configRegistry = loadConfigRegistry(options.repoRoot);
   const rows = await db
     .select({
       calleeSymbol: codeCallEdges.calleeSymbol,
@@ -385,13 +399,19 @@ export async function extractAliasBindingsFromCodeSignals(
   );
 
   let bindingCount = 0;
+  let configBindingCount = 0;
+  let configBindingUnresolvedCount = 0;
   for (const row of rows) {
     const metadata = asRecord(row.evidenceMetadata) ?? {};
     const kind = asString(metadata['kind']);
     if (kind !== 'call' && kind !== 'http_call') continue;
 
-    const host = extractHost(row.calleeSymbol);
     const configKeys = extractConfigKeysFromMetadata(metadata);
+    const configBindings = resolveConfigKeysAgainstEntries(configKeys, configRegistry);
+    configBindingCount += configBindings.descriptors.length;
+    configBindingUnresolvedCount += configBindings.unresolved.length;
+    const configHostHints = uniqueSortedStrings(configBindings.descriptors.flatMap((binding) => binding.hostHints));
+    const host = configHostHints[0] ?? extractHost(row.calleeSymbol);
     const service = host ? findServiceByAlias(serviceMap, host) : null;
     const ownerServiceId = row.ownerObjectId ? (ownerServiceIdByObjectId.get(row.ownerObjectId) ?? null) : null;
     if (host && isLikelyServiceName(host) && service) {
@@ -410,26 +430,31 @@ export async function extractAliasBindingsFromCodeSignals(
       bindingCount += 1;
     }
 
-    if (!host || configKeys.length === 0) continue;
+    for (const binding of configBindings.descriptors) {
+      const aliasValue = binding.resolvedUrl ?? binding.value ?? row.calleeSymbol.trim();
+      const bindingHost = binding.hostHints[0] ?? host ?? null;
+      const bindingService = bindingHost ? findServiceByAlias(serviceMap, bindingHost) : null;
+      if (!bindingHost) {
+        continue;
+      }
 
-    for (const configKey of configKeys) {
       await upsertAliasBinding(db, {
         workspaceId: options.workspaceId,
         runId: options.runId,
-        bindingKind: configKey.toLowerCase().includes('base-url') ? 'base_url' : 'property_alias',
+        bindingKind: binding.bindingKind,
         ownerServiceId,
-        aliasKey: configKey,
-        aliasValue: row.calleeSymbol.trim(),
-        resolvedServiceId: service?.id ?? null,
-        resolvedHost: host,
+        aliasKey: binding.key,
+        aliasValue,
+        resolvedServiceId: bindingService?.id ?? null,
+        resolvedHost: bindingHost,
         evidenceIds: uniqueSortedStrings([row.evidenceId]),
-        confidence: 0.85,
+        confidence: binding.bindingKind === 'base_url' ? 0.9 : 0.85,
       });
       bindingCount += 1;
     }
   }
 
-  return { bindingCount };
+  return { bindingCount, configBindingCount, configBindingUnresolvedCount };
 }
 
 export async function extractAliasBindingsFromConfig(
@@ -441,17 +466,32 @@ export async function extractAliasBindingsFromConfig(
   const detectedPlugins = detectPlugins(options.repoRoot);
 
   let bindingCount = 0;
+  let configBindingCount = 0;
+  let configBindingUnresolvedCount = 0;
   for (const filePath of applicationFiles) {
     const content = readFileSync(filePath, 'utf-8');
     const pluginParsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
-    for (const entry of pluginParsed.entries) {
-      if (entry.sourceType !== 'json') continue;
-      const { aliasValue, resolvedHost } = resolveConfigAliasValue(entry.value);
-      if (aliasValue.length === 0) continue;
+    const fileBundle = mergeConfigBindingBundles(
+      describeConfigEntries(pluginParsed.entries),
+      describeConfigEntries(materializeConfigEntriesFromSignals(pluginParsed.derivedSignals ?? [], filePath)),
+      filePath.endsWith('.yml') || filePath.endsWith('.yaml')
+        ? describeConfigEntries(parseApplicationYml(filePath, content).propertyEntries.map((entry) => ({
+            key: entry.key,
+            value: entry.value,
+            sourceType: 'yaml',
+            filePath,
+          })))
+        : { descriptors: [], unresolved: [], summary: { total: 0, bindingCount: 0, unresolvedCount: 0, valueKindCounts: { url: 0, host: 0, topic: 0, queue: 0, port: 0, path: 0, property: 0 }, bindingKindCounts: { base_url: 0, gateway_target: 0, service_discovery: 0, property_alias: 0 } } },
+    );
+    configBindingCount += fileBundle.descriptors.length;
+    configBindingUnresolvedCount += fileBundle.unresolved.length;
+    for (const binding of fileBundle.descriptors) {
+      const aliasValue = binding.resolvedUrl ?? binding.value ?? '';
+      const resolvedHost = binding.hostHints[0] ?? extractHost(aliasValue);
       const directResolvedService = resolvedHost
         ? findServiceByAlias(serviceMap, resolvedHost)
         : findServiceByAlias(serviceMap, aliasValue);
-      const keyResolvedService = buildConfigAliasCandidates(entry.key, aliasValue, resolvedHost)
+      const keyResolvedService = buildConfigAliasCandidates(binding.key, aliasValue, resolvedHost)
         .map((candidate) => findServiceByAlias(serviceMap, candidate))
         .find((service): service is ServiceRef => service !== null);
       const resolvedService = directResolvedService ?? keyResolvedService ?? null;
@@ -460,50 +500,22 @@ export async function extractAliasBindingsFromConfig(
       await upsertAliasBinding(db, {
         workspaceId: options.workspaceId,
         runId: options.runId,
-        bindingKind: inferConfigBindingKind(entry.key, aliasValue, resolvedHost),
+        bindingKind: binding.bindingKind,
         ownerServiceId: null,
-        aliasKey: entry.key,
-        aliasValue,
+        aliasKey: binding.key,
+        aliasValue: aliasValue.length > 0 ? aliasValue : binding.key,
         resolvedServiceId: resolvedService?.id ?? null,
         resolvedHost,
         evidenceIds: [],
-        confidence: 0.85,
+        confidence: binding.bindingKind === 'base_url' ? 0.95 : 0.85,
       });
       bindingCount += 1;
     }
 
-    const isYaml = filePath.endsWith('.yml') || filePath.endsWith('.yaml');
-    if (!isYaml) continue;
+    if (!(filePath.endsWith('.yml') || filePath.endsWith('.yaml'))) continue;
 
     const signal = parseApplicationYml(filePath, content);
     const ownerService = signal.serviceName ? findServiceByAlias(serviceMap, signal.serviceName) : null;
-
-    for (const entry of signal.propertyEntries) {
-      const { aliasValue, resolvedHost } = resolveConfigAliasValue(entry.value);
-      if (aliasValue.length === 0) continue;
-      const directResolvedService = resolvedHost
-        ? findServiceByAlias(serviceMap, resolvedHost)
-        : findServiceByAlias(serviceMap, aliasValue);
-      const keyResolvedService = buildConfigAliasCandidates(entry.key, aliasValue, resolvedHost)
-        .map((candidate) => findServiceByAlias(serviceMap, candidate))
-        .find((service): service is ServiceRef => service !== null);
-      const resolvedService = directResolvedService ?? keyResolvedService ?? null;
-      if (!resolvedService && !resolvedHost) continue;
-
-      await upsertAliasBinding(db, {
-        workspaceId: options.workspaceId,
-        runId: options.runId,
-        bindingKind: inferConfigBindingKind(entry.key, aliasValue, resolvedHost),
-        ownerServiceId: ownerService?.id ?? null,
-        aliasKey: entry.key,
-        aliasValue,
-        resolvedServiceId: resolvedService?.id ?? null,
-        resolvedHost,
-        evidenceIds: [],
-        confidence: entry.source === 'bootstrap' ? 0.95 : 0.85,
-      });
-      bindingCount += 1;
-    }
 
     for (const route of signal.zuulRoutes) {
       const targetAlias = route.serviceId ?? route.url ?? null;
@@ -527,5 +539,5 @@ export async function extractAliasBindingsFromConfig(
     }
   }
 
-  return { bindingCount };
+  return { bindingCount, configBindingCount, configBindingUnresolvedCount };
 }

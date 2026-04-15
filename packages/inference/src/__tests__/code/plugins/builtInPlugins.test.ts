@@ -79,6 +79,57 @@ export class OrdersController {
     );
   });
 
+  it('spring-boot plugin은 properties config parser hook도 제공해야 한다', () => {
+    const plugin = getBuiltInPlugins().find((candidate) => candidate.id === 'spring-boot');
+    expect(plugin).toBeDefined();
+
+    const parser = plugin?.configParsers?.find((candidate) =>
+      candidate.fileMatchers.some((matcher) => matcher('/tmp/application.properties')));
+    expect(parser).toBeDefined();
+
+    const result = parser?.parse(
+      '/tmp/application.properties',
+      [
+        'client.orders.url=http://orders.internal:8080/api/orders',
+        'client.orders.topic=orders.created',
+        'spring.kafka.listener.topics[0]=order.created',
+      ].join('\n'),
+    );
+
+    expect(result?.entries).toEqual(
+      expect.arrayContaining([
+        {
+          key: 'client.orders.url',
+          value: 'http://orders.internal:8080/api/orders',
+          sourceType: 'properties',
+          filePath: '/tmp/application.properties',
+        },
+        {
+          key: 'client.orders.topic',
+          value: 'orders.created',
+          sourceType: 'properties',
+          filePath: '/tmp/application.properties',
+        },
+        {
+          key: 'spring.kafka.listener.topics[0]',
+          value: 'order.created',
+          sourceType: 'properties',
+          filePath: '/tmp/application.properties',
+        },
+      ]),
+    );
+  });
+
+  it('최소 하나의 built-in plugin은 confidenceRules를 제공해야 한다', () => {
+    const pluginWithRules = getBuiltInPlugins().find(
+      (candidate) => (candidate.confidenceRules?.length ?? 0) > 0,
+    );
+
+    expect(pluginWithRules).toBeDefined();
+    expect(pluginWithRules?.confidenceRules?.some((rule) => rule.adjustment !== 0)).toBe(true);
+    expect(pluginWithRules?.confidenceRules?.some((rule) => rule.signalKind === 'call')).toBe(true);
+  });
+
   it('vertx plugin은 변수 기반 abs 호출, vertx.eventBus(), producerFactory 패턴을 감지해야 한다', () => {
     const plugin = getBuiltInPlugins().find((candidate) => candidate.id === 'vertx');
     expect(plugin).toBeDefined();

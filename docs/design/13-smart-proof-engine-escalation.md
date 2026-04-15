@@ -1,6 +1,6 @@
 # 13. Smart Proof Engine Escalation
 
-상태: Proposed
+상태: Current
 상위 문서:
 - [09-intent-centric-proof-engine-overview.md](./09-intent-centric-proof-engine-overview.md)
 - [11-intent-centric-proof-engine-resolution-pipeline.md](./11-intent-centric-proof-engine-resolution-pipeline.md)
@@ -25,9 +25,7 @@
 
 ## 2. 배경
 
-현재 proof engine은 deterministic-first 구조로 동작하며, `frontierAgent.ts`는 LLM 호출 없이 토큰 매칭 기반의 규칙 엔진이다. 결과적으로 intent의 ~30%가 FRONTIER(미해결) 상태로 남고, 결정론적 agent가 해소하는 비율은 ~1-2%에 불과하다.
-
-원래 설계 의도는 "Agent = LLM 기반 Frontier Patch Generator"였으나, 구현자가 정적 분석과 동일한 결정론적 agent로 구현했다.
+현재 proof engine은 deterministic-first 구조로 동작한다. `frontierAgent.ts` 기반의 결정론적 frontier 처리와, `smartGenerateFn`을 통한 선택적 LLM escalation 경로가 함께 존재한다. 다만 환경/예산/검증 제약 때문에 모든 frontier가 Smart 경로를 기본으로 타는 상태는 아니며, 문서의 나머지 범위는 그 확장 기준을 정의한다.
 
 ---
 
@@ -540,7 +538,7 @@ The static analyzer flagged this function as having dynamic paths that couldn't 
 ## Source Code
 ```{code}```
 
-## Current Summary (incomplete)
+## Current Deterministic Summary
 {existingSummary}
 
 ## Task

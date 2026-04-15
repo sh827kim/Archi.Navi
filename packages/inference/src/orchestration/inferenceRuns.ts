@@ -1128,6 +1128,8 @@ export async function executeInferenceRun(
     processedFileCount: 0,
     skippedFileCount: 0,
     aliasBindingCount: 0,
+    configBindingCount: 0,
+    configBindingUnresolvedCount: 0,
     routeTransformCount: 0,
     interactionIntentCount: 0,
     gatewayRouteSeedCount: 0,
@@ -1157,6 +1159,11 @@ export async function executeInferenceRun(
   };
   const bootstrapResult = {
     analyzedRepoCount: 0,
+    engineRequested: codeEngine,
+    enginesUsed: [] as string[],
+    fallbackCount: 0,
+    scanFailureCount: 0,
+    fileCount: 0,
     signalCount: 0,
     candidateCount: 0,
     createdEndpointCount: 0,
@@ -1213,6 +1220,8 @@ export async function executeInferenceRun(
     configCandidatesCreated: 0,
     codeCandidatesCreated: 0,
     boundEndpointCandidatesCreated: 0,
+    configBindingCount: 0,
+    configBindingUnresolvedCount: 0,
   };
 
   if ((modeSet.has('config') || modeSet.has('code')) && sourceResolution.localSources.length === 0) {
@@ -2443,9 +2452,13 @@ export async function executeInferenceRun(
           configResult.processedFileCount += configFileCounts.processedFileCount;
           configResult.skippedFileCount += configFileCounts.skippedFileCount;
           configResult.aliasBindingCount += aliasResult.bindingCount;
+          configResult.configBindingCount += aliasResult.configBindingCount ?? 0;
+          configResult.configBindingUnresolvedCount += aliasResult.configBindingUnresolvedCount ?? 0;
           configResult.routeTransformCount += routeTransformResult.routeTransformCount;
           configResult.interactionIntentCount += configIntentResult.intentCount;
           configResult.gatewayRouteSeedCount += configIntentResult.gatewayRouteSeedCount ?? 0;
+          configResult.configBindingCount += configIntentResult.configBindingCount ?? 0;
+          configResult.configBindingUnresolvedCount += configIntentResult.configBindingUnresolvedCount ?? 0;
         } catch (error) {
           sourceHasError = true;
           errors.push({
@@ -2494,9 +2507,16 @@ export async function executeInferenceRun(
           if (!codeResult.enginesUsed.includes(result.engineUsed)) {
             codeResult.enginesUsed.push(result.engineUsed);
           }
+          bootstrapResult.fileCount += result.fileCount;
+          bootstrapResult.signalCount += result.signalCount;
+          bootstrapResult.scanFailureCount += Array.isArray(result.scanFailures) ? result.scanFailures.length : 0;
+          if (!bootstrapResult.enginesUsed.includes(result.engineUsed)) {
+            bootstrapResult.enginesUsed.push(result.engineUsed);
+          }
           if (result.fallbackUsed) {
             codeResult.fallbackCount += 1;
             codeResult.fallbackRepoRoots.push(localSource.repoRoot);
+            bootstrapResult.fallbackCount += 1;
           }
           if (result.warning) warnings.push(`[code:${localSource.repoRoot}] ${result.warning}`);
           if (result.scanFailures && result.scanFailures.length > 0) {
@@ -2610,6 +2630,8 @@ export async function executeInferenceRun(
             candidateGenerationMode: 'compat_deterministic',
           });
           compatDeterministic.boundEndpointCandidatesCreated += result.createdEndpointCandidateCount;
+          compatDeterministic.configBindingCount += result.configBindingCount;
+          compatDeterministic.configBindingUnresolvedCount += result.configBindingUnresolvedCount;
         }
       } catch (error) {
         warnings.push(
@@ -2760,6 +2782,8 @@ export async function executeInferenceRun(
           signalCount: codeResult.signalCount,
           artifactCount: codeResult.artifactCount,
           createdAtomicCount: bootstrapResult.createdAtomicCount,
+          configBindingCount: configResult.configBindingCount,
+          configBindingUnresolvedCount: configResult.configBindingUnresolvedCount,
         }),
       },
       {
@@ -2818,6 +2842,8 @@ export async function executeInferenceRun(
           configCandidatesCreated: compatDeterministic.configCandidatesCreated,
           codeCandidatesCreated: compatDeterministic.codeCandidatesCreated,
           boundEndpointCandidatesCreated: compatDeterministic.boundEndpointCandidatesCreated,
+          configBindingCount: compatDeterministic.configBindingCount,
+          configBindingUnresolvedCount: compatDeterministic.configBindingUnresolvedCount,
         }),
         skipped: !requestedCompatDeterministic.enabled,
         skipMessage: 'compat deterministic mode가 비활성화되어 compat_deterministic 단계를 건너뛰었습니다.',

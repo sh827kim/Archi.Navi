@@ -56,6 +56,28 @@ function dedupeNestedRepoRoots(repoRoots: string[]) {
   return deduped;
 }
 
+function normalizeLocalPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function isStrictAncestorPath(ancestor: string, child: string): boolean {
+  if (ancestor.length === 0 || child.length === 0) return false;
+  if (ancestor === child) return false;
+  return child.startsWith(`${ancestor}/`);
+}
+
+function filterBroadAncestorRoots(candidateRoots: string[], serviceScanPaths: string[]): string[] {
+  if (candidateRoots.length === 0) return [];
+  if (serviceScanPaths.length === 0) return candidateRoots;
+
+  const servicePathSet = new Set(serviceScanPaths.map(normalizeLocalPath));
+  return candidateRoots.filter((root) => {
+    const normalizedRoot = normalizeLocalPath(root);
+    if (servicePathSet.has(normalizedRoot)) return true;
+    return !serviceScanPaths.some((scanPath) => isStrictAncestorPath(normalizedRoot, normalizeLocalPath(scanPath)));
+  });
+}
+
 async function collectSmartRepoRoots(
   workspaceId: string,
   body: SmartRunRequest,
@@ -64,6 +86,7 @@ async function collectSmartRepoRoots(
 
   const providedRoots = (body.repoRoots ?? []).map((p) => p.trim()).filter((p) => p.length > 0);
   const discoveredRoots: string[] = [];
+  const serviceScanPaths: string[] = [];
 
   if (body.useServiceMetadataPaths !== false) {
     const services = await db
@@ -75,12 +98,14 @@ async function collectSmartRepoRoots(
       const meta = (svc.metadata ?? {}) as Record<string, unknown>;
       const rawPath = meta['scanPath'];
       if (typeof rawPath === 'string' && rawPath.trim().length > 0) {
-        discoveredRoots.push(rawPath.trim());
+        const scanPath = rawPath.trim();
+        discoveredRoots.push(scanPath);
+        serviceScanPaths.push(scanPath);
       }
     }
   }
 
-  const validRoots = dedupeNestedRepoRoots([...new Set([...providedRoots, ...discoveredRoots])]
+  const normalizedCandidates = [...new Set([...providedRoots, ...discoveredRoots])]
     .map((repoRoot) => {
       try {
         return resolve(repoRoot);
@@ -94,7 +119,17 @@ async function collectSmartRepoRoots(
       } catch {
         return false;
       }
-    }));
+    });
+  const validRoots = filterBroadAncestorRoots(
+    dedupeNestedRepoRoots(normalizedCandidates),
+    serviceScanPaths.map((scanPath) => {
+      try {
+        return resolve(scanPath);
+      } catch {
+        return scanPath;
+      }
+    }),
+  );
 
   return { db, validRoots };
 }

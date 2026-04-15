@@ -20,6 +20,7 @@ import type { AppYmlSignal } from './parsers/applicationYml';
 import type { DockerComposeSignal } from './parsers/dockerCompose';
 import type { K8sSignal } from './parsers/k8sManifest';
 import { saveRelationCandidate } from './candidateStore';
+import { materializeConfigEntriesFromSignals } from './configBinder';
 import { findFiles } from '../utils/fileDiscovery';
 
 // Confidence 상수 (설계 문서 §2.3.3)
@@ -67,7 +68,7 @@ function findApplicationConfigs(repoRoot: string): string[] {
     const base = p.split('/').pop() ?? '';
     return (
       (base.startsWith('application') || base.startsWith('bootstrap')) &&
-      (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json'))
+      (base.endsWith('.yml') || base.endsWith('.yaml') || base.endsWith('.json') || base.endsWith('.properties'))
     );
   });
 }
@@ -954,17 +955,19 @@ export async function inferRelationsFromConfig(
       continue;
     }
 
+    const parsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
+    const derivedEntries = materializeConfigEntriesFromSignals(parsed.derivedSignals ?? [], filePath);
+    const genericEntries = [
+      ...parsed.entries.map((entry) => ({ key: entry.key, value: entry.value })),
+      ...derivedEntries.map((entry) => ({ key: entry.key, value: entry.value })),
+    ];
+    if (genericEntries.length > 0) {
+      await processJsonConfigEntries(filePath, genericEntries, ctx, stats);
+    }
+
     if (filePath.endsWith('.yml') || filePath.endsWith('.yaml')) {
       const signal = parseApplicationYml(filePath, content);
       await processAppYmlSignal(signal, ctx, stats);
-    } else if (filePath.endsWith('.json')) {
-      const parsed = parseConfigWithPluginParsers(filePath, content, detectedPlugins);
-      await processJsonConfigEntries(
-        filePath,
-        parsed.entries.map((entry) => ({ key: entry.key, value: entry.value })),
-        ctx,
-        stats,
-      );
     }
     const artifactId = await upsertConfigArtifact(db, {
       workspaceId,

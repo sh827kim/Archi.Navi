@@ -1,7 +1,7 @@
 // @vitest-environment node
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { mkdtempSync } from 'node:fs';
+import { mkdirSync, mkdtempSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -344,6 +344,49 @@ describe('/api/inference/smart', () => {
         },
       },
     });
+  });
+
+  it('service scanPath가 있을 때 broad ancestor repoRoot는 제거하고 서비스 root를 유지해야 한다', async () => {
+    const workspaceRoot = mkdtempSync(join(tmpdir(), 'smart-proof-collapse-'));
+    const serviceA = join(workspaceRoot, 'service-a');
+    const serviceB = join(workspaceRoot, 'service-b');
+    mkdirSync(serviceA, { recursive: true });
+    mkdirSync(serviceB, { recursive: true });
+    vi.stubGlobal('queueMicrotask', (callback: () => void) => callback());
+    const dbMock = createDbMock([serviceA, serviceB]);
+    getDbMock.mockResolvedValue(dbMock);
+    getInferenceModelMock.mockReturnValue({
+      model: { provider: 'openai' },
+      modelName: 'gpt-4o',
+    });
+    createInferenceRunMock.mockResolvedValue({ id: 'run-proof-collapse', status: 'QUEUED' });
+    executeInferenceRunMock.mockResolvedValue({
+      run: { id: 'run-proof-collapse', status: 'SUCCEEDED', stats: {} },
+      sources: [],
+      events: [],
+    });
+
+    const response = await POST(new Request('http://localhost/api/inference/smart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        workspaceId: 'ws-1',
+        repoRoots: [workspaceRoot, serviceA],
+        useServiceMetadataPaths: true,
+        pipeline: 'reinforced',
+      }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(createInferenceRunMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        sources: [
+          { type: 'local', ref: serviceA },
+          { type: 'local', ref: serviceB },
+        ],
+      }),
+    );
   });
 
   it('POST는 유효한 repo root가 없으면 NO_REPO_ROOTS를 반환해야 한다', async () => {

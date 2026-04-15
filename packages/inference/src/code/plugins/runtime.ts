@@ -36,6 +36,59 @@ function mergeSignals(...groups: ExtractedSignal[][]): ExtractedSignal[] {
   return Array.from(merged.values());
 }
 
+function isSpringComposedExpose(signal: ExtractedSignal): boolean {
+  return signal.kind === 'expose'
+    && signal.metadata['framework'] === 'spring'
+    && signal.metadata['mappingSource'] === 'controller_composed';
+}
+
+function isFlatSpringExpose(signal: ExtractedSignal): boolean {
+  if (signal.kind !== 'expose') return false;
+  if (signal.metadata['framework'] === 'spring') return true;
+  const annotation = signal.metadata['annotation'];
+  if (typeof annotation !== 'string') return false;
+  return /^@(Get|Post|Put|Delete|Patch|Request)Mapping$/.test(annotation);
+}
+
+function clampConfidence(value: number): number {
+  return Math.min(1, Math.max(0, value));
+}
+
+function applyConfidenceRules(
+  signal: ExtractedSignal,
+  rules: NonNullable<FrameworkPlugin['confidenceRules']> | undefined,
+): ExtractedSignal {
+  if (!rules || rules.length === 0) return signal;
+
+  let confidence = signal.confidence;
+  for (const rule of rules) {
+    if (rule.signalKind !== signal.kind) continue;
+    if (!rule.condition(signal)) continue;
+    confidence = clampConfidence(confidence + rule.adjustment);
+  }
+
+  return confidence === signal.confidence ? signal : { ...signal, confidence };
+}
+
+function applyConfidenceRulesToSignals(
+  signals: ExtractedSignal[],
+  rules: NonNullable<FrameworkPlugin['confidenceRules']> | undefined,
+): ExtractedSignal[] {
+  if (!rules || rules.length === 0 || signals.length === 0) return signals;
+  return signals.map((signal) => applyConfidenceRules(signal, rules));
+}
+
+function applyConfidenceRulesToResult(
+  result: FileScanResult,
+  rules: NonNullable<FrameworkPlugin['confidenceRules']> | undefined,
+): FileScanResult {
+  if (!rules || rules.length === 0 || result.signals.length === 0) return result;
+  return {
+    ...result,
+    signals: applyConfidenceRulesToSignals(result.signals, rules),
+  };
+}
+
 export function detectLanguageFromFilePath(filePath: string): FrameworkLanguage | null {
   const extension = extname(filePath).toLowerCase();
 
@@ -70,6 +123,112 @@ function configEntryKey(entry: ConfigEntry): string {
   return `${entry.filePath}::${entry.key}::${entry.value}::${entry.sourceType}`;
 }
 
+type ConfigBindingValueKind = 'url' | 'host' | 'topic' | 'queue' | 'port' | 'path' | 'property';
+type ConfigBindingKind = 'base_url' | 'gateway_target' | 'service_discovery' | 'property_alias';
+
+function normalizeConfigKey(value: string): string {
+  return value.trim().toLowerCase().replace(/\[(\d+)\]/g, '.$1');
+}
+
+function splitConfigKeySegments(value: string): string[] {
+  return normalizeConfigKey(value)
+    .split(/[./_\-\s]+/)
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0);
+}
+
+function splitConfigValueTokens(value: string): string[] {
+  return value
+    .split(/[;,]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+}
+
+function isUrlLike(value: string): boolean {
+  return /^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim());
+}
+
+function isHostPortLike(value: string): boolean {
+  return /^[^/\s:]+:\d{1,5}$/.test(value.trim());
+}
+
+function isNumericPortLike(value: string): boolean {
+  return /^\d{1,5}$/.test(value.trim());
+}
+
+function hasKeyToken(key: string, tokens: string[]): boolean {
+  const segments = splitConfigKeySegments(key);
+  return tokens.some((token) => segments.includes(token));
+}
+
+function inferValueKind(key: string, value: string | null): ConfigBindingValueKind {
+  if (!value || value.trim().length === 0) {
+    return 'property';
+  }
+
+  const normalizedValue = value.trim();
+  if (isUrlLike(normalizedValue)) return 'url';
+  if (isNumericPortLike(normalizedValue) || hasKeyToken(key, ['port'])) return 'port';
+  if (hasKeyToken(key, ['topic'])) return 'topic';
+  if (hasKeyToken(key, ['queue'])) return 'queue';
+  if (hasKeyToken(key, ['path', 'route', 'uri', 'endpoint'])) return 'path';
+  if (isHostPortLike(normalizedValue) || /^[^/\s:]+$/.test(normalizedValue)) return 'host';
+  return 'property';
+}
+
+function inferBindingKind(key: string, valueKind: ConfigBindingValueKind): ConfigBindingKind {
+  if (valueKind === 'url') return 'base_url';
+  if (hasKeyToken(key, ['gateway', 'route'])) return 'gateway_target';
+  if (valueKind === 'host' && hasKeyToken(key, ['host', 'service', 'url', 'uri'])) {
+    return 'service_discovery';
+  }
+  return 'property_alias';
+}
+
+function summarizeConfigEntries(entries: ConfigEntry[]): {
+  total: number;
+  bindingCount: number;
+  unresolvedCount: number;
+  valueKindCounts: Record<ConfigBindingValueKind, number>;
+  bindingKindCounts: Record<ConfigBindingKind, number>;
+} {
+  const valueKindCounts: Record<ConfigBindingValueKind, number> = {
+    url: 0,
+    host: 0,
+    topic: 0,
+    queue: 0,
+    port: 0,
+    path: 0,
+    property: 0,
+  };
+  const bindingKindCounts: Record<ConfigBindingKind, number> = {
+    base_url: 0,
+    gateway_target: 0,
+    service_discovery: 0,
+    property_alias: 0,
+  };
+
+  let bindingCount = 0;
+  for (const entry of entries) {
+    const value = entry.value.trim();
+    const valueKind = inferValueKind(entry.key, value.length > 0 ? value : null);
+    const bindingKind = inferBindingKind(entry.key, valueKind);
+    valueKindCounts[valueKind] += 1;
+    bindingKindCounts[bindingKind] += 1;
+    if (value.length > 0) {
+      bindingCount += 1;
+    }
+  }
+
+  return {
+    total: entries.length,
+    bindingCount,
+    unresolvedCount: entries.length - bindingCount,
+    valueKindCounts,
+    bindingKindCounts,
+  };
+}
+
 export function parseConfigWithPluginParsers(
   filePath: string,
   content: string,
@@ -100,9 +259,20 @@ export function parseConfigWithPluginParsers(
       for (const entry of parsed.entries ?? []) {
         entries.set(configEntryKey(entry), entry);
       }
-      derivedSignals.push(...(parsed.derivedSignals ?? []));
+      derivedSignals.push(...applyConfidenceRulesToSignals(parsed.derivedSignals ?? [], plugin.confidenceRules));
+      const entryCount = parsed.entries?.length ?? 0;
+      const configBindingSummary = summarizeConfigEntries(parsed.entries ?? []);
       if (parsed.metadata) {
-        metadataByParser[`${plugin.id}:${parser.id}`] = parsed.metadata;
+        metadataByParser[`${plugin.id}:${parser.id}`] = {
+          ...parsed.metadata,
+          derivedSignalCount: parsed.derivedSignals?.length ?? 0,
+          configBindingSummary,
+        };
+      } else if (entryCount > 0) {
+        metadataByParser[`${plugin.id}:${parser.id}`] = {
+          derivedSignalCount: parsed.derivedSignals?.length ?? 0,
+          configBindingSummary,
+        };
       }
     }
   }
@@ -128,6 +298,9 @@ export function scanFileWithRegexPlugins(
   const selected = selectPluginsForFile(filePath, detectedPlugins);
   const results = selected
     .map((plugin) => plugin.regexScanner?.(filePath, content) ?? plugin.scanRegex?.(filePath, content) ?? null)
+    .map((result, index) => (
+      result ? applyConfidenceRulesToResult(result, selected[index]?.confidenceRules) : null
+    ))
     .filter((result): result is FileScanResult => result !== null);
 
   if (results.length === 0) {
@@ -150,17 +323,21 @@ export async function scanFileWithHybridPlugins(
 
   const selected = selectPluginsForFile(filePath, detectedPlugins);
   const regexResults = selected
-    .map((plugin) => plugin.regexScanner?.(filePath, content) ?? plugin.scanRegex?.(filePath, content) ?? null)
+    .map((plugin) => {
+      const result = plugin.regexScanner?.(filePath, content) ?? plugin.scanRegex?.(filePath, content) ?? null;
+      return result ? applyConfidenceRulesToResult(result, plugin.confidenceRules) : null;
+    })
     .filter((result): result is FileScanResult => result !== null);
   const astResults = (
     await Promise.all(
       selected.map(async (plugin) => {
         try {
-          return await Promise.resolve(
+          const result = await Promise.resolve(
             plugin.astExtractor?.(filePath, content, {}) ??
               plugin.scanAst?.(filePath, content, {}) ??
               null,
           );
+          return result ? applyConfidenceRulesToResult(result, plugin.confidenceRules) : null;
         } catch {
           return null;
         }
@@ -173,12 +350,16 @@ export async function scanFileWithHybridPlugins(
   }
 
   const base = astResults[0] ?? regexResults[0]!;
+  const mergedAstSignals = mergeSignals(...astResults.map((result) => result.signals));
+  const hasAstSpringComposedExpose = mergedAstSignals.some(isSpringComposedExpose);
+  const mergedRegexSignals = mergeSignals(...regexResults.map((result) => result.signals))
+    .filter((signal) => !(hasAstSpringComposedExpose && isFlatSpringExpose(signal)));
   const mergedSignals = mergeHybridSignals([
-    ...mergeSignals(...regexResults.map((result) => result.signals)).map((signal) => ({
+    ...mergedRegexSignals.map((signal) => ({
       source: 'regex' as const,
       signal,
     })),
-    ...mergeSignals(...astResults.map((result) => result.signals)).map((signal) => ({
+    ...mergedAstSignals.map((signal) => ({
       source: 'ast' as const,
       signal,
     })),
@@ -209,7 +390,7 @@ export async function scanFileWithAstPlugins(
           plugin.scanAst?.(filePath, content, context)
             ?? plugin.astExtractor?.(filePath, content, context)
             ?? null,
-        ),
+        ).then((result) => (result ? applyConfidenceRulesToResult(result, plugin.confidenceRules) : null)),
       ),
     )
   ).filter((result): result is FileScanResult => result !== null);

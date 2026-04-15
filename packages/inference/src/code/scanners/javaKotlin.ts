@@ -24,7 +24,12 @@ const JAVA_PATTERNS: Pattern[] = [
         confidence: 0.8,
         extract: (m) => ({
             symbol: m[2]!,
-            metadata: { method: m[1]!.toUpperCase(), annotation: `@${m[1]!}Mapping` },
+            metadata: {
+                method: m[1]!.toUpperCase(),
+                annotation: `@${m[1]!}Mapping`,
+                framework: 'spring',
+                mappingSource: 'regex_annotation_flat',
+            },
         }),
     },
     // API 노출 — @RequestMapping : 직접 문자열, value=, path=, method= 속성 지원
@@ -34,7 +39,15 @@ const JAVA_PATTERNS: Pattern[] = [
         confidence: 0.8,
         extract: (m) => {
             // method= 속성이 있으면 추출, 없으면 'ANY'
-            return { symbol: m[1]!, metadata: { method: 'ANY', annotation: '@RequestMapping' } };
+            return {
+                symbol: m[1]!,
+                metadata: {
+                    method: 'ANY',
+                    annotation: '@RequestMapping',
+                    framework: 'spring',
+                    mappingSource: 'regex_annotation_flat',
+                },
+            };
         },
     },
     // HTTP 호출 — RestTemplate

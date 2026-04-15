@@ -1,11 +1,12 @@
 # 49. Intent-Centric Proof Engine State Model (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P0
 상위 문서: [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
 관련 디자인 문서: [10-intent-centric-proof-engine-state-model.md](../design/10-intent-centric-proof-engine-state-model.md)
 작성일: 2026-03-31
 최종 정리: 2026-04-04
+구현 메모: proof 실행 상태와 frontier/patch 저장 모델의 현재 기준 문서다.
 
 ---
 

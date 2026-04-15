@@ -1,6 +1,6 @@
 # 98. Bootstrap Engine Policy Alignment (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P1
 상위 문서:
 - [11-ast-regex-hybrid-code-signal-spec.md](./11-ast-regex-hybrid-code-signal-spec.md)
@@ -8,6 +8,7 @@
 관련 설계 문서:
 - [14-signal-coverage-design-public-edition.md](../design/14-signal-coverage-design-public-edition.md)
 작성일: 2026-04-14
+상태 메모: hybrid 기본 정책, fallback 관측치, bootstrap summary 집계가 현행화되었다.
 
 ---
 

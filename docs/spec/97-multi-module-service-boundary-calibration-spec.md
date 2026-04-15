@@ -1,12 +1,13 @@
 # 97. Multi-Module Service Boundary Calibration (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P1
 상위 문서:
 - [12-inference-run-orchestration-spec.md](./12-inference-run-orchestration-spec.md)
 관련 설계 문서:
 - [14-signal-coverage-design-public-edition.md](../design/14-signal-coverage-design-public-edition.md)
 작성일: 2026-04-14
+상태 메모: Maven/Gradle 모듈 수집과 application config 가중치가 경계 보정에 반영된다.
 
 ---
 

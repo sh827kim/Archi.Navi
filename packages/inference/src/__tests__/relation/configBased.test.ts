@@ -6,7 +6,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync, rmSync, chmodSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
-import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
+import { createTestDb as createEmbeddedTestDb, getEmbeddedPostgresTestSupport } from '@archi-navi/db';
 import { objects, relationCandidates, objectRelations, evidences, workspaces, codeArtifacts } from '@archi-navi/db';
 import { eq, and } from 'drizzle-orm';
 import { inferRelationsFromConfig } from '@/relation/configBased';
@@ -19,6 +19,16 @@ async function createTestDb() {
 }
 
 type TestDb = Awaited<ReturnType<typeof createTestDb>>;
+const embeddedSupport = await getEmbeddedPostgresTestSupport();
+const describeDb = embeddedSupport.supported ? describe : describe.skip;
+
+if (!embeddedSupport.supported) {
+  console.warn(
+    `[inference:test] skipping configBased integration tests: ${
+      embeddedSupport.reason ?? 'unsupported test database environment'
+    }`,
+  );
+}
 
 /** 테스트용 워크스페이스 + 서비스 Object 생성 */
 async function createTestFixtures(db: TestDb, workspaceId: string) {
@@ -43,7 +53,7 @@ async function createTestFixtures(db: TestDb, workspaceId: string) {
   return { orderServiceId };
 }
 
-describe('inferRelationsFromConfig', () => {
+describeDb('inferRelationsFromConfig', () => {
   let db: TestDb;
   let tempDir: string;
   const workspaceId = '00000000-0000-0000-0000-000000000001';
@@ -150,6 +160,83 @@ spring:
         );
       expect(consumeCandidates).toHaveLength(2);
       expect(consumeCandidates[0]?.confidence).toBeCloseTo(0.85);
+    });
+
+    it('bootstrap.yml의 nested listener.topics도 consume relation_candidate로 바인딩해야 한다', async () => {
+      const { orderServiceId } = await createTestFixtures(db, workspaceId);
+
+      writeFileSync(
+        join(tempDir, 'bootstrap.yml'),
+        `
+spring:
+  application:
+    name: order-service
+  kafka:
+    bootstrap-servers: kafka:9092
+    listener:
+      topics:
+        - order.created
+        - payment.completed
+server:
+  port: 8081
+`,
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      expect(result.fileCount).toBe(1);
+      expect(result.processedFileCount).toBe(1);
+      expect(result.candidateCount).toBe(2);
+      expect(result.objectCount).toBe(3);
+
+      const consumeCandidates = await db
+        .select()
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, workspaceId),
+            eq(relationCandidates.relationType, 'consume'),
+            eq(relationCandidates.subjectObjectId, orderServiceId),
+          ),
+        );
+      expect(consumeCandidates).toHaveLength(2);
+      expect(consumeCandidates.every((candidate) => candidate.confidence === 0.85)).toBe(true);
+    });
+
+    it('application.properties의 nested datasource.url도 relation_candidate로 바인딩해야 한다', async () => {
+      const { orderServiceId } = await createTestFixtures(db, workspaceId);
+
+      writeFileSync(
+        join(tempDir, 'application.properties'),
+        [
+          'spring.application.name=order-service',
+          'spring.datasource.url=jdbc:mysql://db-host:3306/order_db',
+          'spring.kafka.consumer.topics[0]=order.created',
+          'spring.kafka.consumer.topics[1]=payment.completed',
+        ].join('\n'),
+      );
+
+      const result = await inferRelationsFromConfig(db, { workspaceId, repoRoot: tempDir });
+
+      expect(result.fileCount).toBe(1);
+      expect(result.processedFileCount).toBe(1);
+      expect(result.candidateCount).toBe(2);
+      expect(result.objectCount).toBe(1);
+
+      const dbObjects = await db
+        .select()
+        .from(objects)
+        .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'database')));
+      expect(dbObjects).toHaveLength(1);
+      expect(dbObjects[0]?.name).toBe('order_db');
+
+      const candidates = await db
+        .select()
+        .from(relationCandidates)
+        .where(and(eq(relationCandidates.workspaceId, workspaceId), eq(relationCandidates.subjectObjectId, orderServiceId)));
+      expect(candidates).toHaveLength(2);
+      expect(candidates.some((candidate) => candidate.relationType === 'read')).toBe(true);
+      expect(candidates.some((candidate) => candidate.relationType === 'write')).toBe(true);
     });
 
     it('kafka producer 설정에서 produce relation_candidate를 생성해야 한다', async () => {

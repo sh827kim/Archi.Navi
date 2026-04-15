@@ -18,6 +18,35 @@ function parseGradleIncludes(content: string): string[] {
   return Array.from(new Set(includes));
 }
 
+function parseMavenModules(content: string): string[] {
+  const modules = [...content.matchAll(/<modules\b[^>]*>([\s\S]*?)<\/modules>/gi)]
+    .flatMap((match) => [...(match[1]?.matchAll(/<module>\s*([^<]+?)\s*<\/module>/gi) ?? [])])
+    .map((match) => match[1]?.trim() ?? '')
+    .filter((entry) => entry.length > 0)
+    .map((entry) => entry.replace(/\\/g, '/'));
+  return Array.from(new Set(modules));
+}
+
+function collectMultiModulePaths(repoRoot: string): string[] {
+  const modules = new Set<string>();
+
+  const settingsGradle = ['settings.gradle', 'settings.gradle.kts']
+    .map((name) => join(repoRoot, name))
+    .find((path) => existsSync(path));
+  if (settingsGradle) {
+    const content = readFileSync(settingsGradle, 'utf-8');
+    parseGradleIncludes(content).forEach((modulePath) => modules.add(modulePath));
+  }
+
+  const pomPath = join(repoRoot, 'pom.xml');
+  if (existsSync(pomPath)) {
+    const content = readFileSync(pomPath, 'utf-8');
+    parseMavenModules(content).forEach((modulePath) => modules.add(modulePath));
+  }
+
+  return Array.from(modules);
+}
+
 function hasAnyFile(moduleRoot: string, relativePaths: string[]): boolean {
   return relativePaths.some((relativePath) => existsSync(join(moduleRoot, relativePath)));
 }
@@ -27,7 +56,15 @@ export function scoreModuleExecutability(repoRoot: string, modulePath: string): 
   let score = 0;
   const reasons: string[] = [];
 
-  if (hasAnyFile(moduleRoot, ['src/main/resources/application.yml', 'src/main/resources/application.yaml', 'src/main/resources/application.json'])) {
+  if (
+    hasAnyFile(moduleRoot, [
+      'src/main/resources/application.yml',
+      'src/main/resources/application.yaml',
+      'src/main/resources/application.json',
+      'src/main/resources/application.properties',
+      'src/main/resources/bootstrap.properties',
+    ])
+  ) {
     score += 3;
     reasons.push('application config found (+3)');
   }
@@ -75,14 +112,8 @@ export function scoreModuleExecutability(repoRoot: string, modulePath: string): 
 }
 
 export function calibrateMultiModuleServiceBoundaries(repoRoot: string): ModuleBoundaryScore[] {
-  const settingsGradle = ['settings.gradle', 'settings.gradle.kts']
-    .map((name) => join(repoRoot, name))
-    .find((path) => existsSync(path));
-
-  if (!settingsGradle) return [];
-
-  const content = readFileSync(settingsGradle, 'utf-8');
-  const modules = parseGradleIncludes(content);
+  const modules = collectMultiModulePaths(repoRoot);
+  if (modules.length === 0) return [];
 
   return modules
     .map((modulePath) => scoreModuleExecutability(repoRoot, modulePath))

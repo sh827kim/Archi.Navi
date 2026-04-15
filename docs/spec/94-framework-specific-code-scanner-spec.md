@@ -1,6 +1,6 @@
 # 94. Framework-Specific Code Scanner Extension (SPEC)
 
-상태: Proposed
+상태: Current
 우선순위: P0
 상위 문서:
 - [20-framework-plugin-system-spec.md](./20-framework-plugin-system-spec.md)
@@ -8,6 +8,7 @@
 관련 설계 문서:
 - [14-signal-coverage-design-public-edition.md](../design/14-signal-coverage-design-public-edition.md)
 작성일: 2026-04-14
+상태 메모: built-in plugin confidence 규칙과 framework-specific scanner 경로가 runtime에 반영되었다.
 
 ---
 

@@ -9,7 +9,10 @@ export interface CommonBootstrapRepoResult {
   repoRoot: string;
   engineRequested: CodeSignalEngine;
   engineUsed: CodeSignalEngine;
+  enginesUsed: CodeSignalEngine[];
   fallbackUsed: boolean;
+  fallbackCount: number;
+  fileCount: number;
   signalCount: number;
   candidateCount: number;
   createdEndpointCount: number;
@@ -24,6 +27,11 @@ export interface CommonBootstrapRepoResult {
 
 export interface CommonBootstrapSummary {
   analyzedRepoCount: number;
+  engineRequested: CodeSignalEngine;
+  enginesUsed: CodeSignalEngine[];
+  fallbackCount: number;
+  scanFailureCount: number;
+  fileCount: number;
   signalCount: number;
   candidateCount: number;
   createdEndpointCount: number;
@@ -63,6 +71,7 @@ export async function runCommonBootstrapForRepo(
   const bootstrapOnly = input.bootstrapOnly !== false;
 
   let warning: string | null = null;
+  let fileCount = 0;
   let signalCount = 0;
   let scanFailureCount = 0;
   let engineRequested: CodeSignalEngine = input.codeEngine ?? 'hybrid';
@@ -76,6 +85,7 @@ export async function runCommonBootstrapForRepo(
       codeEngine: input.codeEngine ?? 'hybrid',
       ...(input.forceRescan !== undefined ? { forceRescan: input.forceRescan } : {}),
     });
+    fileCount = extracted.fileCount;
     signalCount = extracted.signalCount;
     warning = extracted.warning ?? null;
     scanFailureCount = Array.isArray(extracted.scanFailures) ? extracted.scanFailures.length : 0;
@@ -95,7 +105,10 @@ export async function runCommonBootstrapForRepo(
     repoRoot: input.repoRoot,
     engineRequested,
     engineUsed,
+    enginesUsed: [engineUsed],
     fallbackUsed,
+    fallbackCount: fallbackUsed ? 1 : 0,
+    fileCount,
     signalCount,
     candidateCount: inferred.candidateCount,
     createdEndpointCount: inferred.createdEndpointCount,
@@ -121,6 +134,11 @@ export async function runCommonBootstrapForRepoRoots(
   const uniqueRepoRoots = Array.from(new Set(input.repoRoots));
   const summary: CommonBootstrapSummary = {
     analyzedRepoCount: 0,
+    engineRequested: input.codeEngine ?? 'hybrid',
+    enginesUsed: [],
+    fallbackCount: 0,
+    scanFailureCount: 0,
+    fileCount: 0,
     signalCount: 0,
     candidateCount: 0,
     createdEndpointCount: 0,
@@ -148,6 +166,12 @@ export async function runCommonBootstrapForRepoRoots(
 
       summary.analyzedRepoCount += 1;
       summary.signalCount += result.signalCount;
+      summary.fileCount += result.fileCount;
+      summary.fallbackCount += result.fallbackCount;
+      summary.scanFailureCount += result.scanFailureCount;
+      if (!summary.enginesUsed.includes(result.engineUsed)) {
+        summary.enginesUsed.push(result.engineUsed);
+      }
       summary.candidateCount += result.candidateCount;
       summary.createdEndpointCount += result.createdEndpointCount;
       summary.createdTopicCount += result.createdTopicCount;

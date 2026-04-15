@@ -7,7 +7,7 @@
  *
  * 주의:
  * - expose 신호는 실제 의존성으로 오인 가능성이 높아 후보 생성에서 제외한다.
- * - 경로만 있는 호출(/api/...)은 타겟 서비스를 식별하기 어려워 기본적으로 스킵한다.
+ * - path-only 호출은 hostHint 같은 추가 힌트가 없으면 여전히 스킵한다.
  */
 import type { DbClient } from '@archi-navi/db';
 import {
@@ -23,6 +23,7 @@ import { and, eq, like, or } from 'drizzle-orm';
 import { saveRelationCandidate } from './candidateStore';
 import { asRecord } from './utils';
 import { preferredSignalOwnerId, resolveExistingSignalOwnerId } from '../code/ownerResolution';
+import { normalizePath, uniqueSortedStrings } from '../extraction/shared';
 
 export interface CodeCandidateInferenceOptions {
   workspaceId: string;
@@ -73,6 +74,11 @@ type OwnerContext = {
   serviceId: string;
   functionId: string | null;
 };
+type HttpCandidateSource = 'calleeSymbol' | 'hostHint' | 'pathHint';
+type HttpCandidate = {
+  value: string;
+  source: HttpCandidateSource;
+};
 
 function asString(value: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
@@ -80,6 +86,15 @@ function asString(value: unknown): string | null {
 
 function asNumber(value: unknown): number | null {
   return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function asBoolean(value: unknown): boolean {
+  return value === true;
+}
+
+function extractStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => asString(entry)).filter((entry): entry is string => entry !== null);
 }
 
 async function loadOwnerContexts(
@@ -212,6 +227,161 @@ function extractServiceCandidatesFromSymbol(symbol: string): string[] {
   }
 
   return Array.from(new Set(candidates.filter(Boolean)));
+}
+
+function extractHostHints(meta: EvidenceMeta): string[] {
+  return uniqueSortedStrings([
+    asString(meta['hostHint']),
+    ...extractStringArray(meta['hostHints']),
+  ]);
+}
+
+function extractPathHints(meta: EvidenceMeta): string[] {
+  return uniqueSortedStrings([
+    asString(meta['pathHint']),
+    ...extractStringArray(meta['pathHints']),
+  ].map((value) => (value ? normalizePath(value) : null)));
+}
+
+function extractConfigKeys(meta: EvidenceMeta): string[] {
+  return uniqueSortedStrings([
+    asString(meta['configKey']),
+    ...extractStringArray(meta['configKeys']),
+  ]);
+}
+
+function collectHttpCandidates(
+  calleeSymbol: string,
+  meta: EvidenceMeta,
+): {
+  hostCandidates: HttpCandidate[];
+  pathCandidates: HttpCandidate[];
+  hostHints: string[];
+  pathHints: string[];
+  configKeys: string[];
+  dynamicHost: boolean;
+  dynamicPath: boolean;
+} {
+  const symbol = calleeSymbol.trim();
+  const symbolHostHints = extractServiceCandidatesFromSymbol(symbol);
+  const hostHints = uniqueSortedStrings([...symbolHostHints, ...extractHostHints(meta)]);
+  const symbolPathHint = extractPathFromUrlLike(symbol);
+  const pathHints = uniqueSortedStrings([
+    ...(symbolPathHint ? [normalizePath(symbolPathHint)] : []),
+    ...extractPathHints(meta),
+  ]);
+  const configKeys = extractConfigKeys(meta);
+  const dynamicHost = asBoolean(meta['dynamicHost']);
+  const dynamicPath = asBoolean(meta['dynamicPath']);
+
+  const hostCandidates: HttpCandidate[] = [];
+  for (const candidate of symbolHostHints) {
+    hostCandidates.push({ value: candidate, source: 'calleeSymbol' });
+  }
+  for (const candidate of hostHints) {
+    hostCandidates.push({ value: candidate, source: 'hostHint' });
+  }
+
+  const pathCandidates: HttpCandidate[] = [];
+  if (symbolPathHint) {
+    pathCandidates.push({ value: normalizePath(symbolPathHint), source: 'calleeSymbol' });
+  }
+  for (const candidate of pathHints) {
+    pathCandidates.push({ value: normalizePath(candidate), source: 'pathHint' });
+  }
+
+  return {
+    hostCandidates,
+    pathCandidates,
+    hostHints,
+    pathHints,
+    configKeys,
+    dynamicHost,
+    dynamicPath,
+  };
+}
+
+function resolveHttpCallCandidate(
+  calleeSymbol: string,
+  meta: EvidenceMeta,
+  allServices: { id: string; name: string }[],
+  endpointByServiceAndPath: Map<string, string>,
+  endpointPathCollision: Set<string>,
+): {
+  targetServiceId: string | null;
+  targetPath: string | null;
+  targetEndpointId: string | null;
+  resolvedVia: string | null;
+  hostHint: string | null;
+  hostHints: string[];
+  pathHint: string | null;
+  pathHints: string[];
+  configKeys: string[];
+  dynamicHost: boolean;
+  dynamicPath: boolean;
+} {
+  const {
+    hostCandidates,
+    pathCandidates,
+    hostHints,
+    pathHints,
+    configKeys,
+    dynamicHost,
+    dynamicPath,
+  } = collectHttpCandidates(calleeSymbol, meta);
+
+  let targetServiceId: string | null = null;
+  let targetPath: string | null = null;
+  let targetEndpointId: string | null = null;
+  let chosenHost: HttpCandidate | null = null;
+  let chosenPath: HttpCandidate | null = null;
+
+  for (const hostCandidate of hostCandidates) {
+    const serviceCandidates = extractServiceCandidatesFromSymbol(hostCandidate.value);
+    const matchedServiceIds = serviceCandidates
+      .map((serviceCandidate) => findServiceIdByName(serviceCandidate, allServices))
+      .filter((value): value is string => value !== null);
+    if (matchedServiceIds.length === 0) continue;
+
+    for (const matchedServiceId of matchedServiceIds) {
+      for (const pathCandidate of pathCandidates) {
+        const normalized = normalizePath(pathCandidate.value);
+        if (normalized.length === 0) continue;
+        const endpointKey = `${matchedServiceId}|${normalized}`;
+        if (endpointPathCollision.has(endpointKey)) continue;
+        const endpointId = endpointByServiceAndPath.get(endpointKey);
+        if (!endpointId) continue;
+
+        targetServiceId = matchedServiceId;
+        targetPath = normalized;
+        targetEndpointId = endpointId;
+        chosenHost = hostCandidate;
+        chosenPath = pathCandidate;
+        break;
+      }
+      if (targetEndpointId) break;
+    }
+    if (targetEndpointId) break;
+  }
+
+  const resolvedViaParts = [
+    chosenHost?.source,
+    chosenPath?.source,
+  ].filter((value): value is HttpCandidateSource => typeof value === 'string');
+
+  return {
+    targetServiceId,
+    targetPath,
+    targetEndpointId,
+    resolvedVia: resolvedViaParts.length > 0 ? [...new Set(resolvedViaParts)].join('+') : null,
+    hostHint: asString(meta['hostHint']) ?? hostCandidates[0]?.value ?? null,
+    hostHints,
+    pathHint: asString(meta['pathHint']) ?? pathCandidates[0]?.value ?? null,
+    pathHints,
+    configKeys,
+    dynamicHost,
+    dynamicPath,
+  };
 }
 
 function slugifyPath(value: string): string {
@@ -784,35 +954,15 @@ export async function inferRelationsFromCodeSignals(
     const specializationMetadata = extractCodeSpecializationMetadata(meta);
 
     if (kind === 'call') {
-      // path-only(/api/...) 호출은 타겟 서비스를 알 수 없어 스킵
-      const trimmed = calleeSymbol.trim();
+      const resolved = resolveHttpCallCandidate(
+        calleeSymbol,
+        meta,
+        allServices,
+        endpointByServiceAndPath,
+        endpointPathCollision,
+      );
 
-      const serviceCandidates = extractServiceCandidatesFromSymbol(trimmed);
-      let targetServiceId: string | null = null;
-      for (const candidate of serviceCandidates) {
-        targetServiceId = findServiceIdByName(candidate, allServices);
-        if (targetServiceId) break;
-      }
-
-      if (!targetServiceId) {
-        skippedEdgeCount += 1;
-        continue;
-      }
-
-      const targetPath = extractPathFromUrlLike(trimmed);
-      if (!targetPath) {
-        skippedEdgeCount += 1;
-        continue;
-      }
-
-      const endpointKey = `${targetServiceId}|${targetPath}`;
-      if (endpointPathCollision.has(endpointKey)) {
-        skippedEdgeCount += 1;
-        continue;
-      }
-
-      const endpointId = endpointByServiceAndPath.get(endpointKey);
-      if (!endpointId) {
+      if (!resolved.targetServiceId || !resolved.targetPath || !resolved.targetEndpointId) {
         skippedEdgeCount += 1;
         continue;
       }
@@ -824,7 +974,7 @@ export async function inferRelationsFromCodeSignals(
           workspaceId,
           relationType: 'call',
           subjectObjectId: ownerContext.serviceId,
-          objectId: endpointId,
+          objectId: resolved.targetEndpointId,
           confidence,
           metadata: {
             ...specializationMetadata,
@@ -833,8 +983,16 @@ export async function inferRelationsFromCodeSignals(
             calleeSymbol,
             repoRoot,
             targetType: 'api_endpoint',
-            targetServiceId,
-            path: targetPath,
+            targetServiceId: resolved.targetServiceId,
+            targetPath: resolved.targetPath,
+            hostHint: resolved.hostHint,
+            hostHints: resolved.hostHints,
+            pathHint: resolved.pathHint,
+            pathHints: resolved.pathHints,
+            configKeys: resolved.configKeys,
+            dynamicHost: resolved.dynamicHost,
+            dynamicPath: resolved.dynamicPath,
+            resolvedVia: resolved.resolvedVia,
           },
           ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
