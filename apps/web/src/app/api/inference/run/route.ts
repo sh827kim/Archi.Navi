@@ -67,15 +67,31 @@ function isSourceType(value: string): value is InferenceSourceType {
   return value === 'local' || value === 'githubRepo' || value === 'githubOrg';
 }
 
+function normalizeLocalPath(path: string): string {
+  return path.replace(/\\/g, '/').replace(/\/+$/, '');
+}
+
+function isStrictAncestorPath(ancestor: string, child: string): boolean {
+  if (ancestor.length === 0 || child.length === 0) return false;
+  if (ancestor === child) return false;
+  return child.startsWith(`${ancestor}/`);
+}
+
 function normalizeLocalSources(
   sources: Array<{ type: InferenceSourceType; ref: string; metadata?: Record<string, unknown> }>,
+  serviceScanPaths: string[] = [],
 ): Array<{ type: InferenceSourceType; ref: string; metadata?: Record<string, unknown> }> {
+  const servicePathSet = new Set(serviceScanPaths.map(normalizeLocalPath));
   const localSources = sources
     .filter((source) => source.type === 'local')
     .map((source) => ({
       ...source,
-      normalizedRef: source.ref.replace(/\\/g, '/').replace(/\/+$/, ''),
+      normalizedRef: normalizeLocalPath(source.ref),
     }))
+    .filter((source) =>
+      servicePathSet.has(source.normalizedRef)
+      || !serviceScanPaths.some((scanPath) => isStrictAncestorPath(source.normalizedRef, normalizeLocalPath(scanPath))),
+    )
     .sort((a, b) => a.normalizedRef.length - b.normalizedRef.length);
 
   const keptLocalSources: Array<{ type: InferenceSourceType; ref: string; metadata?: Record<string, unknown> }> = [];
@@ -124,6 +140,7 @@ async function collectSources(
   body: RunInferenceRequest,
 ): Promise<Array<{ type: InferenceSourceType; ref: string; metadata?: Record<string, unknown> }>> {
   const sourceMap = new Map<string, { type: InferenceSourceType; ref: string; metadata?: Record<string, unknown> }>();
+  const serviceScanPaths: string[] = [];
 
   for (const source of body.sources ?? []) {
     const sourceRef = source?.ref ?? source?.path;
@@ -161,10 +178,11 @@ async function collectSources(
       const scanPath = typeof metadata['scanPath'] === 'string' ? metadata['scanPath'].trim() : '';
       if (scanPath.length === 0) continue;
       sourceMap.set(`local:${scanPath}`, { type: 'local', ref: scanPath });
+      serviceScanPaths.push(scanPath);
     }
   }
 
-  return normalizeLocalSources(Array.from(sourceMap.values()));
+  return normalizeLocalSources(Array.from(sourceMap.values()), serviceScanPaths);
 }
 
 function buildLlmBoostResult(body: RunInferenceRequest) {

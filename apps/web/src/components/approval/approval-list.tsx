@@ -686,9 +686,9 @@ async function resolveInferenceRepoRoots(workspaceId: string): Promise<string[]>
     if (!res.ok) return [];
 
     const payload = (await res.json()) as ScanPathsResponse;
-    const parentDirs = (payload.parentDirs ?? []).map((path) => path.trim()).filter((path) => path.length > 0);
+    // 추론 실행 source는 서비스별 scanPath만 사용한다.
     const paths = (payload.paths ?? []).map((path) => path.trim()).filter((path) => path.length > 0);
-    return [...new Set([...parentDirs, ...paths])];
+    return [...new Set(paths)];
   } catch {
     return [];
   }
