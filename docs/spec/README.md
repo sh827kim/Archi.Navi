@@ -58,6 +58,7 @@
 - [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md)
 - [53-smart-proof-engine-escalation-spec.md](./53-smart-proof-engine-escalation-spec.md)
 - [99-dual-inference-pipeline-selector-spec.md](./99-dual-inference-pipeline-selector-spec.md)
+- [101-frontier-review-promotion-spec.md](./101-frontier-review-promotion-spec.md)
 
 ## Current
 

@@ -11,3 +11,4 @@ SPEC 본문을 보조하는 운영성 문서를 관리한다.
 ## 목록
 - [05-llm-inference-filtering-implementation-checklist.md](./05-llm-inference-filtering-implementation-checklist.md)
 - [53-smart-proof-engine-phase1-implementation-checklist.md](./53-smart-proof-engine-phase1-implementation-checklist.md)
+- [101-frontier-review-promotion-implementation-checklist.md](./101-frontier-review-promotion-implementation-checklist.md)
