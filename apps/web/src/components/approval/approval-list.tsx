@@ -844,6 +844,16 @@ export function ApprovalList() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [workspaceId]);
 
+  useEffect(() => {
+    const handleRefresh = () => {
+      void loadCandidates(false);
+    };
+    window.addEventListener('archi-navi:refresh-approval-candidates', handleRefresh);
+    return () => {
+      window.removeEventListener('archi-navi:refresh-approval-candidates', handleRefresh);
+    };
+  }, [loadCandidates]);
+
   const fetchSmartRunStatus = useCallback(async (runId: string) => {
     if (!workspaceId) throw new Error('workspaceId is required');
 
