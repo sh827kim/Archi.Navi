@@ -2,7 +2,7 @@
 
 > **상태: Deprecated (2026-04-05)**
 > 이 문서는 cross-signal validation의 초기 단계 구현 계약이었다.
-> 현재 현행 기준은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 흡수되었고, 규칙별 상세는 [30-cross-signal-validation-stale-config-phase2a-spec.md](../30-cross-signal-validation-stale-config-phase2a-spec.md)부터 [34-cross-signal-validation-orphan-fk-spec.md](../34-cross-signal-validation-orphan-fk-spec.md)까지를 따른다.
+> 현재 현행 기준은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 완전히 흡수되었다.
 
 ---
 

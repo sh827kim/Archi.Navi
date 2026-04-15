@@ -2,7 +2,7 @@
 
 > **상태: Deprecated (2026-04-05)**
 > 이 문서는 cross-signal validation 마감 단계의 통합 PR 계약이었다.
-> 현재 현행 기준은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 흡수되었고, 규칙별 상세는 [30-cross-signal-validation-stale-config-phase2a-spec.md](../30-cross-signal-validation-stale-config-phase2a-spec.md)부터 [34-cross-signal-validation-orphan-fk-spec.md](../34-cross-signal-validation-orphan-fk-spec.md)까지를 참조한다.
+> 현재 현행 기준은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 완전히 흡수되었다.
 
 ---
 
@@ -10,7 +10,7 @@
 
 - profile 파라미터, Approval 필터/정렬, 최종 운영 기준은 이제 `18` 한 문서에서 읽을 수 있다.
 - 마감용 PR 문서를 현행 기준으로 계속 유지할 이유가 줄었다.
-- 현재 기준에서는 `18`이 공통 규칙, `30~34`가 규칙별 상세라는 구조가 더 명확하다.
+- 현재 기준에서는 `18` 한 문서가 공통 규칙과 규칙별 상세를 모두 담는다.
 
 ---
 
@@ -23,11 +23,7 @@
 상위 SPEC: `docs/spec/18-cross-signal-validation-spec.md`
 선행 SPEC:
 - `docs/spec/29-cross-signal-validation-phase1-spec.md`
-- `docs/spec/30-cross-signal-validation-stale-config-phase2a-spec.md`
 - `docs/spec/31-cross-signal-validation-common-contract-spec.md`
-- `docs/spec/32-cross-signal-validation-phantom-call-spec.md`
-- `docs/spec/33-cross-signal-validation-dead-topic-spec.md`
-- `docs/spec/34-cross-signal-validation-orphan-fk-spec.md`
 
 ## 1. 목적
 
@@ -83,10 +79,10 @@
 
 ## 4. 중복 SPEC 정리 원칙
 
-- `docs/spec/30-cross-signal-validation-stale-config-phase2a-spec.md` 를 C1 정식 문서로 유지한다.
+- contradiction 규칙별 파생 문서는 더 이상 유지하지 않는다.
 - `docs/spec/31-cross-signal-validation-stale-config-phase2-spec.md` 는 제거한다.
 - `docs/spec/31-cross-signal-validation-common-contract-spec.md` 를 공통 계약 문서로 유지한다.
-- `docs/spec/32-cross-signal-validation-contract-freeze-spec.md` 는 제거한다.
+- 당시 contract freeze 문서는 제거한다.
 
 ## 5. 수용 기준
 
