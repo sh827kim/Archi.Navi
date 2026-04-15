@@ -38,6 +38,7 @@ function createDbMock() {
     { id: 'svc-b', name: 'provider-svc', objectType: 'service', parentId: null },
     { id: 'svc-c', name: 'provider-candidate', objectType: 'service', parentId: null },
   ];
+  let objectWhereCallCount = 0;
   return {
     select: vi.fn(() => ({
       from: vi.fn((table: { table: string }) => {
@@ -115,8 +116,28 @@ function createDbMock() {
         }
         if (table.table === 'objects') {
           return {
-            where: vi.fn().mockResolvedValue(serviceRows),
-            limit: vi.fn().mockResolvedValue([{ id: 'svc-a', name: 'consumer-svc' }]),
+            where: vi.fn(() => {
+              objectWhereCallCount += 1;
+              if (objectWhereCallCount === 1) {
+                return Promise.resolve([
+                  { id: 'svc-b', name: 'provider-svc', objectType: 'service', parentId: null },
+                  { id: 'svc-c', name: 'provider-candidate', objectType: 'service', parentId: null },
+                ]);
+              }
+              if (objectWhereCallCount === 2) {
+                return {
+                  limit: vi.fn().mockResolvedValue(serviceRows),
+                };
+              }
+              if (objectWhereCallCount === 3) {
+                return {
+                  limit: vi.fn().mockResolvedValue([{ id: 'svc-a', name: 'consumer-svc' }]),
+                };
+              }
+              return {
+                limit: vi.fn().mockResolvedValue([{ id: 'svc-b', name: 'provider-svc' }]),
+              };
+            }),
           };
         }
         throw new Error(`unexpected table ${table.table}`);

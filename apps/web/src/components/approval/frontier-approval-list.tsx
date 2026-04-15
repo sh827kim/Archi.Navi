@@ -145,6 +145,7 @@ export function FrontierApprovalList() {
     if (!detail || !patchType) return;
     setSubmittingPatch(true);
     try {
+      const proofStateId = detail.proofStateId;
       let payload: Record<string, unknown> = {};
       if (patchType === 'alias_binding') {
         payload = {
@@ -183,8 +184,16 @@ export function FrontierApprovalList() {
         toast.warning('Patch를 적용했지만 아직 frontier 상태입니다.');
       }
 
+      const promotedToCandidate = body.proofStatus === 'CLOSED_ATOMIC';
+      if (promotedToCandidate) {
+        setSelectedProofStateId(null);
+        setDetail(null);
+      }
+
       await loadFrontiers();
-      await loadDetail(detail.proofStateId);
+      if (!promotedToCandidate) {
+        await loadDetail(proofStateId);
+      }
       window.dispatchEvent(new CustomEvent('archi-navi:refresh-approval-candidates'));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'patch 적용 실패');

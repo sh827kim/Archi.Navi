@@ -4,8 +4,8 @@
 작성일: 2026-03-08
 최종 정리: 2026-04-05
 
-> Note (2026-04-05): 이 문서는 cross-signal validation의 단일 현행 기준 문서다.
-> 이전 단계 문서였던 `29`, `31`, `35`는 이 문서에 흡수되었고, 상세 규칙 문서는 [30-cross-signal-validation-stale-config-phase2a-spec.md](./30-cross-signal-validation-stale-config-phase2a-spec.md), [32-cross-signal-validation-phantom-call-spec.md](./32-cross-signal-validation-phantom-call-spec.md), [33-cross-signal-validation-dead-topic-spec.md](./33-cross-signal-validation-dead-topic-spec.md), [34-cross-signal-validation-orphan-fk-spec.md](./34-cross-signal-validation-orphan-fk-spec.md)를 참조한다.
+> Note (2026-04-15): 이 문서는 cross-signal validation의 단일 canonical SPEC이다.
+> 이전 단계 문서였던 `29`, `31`, `35`와 규칙별 파생 SPEC이던 `30`, `32`, `33`, `34`의 살아 있는 계약을 모두 이 문서에 통합했다.
 
 ## 1. 목적
 
@@ -33,11 +33,8 @@ config, code, db 시그널 수집기가 독립 생성한 후보를 교차 검증
 
 ## 3. 문서 구조
 
-- 이 문서: 현행 공통 계약과 제품 기준
-- [30-cross-signal-validation-stale-config-phase2a-spec.md](./30-cross-signal-validation-stale-config-phase2a-spec.md): C1 `STALE_CONFIG`
-- [32-cross-signal-validation-phantom-call-spec.md](./32-cross-signal-validation-phantom-call-spec.md): C2 `PHANTOM_CALL`
-- [33-cross-signal-validation-dead-topic-spec.md](./33-cross-signal-validation-dead-topic-spec.md): C3 `DEAD_TOPIC`
-- [34-cross-signal-validation-orphan-fk-spec.md](./34-cross-signal-validation-orphan-fk-spec.md): C4 `ORPHAN_FK`
+- 이 문서 하나로 공통 계약, contradiction 규칙, UI 계약, 수용 기준을 함께 관리한다.
+- 규칙별 세부 판정은 아래 `4.3.x` 섹션에 통합되어 있다.
 
 ## 4. 처리 규칙
 
@@ -61,12 +58,43 @@ config, code, db 시그널 수집기가 독립 생성한 후보를 교차 검증
 
 ### 4.3 모순 판정
 
-| 규칙 ID | 타입 | 상세 문서 | 요약 |
-|---|---|---|---|
-| `C1` | `STALE_CONFIG` | [30](./30-cross-signal-validation-stale-config-phase2a-spec.md) | config 기반 DB 연결 후보인데 code 기반 테이블 접근 근거가 없음 |
-| `C2` | `PHANTOM_CALL` | [32](./32-cross-signal-validation-phantom-call-spec.md) | code 기반 service call 후보인데 endpoint 근거가 닫히지 않음 |
-| `C3` | `DEAD_TOPIC` | [33](./33-cross-signal-validation-dead-topic-spec.md) | config 기반 topic 후보인데 code produce/consume 근거가 없음 |
-| `C4` | `ORPHAN_FK` | [34](./34-cross-signal-validation-orphan-fk-spec.md) | FK 기반 후보인데 code 테이블 접근 근거가 없음 |
+| 규칙 ID | 타입 | 요약 |
+|---|---|---|
+| `C1` | `STALE_CONFIG` | config 기반 DB 연결 후보인데 code 기반 테이블 접근 근거가 없음 |
+| `C2` | `PHANTOM_CALL` | code 기반 service call 후보인데 endpoint 근거가 닫히지 않음 |
+| `C3` | `DEAD_TOPIC` | config 기반 topic 후보인데 code produce/consume 근거가 없음 |
+| `C4` | `ORPHAN_FK` | FK 기반 후보인데 code 테이블 접근 근거가 없음 |
+
+#### 4.3.1 C1 `STALE_CONFIG`
+
+- 후보의 `relationType`은 `read` 또는 `write`여야 한다.
+- 후보의 지지 소스에 `config`가 포함되어야 한다.
+- 대상 object는 `database`여야 한다.
+- 동일 서비스(`subjectObjectId`)에 대해 해당 database를 parent로 가지는 `db_table` 대상의 code 기반 `read/write` 후보가 없으면 `STALE_CONFIG`로 판정한다.
+- penalty는 고정값 `0.15`를 사용한다.
+
+#### 4.3.2 C2 `PHANTOM_CALL`
+
+- 후보의 `relationType`은 `call`이어야 한다.
+- 후보의 지지 소스에 `code`가 포함되어야 한다.
+- 대상 object는 `service`여야 한다.
+- 같은 서비스 쌍에 대해 승인된 endpoint 매핑이나 code/config 기반 endpoint 근거가 끝까지 확인되지 않으면 `PHANTOM_CALL`로 판정한다.
+- penalty는 고정값 `0.15`를 사용한다.
+
+#### 4.3.3 C3 `DEAD_TOPIC`
+
+- 후보의 `relationType`은 `produce` 또는 `consume`이어야 한다.
+- 후보의 지지 소스에 `config`가 포함되어야 한다.
+- 대상 object는 `kafka_topic` 또는 topic 성격의 `message_broker` 하위 object여야 한다.
+- 동일 서비스와 topic 조합에 대해 code 기반 `produce/consume` 후보가 없으면 `DEAD_TOPIC`으로 판정한다.
+- penalty는 고정값 `0.15`를 사용한다.
+
+#### 4.3.4 C4 `ORPHAN_FK`
+
+- 후보의 지지 소스에 `db`가 포함되어야 한다.
+- 대상 object는 `db_table` 또는 database 계열 데이터 object여야 한다.
+- FK 근거로 후보가 생겼고, 후보의 subject/object `db_table` 어느 쪽에도 code 기반 `read/write` 접근 후보가 없으면 `ORPHAN_FK`로 판정한다.
+- penalty는 고정값 `0.15`를 사용한다.
 
 ### 4.4 신뢰도 재계산
 
@@ -176,4 +204,4 @@ adjusted = clamp(originalConfidence + boost - penalty, 0.1, 0.99);
 ## 8. 구현 메모
 
 - 초기 구현 단계 문서였던 `29`, 공통 계약 정리 문서였던 `31`, 마감 단계 문서였던 `35`는 현재 기준에서 이 문서에 흡수됐다.
-- 구현 세부 조건과 규칙별 판정 로직은 `30`, `32`, `33`, `34`를 참조한다.
+- 규칙별 파생 문서였던 `30`, `32`, `33`, `34`도 삭제하고 이 문서로 통합했다.

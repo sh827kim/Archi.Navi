@@ -5,8 +5,6 @@ export * from './code/index';
 export * from './db/index';
 export * from './llm/index';
 export * from './orchestration/index';
-export * from './openapi/index';
-export * from './storage/index';
 export type * from './agent/smartProofTypes';
 export {
   buildDefaultSmartProofConfig,

@@ -8,7 +8,7 @@
 
 ## 1. 설계 목적
 
-추론 엔진은 코드, 설정, DB 스키마, OpenAPI 명세에서 구조 신호를 수집해
+추론 엔진은 코드, 설정, DB 스키마에서 구조 신호를 수집해
 **승인 가능한 relation/domain 후보**를 만들고, 필요 시 운영 이력과 실행 상태까지 함께 관리한다.
 
 문서 기준의 추론 엔진은 아래 세 가지를 모두 포함한다.
@@ -16,7 +16,7 @@
 | 축 | 설명 |
 |----|------|
 | **표준 추론** | config/code/db 기반 deterministic 후보 생성 |
-| **Smart 추론** | pair-scoped atomic inference 중심의 LLM 보조 경로 |
+| **Smart 추론** | proof-engine 이후의 선택적 Smart escalation 경로 |
 | **운영 레이어** | async run, source 상태, 이벤트 로그, 실행 통계 |
 
 기본 원칙은 변하지 않는다.
@@ -100,12 +100,11 @@ Delta Rollup + UI refresh
 ## 3.3 Smart Run
 
 - 라우트: `POST /api/inference/smart`, `GET /api/inference/smart`
-- 용도: pair-scoped atomic inference 중심의 고정밀 보조 경로
+- 용도: proof-engine run wrapper 기반의 고정밀 보조 경로
 - 특징:
-  - OpenAPI import + code expose bootstrap
-  - config 기반 service pair 탐지
-  - pair evidence pack 기반 atomic 후보 생성
-  - fallback reason과 deep inspection trace 기록
+  - proof-engine contract와 동일한 run 생성/상태 조회를 사용
+  - `smartProof` 설정에 따라 frontier/smart escalation이 추가된다
+  - summary에 proof/frontier/smart trace를 함께 기록한다
   - sync/async 운용을 모두 지원
 
 ---
@@ -203,7 +202,7 @@ relation_candidates 저장(기본은 proof 결과)
 
 ## 6. Smart 추론
 
-> **Note (2026-04-05)**: 기존 pair-first Smart 파이프라인은 Intent-Centric Proof Engine 도입 이후 deprecated 되었다. 레거시 설계는 [deprecated/03-smart-pipeline-legacy.md](./deprecated/03-smart-pipeline-legacy.md)를 참조한다.
+> **Note (2026-04-15)**: 기존 pair-first Smart 3-Phase 파이프라인과 관련 레거시 문서/코드는 제거되었다. 현재 Smart는 proof engine 위의 escalation 레이어만 의미한다.
 
 현재 Smart 추론은 **proof engine 위의 LLM escalation 레이어**로 동작한다.
 

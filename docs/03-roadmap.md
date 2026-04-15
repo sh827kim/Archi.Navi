@@ -355,21 +355,15 @@
 
 > 가장 핵심적인 개선 — Smart를 먼저 요구사항에 맞게 재설계하고, 그 위에 LLM 기능 UI를 안정적으로 연결한다.
 
-**S1-1a. Smart Pipeline 재설계 및 재활성화 (완료)**
-- **현황:** `POST /api/inference/smart` 재설계 범위를 완료했다. Phase 1.5 bootstrap, pair-scoped evidence pack, atomic inference 재작성, fallback observability/UI 노출, optional deep inspection, deterministic tool-assisted deep inspection(1차/2차), `pair_pack`/`agent_assisted`/`full_agent` atomic 분석 모드, trace/observability viewer(`deepInspectionTrace.details` pair drill-down), `no_result` pass-through 표시 보정까지 반영했다.
+**S1-1a. Smart Proof Engine 재정렬 및 UI 연결 (완료)**
+- **현황:** `POST /api/inference/smart`는 현재 별도 3-Phase 엔진이 아니라 proof-engine run wrapper로 정리되었다. Approval UI는 Smart 실행, 비동기 polling, summary viewer, 완료 후 후보 목록 자동 갱신을 제공한다.
 - **검증(최종):**
-  - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 24 tests passed`
   - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/smart.route.test.ts src/__tests__/approval-list.test.tsx` → `2 files, 30 tests passed`
-- **SPEC:** `docs/spec/deprecated/37-smart-pipeline-atomic-redesign-spec.md`
-- **목표:** `config -> candidate service pair -> pair-scoped source analysis -> atomic relation` 흐름으로 재구성
-- **핵심 작업 순서:**
-  - OpenAPI import 뒤에 `Phase 1.5 endpoint bootstrap` 추가 (`expose -> api_endpoint`)
-  - pair-scoped evidence pack assembler 구현
-  - Smart Phase 3를 atomic inference 중심으로 재작성
-  - fallback reason / run detail observability 추가
-  - deterministic tool-assisted deep inspection 1차/2차 반영
-  - `deepInspectionTrace.details` 기반 pair drill-down viewer 반영
-- **UI:** Smart 실행 UI는 summary에 atomic/fallback/bootstrap 통계를 노출하며, Approval fallback 후보 카드에 시도 호출/근거 요약을 표시한다. deep inspection 전용 viewer도 Approval 화면에 연결됐다.
+- **SPEC:** `docs/spec/53-smart-proof-engine-escalation-spec.md`
+- **핵심 결과:**
+  - legacy `analysisMode` 입력 제거
+  - Smart route를 proof engine contract로 수렴
+  - Smart summary/proof metrics를 Approval UI에 노출
 
 **S1-1b. LLM Boost 옵션 UI 연결 (완료)**
 - **백엔드:** `POST /api/inference/run` + `llmBoost` 파라미터 (구현 완료)
@@ -570,18 +564,6 @@
 - **검증(최종):**
   - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/chat.route.test.ts` → `1 file, 1 test passed`
 - **SPEC:** `docs/spec/46-ai-architecture-assistant-scope-expansion-spec.md`
-
-#### ✅ S1-20. Smart Gateway/Proxy Route-Aware Atomic Recovery (완료)
-- **현황:** Smart Pipeline이 direct callsite 매칭을 유지한 채, `Zuul`/gateway route 설정만 있는 pair에 대해 external path를 provider endpoint로 복원할 수 있다.
-- **완료 범위:**
-  - `zuul.prefix`, `zuul.routes.*.path`, `zuul.routes.*.serviceId` 파싱
-  - direct callsite 이후 route-aware alias match / config snippet route recovery 추가
-  - `PATH_NOT_MATCHED`, `NO_ENDPOINT_OBJECTS`, route-only `INSUFFICIENT_CONTEXT` pair를 deep inspection 대상으로 승격
-  - `listGatewayRoutes` tool, `proxy_route` metadata, trigger/tool usage observability 추가
-- **검증(최종):**
-  - `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/smartPipeline.test.ts` → `1 file, 30 tests passed`
-  - `pnpm --filter @archi-navi/inference build` → 통과
-- **SPEC:** `docs/spec/deprecated/47-zuul-route-aware-smart-atomic-spec.md`
 
 ---
 

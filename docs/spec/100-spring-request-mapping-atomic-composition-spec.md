@@ -1,7 +1,8 @@
 # Spring RequestMapping + Method Mapping Atomic 조합 설계
 
 - 작성일: 2026-04-15
-- 대상 워크스페이스: `/Users/spark/testbed/Archi.Navi`
+- 상태: Proposed
+- 대상 범위: Spring Boot / Spring MVC 계열 expose signal 추출기
 - 작성 목적: Spring Boot 기준 클래스 레벨 `@RequestMapping`과 메서드 레벨 `@GetMapping`/`@PostMapping`/`@RequestMapping` 등을 조합한 최종 endpoint 형태로 `api_endpoint` Atomic을 저장하도록 개선하는 구체 설계를 정리한다.
 
 ## 1. 요약

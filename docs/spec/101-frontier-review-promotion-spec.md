@@ -2,7 +2,8 @@
 
 - 작성일: 2026-04-15
 - 대상 범위: `apps/web`, `packages/inference`
-- 상태: Proposed
+- 상태: Current (Partial Rollout)
+- 상태 메모: Frontier 탭, 목록/상세/patch API, 3종 patch type, patch 후 refresh/승격 처리까지 구현되었다. 다만 reason별 form 지원은 부분 롤아웃 상태다.
 
 ## 1) 배경
 
@@ -32,6 +33,21 @@
 4. patch 적용 후 proof를 즉시 재평가한다.
 5. `CLOSED_ATOMIC`이 되면 기존 candidate projection으로 승격한다.
 
+## 3.1) 현재 구현 상태
+
+- 구현 완료
+  - Approval의 `Frontiers` 탭
+  - `GET /api/inference/frontiers`
+  - `GET /api/inference/frontiers/[proofStateId]`
+  - `POST /api/inference/frontiers/[proofStateId]/patch`
+  - `alias_binding`, `provider_service_selection`, `endpoint_disambiguation` patch 제출
+  - patch 후 frontier/candidate refresh
+  - `CLOSED_ATOMIC` 승격 시 detail 재조회 대신 시트 종료
+- 미구현 또는 부분 구현
+  - 모든 frontier reason에 대한 patch form
+  - 보류/숨김/무시 액션
+  - actor 식별 기반 감사 강화
+
 ## 4) 비목표
 
 - 모든 frontier reason 동시 지원
@@ -53,7 +69,7 @@
 
 ## 6) 1차 지원 reason / patch 타입
 
-### 6.1 우선 reason (Spring HTTP)
+### 6.1 엔진에서 우선 관찰하는 reason (Spring HTTP)
 
 - `CONFIG_BINDING_MISSING`
 - `HOST_ALIAS_UNRESOLVED`
@@ -62,11 +78,17 @@
 - `PROVIDER_ENDPOINT_NOT_FOUND`
 - `PATH_TEMPLATE_UNKNOWN`
 
-### 6.2 MVP에서 사람에게 노출할 patch type
+### 6.2 현재 UI에서 patch form이 연결된 reason / patch type
 
-- `alias_binding`
-- `provider_service_selection`
-- `endpoint_disambiguation`
+- `CONFIG_BINDING_MISSING`, `HOST_ALIAS_UNRESOLVED` -> `alias_binding`
+- `PROVIDER_SERVICE_AMBIGUOUS` -> `provider_service_selection`
+- `ENDPOINT_MATCH_AMBIGUOUS` -> `endpoint_disambiguation`
+
+아래 reason은 proof engine 차원에서는 살아 있지만, 현재 Frontier review UI에서는 read-only로 남아 있다.
+
+- `PATH_ONLY_TARGET_UNRESOLVED`
+- `PROVIDER_ENDPOINT_NOT_FOUND`
+- `PATH_TEMPLATE_UNKNOWN`
 
 `route_transform_patch`는 1.5~2차로 이월한다.
 
@@ -103,9 +125,9 @@
 
 ### 7.4 reason별 폼 매핑
 
-- `CONFIG_BINDING_MISSING`, `HOST_ALIAS_UNRESOLVED` → `alias_binding`
-- `PROVIDER_SERVICE_AMBIGUOUS` → `provider_service_selection`
-- `ENDPOINT_MATCH_AMBIGUOUS` → `endpoint_disambiguation`
+- `CONFIG_BINDING_MISSING`, `HOST_ALIAS_UNRESOLVED` -> `alias_binding`
+- `PROVIDER_SERVICE_AMBIGUOUS` -> `provider_service_selection`
+- `ENDPOINT_MATCH_AMBIGUOUS` -> `endpoint_disambiguation`
 - 미지원 reason은 read-only 안내 메시지
 
 ## 8) API 설계
@@ -151,7 +173,7 @@
 
 동작:
 1. `validateAndApplyProofPatch()` 호출
-2. `sourceKind = 'human_review'`
+2. `sourceKind = 'manual'`
 3. replay 결과 반환
 4. candidate 반영 상태 반환
 
@@ -163,6 +185,23 @@
 - malformed request는 400
 - patch validation reject는 200 + 명시적 상태
 
+### 8.4 patch 적용 후 상태 갱신
+
+- `validationStatus = REJECTED`
+  - warning toast 노출
+  - frontier 목록 refresh
+  - 현재 detail 재조회
+- `proofStatus = CLOSED_ATOMIC`
+  - success toast 노출
+  - frontier 목록 refresh
+  - detail sheet 닫기
+  - candidate refresh event dispatch
+- 그 외 frontier 유지
+  - warning toast 노출
+  - frontier 목록 refresh
+  - 현재 detail 재조회
+  - candidate refresh event dispatch
+
 ## 9) Projection 규칙
 
 - frontier를 직접 relation approval 대상으로 만들지 않는다.
@@ -172,7 +211,8 @@
 
 `proof_patch`는 사람 판단이므로 최소 아래 감사 정보가 필요하다.
 
-- `sourceKind = human_review`
+- 현재 구현 값은 `sourceKind = manual`
+- 장기적으로는 사람이 가한 patch임을 더 명시적으로 식별할 source kind/actor 모델이 필요하다.
 - actor 식별 정보(최소 API layer event log)
 - `createdAt`, payload, validationStatus
 

@@ -101,11 +101,11 @@
   - domain 해석 token-boundary + edit-distance 점수 매칭
   - confidence 상위 evidence context 절단 + 생략 개수 요약
   - workspace별 localStorage 채팅 이력 복원/저장
-- ✅ Smart Pipeline API (`/api/inference/smart`)
-  - `pair_pack` / `agent_assisted` / `full_agent` atomic 분석 모드 지원
-  - service-to-service pair는 기존 Smart 경로를 유지하고, atomic만 Agent escalation 또는 full-agent 경로로 분기
-  - 실행 요약/trace에 agent escalation, recovery, tool usage 통계 노출
-  - `Zuul`/gateway route 기반 external path를 provider endpoint로 복원하는 route-aware atomic recovery 지원
+- ✅ Smart Proof Engine API (`/api/inference/smart`)
+  - proof-engine run wrapper + polling 상태 조회 지원
+  - `analysisMode` 같은 legacy Smart 입력은 거부하고 `smartProof` 계약만 허용
+  - 실행 요약/trace에 proof/frontier/smart escalation 통계 노출
+  - Approval UI가 Smart 실행 완료 후 후보 목록을 자동 갱신
 
 ### 1.5 E2E 시나리오 테스트
 
@@ -124,7 +124,7 @@
 
 | 기능 | 백엔드 API | 프론트엔드 상태 | 해결 계획 |
 |------|-----------|---------------|----------|
-| **Smart Pipeline (LLM 3-Phase)** | `POST /api/inference/smart` ✅ | `S1-1a` 완료. Phase 1.5/bootstrap, pair-scoped evidence pack, atomic inference/fallback observability, deterministic deep inspection 1차/2차, `agent_assisted`/`full_agent` atomic 분석 모드, `deepInspectionTrace.details` 기반 pair drill-down viewer, `no_result` pass-through 표시 보정까지 반영. 최종 검증: inference `1 file, 24 tests passed`, web `2 files, 30 tests passed` | S1-1a |
+| **Smart Proof Engine** | `POST /api/inference/smart` ✅ | `S1-1a` 완료. 현재 Smart는 별도 3-Phase 엔진이 아니라 proof-engine run wrapper로 정리되었고, Approval UI에서 비동기 실행/완료 polling/summary viewer를 지원한다. legacy Smart pipeline 산출물은 제거 대상이다. | S1-1a |
 | **LLM Boost (코드 의도 분석)** | `POST /api/inference/run` + `llmBoost` ✅ | `S1-1b` 완료. Approval 추론 실행 UI에서 `llm-boost` 모드로 연결됨 | S1-1b |
 | **LLM Filter (후보 평가)** | `POST /api/inference/llm-filter` ✅ | `S1-1c` 완료. 승인 UI의 `LLM 평가 실행` 버튼으로 연결됨 | S1-1c |
 | **Object 수정 (PATCH)** | `PATCH /api/objects/:id` ✅ | `S1-2` 완료. Service 상세 Sheet의 `displayName`/`description` 인라인 편집과 `visibility` 토글, 목록 카드 visibility 토글이 PATCH로 연결됨. 최종 검증: web `2 files, 7 tests passed` | S1-2 |

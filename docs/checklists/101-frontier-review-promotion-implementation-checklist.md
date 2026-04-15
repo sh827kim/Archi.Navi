@@ -53,7 +53,7 @@
 - [ ] `apps/web/src/app/api/inference/frontiers/[proofStateId]/patch/route.ts` 생성
 - [ ] body 검증 (`workspaceId`, `patchType`, `payload`)
 - [ ] `validateAndApplyProofPatch()` 호출
-- [ ] `sourceKind='human_review'` 보장
+- [ ] `sourceKind='manual'` 보장
 - [ ] replay 결과/후보 반영 상태 응답
 - [ ] malformed request(400) vs rejected patch(200) 분리
 

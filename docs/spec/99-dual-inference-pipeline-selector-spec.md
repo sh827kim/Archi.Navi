@@ -9,11 +9,6 @@
 - [51-intent-centric-proof-engine-adoption-plan-spec.md](./51-intent-centric-proof-engine-adoption-plan-spec.md)
 관련 문서:
 - [93-common-http-signal-extraction-coverage-spec.md](./93-common-http-signal-extraction-coverage-spec.md)
-- [94-framework-specific-code-scanner-spec.md](./94-framework-specific-code-scanner-spec.md)
-- [95-framework-config-parser-hook-spec.md](./95-framework-config-parser-hook-spec.md)
-- [96-config-code-binding-completeness-spec.md](./96-config-code-binding-completeness-spec.md)
-- [97-multi-module-service-boundary-calibration-spec.md](./97-multi-module-service-boundary-calibration-spec.md)
-- [98-bootstrap-engine-policy-alignment-spec.md](./98-bootstrap-engine-policy-alignment-spec.md)
 작성일: 2026-04-14
 구현 메모: `pipelineSelector.ts`와 web API selector 계약이 메인 브랜치에 반영되었다.
 

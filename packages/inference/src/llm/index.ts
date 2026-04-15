@@ -7,9 +7,3 @@ export { generateBoostCandidates } from './boost';
 export { generateDomainLabels } from './domainLabeler';
 export type { GenerateBoostSuggestionFn, LlmBoostContext, LlmBoostRequest, LlmBoostResult, LlmBoostSuggestion } from './boost';
 export type { DomainLabelContext, DomainLabelRequest, DomainLabelResult, DomainLabelSuggestion, GenerateDomainLabelFn } from './domainLabeler';
-
-// Config 파일 기반 Compound 의존성 분석
-export * from './configAnalyzerPrompts';
-
-// 소스코드 기반 엔드포인트 호출 추출
-export * from './callExtractorPrompts';

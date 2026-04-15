@@ -2,7 +2,7 @@
 
 > **상태: Deprecated (2026-04-05)**
 > 이 문서는 contradiction payload와 Approval badge 공통 계약을 고정하던 중간 단계 문서였다.
-> 현재 현행 공통 계약은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 흡수되었고, 규칙별 상세는 [30-cross-signal-validation-stale-config-phase2a-spec.md](../30-cross-signal-validation-stale-config-phase2a-spec.md), [32-cross-signal-validation-phantom-call-spec.md](../32-cross-signal-validation-phantom-call-spec.md), [33-cross-signal-validation-dead-topic-spec.md](../33-cross-signal-validation-dead-topic-spec.md), [34-cross-signal-validation-orphan-fk-spec.md](../34-cross-signal-validation-orphan-fk-spec.md)를 따른다.
+> 현재 현행 공통 계약은 [18-cross-signal-validation-spec.md](../18-cross-signal-validation-spec.md)에 완전히 흡수되었다.
 
 ---
 
@@ -21,7 +21,7 @@
 상태: Implemented
 작성일: 2026-03-20
 상위 SPEC: `docs/spec/18-cross-signal-validation-spec.md`
-선행 SPEC: `docs/spec/18-cross-signal-validation-spec.md`, `docs/spec/30-cross-signal-validation-stale-config-phase2a-spec.md`
+선행 SPEC: `docs/spec/18-cross-signal-validation-spec.md`
 
 ## 1. 목적
 

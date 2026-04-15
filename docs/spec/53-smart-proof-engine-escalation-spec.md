@@ -39,7 +39,7 @@ proof engine 공통 원칙은 `48/50`을 따른다.
 
 1. `frontierAgent`는 현재 결정론적 patcher라서 recall 회복 폭이 제한적이다.
 2. 일부 `HOST_ALIAS_UNRESOLVED`, `CONFIG_BINDING_MISSING`, `ENDPOINT_MATCH_AMBIGUOUS`, `METHOD_UNKNOWN` 케이스는 정적 규칙만으로 닫기 어렵다.
-3. 기존 Smart 문서인 [37-smart-pipeline-atomic-redesign-spec.md](./deprecated/37-smart-pipeline-atomic-redesign-spec.md), [42-agent-assisted-smart-atomic-spec.md](./deprecated/42-agent-assisted-smart-atomic-spec.md)는 pair-scoped Smart pipeline 계약을 중심으로 작성되어 있어, 현재 proof engine 아키텍처와 직접 맞물리지 않는다.
+3. 기존 pair-first Smart 3-Phase 문서와 코드는 제거되었고, 현재 제품 계약은 proof engine 이후의 선택적 escalation만 다룬다.
 
 따라서 현재 제품 계약에서 Smart는
 `proof engine 이후의 선택적 escalation`으로만 해석한다.
@@ -561,15 +561,8 @@ run summary는 최소한 아래 질문에 답할 수 있어야 한다.
 
 ## 16. 기존 Smart 문서와의 관계
 
-아래 문서는 삭제 대상은 아니지만, 현재 제품 계약의 직접 기준은 아니다.
-
-- [37-smart-pipeline-atomic-redesign-spec.md](./deprecated/37-smart-pipeline-atomic-redesign-spec.md)
-- [42-agent-assisted-smart-atomic-spec.md](./deprecated/42-agent-assisted-smart-atomic-spec.md)
-
-정리 원칙:
-
-- 37/42는 pair-scoped Smart pipeline의 역사적 설계 기록으로 남긴다.
-- 현재 구현과 향후 확장 기준은 이 문서와 [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md), [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md)를 우선 참조한다.
+pair-first Smart 3-Phase 문서와 코드는 제거되었다.
+현재 구현과 향후 확장 기준은 이 문서와 [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md), [50-intent-centric-proof-engine-resolution-pipeline-spec.md](./50-intent-centric-proof-engine-resolution-pipeline-spec.md)를 우선 참조한다.
 
 ---
 
