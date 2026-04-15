@@ -108,6 +108,6 @@
 
 - `pnpm --filter @archi-navi/db exec vitest run src/__tests__/client.test.ts`
 - `pnpm --filter @archi-navi/db exec tsc --noEmit`
-- `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/intentProofEngine.test.ts src/__tests__/orchestration/inferenceRuns.test.ts src/__tests__/storage/proofStores.test.ts`
+- `pnpm --filter @archi-navi/inference exec vitest run src/__tests__/orchestration/intentProofEngine.test.ts src/__tests__/orchestration/inferenceRuns.test.ts`
 - `pnpm --filter @archi-navi/web exec vitest run src/__tests__/smart.route.test.ts src/__tests__/inference-candidates.route.test.ts src/__tests__/approval-list.test.tsx src/__tests__/inference-run-list.test.tsx`
 - `pnpm --filter @archi-navi/web run dev`

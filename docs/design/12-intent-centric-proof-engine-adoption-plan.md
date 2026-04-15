@@ -78,7 +78,6 @@ packages/inference/src/
     summariesStore.ts
     aliasBindingsStore.ts
     routeTransformsStore.ts
-    proofStateStore.ts
     frontierStore.ts
     proofPatchStore.ts
   orchestration/

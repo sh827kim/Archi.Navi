@@ -52,15 +52,8 @@
 
 ## 4. 기존 Smart 문서와의 관계
 
-아래 문서는 삭제 대상은 아니지만, 현재 제품 계약의 직접 기준은 아니다.
-
-- [37-smart-pipeline-atomic-redesign-spec.md](../spec/deprecated/37-smart-pipeline-atomic-redesign-spec.md) — pair-scoped Smart pipeline
-- [42-agent-assisted-smart-atomic-spec.md](../spec/deprecated/42-agent-assisted-smart-atomic-spec.md) — agent-assisted Smart atomic
-
-정리 원칙:
-
-- 37/42는 pair-scoped Smart pipeline의 역사적 설계 기록으로 남긴다.
-- 현재 구현과 향후 확장 기준은 이 문서와 [53-smart-proof-engine-escalation-spec.md](../spec/53-smart-proof-engine-escalation-spec.md)를 우선 참조한다.
+pair-first Smart 3-Phase 문서와 코드는 제거되었다.
+현재 구현과 향후 확장 기준은 이 문서와 [53-smart-proof-engine-escalation-spec.md](../spec/53-smart-proof-engine-escalation-spec.md)를 우선 참조한다.
 
 ---
 
