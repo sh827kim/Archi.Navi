@@ -27,9 +27,12 @@ type JsonRecord = Record<string, unknown>;
 export const SUPPORTED_SMART_FRONTIER_REASONS = [
   'HOST_ALIAS_UNRESOLVED',
   'CONFIG_BINDING_MISSING',
+  'PATH_ONLY_TARGET_UNRESOLVED',
   'ROUTE_FAMILY_DERIVATION_EMPTY',
   'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
+  'PATH_TEMPLATE_UNKNOWN',
   'METHOD_UNKNOWN',
+  'PROVIDER_ENDPOINT_NOT_FOUND',
   'ENDPOINT_MATCH_AMBIGUOUS',
 ] as const;
 
@@ -201,15 +204,21 @@ export function isSupportedSmartFrontierReason(
 }
 
 function supportsAliasBindingPatch(reason: SupportedSmartFrontierReason): boolean {
-  return reason === 'HOST_ALIAS_UNRESOLVED' || reason === 'CONFIG_BINDING_MISSING';
+  return reason === 'HOST_ALIAS_UNRESOLVED'
+    || reason === 'CONFIG_BINDING_MISSING'
+    || reason === 'PATH_ONLY_TARGET_UNRESOLVED';
 }
 
 function supportsRouteTransformPatch(reason: SupportedSmartFrontierReason): boolean {
-  return reason === 'ROUTE_FAMILY_DERIVATION_EMPTY' || reason === 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED';
+  return reason === 'ROUTE_FAMILY_DERIVATION_EMPTY'
+    || reason === 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED'
+    || reason === 'PATH_TEMPLATE_UNKNOWN';
 }
 
 function supportsMethodPathPatch(reason: SupportedSmartFrontierReason): boolean {
-  return reason === 'METHOD_UNKNOWN';
+  return reason === 'METHOD_UNKNOWN'
+    || reason === 'PATH_TEMPLATE_UNKNOWN'
+    || reason === 'PROVIDER_ENDPOINT_NOT_FOUND';
 }
 
 function supportsEndpointDisambiguationPatch(reason: SupportedSmartFrontierReason): boolean {
@@ -399,7 +408,7 @@ export function buildSmartMethodPathHintPatch(
       method: proposal.methodPathHint?.method,
       externalPath: proposal.methodPathHint?.externalPath,
       confidence: proposal.confidence,
-      evidenceIds: ['smart-agent:METHOD_UNKNOWN'],
+      evidenceIds: ['smart-agent:METHOD_PATH_FRONTIER'],
     },
     sourceKind: 'smart_agent',
   };
@@ -514,7 +523,13 @@ async function loadSmartFrontierResolutionContext(
     ...asStringArray(endpointCandidateSet?.['objectIds']),
   ];
   const shouldUseProviderEndpointFallback =
-    (state.providerServiceId && (frontier.frontierReason === 'METHOD_UNKNOWN' || frontier.frontierReason === 'ENDPOINT_MATCH_AMBIGUOUS'))
+    (state.providerServiceId
+      && (
+        frontier.frontierReason === 'METHOD_UNKNOWN'
+        || frontier.frontierReason === 'ENDPOINT_MATCH_AMBIGUOUS'
+        || frontier.frontierReason === 'PROVIDER_ENDPOINT_NOT_FOUND'
+        || frontier.frontierReason === 'PATH_TEMPLATE_UNKNOWN'
+      ))
     && explicitCandidateEndpointIds.length === 0;
   const fallbackCandidateEndpointIds = shouldUseProviderEndpointFallback
       ? endpointRows

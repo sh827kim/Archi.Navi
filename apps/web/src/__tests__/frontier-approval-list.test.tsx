@@ -63,7 +63,13 @@ interface FrontierListItem {
 }
 
 interface FrontierDetail extends FrontierListItem {
-  patchableActions: Array<'alias_binding' | 'provider_service_selection' | 'endpoint_disambiguation'>;
+  patchableActions: Array<
+    'alias_binding'
+    | 'provider_service_selection'
+    | 'endpoint_disambiguation'
+    | 'method_path_hint'
+    | 'route_transform_patch'
+  >;
   candidateServices: Array<{ id: string; name: string }>;
   candidateEndpoints: Array<{ id: string; name: string; parentId: string | null }>;
   suggestedServices: Array<{ id: string; name: string }>;

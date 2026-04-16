@@ -6,7 +6,12 @@ import { Badge, Button, Sheet, SheetContent, SheetDescription, SheetFooter, Shee
 import { useWorkspace } from '@/contexts/workspace-context';
 import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
 
-type FrontierPatchType = 'alias_binding' | 'provider_service_selection' | 'endpoint_disambiguation';
+type FrontierPatchType =
+  | 'alias_binding'
+  | 'provider_service_selection'
+  | 'endpoint_disambiguation'
+  | 'method_path_hint'
+  | 'route_transform_patch';
 
 interface FrontierListItem {
   proofStateId: string;
@@ -46,8 +51,15 @@ interface FrontierDetail extends FrontierListItem {
 
 function normalizeReasonToPatchType(reason: string): FrontierPatchType | null {
   if (reason === 'CONFIG_BINDING_MISSING' || reason === 'HOST_ALIAS_UNRESOLVED') return 'alias_binding';
+  if (reason === 'PATH_ONLY_TARGET_UNRESOLVED') return 'alias_binding';
   if (reason === 'PROVIDER_SERVICE_AMBIGUOUS') return 'provider_service_selection';
   if (reason === 'ENDPOINT_MATCH_AMBIGUOUS') return 'endpoint_disambiguation';
+  if (reason === 'METHOD_UNKNOWN' || reason === 'PROVIDER_ENDPOINT_NOT_FOUND' || reason === 'PATH_TEMPLATE_UNKNOWN') {
+    return 'method_path_hint';
+  }
+  if (reason === 'ROUTE_FAMILY_DERIVATION_EMPTY' || reason === 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED') {
+    return 'route_transform_patch';
+  }
   return null;
 }
 
@@ -60,6 +72,13 @@ function renderReasonBadge(reason: string) {
       return <Badge variant="outline">Provider</Badge>;
     case 'ENDPOINT_MATCH_AMBIGUOUS':
       return <Badge variant="outline">Endpoint</Badge>;
+    case 'METHOD_UNKNOWN':
+    case 'PROVIDER_ENDPOINT_NOT_FOUND':
+    case 'PATH_TEMPLATE_UNKNOWN':
+      return <Badge variant="outline">Method/Path</Badge>;
+    case 'ROUTE_FAMILY_DERIVATION_EMPTY':
+    case 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED':
+      return <Badge variant="outline">Route</Badge>;
     default:
       return <Badge variant="outline">Read Only</Badge>;
   }
@@ -81,6 +100,11 @@ export function FrontierApprovalList() {
   const [resolvedServiceId, setResolvedServiceId] = useState('');
   const [selectedServiceId, setSelectedServiceId] = useState('');
   const [endpointId, setEndpointId] = useState('');
+  const [methodHint, setMethodHint] = useState('');
+  const [externalPathHint, setExternalPathHint] = useState('');
+  const [targetServiceHint, setTargetServiceHint] = useState('');
+  const [targetHostAlias, setTargetHostAlias] = useState('');
+  const [selectedPatchType, setSelectedPatchType] = useState<FrontierPatchType | ''>('');
 
   const loadFrontiers = useCallback(async () => {
     setLoading(true);
@@ -114,6 +138,11 @@ export function FrontierApprovalList() {
       setResolvedServiceId('');
       setSelectedServiceId('');
       setEndpointId('');
+      setMethodHint('');
+      setExternalPathHint('');
+      setTargetServiceHint('');
+      setTargetHostAlias('');
+      setSelectedPatchType('');
     } catch (error) {
       setDetail(null);
       toast.error(error instanceof Error ? error.message : 'frontier 상세 조회 실패');
@@ -138,8 +167,14 @@ export function FrontierApprovalList() {
     [items],
   );
 
-  const patchType = detail ? normalizeReasonToPatchType(detail.frontierReason) : null;
-  const canPatch = Boolean(detail && patchType && detail.patchableActions.includes(patchType));
+  const patchType = useMemo(() => {
+    if (!detail) return null;
+    if (selectedPatchType && detail.patchableActions.includes(selectedPatchType)) return selectedPatchType;
+    const preferred = normalizeReasonToPatchType(detail.frontierReason);
+    if (preferred && detail.patchableActions.includes(preferred)) return preferred;
+    return detail.patchableActions[0] ?? null;
+  }, [detail, selectedPatchType]);
+  const canPatch = Boolean(detail && patchType);
 
   async function submitPatch() {
     if (!detail || !patchType) return;
@@ -158,6 +193,21 @@ export function FrontierApprovalList() {
         payload = { selectedServiceId: selectedServiceId.trim() };
       } else if (patchType === 'endpoint_disambiguation') {
         payload = { endpointId: endpointId.trim() };
+      } else if (patchType === 'method_path_hint') {
+        payload = {
+          method: methodHint.trim().toUpperCase(),
+          externalPath: externalPathHint.trim(),
+        };
+      } else if (patchType === 'route_transform_patch') {
+        payload = {
+          ownerServiceId: detail.sourceServiceId,
+          gatewayKind: typeof detail.detail['gatewayKind'] === 'string' ? detail.detail['gatewayKind'] : '',
+          matchPath: typeof detail.detail['externalRoutePattern'] === 'string'
+            ? detail.detail['externalRoutePattern']
+            : (detail.externalPathResolved ?? ''),
+          targetServiceHint: targetServiceHint.trim(),
+          targetHostAlias: targetHostAlias.trim(),
+        };
       }
 
       const res = await fetch(`/api/inference/frontiers/${detail.proofStateId}/patch`, {
@@ -298,6 +348,20 @@ export function FrontierApprovalList() {
 
               {canPatch ? (
                 <div className="space-y-3 rounded-lg border border-border/70 p-3">
+                  {detail.patchableActions.length > 1 && (
+                    <label className="block text-xs">
+                      patch type
+                      <select
+                        className="mt-1 w-full rounded border border-input px-2 py-1"
+                        value={patchType ?? ''}
+                        onChange={(event) => setSelectedPatchType(event.target.value as FrontierPatchType)}
+                      >
+                        {detail.patchableActions.map((action) => (
+                          <option key={action} value={action}>{action}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   {patchType === 'alias_binding' && (
                     <>
                       <label className="block text-xs">
@@ -342,6 +406,52 @@ export function FrontierApprovalList() {
                         ))}
                       </select>
                     </label>
+                  )}
+
+                  {patchType === 'method_path_hint' && (
+                    <>
+                      <label className="block text-xs">
+                        method
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="GET"
+                          value={methodHint}
+                          onChange={(event) => setMethodHint(event.target.value)}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        externalPath
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="/api/orders/{id}"
+                          value={externalPathHint}
+                          onChange={(event) => setExternalPathHint(event.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {patchType === 'route_transform_patch' && (
+                    <>
+                      <label className="block text-xs">
+                        targetServiceHint
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="orders-service"
+                          value={targetServiceHint}
+                          onChange={(event) => setTargetServiceHint(event.target.value)}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        targetHostAlias
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="orders.internal"
+                          value={targetHostAlias}
+                          onChange={(event) => setTargetHostAlias(event.target.value)}
+                        />
+                      </label>
+                    </>
                   )}
                 </div>
               ) : (

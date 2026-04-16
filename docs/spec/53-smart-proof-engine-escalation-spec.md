@@ -13,7 +13,7 @@
 
 상태 메모:
 - Smart escalation 실행 경로와 기본 validator 연동은 구현되었다.
-- 다만 frontier reason coverage는 부분 롤아웃 상태이며, 일부 reason은 현재 read-only 또는 미지원으로 남아 있다.
+- frontier reason 지원/미지원 집합은 코드 상수(`SMART_FRONTIER_REASONS_SUPPORTED` / `SMART_FRONTIER_REASONS_UNSUPPORTED`)와 동기화해 고정한다.
 
 ---
 
@@ -237,14 +237,16 @@ Smart의 실행 순서는 아래를 따른다.
 
 - `HOST_ALIAS_UNRESOLVED`
 - `CONFIG_BINDING_MISSING`
+- `PATH_ONLY_TARGET_UNRESOLVED`
 - `ENDPOINT_MATCH_AMBIGUOUS`
 - `METHOD_UNKNOWN`
+- `PROVIDER_ENDPOINT_NOT_FOUND`
+- `PATH_TEMPLATE_UNKNOWN`
 - `ROUTE_FAMILY_DERIVATION_EMPTY`
 - `ROUTE_TO_ENDPOINT_COMPOSITION_FAILED`
 
 후속 확장 후보:
 
-- `PATH_TEMPLATE_UNKNOWN`
 - `DB_TABLE_UNRESOLVED`
 - `DB_SCHEMA_AMBIGUOUS`
 - `MESSAGE_TARGET_UNRESOLVED`

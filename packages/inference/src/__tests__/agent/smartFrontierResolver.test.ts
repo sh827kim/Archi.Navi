@@ -62,16 +62,21 @@ describe('smartFrontierResolver', () => {
     expect(SUPPORTED_SMART_FRONTIER_REASONS).toEqual([
       'HOST_ALIAS_UNRESOLVED',
       'CONFIG_BINDING_MISSING',
+      'PATH_ONLY_TARGET_UNRESOLVED',
       'ROUTE_FAMILY_DERIVATION_EMPTY',
       'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
+      'PATH_TEMPLATE_UNKNOWN',
       'METHOD_UNKNOWN',
+      'PROVIDER_ENDPOINT_NOT_FOUND',
       'ENDPOINT_MATCH_AMBIGUOUS',
     ]);
     expect(isSupportedSmartFrontierReason('HOST_ALIAS_UNRESOLVED')).toBe(true);
     expect(isSupportedSmartFrontierReason('CONFIG_BINDING_MISSING')).toBe(true);
     expect(isSupportedSmartFrontierReason('ROUTE_FAMILY_DERIVATION_EMPTY')).toBe(true);
     expect(isSupportedSmartFrontierReason('ROUTE_TO_ENDPOINT_COMPOSITION_FAILED')).toBe(true);
+    expect(isSupportedSmartFrontierReason('PATH_TEMPLATE_UNKNOWN')).toBe(true);
     expect(isSupportedSmartFrontierReason('METHOD_UNKNOWN')).toBe(true);
+    expect(isSupportedSmartFrontierReason('PROVIDER_ENDPOINT_NOT_FOUND')).toBe(true);
     expect(isSupportedSmartFrontierReason('ENDPOINT_MATCH_AMBIGUOUS')).toBe(true);
   });
 

@@ -17,6 +17,8 @@ const SUPPORTED_PATCH_TYPES: ProofPatchType[] = [
   'alias_binding',
   'provider_service_selection',
   'endpoint_disambiguation',
+  'method_path_hint',
+  'route_transform_patch',
 ];
 
 export async function POST(

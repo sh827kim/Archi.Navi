@@ -3,7 +3,7 @@
 - 작성일: 2026-04-15
 - 대상 범위: `apps/web`, `packages/inference`
 - 상태: Current (Partial Rollout)
-- 상태 메모: Frontier 탭, 목록/상세/patch API, 3종 patch type, patch 후 refresh/승격 처리까지 구현되었다. 다만 reason별 form 지원은 부분 롤아웃 상태다.
+- 상태 메모: Frontier 탭, 목록/상세/patch API, patch 후 refresh/승격 처리까지 구현되었다. reason별 patch form은 alias/provider/endpoint 외 method_path/route_transform까지 확장되었다.
 
 ## 1) 배경
 
@@ -44,7 +44,7 @@
   - patch 후 frontier/candidate refresh
   - `CLOSED_ATOMIC` 승격 시 detail 재조회 대신 시트 종료
 - 미구현 또는 부분 구현
-  - 모든 frontier reason에 대한 patch form
+  - DB/message/Vert.x 전용 reason patch form
   - 보류/숨김/무시 액션
   - actor 식별 기반 감사 강화
 
@@ -84,13 +84,11 @@
 - `PROVIDER_SERVICE_AMBIGUOUS` -> `provider_service_selection`
 - `ENDPOINT_MATCH_AMBIGUOUS` -> `endpoint_disambiguation`
 
-아래 reason은 proof engine 차원에서는 살아 있지만, 현재 Frontier review UI에서는 read-only로 남아 있다.
-
-- `PATH_ONLY_TARGET_UNRESOLVED`
-- `PROVIDER_ENDPOINT_NOT_FOUND`
-- `PATH_TEMPLATE_UNKNOWN`
-
-`route_transform_patch`는 1.5~2차로 이월한다.
+추가 확장:
+- `PATH_ONLY_TARGET_UNRESOLVED` -> `alias_binding`
+- `PROVIDER_ENDPOINT_NOT_FOUND`, `METHOD_UNKNOWN`, `PATH_TEMPLATE_UNKNOWN` -> `method_path_hint`
+- `ROUTE_FAMILY_DERIVATION_EMPTY`, `ROUTE_TO_ENDPOINT_COMPOSITION_FAILED` -> `route_transform_patch`
+- `PATH_TEMPLATE_UNKNOWN` (gateway route intent) -> `route_transform_patch` 추가 허용
 
 ## 7) UX 설계
 

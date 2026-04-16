@@ -1497,7 +1497,7 @@ async function validatePatchDeterministically(
       const resolvedServiceId = asString(payload['resolvedServiceId']);
       const aliasKey = asString(payload['aliasKey']);
       const aliasValue = asString(payload['aliasValue']);
-      if (!frontier || !['CONFIG_BINDING_MISSING', 'HOST_ALIAS_UNRESOLVED'].includes(frontier.frontierReason)) {
+      if (!frontier || !['CONFIG_BINDING_MISSING', 'HOST_ALIAS_UNRESOLVED', 'PATH_ONLY_TARGET_UNRESOLVED'].includes(frontier.frontierReason)) {
         errors.push('alias_binding requires a host/config alias frontier');
         return errors;
       }
@@ -1514,7 +1514,7 @@ async function validatePatchDeterministically(
           .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
           .map((entry) => normalizeLookupToken(entry))
       );
-      if (aliasKey && !frontierKeys.has(normalizeLookupToken(aliasKey))) {
+      if (aliasKey && frontierKeys.size > 0 && !frontierKeys.has(normalizeLookupToken(aliasKey))) {
         errors.push('aliasKey must reference a frontier host/config hint');
       }
       if (aliasValue) {
@@ -1668,8 +1668,8 @@ async function validatePatchDeterministically(
     case 'method_path_hint': {
       const methodHint = normalizeMethod(payload['method']);
       const externalPathHint = asString(payload['externalPath']);
-      if (!frontier || frontier.frontierReason !== 'METHOD_UNKNOWN') {
-        errors.push('method_path_hint requires a METHOD_UNKNOWN frontier');
+      if (!frontier || !['METHOD_UNKNOWN', 'PATH_TEMPLATE_UNKNOWN', 'PROVIDER_ENDPOINT_NOT_FOUND'].includes(frontier.frontierReason)) {
+        errors.push('method_path_hint requires a method/path frontier');
         return errors;
       }
       if (!proofState.providerServiceId) {
