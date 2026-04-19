@@ -280,8 +280,11 @@ function firstTopicSegment(topic: string): string | null {
     return segments[0] ?? null;
 }
 
+// approve route 과 일관성 있게 한글(가-힣)을 포함해 정규화.
+// 한글만 있는 후보(예: "주문") 를 빈 문자열로 변환하지 않아야 discovery 와 approval
+// 동작의 일관성이 유지됨.
 function normalizeSlug(input: string): string {
-    return input.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return input.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
 }
 
 /** 객체 이름을 의미 토큰으로 분해 — pascalCase / camelCase / snake_case / kebab-case 지원 */

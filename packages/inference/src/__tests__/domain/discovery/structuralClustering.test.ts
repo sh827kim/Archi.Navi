@@ -207,4 +207,40 @@ describe('runStructuralClustering', () => {
         const orders = result.candidates.find((c) => c.slug === 'orders');
         expect(orders!.members[0]!.relationCohesion).toBe(0);
     });
+
+    it('T7: 한글 slug 는 정규화 후 보존 (approve 와 일관성)', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    { id: 'ord', objectType: 'service', name: '주문서비스', displayName: null, path: '/주문' },
+                    { id: 'pay', objectType: 'service', name: '결제Handler', displayName: null, path: '/결제/api' },
+                ],
+                intents: [
+                    {
+                        id: 'ord-i1',
+                        objectId: 'ord',
+                        externalPathHint: '/주문',
+                        externalRoutePattern: null,
+                        messageTopicHints: [],
+                    },
+                    {
+                        id: 'pay-i1',
+                        objectId: 'pay',
+                        externalPathHint: null,
+                        externalRoutePattern: null,
+                        messageTopicHints: ['결제.처리'],
+                    },
+                ],
+            }),
+        );
+
+        const slugs = result.candidates.map((c) => c.slug);
+        // 한글 slug 가 보존되어야 함 (빈 문자열로 변환돼 무시되지 않아야 함)
+        expect(slugs).toContain('주문');
+        expect(slugs).toContain('결제');
+
+        const order = result.candidates.find((c) => c.slug === '주문')!;
+        expect(order.members).toHaveLength(1);
+        expect(order.members[0]!.objectId).toBe('ord');
+    });
 });
