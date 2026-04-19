@@ -9,6 +9,7 @@
  *  - T4: 승인 성공 시 멤버 수만큼 DOMAIN_AFFINITY_CHANGED 이벤트가 발행됨
  *  - T5: 동시 승인 race — insert 가 partial unique index 충돌로 0행을 돌려줘도,
  *        재조회로 동일 domainId 에 합류해 reused:true 로 응답한다.
+ *  - T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME 반환
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -217,6 +218,28 @@ describe('POST /api/domains/approve', () => {
         const json = await res.json();
         expect(json.data.reused).toBe(false);
         expect(json.data.domainId).toBe('fresh-domain-id');
+    });
+
+    it('T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME', async () => {
+        // 이모지/특수문자만 있는 이름은 /domain/ 로 수렴해 서로 무관한 승인이 같은 도메인으로 섞임 → 차단
+        const db = buildDbMock({ ownedIds: ['obj-a'] });
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: '!!!',
+                primaryMembers: [{ objectId: 'obj-a', affinity: 0.8, confidence: 0.7 }],
+            }),
+        );
+
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.success).toBe(false);
+        expect(json.error.code).toBe('INVALID_NAME');
+        // workspace owner 조회나 rollup 발행까지 가지 않아야 함
+        expect(db.transaction).not.toHaveBeenCalled();
+        expect(applyRollupChangesMock).not.toHaveBeenCalled();
     });
 
     it('T5: 동시 승인 race — insert 가 0행이면 재조회로 raced-in 도메인을 reused 로 합류', async () => {

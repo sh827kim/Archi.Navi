@@ -67,6 +67,20 @@ export async function POST(req: Request) {
             .toLowerCase()
             .replace(/[^a-z0-9가-힣]+/g, '-')
             .replace(/^-+|-+$/g, '');
+        // "!!!" 나 이모지만 있는 이름은 정규화 후 빈 문자열이 되어 /domain/ 로 수렴한다.
+        // 이 경로를 허용하면 서로 무관한 이름들이 같은 도메인 행으로 합쳐져 멤버십이 섞이므로 차단.
+        if (slug.length === 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'INVALID_NAME',
+                        message: 'name 에서 유효한 도메인 slug 를 만들 수 없습니다. 한글/영문/숫자를 포함한 이름을 사용하세요.',
+                    },
+                },
+                { status: 400 },
+            );
+        }
         const domainPath = `/domain/${slug}`;
 
         const db = await getDb();
