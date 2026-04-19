@@ -151,6 +151,53 @@ describe('runStructuralClustering', () => {
         expect(slugs).toContain('small');
     });
 
+    it('T6.1: transport/version prefix(/api, /v1) 는 슬러그로 잡지 않고 다음 의미 segment 를 사용', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    { id: 'svc-orders', objectType: 'service', name: 'OrdersService', displayName: null, path: '/api/orders/list' },
+                    { id: 'svc-pay', objectType: 'service', name: 'PaymentsService', displayName: null, path: '/v1/payments/charge' },
+                ],
+                intents: [
+                    {
+                        sourceObjectId: 'svc-orders',
+                        intentType: 'http_call',
+                        externalPathHint: '/api/orders/123',
+                        externalRoutePattern: null,
+                        messageTopicHints: [],
+                    },
+                ],
+            }),
+        );
+
+        const slugs = result.candidates.map((c) => c.slug);
+        // api / v1 은 후보 풀에 들어가지 않아야 한다 (서로 다른 도메인이 한 후보로 묶이는 문제 방지)
+        expect(slugs).not.toContain('api');
+        expect(slugs).not.toContain('v1');
+        // 의미 있는 segment 인 orders, payments 가 후보로 잡혀야 한다
+        expect(slugs).toContain('orders');
+        expect(slugs).toContain('payments');
+
+        const orders = result.candidates.find((c) => c.slug === 'orders')!;
+        // 강한 신호 칩도 의미 있는 segment 로 채워져야 한다
+        expect(orders.signals.topPathPrefix).toBe('orders');
+        expect(orders.signals.topRoutePrefix).toBe('/orders');
+    });
+
+    it('T6.2: 모든 segment 가 transport prefix 라면 마지막 segment 를 fallback', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    { id: 'svc-x', objectType: 'service', name: 'PublicApi', displayName: null, path: '/api/internal' },
+                ],
+            }),
+        );
+        // 모두 prefix → fallback 인 마지막 segment "internal" 이 슬러그로 잡힘
+        // 의미 있는 도메인은 아니지만, 의도된 fallback 동작 검증.
+        const slugs = result.candidates.map((c) => c.slug);
+        expect(slugs).toContain('internal');
+    });
+
     it('T6: relationCohesion 은 본 모듈에서 0 으로 초기화', () => {
         const result = runStructuralClustering(
             makeInputs({

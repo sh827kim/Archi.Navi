@@ -87,6 +87,38 @@ describe('runDomainDiscovery', () => {
         expect(orders.members.find((m) => m.objectId === 'b')!.relationCohesion).toBe(1);
     });
 
+    it('T4.1: review 함수가 단일 후보에서 throw 해도 결정적 발견 결과는 살아남고 해당 후보만 review = null', async () => {
+        let callIndex = 0;
+        const review = vi.fn(async () => {
+            callIndex += 1;
+            if (callIndex === 1) {
+                throw new Error('rate-limit');
+            }
+            return {
+                coherent: true,
+                suggestedName: '결제',
+                responsibilityHint: '결제 처리',
+            };
+        });
+
+        const result = await runDomainDiscovery({
+            inputs: makeInputs({
+                objects: [
+                    { id: 'svc-orders', objectType: 'service', name: 'OrdersService', displayName: null, path: '/orders/api' },
+                    { id: 'svc-payments', objectType: 'service', name: 'PaymentsService', displayName: null, path: '/payments/api' },
+                ],
+            }),
+            review,
+        });
+
+        // 후보 2개가 모두 살아있어야 한다 (한 쪽이 LLM 실패해도 발견 자체는 성공)
+        expect(result.candidates).toHaveLength(2);
+        const reviewed = result.candidates.filter((c) => c.review !== null);
+        const failed = result.candidates.filter((c) => c.review === null);
+        expect(reviewed).toHaveLength(1);
+        expect(failed).toHaveLength(1);
+    });
+
     it('T5: review 함수가 주입되면 후보별로 호출되어 review 채움', async () => {
         const review = vi.fn(async () => ({
             coherent: true,

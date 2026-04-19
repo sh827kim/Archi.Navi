@@ -36,6 +36,35 @@ const STRIPPABLE_NAME_SUFFIXES = [
     'module',
 ];
 
+/**
+ * URL/경로 앞단의 도메인이 아닌 prefix.
+ * `/api/orders`, `/v1/payments`, `/rest/inventory` 같은 흔한 transport·버전 segment 가
+ * 슬러그로 잡히면 서로 다른 도메인이 한 후보(`api`/`v1`)로 묶여 발견 결과가 희석된다.
+ */
+const NON_DOMAIN_PATH_PREFIXES = new Set([
+    'api',
+    'apis',
+    'rest',
+    'graphql',
+    'gql',
+    'rpc',
+    'grpc',
+    'public',
+    'internal',
+    'private',
+    'app',
+    'web',
+]);
+
+/** v1 / v2 / v10 처럼 "v" + 숫자 형태인지 판정 */
+function isVersionSegment(segment: string): boolean {
+    return /^v\d+$/i.test(segment);
+}
+
+function isNonDomainSegment(segment: string): boolean {
+    return NON_DOMAIN_PATH_PREFIXES.has(segment.toLowerCase()) || isVersionSegment(segment);
+}
+
 export interface StructuralClusterCandidate {
     /** 후보 슬러그 (정규화된 소문자 — 예: "payments") */
     slug: string;
@@ -153,12 +182,12 @@ function groupIntentsByObject(intents: DiscoveryIntentInput[]): Map<string, Disc
     return map;
 }
 
-/** path 의 첫 1~2개 segment 를 슬러그 후보로 추출 */
+/** path 의 첫 "의미 있는" segment 를 슬러그 후보로 추출 (transport/version prefix 는 건너뜀) */
 function extractPathSlugs(path: string): string[] {
-    const segments = path.split('/').filter((s) => s.length > 0);
-    const slugs: string[] = [];
-    if (segments[0]) slugs.push(normalizeSlug(segments[0]));
-    return slugs.filter((s) => s.length >= 2);
+    const seg = firstPathSegment(path);
+    if (!seg) return [];
+    const slug = normalizeSlug(seg);
+    return slug.length >= 2 ? [slug] : [];
 }
 
 /** 객체 이름에서 의미 있는 토큰만 추출 (Service/Controller 등 suffix 제거) */
@@ -237,7 +266,12 @@ function pickFirstTopicMatch(intents: DiscoveryIntentInput[], slug: string): str
 
 function firstPathSegment(input: string): string | null {
     const segments = input.split(/[\/]/).filter((s) => s.length > 0 && !s.startsWith(':') && !s.startsWith('{'));
-    return segments[0] ?? null;
+    // transport prefix(api, rest, …) / 버전(v1, v2) 는 도메인 슬러그가 아니므로
+    // 첫 "의미 있는" segment 가 나올 때까지 건너뛴다. 모두 prefix 라면 마지막 segment 를 fallback.
+    for (const segment of segments) {
+        if (!isNonDomainSegment(segment)) return segment;
+    }
+    return segments[segments.length - 1] ?? null;
 }
 
 function firstTopicSegment(topic: string): string | null {

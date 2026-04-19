@@ -80,26 +80,35 @@ export async function runDomainDiscovery(
         } satisfies DomainCandidate;
     });
 
-    // 4. LLM 검토 (선택)
+    // 4. LLM 검토 (선택) — 후보별 호출은 독립적으로 격리한다.
+    //    한 후보의 provider 오류(타임아웃/rate-limit/invalid key 등)가 결정적 발견 결과 전체를
+    //    날리지 않도록, 실패한 후보만 review = null 로 두고 나머지는 정상 채움.
     if (args.review) {
         const generate = args.review;
         const objectNameById = buildObjectNameLookup(args.inputs);
         const allIds = finalCandidates.map((c) => c.id);
         for (const cand of finalCandidates) {
-            const review = await reviewDomainCandidate(
-                {
-                    candidate: {
-                        slug: cand.id,
-                        autoName: cand.autoName,
-                        signals: cand.signals,
-                        members: cand.members,
+            try {
+                cand.review = await reviewDomainCandidate(
+                    {
+                        candidate: {
+                            slug: cand.id,
+                            autoName: cand.autoName,
+                            signals: cand.signals,
+                            members: cand.members,
+                        },
+                        objectNameById,
+                        siblingCandidateIds: allIds,
                     },
-                    objectNameById,
-                    siblingCandidateIds: allIds,
-                },
-                generate,
-            );
-            cand.review = review;
+                    generate,
+                );
+            } catch (error) {
+                console.warn(
+                    `[runDomainDiscovery] LLM review failed for candidate "${cand.id}", continuing without review`,
+                    error,
+                );
+                cand.review = null;
+            }
         }
     }
 
