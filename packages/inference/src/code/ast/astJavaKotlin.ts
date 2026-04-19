@@ -263,7 +263,7 @@ function buildPartialHttpMetadata(
   const hostLiteral = stringLiterals.find((value) => /^[a-z][a-z0-9+.-]*:\/\//i.test(value))
     ?? stringLiterals.find((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !value.startsWith('/') && !SPRING_HTTP_FRAMEWORK_TOKENS.has(value))
     ?? null;
-  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*(?:BaseUrl|Host|Url))\b/);
+  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*(?:BaseUrl|Host|Url))\b(?!\s*\()/);
   const serviceNameHintMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_-]*service[A-Za-z0-9_-]*)\b/i);
   const getterServiceHintMatch = [...argText.matchAll(/\bget([A-Z][A-Za-z0-9]*(?:Service|Manager|Client|Api|Gateway|Mgt)[A-Za-z0-9]*)\s*\(/g)][0]?.[1];
   const serviceNameHint = getterServiceHintMatch ?? serviceNameHintMatch?.[1] ?? null;
@@ -303,6 +303,28 @@ function buildPartialHttpMetadata(
     unsupportedPattern,
     ...(methodHint ? { methodHint } : {}),
   };
+}
+
+function hasUsefulPartialHttpMetadata(metadata: Record<string, unknown>): boolean {
+    const pathHint = metadata['pathHint'];
+    const hostHint = metadata['hostHint'];
+    const baseUrlVar = metadata['baseUrlVar'];
+    const serviceNameHint = metadata['serviceNameHint'];
+    const configKeys = metadata['configKeys'];
+    const pathVariables = metadata['pathVariables'];
+    const queryKeys = metadata['queryKeys'];
+
+    return (
+        (typeof pathHint === 'string' && pathHint.length > 1)
+        || (typeof hostHint === 'string' && hostHint.length > 0)
+        || (typeof baseUrlVar === 'string' && baseUrlVar.length > 0)
+        || (typeof serviceNameHint === 'string' && serviceNameHint.length > 0)
+        || (Array.isArray(configKeys) && configKeys.length > 0)
+        || (Array.isArray(pathVariables) && pathVariables.length > 0)
+        || (Array.isArray(queryKeys) && queryKeys.length > 0)
+        || metadata['dynamicPath'] === true
+        || metadata['dynamicHost'] === true
+    );
 }
 
 /**
@@ -1043,10 +1065,10 @@ function processMethodInvocations(
                         }),
                     );
                 } else {
-                    if (!['string_literal', 'identifier'].includes(firstArg.type)) {
+                    const fallbackMetadata = buildPartialHttpMetadata(objectName, args.map((arg) => arg.text).join(', '));
+                    if (!hasUsefulPartialHttpMetadata(fallbackMetadata)) {
                         continue;
                     }
-                    const fallbackMetadata = buildPartialHttpMetadata(objectName, args.map((arg) => arg.text).join(', '));
                     signals.push(
                         makeSignal({
                             kind: 'call',
