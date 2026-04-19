@@ -17,7 +17,6 @@ vi.mock('@archi-navi/db', async () => {
 
 import {
   createTestDb as createEmbeddedTestDb,
-  domainCandidates,
   inferenceRuns,
   objects,
   relationCandidates,
@@ -95,18 +94,6 @@ describe('GET /api/dashboard/summary', () => {
       status: 'PENDING',
     });
 
-    await dbHolder.db.insert(domainCandidates).values({
-      id: '00000000-0000-0000-0000-000000000401',
-      workspaceId,
-      objectId: '00000000-0000-0000-0000-000000000201',
-      affinityMap: { '00000000-0000-0000-0000-000000000203': 0.91 },
-      purity: 0.91,
-      primaryDomainId: '00000000-0000-0000-0000-000000000203',
-      secondaryDomainIds: [],
-      signals: {},
-      status: 'PENDING',
-    });
-
     await dbHolder.db.insert(inferenceRuns).values([
       {
         id: '00000000-0000-0000-0000-000000000501',
@@ -142,7 +129,6 @@ describe('GET /api/dashboard/summary', () => {
         services: 2,
         domains: 1,
         pendingRelations: 1,
-        pendingDomains: 1,
       },
       recentRuns: [
         expect.objectContaining({

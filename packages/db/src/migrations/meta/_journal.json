@@ -127,6 +127,13 @@
       "when": 1776510000000,
       "tag": "0017_domain_semantic_profiles",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1776596400000,
+      "tag": "0018_drop_legacy_domain_tables",
+      "breakpoints": true
     }
   ]
 }

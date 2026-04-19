@@ -1,33 +1,8 @@
 /**
  * Domain 추론 엔진
- * Track A: Seed 기반 Affinity 계산
- * Track B: Seed-less Discovery (Louvain/Leiden)
- * 승인/거부 처리
+ * Phase 1: 도메인 발견 — 결정적 클러스터링 + LLM 검토
+ * Phase 2: 도메인 의미 추출 — 신호 수집 + LLM 합성
  */
-export { runSeedBasedInference } from './seedBased';
-export { runDiscovery } from './discovery';
-export { approveDomainCandidate } from './approveDomainCandidate';
-export type { ApproveDomainCandidateResult } from './approveDomainCandidate';
-export {
-  DEFAULT_DOMAIN_FEEDBACK_CONFIG,
-  accumulateDomainCandidateFeedback,
-  applyDomainFeedbackToSeedCandidate,
-  computeDomainFeedbackAdjustment,
-  deriveDomainFeedbackDescriptor,
-  getPurityBucket,
-  normalizeDomainFeedbackAdjustments,
-  normalizeDomainFeedbackConfig,
-} from './feedbackLoop';
-export type {
-  DomainFeedbackConfig,
-  DomainFeedbackDescriptor,
-  DomainFeedbackMetadata,
-  DomainFeedbackPurityBucket,
-  DomainFeedbackStats,
-  DomainFeedbackTrack,
-} from './feedbackLoop';
-export { extractLabelCandidates } from './labelExtractor';
-export type { LabelCandidate } from './labelExtractor';
 
 // 도메인 발견 (Phase 1) — 결정적 클러스터링 + LLM 검토
 export {

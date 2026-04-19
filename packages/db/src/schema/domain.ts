@@ -1,8 +1,6 @@
 /**
  * Domain 추론 관련 테이블 스키마
- * object_domain_affinities, domain_inference_profiles,
- * domain_candidates, domain_discovery_runs, domain_discovery_memberships,
- * domain_rollup_provenances
+ * object_domain_affinities, domain_inference_profiles
  */
 import {
   bigint,
@@ -18,7 +16,6 @@ import {
   uuid,
 } from 'drizzle-orm/pg-core';
 import { workspaces, objects } from './core';
-import { evidences } from './evidence';
 
 const DEFAULT_PROOF_CONFIDENCE_CONFIG = {
   name: 'intent-proof-default',
@@ -169,131 +166,3 @@ export const domainInferenceProfiles = pgTable(
   },
   (table) => [unique('uq_profile_ws_name').on(table.workspaceId, table.name)],
 );
-
-// Seed 기반 도메인 추론 후보 큐
-export const domainCandidates = pgTable(
-  'domain_candidates',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    workspaceId: uuid('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-
-    runId: uuid('run_id'),
-    objectId: uuid('object_id')
-      .notNull()
-      .references(() => objects.id, { onDelete: 'cascade' }),
-
-    affinityMap: jsonb('affinity_map').notNull(), // {"<domainId>": 0.62, ...}
-    purity: real('purity').notNull(),
-    primaryDomainId: uuid('primary_domain_id').references(() => objects.id, {
-      onDelete: 'set null',
-    }),
-    secondaryDomainIds: jsonb('secondary_domain_ids').notNull().default([]),
-
-    signals: jsonb('signals').notNull().default({}),
-
-    status: text('status').notNull().default('PENDING'), // PENDING, APPROVED, REJECTED
-    reviewedAt: timestamp('reviewed_at', { withTimezone: true }),
-    reviewedBy: text('reviewed_by'),
-
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    index('ix_domcand_ws_status').on(table.workspaceId, table.status),
-    index('ix_domcand_ws_object').on(table.workspaceId, table.objectId),
-  ],
-);
-
-// 도메인 후보 - 근거 연결
-export const domainCandidateEvidences = pgTable(
-  'domain_candidate_evidences',
-  {
-    workspaceId: uuid('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-    candidateId: uuid('candidate_id')
-      .notNull()
-      .references(() => domainCandidates.id, { onDelete: 'cascade' }),
-    evidenceId: uuid('evidence_id')
-      .notNull()
-      .references(() => evidences.id, { onDelete: 'cascade' }),
-  },
-  (table) => [
-    {
-      pk: { columns: [table.workspaceId, table.candidateId, table.evidenceId] },
-    },
-  ],
-);
-
-// Seed-less Discovery 실행 스냅샷
-export const domainDiscoveryRuns = pgTable(
-  'domain_discovery_runs',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    workspaceId: uuid('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-
-    profileId: uuid('profile_id').references(() => domainInferenceProfiles.id),
-    algo: text('algo').notNull(), // louvain, leiden
-    algoVersion: text('algo_version'),
-    inputLayers: jsonb('input_layers').notNull(), // ["call","db","msg","code"]
-    parameters: jsonb('parameters').notNull().default({}),
-
-    graphStats: jsonb('graph_stats').notNull().default({}),
-    status: text('status').notNull().default('DONE'), // DONE, FAILED
-
-    startedAt: timestamp('started_at', { withTimezone: true }).notNull().defaultNow(),
-    finishedAt: timestamp('finished_at', { withTimezone: true }),
-  },
-  (table) => [index('ix_ddr_ws_time').on(table.workspaceId, table.startedAt)],
-);
-
-// Discovery 멤버십 스냅샷 (run별 결과 보존)
-export const domainDiscoveryMemberships = pgTable(
-  'domain_discovery_memberships',
-  {
-    id: uuid('id').primaryKey().defaultRandom(),
-    workspaceId: uuid('workspace_id')
-      .notNull()
-      .references(() => workspaces.id, { onDelete: 'cascade' }),
-
-    runId: uuid('run_id')
-      .notNull()
-      .references(() => domainDiscoveryRuns.id, { onDelete: 'cascade' }),
-
-    objectId: uuid('object_id')
-      .notNull()
-      .references(() => objects.id, { onDelete: 'cascade' }),
-    domainId: uuid('domain_id')
-      .notNull()
-      .references(() => objects.id, { onDelete: 'cascade' }),
-
-    affinity: real('affinity').notNull(), // 0~1
-    purity: real('purity'),
-
-    createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
-  },
-  (table) => [
-    unique('uq_ddm').on(table.workspaceId, table.runId, table.objectId, table.domainId),
-    index('ix_ddm_ws_run').on(table.workspaceId, table.runId),
-    index('ix_ddm_ws_object').on(table.workspaceId, table.objectId),
-    index('ix_ddm_ws_domain').on(table.workspaceId, table.domainId),
-  ],
-);
-
-// Domain Rollup Provenance (Domain-to-Domain 근거 추적)
-export const domainRollupProvenances = pgTable('domain_rollup_provenances', {
-  id: uuid('id').primaryKey().defaultRandom(),
-  workspaceId: uuid('workspace_id')
-    .notNull()
-    .references(() => workspaces.id, { onDelete: 'cascade' }),
-  generationVersion: bigint('generation_version', { mode: 'number' }).notNull(),
-  domainRollupId: uuid('domain_rollup_id').notNull(),
-  sourceServiceRollupId: uuid('source_service_rollup_id').notNull(),
-  factor: real('factor').notNull(),
-  contributedWeight: real('contributed_weight').notNull(),
-  contributedConfidence: real('contributed_confidence'),
-  createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
-});
