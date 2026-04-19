@@ -29,6 +29,8 @@ interface FrontierListItem {
   retryStrategy: string;
   priority: number;
   detail: Record<string, unknown>;
+  gatewayKind?: string | null;
+  externalRoutePattern?: string | null;
   methodResolved: string | null;
   externalPathResolved: string | null;
   internalPathResolved: string | null;
@@ -232,12 +234,14 @@ export function FrontierApprovalList() {
           externalPath: externalPathHint.trim(),
         };
       } else if (patchType === 'route_transform_patch') {
+        const matchPath = detail.externalRoutePattern
+          ?? (typeof detail.detail['externalRoutePattern'] === 'string'
+            ? detail.detail['externalRoutePattern']
+            : detail.externalPathResolved);
         payload = {
           ownerServiceId: detail.sourceServiceId,
-          gatewayKind: typeof detail.detail['gatewayKind'] === 'string' ? detail.detail['gatewayKind'] : '',
-          matchPath: typeof detail.detail['externalRoutePattern'] === 'string'
-            ? detail.detail['externalRoutePattern']
-            : (detail.externalPathResolved ?? ''),
+          gatewayKind: detail.gatewayKind ?? '',
+          matchPath: matchPath ?? '',
           targetServiceHint: targetServiceHint.trim(),
           targetHostAlias: targetHostAlias.trim(),
         };

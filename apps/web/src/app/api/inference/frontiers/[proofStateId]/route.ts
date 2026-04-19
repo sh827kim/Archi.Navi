@@ -188,6 +188,8 @@ export async function GET(
       priority: frontier.priority,
       confidence: state.confidence,
       detail,
+      gatewayKind: intent?.gatewayKind ?? null,
+      externalRoutePattern: intent?.externalRoutePattern ?? null,
       methodResolved: state.methodResolved,
       externalPathResolved: state.externalPathResolved,
       internalPathResolved: state.internalPathResolved,

@@ -113,6 +113,8 @@ function createFrontierItem(): FrontierListItem {
     retryStrategy: 'manual_review',
     priority: 10,
     detail: { candidateProviderIds: ['svc-a', 'svc-b'] },
+    gatewayKind: null,
+    externalRoutePattern: null,
     methodResolved: 'GET',
     externalPathResolved: '/orders',
     internalPathResolved: null,
@@ -324,5 +326,69 @@ describe('FrontierApprovalList', () => {
       applyMode: 'defer',
     });
     expect(dispatchSpy).not.toHaveBeenCalled();
+  });
+
+  it('route_transform_patch는 top-level gatewayKind와 externalRoutePattern을 사용해야 한다', async () => {
+    const initialItem = {
+      ...createFrontierItem(),
+      frontierReason: 'ROUTE_FAMILY_DERIVATION_EMPTY',
+      detail: {},
+      gatewayKind: 'spring_cloud_gateway',
+      externalRoutePattern: '/api/orders/**',
+      externalPathResolved: '/api/orders/**',
+    };
+    const detail: FrontierDetail = {
+      ...initialItem,
+      patchableActions: ['route_transform_patch'],
+      candidateServices: [],
+      candidateEndpoints: [],
+      suggestedServices: [],
+      recentProofSteps: [],
+    };
+    const patchRequests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([initialItem]));
+      }
+      if (url.includes('/api/inference/frontiers/proof-1?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse(detail));
+      }
+      if (url.endsWith('/api/inference/frontiers/proof-1/patch') && init?.method === 'POST') {
+        patchRequests.push(JSON.parse(String(init.body)));
+        return Promise.resolve(jsonResponse({
+          validationStatus: 'ACCEPTED',
+          proofStatus: 'FRONTIER',
+        }));
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findByTestId('frontier-card');
+    fireEvent.click(screen.getByRole('button', { name: '보정' }));
+    await screen.findByText('Frontier 보정');
+
+    fireEvent.change(screen.getByPlaceholderText('orders-service'), {
+      target: { value: 'orders-service' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Patch 적용' }));
+
+    await waitFor(() => {
+      expect(patchRequests).toHaveLength(1);
+    });
+    expect(patchRequests[0]).toMatchObject({
+      workspaceId: 'ws-1',
+      patchType: 'route_transform_patch',
+      payload: {
+        gatewayKind: 'spring_cloud_gateway',
+        matchPath: '/api/orders/**',
+        targetServiceHint: 'orders-service',
+      },
+    });
   });
 });
