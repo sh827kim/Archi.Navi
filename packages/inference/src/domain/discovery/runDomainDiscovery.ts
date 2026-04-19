@@ -1,0 +1,115 @@
+/**
+ * Phase 1 도메인 발견 오케스트레이터.
+ * 결정적 클러스터링 → 관계 응집도 → LLM 검토 → primary/secondary 결정 순으로 후보를 풍부화한다.
+ *
+ * 점수 규칙 (witty-roaming-pudding 계획서):
+ *  - affinity   = (pathPrefixMatch + routePrefixMatch + topicPrefixMatch + nameTokenJaccard) / 4
+ *  - confidence = relationCohesion (멤버 단위)
+ *  - 멤버 채택 임계값: affinity ≥ 0.25
+ *  - 한 객체가 여러 후보에서 0.25 이상이면 affinity 가장 높은 곳을 primary
+ *  - secondary 는 affinity ≥ 0.5 일 때만 함께 보존
+ *
+ * LLM reviewer 가 주입되지 않으면 review 는 null 로 둔다 (테스트/오프라인 발견).
+ */
+import { computeRelationCohesion } from './relationCohesion';
+import { reviewDomainCandidate } from './llmReviewer';
+import type { GenerateDomainReviewFn } from './llmReviewer';
+import { runStructuralClustering } from './structuralClustering';
+import type { StructuralClusterCandidate } from './structuralClustering';
+import type {
+    CandidateMemberScore,
+    DiscoveryInputs,
+    DomainCandidate,
+} from './types';
+
+export const SECONDARY_AFFINITY_THRESHOLD = 0.5;
+
+export interface RunDomainDiscoveryArgs {
+    inputs: DiscoveryInputs;
+    /** LLM 검토를 건너뛰려면 undefined 로 호출 */
+    review?: GenerateDomainReviewFn;
+}
+
+export interface RunDomainDiscoveryResult {
+    candidates: DomainCandidate[];
+}
+
+export async function runDomainDiscovery(
+    args: RunDomainDiscoveryArgs,
+): Promise<RunDomainDiscoveryResult> {
+    // 1. 결정적 클러스터링
+    const { candidates: structural } = runStructuralClustering(args.inputs);
+
+    // 2. 관계 응집도 보정 — 멤버별 cohesion 채움
+    const enriched: StructuralClusterCandidate[] = structural.map((cand) => {
+        const { members } = computeRelationCohesion({
+            members: cand.members,
+            relations: args.inputs.relations,
+        });
+        return { ...cand, members };
+    });
+
+    // 3. primary/secondary 결정 — 후보별 멤버 목록 재구성
+    const primaryByObject = new Map<string, { slug: string; affinity: number }>();
+    for (const cand of enriched) {
+        for (const member of cand.members) {
+            const current = primaryByObject.get(member.objectId);
+            if (!current || member.affinity > current.affinity) {
+                primaryByObject.set(member.objectId, { slug: cand.slug, affinity: member.affinity });
+            }
+        }
+    }
+
+    const finalCandidates: DomainCandidate[] = enriched
+        .map((cand) => {
+            const members: CandidateMemberScore[] = cand.members.filter((member) => {
+                const primary = primaryByObject.get(member.objectId);
+                if (!primary) return false;
+                if (primary.slug === cand.slug) return true;
+                // secondary: affinity ≥ 0.5 일 때만 보존
+                return member.affinity >= SECONDARY_AFFINITY_THRESHOLD;
+            });
+
+            return {
+                id: cand.slug,
+                autoName: cand.autoName,
+                signals: cand.signals,
+                members,
+                review: null,
+            } satisfies DomainCandidate;
+        })
+        .filter((cand) => cand.members.length > 0);
+
+    // 4. LLM 검토 (선택)
+    if (args.review) {
+        const generate = args.review;
+        const objectNameById = buildObjectNameLookup(args.inputs);
+        const allIds = finalCandidates.map((c) => c.id);
+        for (const cand of finalCandidates) {
+            const review = await reviewDomainCandidate(
+                {
+                    candidate: {
+                        slug: cand.id,
+                        autoName: cand.autoName,
+                        signals: cand.signals,
+                        members: cand.members,
+                    },
+                    objectNameById,
+                    siblingCandidateIds: allIds,
+                },
+                generate,
+            );
+            cand.review = review;
+        }
+    }
+
+    return { candidates: finalCandidates };
+}
+
+function buildObjectNameLookup(inputs: DiscoveryInputs): Map<string, string> {
+    const map = new Map<string, string>();
+    for (const obj of inputs.objects) {
+        map.set(obj.id, obj.displayName ?? obj.name);
+    }
+    return map;
+}

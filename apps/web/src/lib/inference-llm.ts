@@ -9,9 +9,11 @@ import type {
   GenerateAssessmentFn,
   GenerateBoostSuggestionFn,
   GenerateDomainLabelFn,
+  GenerateDomainReviewFn,
   GenerateExplanationFn,
   GenerateSemanticProfileFn,
   GenerateSmartResolutionFn,
+  LlmCandidateReview,
   LlmAssessment,
   LlmBoostContext,
   LlmBoostSuggestion,
@@ -375,6 +377,28 @@ export function createGenerateSemanticProfileFn(
       temperature: 0.2,
     });
     return result.object as SemanticLlmDraft;
+  };
+}
+
+const domainReviewSchema = z.object({
+  coherent: z.boolean(),
+  suggestedName: z.string(),
+  responsibilityHint: z.string(),
+  mergeWithCandidateId: z.string().optional(),
+});
+
+export function createGenerateDomainReviewFn(
+  aiModel: LanguageModel,
+  _modelName: string,
+): GenerateDomainReviewFn {
+  return async (prompt: string): Promise<LlmCandidateReview> => {
+    const result = await generateObject({
+      model: aiModel,
+      schema: domainReviewSchema,
+      prompt,
+      temperature: 0.1,
+    });
+    return result.object as LlmCandidateReview;
   };
 }
 
