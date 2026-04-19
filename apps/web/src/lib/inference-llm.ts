@@ -352,7 +352,7 @@ const domainReviewSchema = z.object({
   coherent: z.boolean(),
   suggestedName: z.string(),
   responsibilityHint: z.string(),
-  mergeWithCandidateId: z.string().nullable().default(null),
+  mergeWithCandidateId: z.string().nullable(),
 });
 
 export function createGenerateDomainReviewFn(
