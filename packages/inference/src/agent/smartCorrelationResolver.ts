@@ -15,18 +15,23 @@ import {
   resolveInteractionIntentProof,
   validateAndApplyProofPatch,
 } from '@/orchestration/intentProofEngine';
-import type { SmartProofConfig, SmartProofDecision } from './smartProofTypes';
-import { resolveSmartProofDecision } from './smartProofTypes';
+import type {
+  SmartProofConfig,
+  SmartProofDecision,
+  SupportedSmartCorrelationReason as CanonicalSupportedSmartCorrelationReason,
+} from './smartProofTypes';
+import {
+  isSupportedSmartCorrelationReason as isCanonicalSupportedSmartCorrelationReason,
+  resolveSmartProofDecision,
+  SMART_CORRELATION_REASONS_SUPPORTED,
+} from './smartProofTypes';
 import type { GenerateSmartResolutionFn, SmartGenerateResolutionResult } from './smartFrontierResolver';
 
 type JsonRecord = Record<string, unknown>;
 
-export const SUPPORTED_SMART_CORRELATION_REASONS = [
-  'HOST_ALIAS_UNRESOLVED',
-  'CONFIG_BINDING_MISSING',
-] as const;
+export const SUPPORTED_SMART_CORRELATION_REASONS = SMART_CORRELATION_REASONS_SUPPORTED;
 
-export type SupportedSmartCorrelationReason = (typeof SUPPORTED_SMART_CORRELATION_REASONS)[number];
+export type SupportedSmartCorrelationReason = CanonicalSupportedSmartCorrelationReason;
 
 export interface SmartCorrelationFrontierSeed {
   proofStateId: string;
@@ -118,8 +123,7 @@ function sha256(value: string): string {
 export function isSupportedSmartCorrelationReason(
   reason: string | null,
 ): reason is SupportedSmartCorrelationReason {
-  return typeof reason === 'string'
-    && (SUPPORTED_SMART_CORRELATION_REASONS as readonly string[]).includes(reason);
+  return isCanonicalSupportedSmartCorrelationReason(reason);
 }
 
 function buildGroupKey(input: {

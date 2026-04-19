@@ -19,24 +19,17 @@ import {
   type SmartFrontierResolution,
   type SmartProofConfig,
   type SmartProofDecision,
+  type SupportedSmartFrontierResolutionReason,
+  isSupportedSmartFrontierResolutionReason,
   resolveSmartProofDecision,
+  SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED,
 } from './smartProofTypes';
 
 type JsonRecord = Record<string, unknown>;
 
-export const SUPPORTED_SMART_FRONTIER_REASONS = [
-  'HOST_ALIAS_UNRESOLVED',
-  'CONFIG_BINDING_MISSING',
-  'PATH_ONLY_TARGET_UNRESOLVED',
-  'ROUTE_FAMILY_DERIVATION_EMPTY',
-  'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
-  'PATH_TEMPLATE_UNKNOWN',
-  'METHOD_UNKNOWN',
-  'PROVIDER_ENDPOINT_NOT_FOUND',
-  'ENDPOINT_MATCH_AMBIGUOUS',
-] as const;
+export const SUPPORTED_SMART_FRONTIER_REASONS = SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED;
 
-export type SupportedSmartFrontierReason = (typeof SUPPORTED_SMART_FRONTIER_REASONS)[number];
+export type SupportedSmartFrontierReason = SupportedSmartFrontierResolutionReason;
 
 export interface SmartFrontierAvailableService {
   id: string;
@@ -199,8 +192,7 @@ function getEndpointMetadata(value: unknown): { method: string | null; path: str
 export function isSupportedSmartFrontierReason(
   reason: string | null,
 ): reason is SupportedSmartFrontierReason {
-  return typeof reason === 'string'
-    && (SUPPORTED_SMART_FRONTIER_REASONS as readonly string[]).includes(reason);
+  return isSupportedSmartFrontierResolutionReason(reason);
 }
 
 function supportsAliasBindingPatch(reason: SupportedSmartFrontierReason): boolean {

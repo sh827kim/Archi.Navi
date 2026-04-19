@@ -2,8 +2,8 @@
 
 - 작성일: 2026-04-15
 - 대상 범위: `apps/web`, `packages/inference`
-- 상태: Current (Partial Rollout)
-- 상태 메모: Frontier 탭, 목록/상세/patch API, patch 후 refresh/승격 처리까지 구현되었다. reason별 patch form은 alias/provider/endpoint 외 method_path/route_transform까지 확장되었다.
+- 상태: Current
+- 상태 메모: Frontier 탭, 목록/상세/patch API, patch 후 refresh/승격 처리까지 구현되었다. reason별 patch form은 alias/provider/endpoint 외 method_path/route_transform까지 확장되었고, 수동 review defer(`보류 저장`)도 지원한다.
 
 ## 1) 배경
 
@@ -40,12 +40,13 @@
   - `GET /api/inference/frontiers`
   - `GET /api/inference/frontiers/[proofStateId]`
   - `POST /api/inference/frontiers/[proofStateId]/patch`
-  - `alias_binding`, `provider_service_selection`, `endpoint_disambiguation` patch 제출
+  - `alias_binding`, `provider_service_selection`, `endpoint_disambiguation`, `method_path_hint`, `route_transform_patch` patch 제출
+  - `applyMode='defer'` 기반 `보류 저장`
   - patch 후 frontier/candidate refresh
   - `CLOSED_ATOMIC` 승격 시 detail 재조회 대신 시트 종료
 - 미구현 또는 부분 구현
   - DB/message/Vert.x 전용 reason patch form
-  - 보류/숨김/무시 액션
+  - 숨김/무시 persistence
   - actor 식별 기반 감사 강화
 
 ## 4) 비목표
@@ -118,8 +119,8 @@
 
 1차 MVP:
 - 보정
-- 보류(옵션)
-- 숨김/무시(옵션, 1차에서는 미구현 가능)
+- 보류 저장
+- 숨김/무시(옵션, 이번 단계에서는 미구현)
 
 ### 7.4 reason별 폼 매핑
 
@@ -182,6 +183,7 @@
 정책:
 - malformed request는 400
 - patch validation reject는 200 + 명시적 상태
+- `applyMode='defer'`는 patch를 `PENDING`으로 저장하고 replay를 수행하지 않는다.
 
 ### 8.4 patch 적용 후 상태 갱신
 
@@ -189,6 +191,11 @@
   - warning toast 노출
   - frontier 목록 refresh
   - 현재 detail 재조회
+- `validationStatus = PENDING`
+  - success toast 노출
+  - frontier 목록 refresh
+  - 현재 detail 재조회
+  - candidate refresh event는 생략
 - `proofStatus = CLOSED_ATOMIC`
   - success toast 노출
   - frontier 목록 refresh
@@ -217,10 +224,11 @@
 ## 11) 완료 기준
 
 1. Frontiers 탭으로 frontier를 별도 조회 가능
-2. 3종 patch type 제출 가능
-3. 제출 patch가 deterministic validation + replay를 거침
-4. replay 결과 `CLOSED_ATOMIC`이면 candidate 생성
-5. 기존 candidate 승인 흐름과 충돌 없음
+2. 5종 patch type 제출 가능
+3. `보류 저장`으로 manual review pending patch를 저장할 수 있음
+4. 제출 patch가 deterministic validation + replay를 거침
+5. replay 결과 `CLOSED_ATOMIC`이면 candidate 생성
+6. 기존 candidate 승인 흐름과 충돌 없음
 
 ## 12) 연계 문서
 

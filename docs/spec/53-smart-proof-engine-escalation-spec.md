@@ -1,6 +1,6 @@
 # 53. Smart Proof Engine Escalation (SPEC)
 
-상태: Current (Partial Rollout)
+상태: Implemented (2026-04-19)
 우선순위: P0
 상위 문서:
 - [48-intent-centric-proof-engine-spec.md](./48-intent-centric-proof-engine-spec.md)
@@ -12,8 +12,9 @@
 작성일: 2026-04-05
 
 상태 메모:
-- Smart escalation 실행 경로와 기본 validator 연동은 구현되었다.
-- frontier reason 지원/미지원 집합은 코드 상수(`SMART_FRONTIER_REASONS_SUPPORTED` / `SMART_FRONTIER_REASONS_UNSUPPORTED`)와 동기화해 고정한다.
+- Smart escalation 실행 경로와 validator 연동은 구현되었다.
+- Category A/B/C/D/E의 최소 도입 경로가 모두 구현되었고, 기본 설정은 Category B만 활성화한 채 나머지를 opt-in으로 둔다.
+- frontier reason 지원/미지원 집합과 Category B/C/D reason subset은 `packages/inference/src/agent/smartProofTypes.ts`의 코드 상수와 동기화해 고정한다.
 
 ---
 
@@ -200,7 +201,8 @@ Smart의 실행 순서는 아래를 따른다.
 5. final proof summary 집계
 ```
 
-현재 1차 구현에서는 Category B가 주 경로이고, Category A는 선별 summary enhancement 최소 도입 수준으로만 활성화한다.
+현재 구현에서는 Category A/B/C/D/E 경로가 모두 존재한다.
+다만 기본 설정은 `frontierResolution=true`만 켜고, Category A/C/D/E는 선택적으로 활성화한다.
 
 ---
 
@@ -245,14 +247,15 @@ Smart의 실행 순서는 아래를 따른다.
 - `ROUTE_FAMILY_DERIVATION_EMPTY`
 - `ROUTE_TO_ENDPOINT_COMPOSITION_FAILED`
 
-후속 확장 후보:
+현재 미지원 frontier reason:
 
-- `DB_TABLE_UNRESOLVED`
-- `DB_SCHEMA_AMBIGUOUS`
-- `MESSAGE_TARGET_UNRESOLVED`
+- `PROVIDER_ENDPOINT_INDEX_EMPTY`
+- `DYNAMIC_URI_UNRESOLVED`
 - `PATH_REWRITE_CONFLICT`
+- `ENDPOINT_SET_OPEN`
+- `ROUTE_FAMILY_TOO_BROAD`
 
-`ROUTE_FAMILY_DERIVATION_EMPTY`, `ROUTE_TO_ENDPOINT_COMPOSITION_FAILED`는 이미 1차 지원이 완료되어 후속 확장 후보에서 제외한다.
+위 지원/미지원 집합은 각각 `SMART_FRONTIER_REASONS_SUPPORTED`, `SMART_FRONTIER_REASONS_UNSUPPORTED`로 고정한다.
 
 ### 8.3 Category C. Ambiguity Resolution
 
@@ -268,6 +271,8 @@ Smart의 실행 순서는 아래를 따른다.
 현재 1차 지원 reason:
 
 - `PROVIDER_SERVICE_AMBIGUOUS` (`provider_service_selection`)
+
+이 집합은 `SMART_AMBIGUITY_REASONS_SUPPORTED`와 동기화해 유지한다.
 
 ### 8.4 Category D. Cross-Proof Correlation
 
@@ -289,6 +294,8 @@ Phase 5 Category D 1차(최소 도입) 범위:
 - `crossProofCorrelation=true`일 때만 동작한다.
 - accepted patch는 대표 proofState에 적용하고, 같은 run 안에서 grouped frontier 감소를 관측한다.
 - DB/message frontier correlation은 1차 범위에서 제외한다.
+
+이 집합은 `SMART_CORRELATION_REASONS_SUPPORTED`와 동기화해 유지한다.
 
 ### 8.5 Category E. Contradiction Detection
 
@@ -580,4 +587,4 @@ pair-first Smart 3-Phase 문서와 코드는 제거되었다.
 2. deterministic pipeline과 frontier agent는 그대로 유지한다.
 3. LLM은 frontier-local structured patch proposer로만 동작한다.
 4. validator와 proof re-run이 최종 판정 권한을 가진다.
-5. 1차 구현은 Category B의 4개 frontier reason부터 시작한다.
+5. 지원/미지원 frontier reason과 Category B/C/D subset은 코드 상수와 문서에 함께 고정한다.

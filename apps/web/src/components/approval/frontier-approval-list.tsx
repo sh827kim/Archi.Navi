@@ -33,6 +33,13 @@ interface FrontierListItem {
   externalPathResolved: string | null;
   internalPathResolved: string | null;
   confidence: number;
+  latestPatch?: {
+    id: string;
+    patchType: string;
+    validationStatus: string;
+    sourceKind: string;
+    createdAt: string;
+  } | null;
 }
 
 interface FrontierDetail extends FrontierListItem {
@@ -48,6 +55,8 @@ interface FrontierDetail extends FrontierListItem {
     message: string | null;
   }>;
 }
+
+type FrontierApplyMode = 'apply' | 'defer';
 
 function normalizeReasonToPatchType(reason: string): FrontierPatchType | null {
   if (reason === 'CONFIG_BINDING_MISSING' || reason === 'HOST_ALIAS_UNRESOLVED') return 'alias_binding';
@@ -84,6 +93,20 @@ function renderReasonBadge(reason: string) {
   }
 }
 
+function renderLatestPatchBadge(latestPatch: FrontierListItem['latestPatch']) {
+  if (!latestPatch) return null;
+  switch (latestPatch.validationStatus) {
+    case 'PENDING':
+      return <Badge variant="outline">보류됨</Badge>;
+    case 'ACCEPTED':
+      return <Badge variant="outline">Patch 적용</Badge>;
+    case 'REJECTED':
+      return <Badge variant="outline">Patch 거절</Badge>;
+    default:
+      return <Badge variant="outline">{latestPatch.validationStatus}</Badge>;
+  }
+}
+
 export function FrontierApprovalList() {
   const { workspaceId } = useWorkspace();
   const [items, setItems] = useState<FrontierListItem[]>([]);
@@ -107,6 +130,11 @@ export function FrontierApprovalList() {
   const [selectedPatchType, setSelectedPatchType] = useState<FrontierPatchType | ''>('');
 
   const loadFrontiers = useCallback(async () => {
+    if (!workspaceId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const query = new URLSearchParams({ workspaceId });
@@ -125,6 +153,11 @@ export function FrontierApprovalList() {
   }, [reasonFilter, sourceServiceFilter, workspaceId]);
 
   const loadDetail = useCallback(async (proofStateId: string) => {
+    if (!workspaceId) {
+      setDetail(null);
+      setDetailLoading(false);
+      return;
+    }
     setDetailLoading(true);
     try {
       const res = await fetch(
@@ -176,8 +209,8 @@ export function FrontierApprovalList() {
   }, [detail, selectedPatchType]);
   const canPatch = Boolean(detail && patchType);
 
-  async function submitPatch() {
-    if (!detail || !patchType) return;
+  async function submitPatch(applyMode: FrontierApplyMode) {
+    if (!detail || !patchType || !workspaceId) return;
     setSubmittingPatch(true);
     try {
       const proofStateId = detail.proofStateId;
@@ -217,6 +250,7 @@ export function FrontierApprovalList() {
           workspaceId,
           patchType,
           payload,
+          applyMode,
         }),
       });
       const body = (await res.json()) as {
@@ -226,7 +260,9 @@ export function FrontierApprovalList() {
       };
       if (!res.ok) throw new Error(body.error ?? 'patch 적용 실패');
 
-      if (body.validationStatus === 'REJECTED') {
+      if (body.validationStatus === 'PENDING') {
+        toast.success('Patch를 보류로 저장했습니다. 수동 검토 대기 상태입니다.');
+      } else if (body.validationStatus === 'REJECTED') {
         toast.warning('Patch가 거절되었습니다. 입력값을 확인하세요.');
       } else if (body.proofStatus === 'CLOSED_ATOMIC') {
         toast.success('Frontier를 승격했습니다. candidate로 이동했습니다.');
@@ -234,7 +270,7 @@ export function FrontierApprovalList() {
         toast.warning('Patch를 적용했지만 아직 frontier 상태입니다.');
       }
 
-      const promotedToCandidate = body.proofStatus === 'CLOSED_ATOMIC';
+      const promotedToCandidate = body.validationStatus !== 'PENDING' && body.proofStatus === 'CLOSED_ATOMIC';
       if (promotedToCandidate) {
         setSelectedProofStateId(null);
         setDetail(null);
@@ -244,7 +280,9 @@ export function FrontierApprovalList() {
       if (!promotedToCandidate) {
         await loadDetail(proofStateId);
       }
-      window.dispatchEvent(new CustomEvent('archi-navi:refresh-approval-candidates'));
+      if (body.validationStatus !== 'PENDING') {
+        window.dispatchEvent(new CustomEvent('archi-navi:refresh-approval-candidates'));
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'patch 적용 실패');
     } finally {
@@ -314,6 +352,7 @@ export function FrontierApprovalList() {
               </div>
               <div className="flex items-center gap-2">
                 {renderReasonBadge(item.frontierReason)}
+                {renderLatestPatchBadge(item.latestPatch ?? null)}
                 <Badge variant="outline">priority {item.priority}</Badge>
                 <Button size="sm" onClick={() => setSelectedProofStateId(item.proofStateId)}>보정</Button>
               </div>
@@ -473,7 +512,10 @@ export function FrontierApprovalList() {
 
           <SheetFooter>
             <Button variant="outline" onClick={() => setSelectedProofStateId(null)}>닫기</Button>
-            <Button disabled={!canPatch || submittingPatch} onClick={() => void submitPatch()}>
+            <Button variant="outline" disabled={!canPatch || submittingPatch} onClick={() => void submitPatch('defer')}>
+              {submittingPatch ? '저장 중...' : '보류 저장'}
+            </Button>
+            <Button disabled={!canPatch || submittingPatch} onClick={() => void submitPatch('apply')}>
               {submittingPatch ? '적용 중...' : 'Patch 적용'}
             </Button>
           </SheetFooter>

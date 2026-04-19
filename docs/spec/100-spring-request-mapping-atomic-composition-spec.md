@@ -1,9 +1,16 @@
-# Spring RequestMapping + Method Mapping Atomic 조합 설계
+# 100. Spring RequestMapping + Method Mapping Atomic Composition (SPEC)
 
 - 작성일: 2026-04-15
-- 상태: Proposed
+- 상태: Implemented (2026-04-19)
 - 대상 범위: Spring Boot / Spring MVC 계열 expose signal 추출기
 - 작성 목적: Spring Boot 기준 클래스 레벨 `@RequestMapping`과 메서드 레벨 `@GetMapping`/`@PostMapping`/`@RequestMapping` 등을 조합한 최종 endpoint 형태로 `api_endpoint` Atomic을 저장하도록 개선하는 구체 설계를 정리한다.
+
+현행 메모:
+
+- Java/Kotlin AST 추출기는 declaration-aware Spring controller extractor를 사용해 클래스 레벨 prefix와 메서드 레벨 mapping을 조합한 expose signal을 생성한다.
+- hybrid 경로에서는 AST `controller_composed` expose가 있으면 regex flat Spring expose를 suppress한다.
+- `RestClient.create(baseUrl)`, `webClient.uri(baseUrl, uriBuilder -> ...)`, `UriComponentsBuilder...pathSegment(...).buildAndExpand(...)` 패턴은 현재 shipped partial metadata/path template 계약으로 회귀 테스트가 고정돼 있다.
+- stale endpoint refresh/backfill 도구는 여전히 후속 범위다.
 
 ## 1. 요약
 
@@ -240,12 +247,12 @@ interface SpringRequestMappingInfo {
 
 - bootstrap 이후 최종 조합 endpoint만 생성되는지
 
-## 11. 단계별 구현 계획
+## 11. 구현 결과
 
-1. AST declaration-aware controller 조합
-2. hybrid suppression
-3. bootstrap 검증
-4. refresh/backfill 도구 설계
+1. AST declaration-aware controller 조합 구현 완료
+2. hybrid suppression 구현 완료
+3. bootstrap 입력 계약 검증 및 회귀 테스트 반영 완료
+4. refresh/backfill 도구는 후속 범위 유지
 
 ## 12. 리스크와 대응
 
@@ -254,9 +261,10 @@ interface SpringRequestMappingInfo {
 - type-only 패턴 누락 가능 → method-level 유무 기반 분기
 - HEAD/OPTIONS 범위 모호 → 1차 ANY degrade
 
-## 13. 최종 권고
+## 13. 최종 상태
 
 문제의 본질은 저장 단계가 아니라 **Spring expose 추출의 declaration-aware 부재**다.
+현재 active 계약은 이 문제를 AST 추출 단계에서 해결한 상태다.
 
 따라서 다음을 권고한다.
 

@@ -1,6 +1,6 @@
 # Archi.Navi — 구현 현황 (v2)
 
-> 최종 점검일: 2026-04-15
+> 최종 점검일: 2026-04-19
 > 기준: `apps/web`, `packages/core`, `packages/inference`, `packages/cli` 실코드
 
 ---
@@ -16,11 +16,11 @@
 | Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 추론 엔진 고도화 (P4) | ✅ | 4-1~4-6 구현 완료 |
-| **안정화 (S1)** | **✅** | **S1-1~S1-20 완료. 다만 frontier/smart coverage와 문서 계약 정렬은 후속 범위로 남아 있다.** |
+| **안정화 (S1)** | **✅** | **S1-1~S1-20 완료. Smart reason 계약, AST endpoint 정확도 계약, active 문서 정렬까지 반영되었다.** |
 | 생산성 기능 (P5) | 📋 | Change Impact, Drift Detection, Health Score, Journal, API Diff는 backlog 설계 상태이며 현재 shipped 계약은 아니다. |
 
 현행 메모:
-- 현재 제품 기준의 다음 우선순위는 P5 신규 기능 착수가 아니라, active 문서 정렬과 frontier/smart coverage 보강이다.
+- 현재 제품 기준의 다음 우선순위는 P5 신규 기능 착수가 아니라, backlog 문서 정리와 후속 tooling 범위 분리다.
 - P5 항목은 기반 요소가 일부 존재해도 아직 제품 계약으로 승격되지 않았으므로 backlog로 유지한다.
 
 ---
@@ -41,6 +41,11 @@
   - `POST /api/inference/run` 호출 버튼 제공
   - 실행 후 PENDING 후보 즉시 재조회
   - cross-validation 배지/경고 표시, 필터/정렬, endpoint 세부 매핑 제공
+- ✅ `Approval > Frontiers`
+  - `GET /api/inference/frontiers`, `GET /api/inference/frontiers/:proofStateId`, `POST /api/inference/frontiers/:proofStateId/patch`
+  - frontier 목록/상세/최근 proof step 조회, latest patch 상태 badge, reason/source service 필터 지원
+  - `alias_binding`, `provider_service_selection`, `endpoint_disambiguation`, `method_path_hint`, `route_transform_patch` 수동 patch 제출 지원
+  - `보류 저장(applyMode=defer)`으로 manual review pending patch를 저장하고, 승격 시 candidate refresh를 수행
 - ✅ `Approval > 도메인 후보`
   - `GET/PATCH /api/inference/domain-candidates*`로 승인/거부 처리
 - ✅ Inference Run 운영 UI/API
@@ -80,6 +85,7 @@
 - ✅ Relation 추론(구현 존재)
   - Config 기반: `inferRelationsFromConfig`
   - Code Signal(AST/Regex): `extractCodeSignalsWithEngine` (`hybrid` 기본, `ast`는 AST 실패 시 Regex fallback)
+  - Java/Kotlin inter-procedural AST: symbol table, property resolution, call-chain depth 제한, Spring controller composed expose, partial HTTP metadata 회귀 계약 반영
   - Code Signal 기반 후보 생성: `mode=code`로 `relation_candidates` 생성
   - DB Signal: `extractDbSchemaSignals` (FK/implicit 후보 + schema evidence 연결)
   - Cross-Signal Validation: `crossValidatePendingRelationCandidates`
@@ -110,6 +116,7 @@
   - `analysisMode` 같은 legacy Smart 입력은 거부하고 `smartProof` 계약만 허용
   - 실행 요약/trace에 proof/frontier/smart escalation 통계 노출
   - Approval UI가 Smart 실행 완료 후 후보 목록을 자동 갱신
+  - supported/unsupported frontier reason과 Category B/C/D subset이 `smartProofTypes.ts` canonical 상수로 고정되었고 각 resolver/test/doc가 이를 공유한다
 
 ### 1.5 E2E 시나리오 테스트
 
@@ -157,7 +164,7 @@
 
 ## 3) 추론 엔진 고도화 메모 (P4)
 
-- ✅ Cross-Signal Validation, Inter-procedural AST, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신은 구현 완료 상태다.
+- ✅ Cross-Signal Validation, Inter-procedural AST, Spring RequestMapping atomic composition, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신은 구현 완료 상태다.
 - ✅ 4-6은 relation feedback canonical key 집계와 next-run-only relation 보정 위에, Track A domain feedback 집계 및 next-run-only domain 보정까지 반영되었다.
 - ✅ 후속 specialization으로 code-origin relation feedback key가 `framework/language`를 안정적으로 가지면 v2 key를 사용하고, 없으면 legacy v1로 fallback 하도록 확장되었다.
 - ✅ next-run relation 보정 lookup은 `v2 -> legacy v1` dual-read를 사용하며, `GET /api/inference/candidates`는 3-segment/5-segment feedback key를 모두 opaque string으로 수용한다.

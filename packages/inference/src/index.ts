@@ -10,6 +10,12 @@ export {
   buildDefaultSmartProofConfig,
   buildEmptySmartModeSummary,
   normalizeSmartProofConfig,
+  SMART_AMBIGUITY_REASONS_SUPPORTED,
+  SMART_CORRELATION_REASONS_SUPPORTED,
+  SMART_FRONTIER_REASONS,
+  SMART_FRONTIER_REASONS_SUPPORTED,
+  SMART_FRONTIER_REASONS_UNSUPPORTED,
+  SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED,
 } from './agent/smartProofTypes';
 export {
   canAffordSmartBudgetCall,

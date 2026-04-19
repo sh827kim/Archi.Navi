@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SMART_AMBIGUITY_REASONS_SUPPORTED } from '@/agent/smartProofTypes';
 import {
   buildProviderServiceSelectionPrompt,
   buildSmartProviderServiceSelectionPatch,
@@ -36,7 +37,7 @@ function createContext(): SmartAmbiguityResolutionContext {
 
 describe('smartAmbiguityResolver', () => {
   it('지원 ambiguity reason만 허용해야 한다', () => {
-    expect(SUPPORTED_SMART_AMBIGUITY_REASONS).toEqual(['PROVIDER_SERVICE_AMBIGUOUS']);
+    expect(SUPPORTED_SMART_AMBIGUITY_REASONS).toEqual(SMART_AMBIGUITY_REASONS_SUPPORTED);
     expect(isSupportedSmartAmbiguityReason('PROVIDER_SERVICE_AMBIGUOUS')).toBe(true);
     expect(isSupportedSmartAmbiguityReason('ENDPOINT_MATCH_AMBIGUOUS')).toBe(false);
   });

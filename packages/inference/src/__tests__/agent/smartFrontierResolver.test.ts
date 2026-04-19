@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED } from '@/agent/smartProofTypes';
 import {
   buildEndpointDisambiguationPrompt,
   buildHostAliasResolutionPrompt,
@@ -59,17 +60,7 @@ function createContext(): SmartFrontierResolutionContext {
 
 describe('smartFrontierResolver', () => {
   it('지원 frontier reason만 허용해야 한다', () => {
-    expect(SUPPORTED_SMART_FRONTIER_REASONS).toEqual([
-      'HOST_ALIAS_UNRESOLVED',
-      'CONFIG_BINDING_MISSING',
-      'PATH_ONLY_TARGET_UNRESOLVED',
-      'ROUTE_FAMILY_DERIVATION_EMPTY',
-      'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
-      'PATH_TEMPLATE_UNKNOWN',
-      'METHOD_UNKNOWN',
-      'PROVIDER_ENDPOINT_NOT_FOUND',
-      'ENDPOINT_MATCH_AMBIGUOUS',
-    ]);
+    expect(SUPPORTED_SMART_FRONTIER_REASONS).toEqual(SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED);
     expect(isSupportedSmartFrontierReason('HOST_ALIAS_UNRESOLVED')).toBe(true);
     expect(isSupportedSmartFrontierReason('CONFIG_BINDING_MISSING')).toBe(true);
     expect(isSupportedSmartFrontierReason('ROUTE_FAMILY_DERIVATION_EMPTY')).toBe(true);
@@ -78,6 +69,7 @@ describe('smartFrontierResolver', () => {
     expect(isSupportedSmartFrontierReason('METHOD_UNKNOWN')).toBe(true);
     expect(isSupportedSmartFrontierReason('PROVIDER_ENDPOINT_NOT_FOUND')).toBe(true);
     expect(isSupportedSmartFrontierReason('ENDPOINT_MATCH_AMBIGUOUS')).toBe(true);
+    expect(isSupportedSmartFrontierReason('PROVIDER_SERVICE_AMBIGUOUS')).toBe(false);
   });
 
   it('host alias prompt는 핵심 frontier 문맥을 포함해야 한다', () => {

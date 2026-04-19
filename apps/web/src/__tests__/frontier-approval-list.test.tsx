@@ -60,6 +60,13 @@ interface FrontierListItem {
   externalPathResolved: string | null;
   internalPathResolved: string | null;
   confidence: number;
+  latestPatch?: {
+    id: string;
+    patchType: string;
+    validationStatus: string;
+    sourceKind: string;
+    createdAt: string;
+  } | null;
 }
 
 interface FrontierDetail extends FrontierListItem {
@@ -252,5 +259,70 @@ describe('FrontierApprovalList', () => {
       expect(detailFetchCount).toBe(2);
     });
     expect(screen.getByTestId('frontier-sheet')).toBeTruthy();
+  });
+
+  it('보류 저장 시에는 PENDING patch를 저장하고 detail만 새로고침해야 한다', async () => {
+    const initialItem = {
+      ...createFrontierItem(),
+      latestPatch: {
+        id: 'patch-old',
+        patchType: 'provider_service_selection',
+        validationStatus: 'PENDING',
+        sourceKind: 'manual',
+        createdAt: '2026-04-17T00:00:00.000Z',
+      },
+    };
+    const detail = createFrontierDetail();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    const patchRequests: Array<Record<string, unknown>> = [];
+    let detailFetchCount = 0;
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([initialItem]));
+      }
+      if (url.includes('/api/inference/frontiers/proof-1?workspaceId=ws-1')) {
+        detailFetchCount += 1;
+        return Promise.resolve(jsonResponse(detail));
+      }
+      if (url.endsWith('/api/inference/frontiers/proof-1/patch') && init?.method === 'POST') {
+        patchRequests.push(JSON.parse(String(init.body)));
+        return Promise.resolve(jsonResponse({
+          validationStatus: 'PENDING',
+          proofStatus: 'FRONTIER',
+        }));
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findByText('보류됨');
+    await screen.findByTestId('frontier-card');
+    fireEvent.click(screen.getByRole('button', { name: '보정' }));
+    await screen.findByText('Frontier 보정');
+
+    fireEvent.change(screen.getAllByRole('combobox')[2] as HTMLSelectElement, {
+      target: { value: 'svc-b' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: '보류 저장' }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Patch를 보류로 저장했습니다. 수동 검토 대기 상태입니다.');
+    });
+    await waitFor(() => {
+      expect(detailFetchCount).toBe(2);
+    });
+
+    expect(screen.getByTestId('frontier-sheet')).toBeTruthy();
+    expect(patchRequests[0]).toMatchObject({
+      workspaceId: 'ws-1',
+      patchType: 'provider_service_selection',
+      applyMode: 'defer',
+    });
+    expect(dispatchSpy).not.toHaveBeenCalled();
   });
 });
