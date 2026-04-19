@@ -48,7 +48,11 @@ function pickPrimaryDomain(affinities: Array<{ objectId: string; domainId: strin
     const best = new Map<string, { domainId: string; affinity: number }>();
     for (const row of affinities) {
         const prev = best.get(row.objectId);
-        if (!prev || row.affinity > prev.affinity) {
+        if (
+            !prev
+            || row.affinity > prev.affinity
+            || (row.affinity === prev.affinity && row.domainId < prev.domainId)
+        ) {
             best.set(row.objectId, { domainId: row.domainId, affinity: row.affinity });
         }
     }

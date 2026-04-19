@@ -302,6 +302,35 @@ describe('fetchDomainSemanticInputs', () => {
         ).toBe(true);
     });
 
+    it('동일 affinity tie 는 domainId 순으로 결정해 대표 도메인을 안정적으로 고른다', async () => {
+        const db = buildDbMock([
+            [{ id: 'dom-a', name: '주문', displayName: '주문' }],
+            [{ objectId: 'svc-order' }],
+            [
+                { objectId: 'svc-order', domainId: 'dom-z', affinity: 0.8 },
+                { objectId: 'svc-order', domainId: 'dom-a', affinity: 0.8 },
+            ],
+            [
+                {
+                    id: 'svc-order',
+                    name: 'order-service',
+                    displayName: 'Order Service',
+                    objectType: 'service',
+                    description: '주문 서비스',
+                },
+            ],
+            [],
+            [],
+        ]);
+
+        const result = await fetchDomainSemanticInputs(db as never, {
+            workspaceId: 'ws-1',
+            domainId: 'dom-a',
+        });
+
+        expect(result.members.map((member) => member.id)).toEqual(['svc-order']);
+    });
+
     it('대표 도메인이 아닌 weak secondary 멤버는 제외하고 relation 은 APPROVED 만 조회한다', async () => {
         const db = buildDbMock([
             [{ id: 'dom-order', name: 'order-domain', displayName: 'Order Domain' }],

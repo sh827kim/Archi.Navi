@@ -15,6 +15,7 @@
  *  - T9: rollup 갱신 실패는 warning 과 함께 200 success 로 반환
  *  - T10: 중복 objectId 멤버는 400 DUPLICATE_MEMBER 로 거절
  *  - T11: domain 타입 멤버는 400 INVALID_MEMBER_TYPE 으로 거절
+ *  - T12: 재승인 시 빠진 기존 멤버 affinity 를 삭제하고 rollup 이벤트도 발행
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -93,12 +94,14 @@ function buildDbMock(opts: {
     ownedObjects?: Array<{ id: string; objectType: string }>;
     existingDomainId?: string;
     insertedDomainId?: string;
+    existingAffinityObjectIds?: string[];
     /** insert 가 partial unique index 충돌로 0행을 돌려주는 race 시뮬레이션 */
     insertReturnsEmpty?: boolean;
     /** race fallback 시 두 번째 tx.select 가 돌려줄 domainId */
     raceFallbackDomainId?: string;
 }) {
     const insertSpy = vi.fn();
+    const deleteWhereConditions: unknown[] = [];
 
     // tx.select 호출 시퀀스를 미리 큐로 정의해두고 차례대로 소비.
     const selectQueue: Array<Array<{ id: string }>> = [];
@@ -127,11 +130,29 @@ function buildDbMock(opts: {
 
     const tx = {
         select: vi.fn(() => ({
-            from: () => ({
-                where: () => ({
-                    limit: async () => selectQueue.shift() ?? [],
-                }),
+            from: (table: unknown) => ({
+                where: (condition: unknown) => {
+                    if (table === objectsTable) {
+                        return {
+                            limit: async () => {
+                                void condition;
+                                return selectQueue.shift() ?? [];
+                            },
+                        };
+                    }
+                    if (table === objectDomainAffinitiesTable) {
+                        return Promise.resolve(
+                            (opts.existingAffinityObjectIds ?? []).map((objectId) => ({ objectId })),
+                        );
+                    }
+                    return Promise.resolve([]);
+                },
             }),
+        })),
+        delete: vi.fn(() => ({
+            where: async (condition: unknown) => {
+                deleteWhereConditions.push(condition);
+            },
         })),
         insert: vi.fn((table: unknown) => {
             insertSpy(table);
@@ -147,9 +168,25 @@ function buildDbMock(opts: {
         })),
         transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
         insertSpy,
+        deleteWhereConditions,
     };
 
     return db;
+}
+
+function hasPredicate(
+    input: unknown,
+    predicate: (node: { type: string; [key: string]: unknown }) => boolean,
+): boolean {
+    if (!input || typeof input !== 'object') return false;
+    const node = input as { type?: string; args?: unknown[] };
+    if (typeof node.type === 'string' && predicate(node as { type: string; [key: string]: unknown })) {
+        return true;
+    }
+    if (Array.isArray(node.args)) {
+        return node.args.some((arg) => hasPredicate(arg, predicate));
+    }
+    return false;
 }
 
 describe('POST /api/domains/approve', () => {
@@ -445,5 +482,49 @@ describe('POST /api/domains/approve', () => {
         expect(json.error.domainObjectIds).toEqual(['dom-a']);
         expect(db.transaction).not.toHaveBeenCalled();
         expect(applyRollupChangesMock).not.toHaveBeenCalled();
+    });
+
+    it('T12: 재승인 시 누락된 기존 멤버 affinity 를 삭제하고 rollup 이벤트를 발행한다', async () => {
+        const db = buildDbMock({
+            ownedIds: ['obj-a'],
+            existingDomainId: 'existing-domain-id',
+            existingAffinityObjectIds: ['obj-a', 'obj-legacy'],
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: '주문',
+                primaryMembers: [{ objectId: 'obj-a', affinity: 0.8, confidence: 0.7 }],
+            }),
+        );
+
+        expect(res.status).toBe(200);
+        expect(db.deleteWhereConditions).toHaveLength(1);
+        expect(
+            hasPredicate(
+                db.deleteWhereConditions[0],
+                (node) => node.type === 'inArray'
+                    && node.col === objectDomainAffinitiesTable.objectId
+                    && Array.isArray(node.values)
+                    && node.values.length === 1
+                    && node.values[0] === 'obj-legacy',
+            ),
+        ).toBe(true);
+
+        expect(applyRollupChangesMock).toHaveBeenCalledTimes(1);
+        const call = (applyRollupChangesMock.mock.calls[0] ?? []) as unknown as [
+            unknown,
+            unknown,
+            Array<{
+                payload: { objectId: string; domainId: string };
+            }>?,
+        ];
+        const events = (call[2] ?? []) as Array<{
+            payload: { objectId: string; domainId: string };
+        }>;
+        expect(events.map((event) => event.payload.objectId).sort()).toEqual(['obj-a', 'obj-legacy']);
+        expect(events.every((event) => event.payload.domainId === 'existing-domain-id')).toBe(true);
     });
 });

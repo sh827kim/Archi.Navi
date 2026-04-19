@@ -34,6 +34,11 @@ function normalizeRequiredString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
+function asStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    return value.filter((item): item is string => typeof item === 'string');
+}
+
 export async function POST(req: Request) {
     try {
         const body = (await req.json()) as { workspaceId?: unknown };
@@ -100,9 +105,7 @@ export async function POST(req: Request) {
             intentType: row.intentType,
             externalPathHint: row.externalPathHint,
             externalRoutePattern: row.externalRoutePattern,
-            messageTopicHints: Array.isArray(row.messageTopicHints)
-                ? (row.messageTopicHints as string[])
-                : [],
+            messageTopicHints: asStringArray(row.messageTopicHints),
         }));
 
         // 3. 관계 — APPROVED 만 사용

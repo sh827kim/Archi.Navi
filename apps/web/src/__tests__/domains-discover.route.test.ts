@@ -236,4 +236,48 @@ describe('POST /api/domains/discover', () => {
             },
         });
     });
+
+    it('mixed messageTopicHints 는 string 요소만 남겨 discovery 입력으로 전달한다', async () => {
+        const db = buildDbMock([
+            [
+                {
+                    id: 'svc-order',
+                    objectType: 'service',
+                    name: 'OrderService',
+                    displayName: 'OrderService',
+                    path: '/orders',
+                },
+            ],
+            [
+                {
+                    sourceServiceId: 'svc-order',
+                    sourceFunctionId: null,
+                    intentType: 'message_publish',
+                    externalPathHint: null,
+                    externalRoutePattern: null,
+                    messageTopicHints: ['orders.created', null, 123, 'orders.updated'],
+                },
+            ],
+            [],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        runDomainDiscoveryMock.mockResolvedValue({ candidates: [] });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1' }));
+
+        expect(res.status).toBe(200);
+        expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
+        expect(runDomainDiscoveryMock.mock.calls[0]?.[0]).toMatchObject({
+            inputs: {
+                intents: [
+                    {
+                        sourceObjectId: 'svc-order',
+                        intentType: 'message_publish',
+                        messageTopicHints: ['orders.created', 'orders.updated'],
+                    },
+                ],
+            },
+        });
+    });
 });

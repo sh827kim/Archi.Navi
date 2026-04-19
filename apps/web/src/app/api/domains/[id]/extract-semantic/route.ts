@@ -16,11 +16,22 @@ export async function POST(
 ) {
     try {
         const { id: domainId } = await params;
-        const body = (await req.json()) as {
+        let body: {
             workspaceId?: string;
             maxScenarios?: number;
             persist?: boolean;
         };
+        try {
+            body = (await req.json()) as typeof body;
+        } catch {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: { code: 'BAD_REQUEST', message: '유효한 JSON body 가 필요합니다.' },
+                },
+                { status: 400 },
+            );
+        }
 
         if (!body.workspaceId) {
             return NextResponse.json(

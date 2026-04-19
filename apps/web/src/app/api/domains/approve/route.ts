@@ -233,7 +233,7 @@ export async function POST(req: Request) {
 
         // 도메인 조회/생성 + affinity upsert 는 하나의 트랜잭션으로 묶어
         // 중간 실패 시 고아 도메인/부분 affinity 가 남지 않도록 한다.
-        const { domainId, reused } = await db.transaction(async (tx) => {
+        const { domainId, reused, staleMemberIds } = await db.transaction(async (tx) => {
             // (P2) 같은 (workspace, /domain/<slug>) 가 이미 있으면 재사용.
             //      반복 발견·승인 시 동일 도메인이 중복 생성돼 카드와 분석이 분기되는 문제 방지.
             //      (P2-race) 동시 승인 race 는 partial unique index `ux_objects_ws_domain_path`
@@ -300,6 +300,31 @@ export async function POST(req: Request) {
                 }
             }
 
+            const existingAffinityRows = await tx
+                .select({ objectId: objectDomainAffinities.objectId })
+                .from(objectDomainAffinities)
+                .where(
+                    and(
+                        eq(objectDomainAffinities.workspaceId, workspaceId),
+                        eq(objectDomainAffinities.domainId, domainObjectId),
+                    ),
+                );
+            const currentMemberIdSet = new Set(memberIds);
+            const staleMemberIds = existingAffinityRows
+                .map((row) => row.objectId)
+                .filter((objectId) => !currentMemberIdSet.has(objectId));
+            if (staleMemberIds.length > 0) {
+                await tx
+                    .delete(objectDomainAffinities)
+                    .where(
+                        and(
+                            eq(objectDomainAffinities.workspaceId, workspaceId),
+                            eq(objectDomainAffinities.domainId, domainObjectId),
+                            inArray(objectDomainAffinities.objectId, staleMemberIds),
+                        ),
+                    );
+            }
+
             // affinity upsert — primary + secondary 를 한 번에
             for (const member of allMembers) {
                 await tx
@@ -327,7 +352,7 @@ export async function POST(req: Request) {
                     });
             }
 
-            return { domainId: domainObjectId, reused: didReuse };
+            return { domainId: domainObjectId, reused: didReuse, staleMemberIds };
         });
 
         const successData: ApprovalSuccessPayload = {
@@ -347,7 +372,12 @@ export async function POST(req: Request) {
             await applyRollupChanges(
                 db,
                 workspaceId,
-                allMembers.map((member) => createDomainAffinityChangedEvent(member.objectId, domainId)),
+                Array.from(
+                    new Set([
+                        ...allMembers.map((member) => member.objectId),
+                        ...staleMemberIds,
+                    ]),
+                ).map((objectId) => createDomainAffinityChangedEvent(objectId, domainId)),
             );
         } catch (rollupError) {
             successData.rollupApplied = false;
