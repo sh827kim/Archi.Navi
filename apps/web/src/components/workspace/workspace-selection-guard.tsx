@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { WorkspaceLoadingSkeleton } from '@/components/workspace/workspace-loading-skeleton';
@@ -8,8 +8,7 @@ import { WorkspaceLoadingSkeleton } from '@/components/workspace/workspace-loadi
 export function WorkspaceSelectionGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { workspaceId, workspaces, refreshWorkspaces } = useWorkspace();
-  const hasCachedWorkspacesRef = useRef(workspaces.length > 0);
-  const [checked, setChecked] = useState(hasCachedWorkspacesRef.current);
+  const [checked, setChecked] = useState(workspaces.length > 0);
 
   const isValidSelection = useMemo(
     () => !!workspaceId && workspaces.some((ws) => ws.id === workspaceId),
@@ -17,10 +16,6 @@ export function WorkspaceSelectionGuard({ children }: { children: React.ReactNod
   );
 
   useEffect(() => {
-    if (hasCachedWorkspacesRef.current) {
-      setChecked(true);
-      return;
-    }
     let cancelled = false;
     (async () => {
       await refreshWorkspaces();
@@ -30,6 +25,12 @@ export function WorkspaceSelectionGuard({ children }: { children: React.ReactNod
       cancelled = true;
     };
   }, [refreshWorkspaces]);
+
+  useEffect(() => {
+    if (workspaces.length > 0) {
+      setChecked(true);
+    }
+  }, [workspaces]);
 
   useEffect(() => {
     if (!checked) return;

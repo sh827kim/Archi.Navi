@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, render, screen, waitFor } from '@testing-library/react';
 
 const {
   useWorkspaceMock,
@@ -82,5 +82,24 @@ describe('workspace loading behavior', () => {
     );
 
     expect(screen.getByTestId('workspace-loading-skeleton')).toBeTruthy();
+  });
+
+  it('selection guard 는 cached workspaces 가 있어도 background refresh 를 수행한다', async () => {
+    const refreshWorkspaces = vi.fn(async () => undefined);
+    useWorkspaceMock.mockReturnValue({
+      workspaces: [{ id: 'ws-1', name: 'Workspace 1', createdAt: '2026-04-19T00:00:00Z' }],
+      workspaceId: 'ws-1',
+      refreshWorkspaces,
+    });
+
+    render(
+      <WorkspaceSelectionGuard>
+        <div>dashboard</div>
+      </WorkspaceSelectionGuard>,
+    );
+
+    expect(screen.queryByTestId('workspace-loading-skeleton')).toBeNull();
+    expect(screen.getByText('dashboard')).toBeTruthy();
+    await waitFor(() => expect(refreshWorkspaces).toHaveBeenCalledTimes(1));
   });
 });

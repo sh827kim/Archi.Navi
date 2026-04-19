@@ -97,6 +97,31 @@ describe('POST /api/domains/discover', () => {
         vi.clearAllMocks();
     });
 
+    it('malformed JSON 또는 non-object body 는 400 BAD_REQUEST', async () => {
+        const malformedRes = await POST(
+            new Request('http://localhost/api/domains/discover', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{',
+            }),
+        );
+        expect(malformedRes.status).toBe(400);
+        expect((await malformedRes.json()).error.code).toBe('BAD_REQUEST');
+
+        const nullRes = await POST(
+            new Request('http://localhost/api/domains/discover', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: 'null',
+            }),
+        );
+        expect(nullRes.status).toBe(400);
+        expect((await nullRes.json()).error.code).toBe('BAD_REQUEST');
+
+        expect(getDbMock).not.toHaveBeenCalled();
+        expect(runDomainDiscoveryMock).not.toHaveBeenCalled();
+    });
+
     it('workspaceId 가 문자열이 아니거나 공백이면 400 BAD_REQUEST', async () => {
         const invalidTypeRes = await POST(makeRequest({ workspaceId: { value: 'ws-1' } }));
         expect(invalidTypeRes.status).toBe(400);

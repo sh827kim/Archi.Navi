@@ -41,7 +41,28 @@ function asStringArray(value: unknown): string[] {
 
 export async function POST(req: Request) {
     try {
-        const body = (await req.json()) as { workspaceId?: unknown };
+        let parsedBody: unknown;
+        try {
+            parsedBody = await req.json();
+        } catch {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: { code: 'BAD_REQUEST', message: '유효한 JSON body 가 필요합니다.' },
+                },
+                { status: 400 },
+            );
+        }
+        if (typeof parsedBody !== 'object' || parsedBody === null || Array.isArray(parsedBody)) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: { code: 'BAD_REQUEST', message: '요청 body 는 JSON object 여야 합니다.' },
+                },
+                { status: 400 },
+            );
+        }
+        const body = parsedBody as { workspaceId?: unknown };
         const workspaceId = normalizeRequiredString(body.workspaceId);
         if (!workspaceId) {
             return NextResponse.json(

@@ -194,6 +194,31 @@ describe('POST /api/domains/approve', () => {
         vi.clearAllMocks();
     });
 
+    it('malformed JSON 또는 non-object body 는 400 BAD_REQUEST 반환', async () => {
+        const malformedRes = await POST(
+            new Request('http://localhost/api/domains/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: '{',
+            }),
+        );
+        expect(malformedRes.status).toBe(400);
+        expect((await malformedRes.json()).error.code).toBe('BAD_REQUEST');
+
+        const nullRes = await POST(
+            new Request('http://localhost/api/domains/approve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: 'null',
+            }),
+        );
+        expect(nullRes.status).toBe(400);
+        expect((await nullRes.json()).error.code).toBe('BAD_REQUEST');
+
+        expect(getDbMock).not.toHaveBeenCalled();
+        expect(applyRollupChangesMock).not.toHaveBeenCalled();
+    });
+
     it('T1: 멤버 중 다른 워크스페이스 객체가 있으면 403 + foreignObjectIds 반환', async () => {
         const db = buildDbMock({ ownedIds: ['obj-a'] }); // obj-b 는 미소유
         getDbMock.mockResolvedValue(db);
