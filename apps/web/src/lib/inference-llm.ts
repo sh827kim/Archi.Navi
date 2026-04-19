@@ -8,7 +8,6 @@ import type {
   CandidateContext,
   GenerateAssessmentFn,
   GenerateBoostSuggestionFn,
-  GenerateDomainLabelFn,
   GenerateDomainReviewFn,
   GenerateExplanationFn,
   GenerateSemanticProfileFn,
@@ -18,8 +17,6 @@ import type {
   LlmBoostContext,
   LlmBoostSuggestion,
   LlmExplanation,
-  DomainLabelContext,
-  DomainLabelSuggestion,
   SemanticLlmDraft,
   SmartPatchProposal,
   SmartContradictionChallengeProposal,
@@ -50,11 +47,6 @@ const boostSuggestionSchema = z.union([
   }),
   z.null(),
 ]);
-
-const domainLabelSchema = z.object({
-  ko: z.string(),
-  en: z.string(),
-});
 
 const smartAliasBindingProposalSchema = z.object({
   patchType: z.literal('alias_binding'),
@@ -295,30 +287,6 @@ export function createGenerateBoostSuggestionFn(
       ...(typeof confidence === 'number' ? { confidence } : {}),
       reasoning: `[${modelName}] ${result.object.reasoning}`,
     };
-  };
-}
-
-export function createGenerateDomainLabelFn(
-  aiModel: LanguageModel,
-  _modelName: string,
-): GenerateDomainLabelFn {
-  return async (context: DomainLabelContext): Promise<DomainLabelSuggestion | null> => {
-    const prompt = [
-      '아래 도메인 클러스터에 대해 한국어/영어 도메인 이름을 각각 하나씩 제안하라.',
-      `domainName=${context.domainName}`,
-      `memberNames=${context.memberNames.join(', ')}`,
-      `labelCandidates=${context.labelCandidates.map((item) => item.text).join(', ')}`,
-      '응답은 간결한 명사구로 작성한다.',
-    ].join('\n');
-
-    const result = await generateObject({
-      model: aiModel,
-      schema: domainLabelSchema,
-      prompt,
-      temperature: 0.2,
-    });
-
-    return result.object;
   };
 }
 

@@ -34,9 +34,6 @@ vi.mock('@/components/approval/approval-list', () => ({
 vi.mock('@/components/approval/frontier-approval-list', () => ({
   FrontierApprovalList: () => <div>frontiers-content</div>,
 }));
-vi.mock('@/components/approval/domain-approval-list', () => ({
-  DomainApprovalList: () => <div>domains-content</div>,
-}));
 
 import { ApprovalTabs } from '@/components/approval/approval-tabs';
 
@@ -46,7 +43,6 @@ describe('ApprovalTabs', () => {
 
     expect(screen.getByText('관계 후보')).toBeTruthy();
     expect(screen.getByText('Frontiers')).toBeTruthy();
-    expect(screen.getByText('도메인 후보')).toBeTruthy();
 
     expect(screen.getByText('relations-content')).toBeTruthy();
     fireEvent.click(screen.getByText('Frontiers'));

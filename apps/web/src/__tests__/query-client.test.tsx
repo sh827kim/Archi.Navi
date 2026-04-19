@@ -296,7 +296,6 @@ describe('QueryClient', () => {
           summary: {
             domainId: 'domain-1',
             memberCount: 3,
-            avgPurity: 0.83,
             avgAffinity: 0.76,
             relationDensity: 0.45,
             membersByType: { service: 3 },

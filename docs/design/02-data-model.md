@@ -448,92 +448,50 @@ create table domain_inference_profiles (
 );
 ```
 
-#### domain_candidates (Seed 기반 후보 큐)
+#### domain_semantic_profiles (Phase 2 의미 프로파일 — migration 0017)
+
+> 새 도메인 추론 엔진(2026-04-19)의 Phase 2 산출물.
+> 도메인의 책임/state/actions/invariants/events/collaborators/scenarios 를
+> evidence(file:line) 와 함께 영속화한다. 워크스페이스 × 도메인 1행.
 
 ```sql
-create table domain_candidates (
-  id uuid primary key,
+create table domain_semantic_profiles (
+  id uuid primary key default gen_random_uuid(),
   workspace_id uuid not null references workspaces(id) on delete cascade,
-
-  run_id uuid,
-  object_id uuid not null references objects(id) on delete cascade,
-
-  affinity_map jsonb not null,      -- {"<domainId>": 0.62, ...}
-  purity real not null,
-  primary_domain_id uuid references objects(id) on delete set null,
-  secondary_domain_ids jsonb not null default '[]'::jsonb,
-
-  signals jsonb not null default '{}'::jsonb,
-
-  status text not null default 'PENDING', -- PENDING, APPROVED, REJECTED
-  reviewed_at timestamptz,
-  reviewed_by text,
-
-  created_at timestamptz not null default now()
-);
-
-create index ix_domcand_ws_status on domain_candidates(workspace_id, status);
-create index ix_domcand_ws_object on domain_candidates(workspace_id, object_id);
-```
-
-#### domain_candidate_evidences
-
-```sql
-create table domain_candidate_evidences (
-  workspace_id uuid not null references workspaces(id) on delete cascade,
-  candidate_id uuid not null references domain_candidates(id) on delete cascade,
-  evidence_id uuid not null references evidences(id) on delete cascade,
-  primary key (workspace_id, candidate_id, evidence_id)
-);
-```
-
-#### domain_discovery_runs (Seed-less 실행 스냅샷)
-
-```sql
-create table domain_discovery_runs (
-  id uuid primary key,
-  workspace_id uuid not null references workspaces(id) on delete cascade,
-
-  profile_id uuid references domain_inference_profiles(id),
-  algo text not null,               -- louvain, leiden
-  algo_version text,
-  input_layers jsonb not null,      -- ["call","db","msg","code"]
-  parameters jsonb not null default '{}'::jsonb,
-
-  graph_stats jsonb not null default '{}'::jsonb,
-  status text not null default 'DONE', -- DONE, FAILED
-
-  started_at timestamptz not null default now(),
-  finished_at timestamptz
-);
-
-create index ix_ddr_ws_time on domain_discovery_runs(workspace_id, started_at desc);
-```
-
-#### domain_discovery_memberships (멤버십 스냅샷)
-
-```sql
-create table domain_discovery_memberships (
-  id uuid primary key,
-  workspace_id uuid not null references workspaces(id) on delete cascade,
-
-  run_id uuid not null references domain_discovery_runs(id) on delete cascade,
-
-  object_id uuid not null references objects(id) on delete cascade,
   domain_id uuid not null references objects(id) on delete cascade,
 
-  affinity real not null,           -- 0~1
-  purity real,
+  schema_version text not null default '1.0',
+  domain_name text not null,
+  responsibility text not null,                 -- Why: 1~3 문장 자연어
+
+  state jsonb not null default '[]'::jsonb,           -- StateField[]
+  actions jsonb not null default '[]'::jsonb,         -- Action[]
+  invariants jsonb not null default '[]'::jsonb,      -- Invariant[]
+  events jsonb not null default '[]'::jsonb,          -- DomainEvent[]
+  collaborators jsonb not null default '[]'::jsonb,   -- Collaborator[]
+  scenarios jsonb not null default '[]'::jsonb,       -- Scenario[]
+  evidence jsonb not null default '[]'::jsonb,        -- EvidenceRef[]
+
+  status text not null default 'DRAFT',         -- DRAFT, APPROVED
+  generated_at timestamptz not null default now(),
+  generated_by text not null default 'manual',
+  llm_model text not null,
 
   created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
 
-  unique(workspace_id, run_id, object_id, domain_id)
+  constraint uq_dsp_ws_domain unique (workspace_id, domain_id),
+  constraint chk_dsp_status check (status in ('DRAFT', 'APPROVED'))
 );
 
-create index ix_ddm_ws_run on domain_discovery_memberships(workspace_id, run_id);
-create index ix_ddm_ws_object on domain_discovery_memberships(workspace_id, object_id);
-create index ix_ddm_ws_domain on domain_discovery_memberships(workspace_id, domain_id);
+create index ix_dsp_ws_status on domain_semantic_profiles(workspace_id, status);
 ```
+
+> **폐기 (migration 0018, 2026-04-19)**: `domain_candidates`,
+> `domain_candidate_evidences`, `domain_discovery_runs`,
+> `domain_discovery_memberships`, `domain_rollup_provenances` 를 모두 drop.
+> 새 발견 흐름은 in-memory 후보 → 즉시 승인(`object_domain_affinities` upsert)
+> 으로 변경되어 후보 큐 테이블이 더 이상 필요하지 않다.
 
 #### object_rollup_provenances
 
@@ -682,11 +640,8 @@ create index ix_changelog_ws_time on change_logs(workspace_id, created_at desc);
 | | `rollup_generations` | Generation 관리 |
 | | `object_graph_stats` | 노드별 degree 통계 |
 | **Domain** | `object_domain_affinities` | 도메인 소속 분포 |
-| | `domain_inference_profiles` | 추론 설정 프로필 |
-| | `domain_candidates` | 도메인 후보 큐 |
-| | `domain_candidate_evidences` | 도메인 후보-근거 |
-| | `domain_discovery_runs` | Discovery 실행 스냅샷 |
-| | `domain_discovery_memberships` | Discovery 멤버십 |
+| | `domain_inference_profiles` | Smart Proof 가중치/예산 프로필 |
+| | `domain_semantic_profiles` | Phase 2 의미 프로파일 (책임/state/actions/...) |
 | | `object_rollup_provenances` | Rollup edge 근거 |
 | **Code** | `code_artifacts` | 코드 파일 메타 |
 | | `code_import_edges` | Import 그래프 |
@@ -702,18 +657,17 @@ create index ix_changelog_ws_time on change_logs(workspace_id, created_at desc);
 | | `smart_proof_llm_calls` | Smart LLM 호출 감사 로그 |
 | **Audit** | `change_logs` | Append-only 변경 이력 |
 
-**총 30개 테이블**
-
 ---
 
 ## 6. 운영 원칙 요약
 
-1. 자동 추론 결과는 `relation_candidates` / `domain_candidates`에만 저장
-2. 승인 후 `object_relations` / `object_domain_affinities`로 이동
-3. Roll-up은 `object_rollups`에 Materialized 저장
-4. UI는 항상 최신 `generation_version` (ACTIVE) 기준으로 조회
-5. 수동 오버라이드 > 자동 추론 (우선순위)
-6. 모든 변경은 `change_logs`에 append-only 기록
+1. 관계 자동 추론 결과는 `relation_candidates` 에만 저장 → 승인 후 `object_relations` 로 이동
+2. 도메인 발견(Phase 1)은 in-memory 후보 → 즉시 승인(`object_domain_affinities` upsert) 패턴 — 후보 큐 테이블 없음
+3. 도메인 의미 프로파일(Phase 2)은 `domain_semantic_profiles` 에 DRAFT/APPROVED 상태로 저장 (워크스페이스 × 도메인 1행)
+4. Roll-up은 `object_rollups` 에 Materialized 저장
+5. UI는 항상 최신 `generation_version` (ACTIVE) 기준으로 조회
+6. 수동 오버라이드 > 자동 추론 (우선순위)
+7. 모든 변경은 `change_logs` 에 append-only 기록
 
 ---
 

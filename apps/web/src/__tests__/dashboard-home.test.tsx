@@ -33,7 +33,6 @@ describe('DashboardHomeClient', () => {
               services: 6,
               domains: 3,
               pendingRelations: 4,
-              pendingDomains: 2,
             },
             recentRuns: [
               {
@@ -74,7 +73,8 @@ describe('DashboardHomeClient', () => {
     expect(screen.getByRole('link', { name: /추론 실행/ }).getAttribute('href')).toBe('/approval');
     expect(screen.getByRole('link', { name: /코드 스캔/ }).getAttribute('href')).toBe('/settings');
     expect(screen.getByRole('link', { name: /쿼리 엔진/ }).getAttribute('href')).toBe('/query');
-    expect(screen.getAllByText('6').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText('6')).toBeTruthy();
+    expect(screen.getByText('4')).toBeTruthy();
   });
 
   it('요약 조회가 실패하면 fallback 안내를 보여야 한다', async () => {

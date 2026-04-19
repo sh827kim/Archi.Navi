@@ -1,12 +1,8 @@
 /**
- * DOMAIN_SUMMARY — 결정론적 도메인 집계 (Phase 2, 2-4)
- *
- * 설계 참조: docs/04-query-engine.md §5.4 DOMAIN_SUMMARY
- * 로드맵: docs/08-roadmap.md §2-4
+ * DOMAIN_SUMMARY — 결정론적 도메인 집계
  *
  * 집계 항목:
  *  - 도메인 소속 Object 수 및 type별 분포
- *  - 평균 purity (domain_candidates 기반)
  *  - 평균 affinity (object_domain_affinities 기반)
  *  - 상위 5개 멤버 (affinity 내림차순)
  *  - 외부 의존 도메인 (DOMAIN_TO_DOMAIN rollup 기반)
@@ -17,7 +13,6 @@ import type { DbClient } from '@archi-navi/db';
 import {
     objects,
     objectDomainAffinities,
-    domainCandidates,
     objectRelations,
     objectRollups,
     objectRollupProvenances,
@@ -50,8 +45,6 @@ export interface DomainSummaryData {
     memberCount: number;
     /** Object type별 카운트 e.g. { service: 5, db_table: 2 } */
     membersByType: Record<string, number>;
-    /** domain_candidates.purity 평균 (APPROVED 후보 기반, 없으면 null) */
-    avgPurity: number | null;
     /** object_domain_affinities.affinity 평균 */
     avgAffinity: number;
     /** affinity 내림차순 상위 5개 멤버 */
@@ -202,23 +195,7 @@ async function summarizeSingleDomain(
             };
         });
 
-    // ─── 4. 도메인 후보 purity 조회 ───────────────────────────────────────────
-    const candidateRows = await db
-        .select()
-        .from(domainCandidates)
-        .where(
-            and(
-                eq(domainCandidates.workspaceId, workspaceId),
-                eq(domainCandidates.status, 'APPROVED'),
-                eq(domainCandidates.primaryDomainId, domainId),
-            ),
-        );
-
-    const avgPurity = candidateRows.length > 0
-        ? candidateRows.reduce((sum, c) => sum + c.purity, 0) / candidateRows.length
-        : null;
-
-    // ─── 5. intra-domain 관계 수 (밀도 계산용) ────────────────────────────────
+    // ─── 4. intra-domain 관계 수 (밀도 계산용) ────────────────────────────────
     const memberIdSet = new Set(memberIds);
     let intraDomainRelationCount = 0;
 
@@ -243,7 +220,7 @@ async function summarizeSingleDomain(
         ? intraDomainRelationCount / maxPossibleRelations
         : 0;
 
-    // ─── 6. 외부 의존 도메인 (DOMAIN_TO_DOMAIN rollup) ────────────────────────
+    // ─── 5. 외부 의존 도메인 (DOMAIN_TO_DOMAIN rollup) ────────────────────────
     const externalRollupRows = await db
         .select()
         .from(objectRollups)
@@ -293,7 +270,6 @@ async function summarizeSingleDomain(
         domainName: domainObj.displayName ?? domainObj.name,
         memberCount: memberIds.length,
         membersByType,
-        avgPurity,
         avgAffinity,
         topMembers,
         externalDependencies,

@@ -21,12 +21,11 @@ function createMockDbAllDomains(domainRows: unknown[]) {
     return { select: selectMock } as unknown as Parameters<typeof summarizeDomain>[0];
 }
 
-/** domainId + 멤버 있는 케이스 (최대 7회 조회, provenance 포함) */
+/** domainId + 멤버 있는 케이스 (최대 6회 조회, provenance 포함) */
 function createMockDbWithMembers({
     domainRow,
     affinityRows = [],
     memberRows = [],
-    candidateRows = [],
     relationRows = [],
     rollupRows = [],
     rollupProvenanceRows = [],
@@ -34,7 +33,6 @@ function createMockDbWithMembers({
     domainRow: unknown;
     affinityRows?: unknown[];
     memberRows?: unknown[];
-    candidateRows?: unknown[];
     relationRows?: unknown[];
     rollupRows?: unknown[];
     rollupProvenanceRows?: unknown[];
@@ -43,29 +41,25 @@ function createMockDbWithMembers({
         .mockReturnValueOnce(makeChain([domainRow]))    // 1. objects (domain)
         .mockReturnValueOnce(makeChain(affinityRows))   // 2. object_domain_affinities
         .mockReturnValueOnce(makeChain(memberRows))     // 3. objects (members)
-        .mockReturnValueOnce(makeChain(candidateRows))  // 4. domain_candidates
-        .mockReturnValueOnce(makeChain(relationRows))   // 5. object_relations
-        .mockReturnValueOnce(makeChain(rollupRows))     // 6. object_rollups
-        .mockReturnValueOnce(makeChain(rollupProvenanceRows)); // 7. object_rollup_provenances
+        .mockReturnValueOnce(makeChain(relationRows))   // 4. object_relations
+        .mockReturnValueOnce(makeChain(rollupRows))     // 5. object_rollups
+        .mockReturnValueOnce(makeChain(rollupProvenanceRows)); // 6. object_rollup_provenances
 
     return { select: selectMock } as unknown as Parameters<typeof summarizeDomain>[0];
 }
 
-/** domainId + 멤버 없는 케이스 (4회 조회 — 3,5번 건너뜀) */
+/** domainId + 멤버 없는 케이스 (3회 조회 — 3,4번 건너뜀) */
 function createMockDbNoMembers({
     domainRow,
-    candidateRows = [],
     rollupRows = [],
 }: {
     domainRow: unknown;
-    candidateRows?: unknown[];
     rollupRows?: unknown[];
 }) {
     const selectMock = vi.fn()
         .mockReturnValueOnce(makeChain([domainRow]))    // 1. objects (domain)
         .mockReturnValueOnce(makeChain([]))             // 2. object_domain_affinities (empty)
-        .mockReturnValueOnce(makeChain(candidateRows))  // 3. domain_candidates
-        .mockReturnValueOnce(makeChain(rollupRows));    // 4. object_rollups
+        .mockReturnValueOnce(makeChain(rollupRows));    // 3. object_rollups
 
     return { select: selectMock } as unknown as Parameters<typeof summarizeDomain>[0];
 }
@@ -103,11 +97,6 @@ const MEMBER_ROWS = [
     { id: 'svc-order', workspaceId: 'ws-1', objectType: 'service', name: 'order-service', displayName: '주문 서비스', parentId: null, path: '/order-service', depth: 0, visibility: 'VISIBLE', metadata: {}, createdAt: new Date(), updatedAt: new Date(), urn: null, category: 'COMPUTE', granularity: 'ATOMIC', description: null, validFrom: null, validTo: null },
     { id: 'svc-payment', workspaceId: 'ws-1', objectType: 'service', name: 'payment-service', displayName: '결제 서비스', parentId: null, path: '/payment-service', depth: 0, visibility: 'VISIBLE', metadata: {}, createdAt: new Date(), updatedAt: new Date(), urn: null, category: 'COMPUTE', granularity: 'ATOMIC', description: null, validFrom: null, validTo: null },
     { id: 'svc-inventory', workspaceId: 'ws-1', objectType: 'service', name: 'inventory-service', displayName: '재고 서비스', parentId: null, path: '/inventory-service', depth: 0, visibility: 'VISIBLE', metadata: {}, createdAt: new Date(), updatedAt: new Date(), urn: null, category: 'COMPUTE', granularity: 'ATOMIC', description: null, validFrom: null, validTo: null },
-];
-
-const CANDIDATE_ROWS = [
-    { id: 'cand-1', workspaceId: 'ws-1', objectId: 'svc-order', primaryDomainId: 'domain-1', purity: 0.92, affinityMap: {}, secondaryDomainIds: [], signals: {}, status: 'APPROVED', runId: null, reviewedAt: null, reviewedBy: null, createdAt: new Date() },
-    { id: 'cand-2', workspaceId: 'ws-1', objectId: 'svc-payment', primaryDomainId: 'domain-1', purity: 0.78, affinityMap: {}, secondaryDomainIds: [], signals: {}, status: 'APPROVED', runId: null, reviewedAt: null, reviewedBy: null, createdAt: new Date() },
 ];
 
 const RELATION_ROWS = [
@@ -185,7 +174,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS,
             memberRows: MEMBER_ROWS,
-            candidateRows: CANDIDATE_ROWS,
             relationRows: RELATION_ROWS,
             rollupRows: ROLLUP_ROWS,
         });
@@ -208,7 +196,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: mixedAffinityRows,
             memberRows: mixedMemberRows,
-            candidateRows: [],
             relationRows: [],
             rollupRows: [],
         });
@@ -219,43 +206,11 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
         expect(summary.membersByType['db_table']).toBe(1);
     });
 
-    it('승인된 도메인 후보의 평균 purity를 계산해야 한다', async () => {
-        const db = createMockDbWithMembers({
-            domainRow: DOMAIN_ROW,
-            affinityRows: AFFINITY_ROWS,
-            memberRows: MEMBER_ROWS,
-            candidateRows: CANDIDATE_ROWS, // purity: 0.92, 0.78
-            relationRows: [],
-            rollupRows: [],
-        });
-        const result = await summarizeDomain(db, 'ws-1', 1, { domainId: 'domain-1' });
-
-        const summary = result.summary as unknown as DomainSummaryData;
-        // avg(0.92, 0.78) = 0.85
-        expect(summary.avgPurity).toBeCloseTo(0.85, 2);
-    });
-
-    it('도메인 후보가 없으면 avgPurity가 null이어야 한다', async () => {
-        const db = createMockDbWithMembers({
-            domainRow: DOMAIN_ROW,
-            affinityRows: AFFINITY_ROWS,
-            memberRows: MEMBER_ROWS,
-            candidateRows: [],
-            relationRows: [],
-            rollupRows: [],
-        });
-        const result = await summarizeDomain(db, 'ws-1', 1, { domainId: 'domain-1' });
-
-        const summary = result.summary as unknown as DomainSummaryData;
-        expect(summary.avgPurity).toBeNull();
-    });
-
     it('평균 affinity를 올바르게 계산해야 한다', async () => {
         const db = createMockDbWithMembers({
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS, // 0.95, 0.72, 0.60
             memberRows: MEMBER_ROWS,
-            candidateRows: [],
             relationRows: [],
             rollupRows: [],
         });
@@ -283,7 +238,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: manyAffinities,
             memberRows: manyMembers,
-            candidateRows: [],
             relationRows: [],
             rollupRows: [],
         });
@@ -300,7 +254,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS, // 3 members
             memberRows: MEMBER_ROWS,
-            candidateRows: [],
             relationRows: RELATION_ROWS, // rel-1: order→payment, rel-2: payment→inventory, rel-3: inventory→external(제외)
             rollupRows: [],
         });
@@ -316,7 +269,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS,
             memberRows: MEMBER_ROWS,
-            candidateRows: [],
             relationRows: [],
             rollupRows: ROLLUP_ROWS,
         });
@@ -336,7 +288,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS,
             memberRows: MEMBER_ROWS,
-            candidateRows: [],
             relationRows: [],
             rollupRows: [],
         });
@@ -351,7 +302,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS,
             memberRows: MEMBER_ROWS,
-            candidateRows: [],
             relationRows: [],
             rollupRows: ROLLUP_ROWS,
         });
@@ -387,7 +337,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS,
             memberRows: MEMBER_ROWS,
-            candidateRows: [],
             relationRows: [],
             rollupRows: rollups,
             rollupProvenanceRows: rollupProvenances,
@@ -413,7 +362,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: affinities,
             memberRows: members,
-            candidateRows: [],
             relationRows: [],
             rollupRows: [],
         });
@@ -428,7 +376,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: DOMAIN_ROW,
             affinityRows: AFFINITY_ROWS,
             memberRows: MEMBER_ROWS,
-            candidateRows: [],
             relationRows: [],
             rollupRows: [{ ...ROLLUP_ROWS[0]!, relationType: 'unknown_type' }],
         });
@@ -449,7 +396,6 @@ describe('summarizeDomain — 특정 도메인 요약', () => {
             domainRow: domainRowWithoutDisplay,
             affinityRows,
             memberRows: memberRowsWithNullDisplay,
-            candidateRows: [],
             relationRows: [],
             rollupRows,
             rollupProvenanceRows: [],
