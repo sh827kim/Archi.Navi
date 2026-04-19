@@ -85,6 +85,9 @@ import {
     fetchDomainSemanticInputs,
 } from '@/domain/semantic/fetchDomainSemanticInputs';
 
+const EVIDENCE_ID_1 = '00000000-0000-4000-8000-000000000001';
+const EVIDENCE_ID_2 = '00000000-0000-4000-8000-000000000002';
+
 function makeThenableResult<T>(rows: T[]) {
     return {
         limit: async () => rows,
@@ -159,12 +162,12 @@ describe('fetchDomainSemanticInputs', () => {
                     messageTopicHints: [],
                     messageQueueHints: [],
                     messageBrokerKind: null,
-                    evidenceIds: ['ev-1'],
+                    evidenceIds: [EVIDENCE_ID_1],
                 },
             ],
             [
                 {
-                    id: 'ev-1',
+                    id: EVIDENCE_ID_1,
                     filePath: 'src/order/OrderService.java',
                     lineStart: 42,
                     lineEnd: 48,
@@ -221,6 +224,84 @@ describe('fetchDomainSemanticInputs', () => {
         expect(hasClosedAtomicIntentFilter).toBe(true);
     });
 
+    it('config/manual anchor evidenceId 는 무시하고 uuid evidence 만 조회해야 한다', async () => {
+        const db = buildDbMock([
+            [{ id: 'dom-1', name: '주문', displayName: '주문' }],
+            [{ objectId: 'svc-order' }],
+            [{ objectId: 'svc-order', domainId: 'dom-1', affinity: 0.95 }],
+            [
+                {
+                    id: 'svc-order',
+                    name: 'order-service',
+                    displayName: 'Order Service',
+                    objectType: 'service',
+                    description: '주문 서비스',
+                },
+            ],
+            [
+                {
+                    id: 'intent-1',
+                    sourceServiceId: 'svc-order',
+                    sourceFunctionId: null,
+                    sourceFilePath: 'src/order/application.yml',
+                    intentType: 'http_gateway_route',
+                    methodHint: 'GET',
+                    externalPathHint: '/articles',
+                    externalRoutePattern: null,
+                    dbTableHints: [],
+                    dbSchemaHint: null,
+                    messageTopicHints: [],
+                    messageQueueHints: [],
+                    messageBrokerKind: null,
+                    evidenceIds: ['config:src/main/resources/application.yml#articles', EVIDENCE_ID_2, 'manual:test'],
+                },
+            ],
+            [
+                {
+                    id: EVIDENCE_ID_2,
+                    filePath: 'src/main/resources/application.yml',
+                    lineStart: 12,
+                    lineEnd: 18,
+                    excerpt: 'articles: /api/articles',
+                },
+            ],
+            [],
+        ]);
+
+        const inputs = await fetchDomainSemanticInputs(db as never, {
+            workspaceId: 'ws-1',
+            domainId: 'dom-1',
+        });
+
+        expect(inputs.intents).toHaveLength(1);
+        expect(inputs.intents[0]?.evidences).toEqual([
+            {
+                filePath: 'src/main/resources/application.yml',
+                lineStart: 12,
+                lineEnd: 18,
+                excerpt: 'articles: /api/articles',
+            },
+        ]);
+
+        const evidenceQueryFilter = db.whereConditions.find((condition) =>
+            hasPredicate(
+                condition,
+                (node) => node.type === 'inArray' && node.col === evidencesTable.id,
+            ),
+        );
+        expect(evidenceQueryFilter).toBeDefined();
+        expect(
+            hasPredicate(
+                evidenceQueryFilter,
+                (node) => node.type === 'inArray'
+                    && node.col === evidencesTable.id
+                    && Array.isArray(node.values)
+                    && node.values.length === 1
+                    && node.values[0] === EVIDENCE_ID_2,
+            ),
+        ).toBe(true);
+    });
+
     it('대표 도메인이 아닌 weak secondary 멤버는 제외하고 relation 은 APPROVED 만 조회한다', async () => {
         const db = buildDbMock([
             [{ id: 'dom-order', name: 'order-domain', displayName: 'Order Domain' }],
@@ -254,12 +335,12 @@ describe('fetchDomainSemanticInputs', () => {
                     messageTopicHints: [],
                     messageQueueHints: [],
                     messageBrokerKind: null,
-                    evidenceIds: ['ev-1'],
+                    evidenceIds: [EVIDENCE_ID_1],
                 },
             ],
             [
                 {
-                    id: 'ev-1',
+                    id: EVIDENCE_ID_1,
                     filePath: 'src/order/OrderController.java',
                     lineStart: 10,
                     lineEnd: 18,

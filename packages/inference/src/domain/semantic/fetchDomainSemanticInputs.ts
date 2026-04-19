@@ -35,6 +35,10 @@ function asStringArray(value: unknown): string[] {
     return value.filter((v): v is string => typeof v === 'string');
 }
 
+function isUuidLike(value: string): boolean {
+    return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 /**
  * 특정 객체의 "대표 도메인 id" 를 affinity 기준으로 찾는다.
  * 도메인 자체 객체(objectType === 'domain') 는 대표 도메인이 자기 자신이 아닐 수 있어 별도 처리하지 않고
@@ -175,7 +179,11 @@ export async function fetchDomainSemanticInputs(
             );
 
         const allEvidenceIds = [
-            ...new Set(intentRows.flatMap((r) => asStringArray(r.evidenceIds))),
+            ...new Set(
+                intentRows
+                    .flatMap((r) => asStringArray(r.evidenceIds))
+                    .filter((id) => isUuidLike(id)),
+            ),
         ];
         const evidenceById = new Map<string, {
             id: string;
