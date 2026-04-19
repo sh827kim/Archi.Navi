@@ -64,6 +64,8 @@ export async function POST(req: Request) {
             }));
 
         // 2. 인텐트 — externalPath/route/topic 신호용
+        //    CLOSED_ATOMIC 상태만 신뢰할 수 있음. NEW/RESOLVING/FRONTIER 는 미해결 추론,
+        //    REJECTED 는 명시적으로 제거된 신호이므로 도메인 클러스터링 입력에 제외.
         const intentRows = await db
             .select({
                 sourceObjectId: interactionIntents.sourceServiceId,
@@ -73,7 +75,12 @@ export async function POST(req: Request) {
                 messageTopicHints: interactionIntents.messageTopicHints,
             })
             .from(interactionIntents)
-            .where(eq(interactionIntents.workspaceId, workspaceId));
+            .where(
+                and(
+                    eq(interactionIntents.workspaceId, workspaceId),
+                    eq(interactionIntents.status, 'CLOSED_ATOMIC'),
+                ),
+            );
 
         const intentInputs: DiscoveryIntentInput[] = intentRows.map((row) => ({
             sourceObjectId: row.sourceObjectId,

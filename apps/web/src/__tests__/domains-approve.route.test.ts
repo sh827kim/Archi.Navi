@@ -10,6 +10,7 @@
  *  - T5: 동시 승인 race — insert 가 partial unique index 충돌로 0행을 돌려줘도,
  *        재조회로 동일 domainId 에 합류해 reused:true 로 응답한다.
  *  - T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME 반환
+ *  - T7: affinity/confidence 범위 이탈(< 0, > 1, NaN, Infinity) 검증
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -218,6 +219,32 @@ describe('POST /api/domains/approve', () => {
         const json = await res.json();
         expect(json.data.reused).toBe(false);
         expect(json.data.domainId).toBe('fresh-domain-id');
+    });
+
+    it('T7: affinity/confidence 범위 이탈(1.5, NaN, Infinity) 은 필터되어 멤버 제외', async () => {
+        // isMemberPayload 검증 규칙: affinity, confidence 모두 [0, 1] 범위의 유한 숫자여야 함.
+        // 범위 이탈 멤버는 필터되므로, 범위를 벗어난 멤버들만 보내면
+        // isMemberPayload 필터 후 primaryMembers 가 비어서 400 이 나올 것을 확인.
+        const db = buildDbMock({ ownedIds: ['obj-bad1', 'obj-bad2', 'obj-bad3'] });
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: '주문',
+                primaryMembers: [
+                    { objectId: 'obj-bad1', affinity: 1.5, confidence: 0.5 }, // affinity > 1 → 필터됨
+                    { objectId: 'obj-bad2', affinity: 0.5, confidence: NaN }, // confidence = NaN → 필터됨
+                    { objectId: 'obj-bad3', affinity: 0.5, confidence: Infinity }, // confidence = Infinity → 필터됨
+                ],
+            }),
+        );
+
+        // 모두 필터되므로 primaryMembers 가 비어있다는 400 에러 반환
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error.code).toBe('BAD_REQUEST');
+        expect(json.error.message).toContain('primaryMembers');
     });
 
     it('T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME', async () => {

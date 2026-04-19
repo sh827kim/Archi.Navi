@@ -32,13 +32,17 @@ interface ApprovalRequestBody {
     secondaryMembers?: ApprovalMemberPayload[];
 }
 
+function isValidScore(value: unknown): boolean {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
+}
+
 function isMemberPayload(value: unknown): value is ApprovalMemberPayload {
     if (typeof value !== 'object' || value === null) return false;
     const v = value as Record<string, unknown>;
     return (
         typeof v.objectId === 'string'
-        && typeof v.affinity === 'number'
-        && typeof v.confidence === 'number'
+        && isValidScore(v.affinity)
+        && isValidScore(v.confidence)
     );
 }
 
