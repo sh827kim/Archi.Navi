@@ -13,6 +13,8 @@
  *  - T7: invalid 멤버 payload 가 섞이면 부분 승인하지 않고 400 으로 거절
  *  - T8: workspaceId/name 이 문자열이 아니거나 공백만 있으면 400
  *  - T9: rollup 갱신 실패는 warning 과 함께 200 success 로 반환
+ *  - T10: 중복 objectId 멤버는 400 DUPLICATE_MEMBER 로 거절
+ *  - T11: domain 타입 멤버는 400 INVALID_MEMBER_TYPE 으로 거절
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -88,6 +90,7 @@ function makeRequest(body: ApproveBody): Request {
  */
 function buildDbMock(opts: {
     ownedIds: string[];
+    ownedObjects?: Array<{ id: string; objectType: string }>;
     existingDomainId?: string;
     insertedDomainId?: string;
     /** insert 가 partial unique index 충돌로 0행을 돌려주는 race 시뮬레이션 */
@@ -139,7 +142,7 @@ function buildDbMock(opts: {
     const db = {
         select: vi.fn(() => ({
             from: () => ({
-                where: async () => opts.ownedIds.map((id) => ({ id })),
+                where: async () => opts.ownedObjects ?? opts.ownedIds.map((id) => ({ id, objectType: 'service' })),
             }),
         })),
         transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
@@ -394,5 +397,53 @@ describe('POST /api/domains/approve', () => {
         expect(json.warning).toMatchObject({
             code: 'ROLLUP_REFRESH_FAILED',
         });
+    });
+
+    it('T10: 같은 objectId 가 중복되면 400 DUPLICATE_MEMBER 반환', async () => {
+        const db = buildDbMock({ ownedIds: ['obj-a', 'obj-b'] });
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: '주문',
+                primaryMembers: [
+                    { objectId: 'obj-a', affinity: 0.8, confidence: 0.7 },
+                ],
+                secondaryMembers: [
+                    { objectId: 'obj-a', affinity: 0.4, confidence: 0.3 },
+                ],
+            }),
+        );
+
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error.code).toBe('DUPLICATE_MEMBER');
+        expect(json.error.duplicateObjectIds).toEqual(['obj-a']);
+        expect(db.transaction).not.toHaveBeenCalled();
+        expect(applyRollupChangesMock).not.toHaveBeenCalled();
+    });
+
+    it('T11: domain 타입 멤버가 포함되면 400 INVALID_MEMBER_TYPE 반환', async () => {
+        const db = buildDbMock({
+            ownedIds: [],
+            ownedObjects: [{ id: 'dom-a', objectType: 'domain' }],
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: '주문',
+                primaryMembers: [{ objectId: 'dom-a', affinity: 0.8, confidence: 0.7 }],
+            }),
+        );
+
+        expect(res.status).toBe(400);
+        const json = await res.json();
+        expect(json.error.code).toBe('INVALID_MEMBER_TYPE');
+        expect(json.error.domainObjectIds).toEqual(['dom-a']);
+        expect(db.transaction).not.toHaveBeenCalled();
+        expect(applyRollupChangesMock).not.toHaveBeenCalled();
     });
 });

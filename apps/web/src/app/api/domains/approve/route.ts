@@ -71,6 +71,22 @@ function normalizeRequiredString(value: unknown): string | null {
     return trimmed.length > 0 ? trimmed : null;
 }
 
+function collectDuplicateMemberObjectIds(
+    primary: ApprovalMemberPayload[],
+    secondary: ApprovalMemberPayload[],
+): string[] {
+    const seen = new Set<string>();
+    const duplicates = new Set<string>();
+    for (const member of [...primary, ...secondary]) {
+        if (seen.has(member.objectId)) {
+            duplicates.add(member.objectId);
+            continue;
+        }
+        seen.add(member.objectId);
+    }
+    return [...duplicates];
+}
+
 export async function POST(req: Request) {
     try {
         const body = (await req.json()) as ApprovalRequestBody;
@@ -129,6 +145,22 @@ export async function POST(req: Request) {
                 { status: 400 },
             );
         }
+
+        const duplicateObjectIds = collectDuplicateMemberObjectIds(primary, secondary);
+        if (duplicateObjectIds.length > 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'DUPLICATE_MEMBER',
+                        message: '같은 objectId 를 여러 번 포함할 수 없습니다.',
+                        duplicateObjectIds,
+                    },
+                },
+                { status: 400 },
+            );
+        }
+
         const slug = name
             .toLowerCase()
             .replace(/[^a-z0-9가-힣]+/g, '-')
@@ -162,7 +194,7 @@ export async function POST(req: Request) {
         //      도메인 분석이 오염될 수 있다.
         const memberIds = Array.from(new Set(allMembers.map((m) => m.objectId)));
         const ownedRows = await db
-            .select({ id: objects.id })
+            .select({ id: objects.id, objectType: objects.objectType })
             .from(objects)
             .where(
                 and(eq(objects.workspaceId, workspaceId), inArray(objects.id, memberIds)),
@@ -180,6 +212,22 @@ export async function POST(req: Request) {
                     },
                 },
                 { status: 403 },
+            );
+        }
+        const domainMembers = ownedRows
+            .filter((row) => row.objectType === 'domain')
+            .map((row) => row.id);
+        if (domainMembers.length > 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'INVALID_MEMBER_TYPE',
+                        message: 'domain 객체는 도메인 멤버로 승인할 수 없습니다.',
+                        domainObjectIds: domainMembers,
+                    },
+                },
+                { status: 400 },
             );
         }
 
