@@ -145,6 +145,20 @@ describe('smartFrontierResolver', () => {
     expect(methodPrompt).toContain('Respond with patchType=method_path_hint.');
   });
 
+  it('PATH_TEMPLATE_UNKNOWN은 gateway route가 아니면 method_path_hint 흐름을 유지해야 한다', () => {
+    const prompt = buildSmartFrontierPrompt({
+      ...createContext(),
+      frontierReason: 'PATH_TEMPLATE_UNKNOWN',
+      intent: {
+        ...createContext().intent,
+        type: 'http_call',
+      },
+    });
+
+    expect(prompt).toContain('Respond with patchType=method_path_hint.');
+    expect(prompt).not.toContain('Respond with patchType=route_transform_patch.');
+  });
+
   it('endpoint disambiguation prompt는 candidate endpoint 문맥을 포함해야 한다', () => {
     const prompt = buildEndpointDisambiguationPrompt({
       ...createContext(),

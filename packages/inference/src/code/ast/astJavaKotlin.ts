@@ -628,6 +628,17 @@ function findAnnotationsWithNames(node: SyntaxNode, names: Set<string>): SyntaxN
     });
 }
 
+function findDirectAnnotationsWithNames(node: SyntaxNode, names: Set<string>): SyntaxNode[] {
+    const declarationHeaderChildren = getChildren(node).filter((child) => child.type !== 'class_body' && child.type !== 'interface_body');
+    return declarationHeaderChildren.flatMap((child) => {
+        const annotationNodes = child.type === 'annotation' ? [child] : findNodes(child, 'annotation');
+        return annotationNodes.filter((annotationNode) => {
+            const annName = getChildren(annotationNode).find((grandChild) => grandChild.type === 'identifier')?.text;
+            return annName ? names.has(annName) : false;
+        });
+    });
+}
+
 function findAncestorByTypes(node: SyntaxNode, types: string[]): SyntaxNode | null {
     let current: SyntaxNode | null = node.parent ?? null;
     while (current) {
@@ -670,7 +681,7 @@ function extractRequestMappingInfo(annotation: SyntaxNode): SpringRequestMapping
 }
 
 function extractTypeLevelSpringMapping(typeDecl: SyntaxNode): SpringMappingExtraction | null {
-    const annotations = findAnnotationsWithNames(typeDecl, new Set([
+    const annotations = findDirectAnnotationsWithNames(typeDecl, new Set([
         'RequestMapping',
         ...Object.keys(MAPPING_ANNOTATIONS),
     ]));
@@ -692,7 +703,7 @@ function extractMethodLevelSpringMappings(methodDecl: SyntaxNode): SpringMapping
 function isSpringControllerType(typeDecl: SyntaxNode, methodMappings: SpringMappingExtraction[]): boolean {
     if (methodMappings.length > 0) return true;
     if (extractTypeLevelSpringMapping(typeDecl)) return true;
-    return findAnnotationsWithNames(typeDecl, CONTROLLER_ANNOTATIONS).length > 0;
+    return findDirectAnnotationsWithNames(typeDecl, CONTROLLER_ANNOTATIONS).length > 0;
 }
 
 function combineSpringMappings(

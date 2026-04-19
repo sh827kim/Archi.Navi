@@ -119,6 +119,26 @@ public class OrderController {
         expect(exposeSignals).toHaveLength(0);
     });
 
+    it('메서드 mapping만 있는 클래스는 type-level prefix로 오인하지 않아야 한다', async () => {
+        const content = `
+@RestController
+public class OrderController {
+    @GetMapping("/orders")
+    public Order getOrder() { return null; }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/OrderController.java', content);
+        const exposeSignals = result.signals.filter((signal) => signal.kind === 'expose');
+
+        expect(exposeSignals).toHaveLength(1);
+        expect(exposeSignals[0]?.symbol).toBe('/orders');
+        expect(exposeSignals[0]?.metadata).toMatchObject({
+            method: 'GET',
+            path: '/orders',
+            mappingSource: 'controller_composed',
+        });
+    });
+
     // ─── 멀티라인 어노테이션 처리 (Phase 2 핵심 개선) ────────────────────────
 
     it('멀티라인 @GetMapping 어노테이션을 정확히 추출해야 한다', async () => {

@@ -203,8 +203,7 @@ function supportsAliasBindingPatch(reason: SupportedSmartFrontierReason): boolea
 
 function supportsRouteTransformPatch(reason: SupportedSmartFrontierReason): boolean {
   return reason === 'ROUTE_FAMILY_DERIVATION_EMPTY'
-    || reason === 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED'
-    || reason === 'PATH_TEMPLATE_UNKNOWN';
+    || reason === 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED';
 }
 
 function supportsMethodPathPatch(reason: SupportedSmartFrontierReason): boolean {
