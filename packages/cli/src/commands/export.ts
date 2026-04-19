@@ -8,24 +8,27 @@ import chalk from 'chalk';
 import ora from 'ora';
 import { getDb } from '@archi-navi/db';
 import { objects, objectRelations } from '@archi-navi/db';
+import { getDomainSemanticProfile } from '@archi-navi/inference';
 import { eq, and } from 'drizzle-orm';
 import { writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-type ExportFormat = 'json' | 'dot';
+type ExportFormat = 'json' | 'dot' | 'domain-semantic';
 
 export function createExportCommand(): Command {
   return new Command('export')
     .description('아키텍처 데이터를 파일로 내보냅니다')
     .requiredOption('-w, --workspace <id>', '워크스페이스 ID')
-    .option('--format <fmt>', '출력 형식 (json | dot)', 'json')
+    .option('--format <fmt>', '출력 형식 (json | dot | domain-semantic)', 'json')
     .option('-o, --output <path>', '출력 파일 경로', './arch-export.json')
     .option('--include-candidates', '후보 관계도 포함 (미승인 포함)')
+    .option('--domain <id>', 'domain-semantic 포맷 시 대상 도메인 ID')
     .action(async (options: {
       workspace: string;
       format: string;
       output: string;
       includeCandidates?: boolean;
+      domain?: string;
     }) => {
       const spinner = ora('데이터 내보내기 중...').start();
 
@@ -33,6 +36,29 @@ export function createExportCommand(): Command {
         const db = await getDb();
         const fmt = options.format as ExportFormat;
         const outputPath = resolve(options.output);
+
+        // 도메인 의미 프로파일 단독 export 분기
+        if (fmt === 'domain-semantic') {
+          if (!options.domain) {
+            spinner.fail(chalk.red('domain-semantic 포맷에는 --domain <id> 가 필요합니다'));
+            process.exit(1);
+            return;
+          }
+          const profile = await getDomainSemanticProfile(db, {
+            workspaceId: options.workspace,
+            domainId: options.domain,
+          });
+          if (!profile) {
+            spinner.fail(chalk.red('저장된 도메인 의미 프로파일이 없습니다. 먼저 추출을 실행하세요.'));
+            process.exit(1);
+            return;
+          }
+          writeFileSync(outputPath, JSON.stringify(profile, null, 2), 'utf-8');
+          spinner.succeed(chalk.green('도메인 의미 프로파일 내보내기 완료'));
+          console.log(chalk.dim(`  도메인: ${profile.domainName}`));
+          console.log(chalk.dim(`  파일: ${outputPath}`));
+          return;
+        }
 
         // Object 조회
         const allObjects = await db

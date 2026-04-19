@@ -28,3 +28,41 @@ export type {
 } from './feedbackLoop';
 export { extractLabelCandidates } from './labelExtractor';
 export type { LabelCandidate } from './labelExtractor';
+
+// 도메인 의미 추출 엔진 (Phase 2)
+export { collectDomainSemanticSignals } from './semantic/semanticSignalCollector';
+export { extractScenarioCandidates } from './semantic/scenarioExtractor';
+export type { ScenarioCandidate, ScenarioExtractorOptions } from './semantic/scenarioExtractor';
+export {
+    composeDomainSemanticProfile,
+} from './semantic/semanticComposer';
+export type {
+    GenerateSemanticProfileFn,
+    SemanticComposerInputs,
+    SemanticLlmDraft,
+} from './semantic/semanticComposer';
+export {
+    DomainNotFoundError,
+    fetchDomainSemanticInputs,
+} from './semantic/fetchDomainSemanticInputs';
+export type { FetchDomainSemanticInputsArgs } from './semantic/fetchDomainSemanticInputs';
+export {
+    extractDomainSemanticProfile,
+    getDomainSemanticProfile,
+} from './semantic/extractDomainSemanticProfile';
+export type {
+    ExtractDomainSemanticProfileArgs,
+    ExtractDomainSemanticProfileResult,
+} from './semantic/extractDomainSemanticProfile';
+export type {
+    CollectedSemanticSignals,
+    CollectorInputs,
+    CollectorIntentInput,
+    CollectorMemberInput,
+    CollectorOtherObject,
+    CollectorRelationInput,
+    ActionCandidate,
+    CollaboratorCandidate,
+    DbAccessCandidate,
+    EventCandidate,
+} from './semantic/types';

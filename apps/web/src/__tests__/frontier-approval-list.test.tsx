@@ -56,6 +56,8 @@ interface FrontierListItem {
   retryStrategy: string;
   priority: number;
   detail: Record<string, unknown>;
+  gatewayKind?: string | null;
+  externalRoutePattern?: string | null;
   methodResolved: string | null;
   externalPathResolved: string | null;
   internalPathResolved: string | null;

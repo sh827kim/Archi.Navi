@@ -120,6 +120,13 @@
       "when": 1775401200000,
       "tag": "0016_scan_config",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1776510000000,
+      "tag": "0017_domain_semantic_profiles",
+      "breakpoints": true
     }
   ]
 }

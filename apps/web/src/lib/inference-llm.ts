@@ -10,6 +10,7 @@ import type {
   GenerateBoostSuggestionFn,
   GenerateDomainLabelFn,
   GenerateExplanationFn,
+  GenerateSemanticProfileFn,
   GenerateSmartResolutionFn,
   LlmAssessment,
   LlmBoostContext,
@@ -17,6 +18,7 @@ import type {
   LlmExplanation,
   DomainLabelContext,
   DomainLabelSuggestion,
+  SemanticLlmDraft,
   SmartPatchProposal,
   SmartContradictionChallengeProposal,
   SmartProviderServiceSelectionProposal,
@@ -115,7 +117,7 @@ const smartProviderServiceSelectionProposalSchema = z.object({
     serviceName: z.string().nullable(),
     score: z.number().min(0).max(1).nullable(),
     reasoning: z.string().nullable(),
-  })).nullable().optional(),
+  })).nullable(),
 });
 
 const smartSummaryEnhancementProposalSchema = z.object({
@@ -318,6 +320,64 @@ export function createGenerateDomainLabelFn(
   };
 }
 
+const domainSemanticDraftSchema = z.object({
+  responsibility: z.string(),
+  state: z.array(z.object({
+    name: z.string(),
+    type: z.string(),
+    description: z.string(),
+    evidenceIds: z.array(z.string()),
+  })),
+  actions: z.array(z.object({
+    name: z.string(),
+    description: z.string(),
+    params: z.array(z.object({ name: z.string(), type: z.string() })),
+    trigger: z.enum(['http', 'message', 'internal', 'scheduled']),
+    evidenceIds: z.array(z.string()),
+  })),
+  invariants: z.array(z.object({
+    description: z.string(),
+    failureMode: z.string().optional(),
+    evidenceIds: z.array(z.string()),
+  })),
+  events: z.array(z.object({
+    name: z.string(),
+    direction: z.enum(['publish', 'consume']),
+    channel: z.string(),
+    description: z.string(),
+    evidenceIds: z.array(z.string()),
+  })),
+  collaborators: z.array(z.object({
+    targetDomainId: z.string().nullable(),
+    targetObjectId: z.string(),
+    targetName: z.string(),
+    relationType: z.string(),
+    reason: z.string(),
+    evidenceIds: z.array(z.string()),
+  })),
+  scenarios: z.array(z.object({
+    title: z.string(),
+    steps: z.array(z.string()),
+    entryPointObjectId: z.string(),
+    evidenceIds: z.array(z.string()),
+  })),
+});
+
+export function createGenerateSemanticProfileFn(
+  aiModel: LanguageModel,
+  _modelName: string,
+): GenerateSemanticProfileFn {
+  return async (prompt: string): Promise<SemanticLlmDraft> => {
+    const result = await generateObject({
+      model: aiModel,
+      schema: domainSemanticDraftSchema,
+      prompt,
+      temperature: 0.2,
+    });
+    return result.object as SemanticLlmDraft;
+  };
+}
+
 export function createGenerateSmartResolutionFn(
   aiModel: LanguageModel,
   modelName: string,
@@ -338,7 +398,10 @@ export function createGenerateSmartResolutionFn(
       model: modelName,
       promptTokens: usage?.inputTokens ?? 0,
       completionTokens: usage?.outputTokens ?? 0,
-      object: result.object,
+      object: result.object as
+        | SmartPatchProposal
+        | SmartSummaryEnhancementProposal
+        | SmartProviderServiceSelectionProposal,
     };
   };
 }

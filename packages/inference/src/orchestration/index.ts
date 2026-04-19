@@ -39,6 +39,7 @@ export {
   resolveInteractionIntentProof,
   validateAndApplyProofPatch,
 } from './intentProofEngine';
+export type { ProofResolutionResult } from './intentProofEngine';
 export {
   buildFrontierAgentPatchProposal,
   runFrontierAgentPass,
