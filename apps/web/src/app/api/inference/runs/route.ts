@@ -37,6 +37,7 @@ interface InferenceRunRequestBody {
   enableAgentPatches?: boolean;
   maxAgentFrontiers?: number;
   smartProof?: boolean | SmartProofConfig;
+  compatDeterministicCandidates?: boolean;
 }
 
 function authorizeInferenceRunsRequest(req: NextRequest): NextResponse | null {

@@ -221,9 +221,6 @@ anavi up --port 3000
 anavi scan --workspace <workspaceId> --path /path/to/project
 anavi scan --workspace <workspaceId> --workspace-dir /path/to/workspace
 
-# Run domain inference (Track A/B)
-anavi infer --workspace <workspaceId> --track all
-
 # Rebuild rollup graph
 anavi rebuild-rollup --workspace <workspaceId>
 

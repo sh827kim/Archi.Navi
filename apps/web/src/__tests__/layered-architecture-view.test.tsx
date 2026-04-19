@@ -247,7 +247,7 @@ describe('LayeredArchitectureView SSE refresh', () => {
       expect(vi.mocked(cytoscape).mock.calls.length).toBeGreaterThan(0);
     });
 
-    const initOptions = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as {
+    const initOptions = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as unknown as {
       style: Array<{ selector: string; css: Record<string, unknown> }>;
     };
     const layerTitleStyle = initOptions.style.find(
@@ -355,7 +355,7 @@ describe('LayeredArchitectureView SSE refresh', () => {
       expect(objectFetchCount).toBeGreaterThan(1);
     });
 
-    const lastInitOptions = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as {
+    const lastInitOptions = vi.mocked(cytoscape).mock.calls.at(-1)?.[0] as unknown as {
       style: Array<{ selector: string; css: Record<string, unknown> }>;
     };
     const layerTitleStyle = lastInitOptions.style.find(

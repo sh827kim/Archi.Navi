@@ -15,6 +15,7 @@ import {
   GitGraph,       // Object Mapping (롤업 그래프)
   Server,         // Services
   GitBranch,      // Relations
+  Boxes,          // Domains
   CheckCircle,    // Approval
   Activity,       // Inference Runs
   SearchCode,     // Query Engine
@@ -60,6 +61,12 @@ const navItems = [
     label: '관계 매핑',
     icon: GitBranch,
     description: '확정된 Relation 관리',
+  },
+  {
+    href: '/domains',
+    label: '도메인 관리',
+    icon: Boxes,
+    description: '도메인 발견 + 의미 추출',
   },
   {
     href: '/approval',

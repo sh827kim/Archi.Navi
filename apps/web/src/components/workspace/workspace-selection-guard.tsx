@@ -3,11 +3,12 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { WorkspaceLoadingSkeleton } from '@/components/workspace/workspace-loading-skeleton';
 
 export function WorkspaceSelectionGuard({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { workspaceId, workspaces, refreshWorkspaces } = useWorkspace();
-  const [checked, setChecked] = useState(false);
+  const [checked, setChecked] = useState(workspaces.length > 0);
 
   const isValidSelection = useMemo(
     () => !!workspaceId && workspaces.some((ws) => ws.id === workspaceId),
@@ -26,6 +27,12 @@ export function WorkspaceSelectionGuard({ children }: { children: React.ReactNod
   }, [refreshWorkspaces]);
 
   useEffect(() => {
+    if (workspaces.length > 0) {
+      setChecked(true);
+    }
+  }, [workspaces]);
+
+  useEffect(() => {
     if (!checked) return;
     if (!isValidSelection) {
       router.replace('/workspaces');
@@ -33,7 +40,7 @@ export function WorkspaceSelectionGuard({ children }: { children: React.ReactNod
   }, [checked, isValidSelection, router]);
 
   if (!checked) {
-    return <div className="h-screen w-full bg-background" />;
+    return <WorkspaceLoadingSkeleton variant="guard" />;
   }
 
   if (!isValidSelection) {

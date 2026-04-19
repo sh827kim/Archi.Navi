@@ -1065,6 +1065,9 @@ function processMethodInvocations(
                         }),
                     );
                 } else {
+                    // URL 인자가 리터럴/식별자로 해결되지 않아도 (예: baseUrl + "/orders" 같은 표현식)
+                    // buildPartialHttpMetadata 로 부분 host/path hint 가 뽑히면 frontier evidence 로 남긴다.
+                    // hint 가 전혀 없는 경우(예: 변수 한 개만 있는 호출)는 노이즈를 피하기 위해 스킵한다.
                     const fallbackMetadata = buildPartialHttpMetadata(objectName, args.map((arg) => arg.text).join(', '));
                     if (!hasUsefulPartialHttpMetadata(fallbackMetadata)) {
                         continue;

@@ -10,7 +10,12 @@ vi.mock('ai', () => ({
   generateObject: generateObjectMock,
 }));
 
-import { createGenerateBoostSuggestionFn, createGenerateSmartResolutionFn } from '@/lib/inference-llm';
+import {
+  createGenerateBoostSuggestionFn,
+  createGenerateDomainReviewFn,
+  createGenerateSemanticProfileFn,
+  createGenerateSmartResolutionFn,
+} from '@/lib/inference-llm';
 
 describe('createGenerateBoostSuggestionFn', () => {
   beforeEach(() => {
@@ -156,6 +161,39 @@ describe('createGenerateBoostSuggestionFn', () => {
     });
   });
 
+  it('smart resolution generator는 provider_service_selection 에서 ranking 필드가 없어도 허용해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order-b',
+        selectedServiceName: 'order-api-b',
+        confidence: 0.78,
+        reasoning: 'service name and host hint both match',
+      },
+      usage: {
+        inputTokens: 61,
+        outputTokens: 16,
+      },
+    });
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve provider without ranking')).resolves.toMatchObject({
+      model: 'gpt-4o',
+      promptTokens: 61,
+      completionTokens: 16,
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order-b',
+      },
+    });
+  });
+
   it('smart resolution generator는 provider_service_selection 응답도 그대로 변환해야 한다', async () => {
     generateObjectMock.mockResolvedValue({
       object: {
@@ -220,6 +258,101 @@ describe('createGenerateBoostSuggestionFn', () => {
         shouldChallenge: true,
         expectedAction: 'reopen_frontier',
       },
+    });
+  });
+});
+
+describe('createGenerateDomainReviewFn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('domain review generator는 mergeWithCandidateId 가 없어도 null 로 정규화해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        coherent: true,
+        suggestedName: '주문',
+        responsibilityHint: '주문 라이프사이클을 책임한다',
+      },
+    });
+
+    const generateDomainReview = createGenerateDomainReviewFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateDomainReview('review this candidate', {
+      candidate: {
+        slug: 'orders',
+        autoName: 'Orders',
+        members: [],
+        signals: {
+          topPathPrefix: 'orders',
+          topRoutePrefix: '/orders',
+          topTopicPrefix: null,
+        },
+      },
+      objectNameById: new Map(),
+      siblingCandidateIds: [],
+    })).resolves.toEqual({
+      coherent: true,
+      suggestedName: '주문',
+      responsibilityHint: '주문 라이프사이클을 책임한다',
+      mergeWithCandidateId: null,
+    });
+  });
+});
+
+describe('createGenerateSemanticProfileFn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('semantic profile generator는 invariant.failureMode 가 없어도 null 로 정규화해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        responsibility: '주문 도메인 책임',
+        state: [],
+        actions: [],
+        invariants: [
+          {
+            description: '주문 수량은 1 이상이어야 한다',
+            evidenceIds: ['ev-1'],
+          },
+        ],
+        events: [],
+        collaborators: [],
+        scenarios: [],
+      },
+    });
+
+    const generateSemanticProfile = createGenerateSemanticProfileFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSemanticProfile('compose semantic profile', {
+      workspaceId: 'ws-1',
+      llmModel: 'gpt-4o',
+      signals: {
+        domainId: 'dom-1',
+        domainName: '주문',
+        members: [],
+        actions: [],
+        events: [],
+        collaborators: [],
+        dbAccesses: [],
+        evidence: [],
+      },
+      scenarios: [],
+    })).resolves.toMatchObject({
+      invariants: [
+        {
+          description: '주문 수량은 1 이상이어야 한다',
+          failureMode: null,
+          evidenceIds: ['ev-1'],
+        },
+      ],
     });
   });
 });

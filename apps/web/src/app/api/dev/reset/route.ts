@@ -24,12 +24,7 @@ import {
   codeImportEdges,
   codeCallEdges,
   objectDomainAffinities,
-  domainCandidates,
-  domainCandidateEvidences,
   domainInferenceProfiles,
-  domainDiscoveryRuns,
-  domainDiscoveryMemberships,
-  domainRollupProvenances,
   changeLogs,
 } from '@archi-navi/db';
 import { eq, sql } from 'drizzle-orm';
@@ -50,7 +45,6 @@ export async function POST(req: NextRequest) {
       db.select({ count: sql<number>`count(*)` }).from(tags).where(eq(tags.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(objectRelations).where(eq(objectRelations.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(relationCandidates).where(eq(relationCandidates.workspaceId, workspaceId)),
-      db.select({ count: sql<number>`count(*)` }).from(domainCandidates).where(eq(domainCandidates.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(codeArtifacts).where(eq(codeArtifacts.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(evidences).where(eq(evidences.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(objectRollups).where(eq(objectRollups.workspaceId, workspaceId)),
@@ -63,27 +57,15 @@ export async function POST(req: NextRequest) {
       tags: Number(before[2][0]?.count ?? 0),
       relations: Number(before[3][0]?.count ?? 0),
       relationCandidates: Number(before[4][0]?.count ?? 0),
-      domainCandidates: Number(before[5][0]?.count ?? 0),
-      codeArtifacts: Number(before[6][0]?.count ?? 0),
-      evidences: Number(before[7][0]?.count ?? 0),
-      objectRollups: Number(before[8][0]?.count ?? 0),
-      objectGraphStats: Number(before[9][0]?.count ?? 0),
-      rollupGenerations: Number(before[10][0]?.count ?? 0),
+      codeArtifacts: Number(before[5][0]?.count ?? 0),
+      evidences: Number(before[6][0]?.count ?? 0),
+      objectRollups: Number(before[7][0]?.count ?? 0),
+      objectGraphStats: Number(before[8][0]?.count ?? 0),
+      rollupGenerations: Number(before[9][0]?.count ?? 0),
     };
 
     await db.transaction(async (tx) => {
-      // 1) 롤업/도메인 provenance 및 스냅샷
-      await tx
-        .delete(domainRollupProvenances)
-        .where(eq(domainRollupProvenances.workspaceId, workspaceId));
-      await tx
-        .delete(domainDiscoveryMemberships)
-        .where(eq(domainDiscoveryMemberships.workspaceId, workspaceId));
-      await tx
-        .delete(domainDiscoveryRuns)
-        .where(eq(domainDiscoveryRuns.workspaceId, workspaceId));
-
-      // 2) 코드/근거
+      // 1) 코드/근거
       await tx
         .delete(codeCallEdges)
         .where(eq(codeCallEdges.workspaceId, workspaceId));
@@ -94,7 +76,7 @@ export async function POST(req: NextRequest) {
         .delete(codeArtifacts)
         .where(eq(codeArtifacts.workspaceId, workspaceId));
 
-      // 3) 롤업 provenance를 먼저 삭제 (objectRelations ON DELETE CASCADE 충돌 방지)
+      // 2) 롤업 provenance를 먼저 삭제 (objectRelations ON DELETE CASCADE 충돌 방지)
       await tx
         .delete(objectRollupProvenances)
         .where(eq(objectRollupProvenances.workspaceId, workspaceId));
@@ -108,10 +90,7 @@ export async function POST(req: NextRequest) {
         .delete(rollupGenerations)
         .where(eq(rollupGenerations.workspaceId, workspaceId));
 
-      // 4) 후보/확정 관계와 연결 테이블
-      await tx
-        .delete(domainCandidateEvidences)
-        .where(eq(domainCandidateEvidences.workspaceId, workspaceId));
+      // 3) 후보/확정 관계와 연결 테이블
       await tx
         .delete(relationCandidateEvidences)
         .where(eq(relationCandidateEvidences.workspaceId, workspaceId));
@@ -119,9 +98,6 @@ export async function POST(req: NextRequest) {
         .delete(relationEvidences)
         .where(eq(relationEvidences.workspaceId, workspaceId));
 
-      await tx
-        .delete(domainCandidates)
-        .where(eq(domainCandidates.workspaceId, workspaceId));
       await tx
         .delete(objectDomainAffinities)
         .where(eq(objectDomainAffinities.workspaceId, workspaceId));
@@ -132,7 +108,7 @@ export async function POST(req: NextRequest) {
         .delete(objectRelations)
         .where(eq(objectRelations.workspaceId, workspaceId));
 
-      // 5) 근거 원문 / 태깅 / 레이어 배치
+      // 4) 근거 원문 / 태깅 / 레이어 배치
       await tx
         .delete(evidences)
         .where(eq(evidences.workspaceId, workspaceId));
@@ -143,7 +119,7 @@ export async function POST(req: NextRequest) {
         .delete(objectLayerAssignments)
         .where(eq(objectLayerAssignments.workspaceId, workspaceId));
 
-      // 6) 오브젝트/레이어/태그 및 도메인 프로필/로그
+      // 5) 오브젝트/레이어/태그 및 도메인 프로필/로그
       await tx
         .delete(objects)
         .where(eq(objects.workspaceId, workspaceId));
@@ -167,7 +143,6 @@ export async function POST(req: NextRequest) {
       db.select({ count: sql<number>`count(*)` }).from(tags).where(eq(tags.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(objectRelations).where(eq(objectRelations.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(relationCandidates).where(eq(relationCandidates.workspaceId, workspaceId)),
-      db.select({ count: sql<number>`count(*)` }).from(domainCandidates).where(eq(domainCandidates.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(codeArtifacts).where(eq(codeArtifacts.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(evidences).where(eq(evidences.workspaceId, workspaceId)),
       db.select({ count: sql<number>`count(*)` }).from(objectRollups).where(eq(objectRollups.workspaceId, workspaceId)),
@@ -180,12 +155,11 @@ export async function POST(req: NextRequest) {
       tags: Number(after[2][0]?.count ?? 0),
       relations: Number(after[3][0]?.count ?? 0),
       relationCandidates: Number(after[4][0]?.count ?? 0),
-      domainCandidates: Number(after[5][0]?.count ?? 0),
-      codeArtifacts: Number(after[6][0]?.count ?? 0),
-      evidences: Number(after[7][0]?.count ?? 0),
-      objectRollups: Number(after[8][0]?.count ?? 0),
-      objectGraphStats: Number(after[9][0]?.count ?? 0),
-      rollupGenerations: Number(after[10][0]?.count ?? 0),
+      codeArtifacts: Number(after[5][0]?.count ?? 0),
+      evidences: Number(after[6][0]?.count ?? 0),
+      objectRollups: Number(after[7][0]?.count ?? 0),
+      objectGraphStats: Number(after[8][0]?.count ?? 0),
+      rollupGenerations: Number(after[9][0]?.count ?? 0),
     };
 
     const hasRemaining = Object.values(remaining).some((count) => count > 0);

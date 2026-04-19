@@ -1,18 +1,23 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Plus, FolderOpen, ChevronRight } from 'lucide-react';
 import { Button, Card, CardContent } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
+import { WorkspaceLoadingSkeleton } from '@/components/workspace/workspace-loading-skeleton';
 
 export function WorkspacesPageClient() {
   const router = useRouter();
   const { workspaces, workspaceId, setWorkspace, refreshWorkspaces } = useWorkspace();
-  const [loading, setLoading] = useState(true);
+  const hasCachedWorkspacesRef = useRef(workspaces.length > 0);
+  const [loading, setLoading] = useState(!hasCachedWorkspacesRef.current);
 
   useEffect(() => {
     let cancelled = false;
+    if (hasCachedWorkspacesRef.current) {
+      setLoading(false);
+    }
     (async () => {
       await refreshWorkspaces();
       if (!cancelled) setLoading(false);
@@ -29,7 +34,7 @@ export function WorkspacesPageClient() {
   );
 
   if (loading) {
-    return <div className="h-screen w-full bg-background" />;
+    return <WorkspaceLoadingSkeleton variant="page" />;
   }
 
   return (

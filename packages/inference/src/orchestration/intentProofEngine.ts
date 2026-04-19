@@ -39,7 +39,7 @@ export type ProofPatchValidationStatus = 'PENDING' | 'ACCEPTED' | 'REJECTED';
 
 type JsonRecord = Record<string, unknown>;
 
-interface ProofResolutionResult {
+export interface ProofResolutionResult {
   proofStateId: string;
   status: ProofLifecycleStatus;
   frontierReason: string | null;

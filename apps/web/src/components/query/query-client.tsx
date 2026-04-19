@@ -300,7 +300,7 @@ function QueryInsight({
       <div className="rounded-xl border border-border/60 bg-muted/20 p-4">
         <p className="text-sm font-semibold">현재 워크스페이스의 도메인 {domainCount}개를 찾았습니다.</p>
         <p className="mt-1 text-sm text-muted-foreground">
-          특정 도메인을 선택하면 멤버 서비스, purity, 외부 의존까지 상세하게 볼 수 있습니다.
+          특정 도메인을 선택하면 멤버 서비스, 관계 밀도, 외부 의존까지 상세하게 볼 수 있습니다.
         </p>
       </div>
     );
@@ -359,9 +359,8 @@ function DomainSummaryPanel({ summary }: { summary: Record<string, unknown> }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-3">
         <SummaryMetric label="멤버 수" value={readNumber(summary, 'memberCount') ?? 0} />
-        <SummaryMetric label="평균 purity" value={formatPercent(readNumber(summary, 'avgPurity'))} />
         <SummaryMetric label="평균 affinity" value={formatScore(readNumber(summary, 'avgAffinity'))} />
         <SummaryMetric label="관계 밀도" value={formatPercent(readNumber(summary, 'relationDensity'))} />
       </div>

@@ -59,10 +59,6 @@ async function bootstrap(): Promise<void> {
     const mod = await import('./commands/scan.js');
     return { createCommand: mod.createScanCommand };
   });
-  await registerLazyCommand('infer', '도메인 추론을 실행합니다 (Track A: Seed 기반, Track B: 자동 탐지)', async () => {
-    const mod = await import('./commands/infer.js');
-    return { createCommand: mod.createInferCommand };
-  });
   await registerLazyCommand('rebuild-rollup', 'Roll-up 집계 테이블을 재계산합니다', async () => {
     const mod = await import('./commands/rebuild-rollup.js');
     return { createCommand: mod.createRebuildRollupCommand };
