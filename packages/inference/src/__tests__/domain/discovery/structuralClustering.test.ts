@@ -36,6 +36,11 @@ describe('tokenizeName', () => {
         const tokens = tokenizeName('user-auth-controller');
         expect(Array.from(tokens).sort()).toEqual(['auth', 'user']);
     });
+
+    it('T4: 한글 이름 토큰은 보존해야 한다', () => {
+        const tokens = tokenizeName('주문 서비스');
+        expect(Array.from(tokens).sort()).toEqual(['서비스', '주문']);
+    });
 });
 
 describe('runStructuralClustering', () => {
@@ -217,15 +222,15 @@ describe('runStructuralClustering', () => {
                 ],
                 intents: [
                     {
-                        id: 'ord-i1',
-                        objectId: 'ord',
+                        sourceObjectId: 'ord',
+                        intentType: 'http_call',
                         externalPathHint: '/주문',
                         externalRoutePattern: null,
                         messageTopicHints: [],
                     },
                     {
-                        id: 'pay-i1',
-                        objectId: 'pay',
+                        sourceObjectId: 'pay',
+                        intentType: 'message_publish',
                         externalPathHint: null,
                         externalRoutePattern: null,
                         messageTopicHints: ['결제.처리'],
@@ -242,5 +247,26 @@ describe('runStructuralClustering', () => {
         const order = result.candidates.find((c) => c.slug === '주문')!;
         expect(order.members).toHaveLength(1);
         expect(order.members[0]!.objectId).toBe('ord');
+    });
+
+    it('T8: 한글 이름 토큰도 slug 후보와 jaccard 계산에 반영해야 한다', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    {
+                        id: 'svc-order',
+                        objectType: 'service',
+                        name: '주문',
+                        displayName: null,
+                        path: '/misc',
+                    },
+                ],
+            }),
+        );
+
+        const order = result.candidates.find((c) => c.slug === '주문');
+        expect(order).toBeDefined();
+        expect(order!.members[0]!.nameTokenJaccard).toBe(1);
+        expect(order!.members[0]!.affinity).toBeCloseTo(0.25);
     });
 });

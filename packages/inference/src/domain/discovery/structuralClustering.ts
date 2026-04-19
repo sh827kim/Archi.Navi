@@ -193,7 +193,7 @@ function extractPathSlugs(path: string): string[] {
 /** 객체 이름에서 의미 있는 토큰만 추출 (Service/Controller 등 suffix 제거) */
 function extractNameSlugs(name: string): string[] {
     const tokens = tokenizeName(name);
-    return Array.from(tokens).filter((t) => t.length >= 3);
+    return Array.from(tokens).filter((t) => t.length >= 3 || /[가-힣]/.test(t));
 }
 
 function extractIntentRouteSlugs(intent: DiscoveryIntentInput): string[] {
@@ -292,7 +292,7 @@ export function tokenizeName(name: string): Set<string> {
     const tokens = name
         .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
         .split(/[\s_\-./]+/)
-        .map((t) => t.toLowerCase().replace(/[^a-z0-9]/g, ''))
+        .map((t) => t.toLowerCase().replace(/[^a-z0-9가-힣]/g, ''))
         .filter((t) => t.length >= 2)
         .filter((t) => !STRIPPABLE_NAME_SUFFIXES.includes(t));
     return new Set(tokens);

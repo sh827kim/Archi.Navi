@@ -11,6 +11,8 @@
  *        재조회로 동일 domainId 에 합류해 reused:true 로 응답한다.
  *  - T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME 반환
  *  - T7: invalid 멤버 payload 가 섞이면 부분 승인하지 않고 400 으로 거절
+ *  - T8: workspaceId/name 이 문자열이 아니거나 공백만 있으면 400
+ *  - T9: rollup 갱신 실패는 warning 과 함께 200 success 로 반환
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -61,10 +63,10 @@ vi.mock('@/lib/rollup-change-events', () => ({
 import { POST } from '@/app/api/domains/approve/route';
 
 interface ApproveBody {
-    workspaceId: string;
-    name: string;
-    primaryMembers: Array<{ objectId: string; affinity: number; confidence: number }>;
-    secondaryMembers?: Array<{ objectId: string; affinity: number; confidence: number }>;
+    workspaceId: unknown;
+    name: unknown;
+    primaryMembers: unknown;
+    secondaryMembers?: unknown;
 }
 
 function makeRequest(body: ApproveBody): Request {
@@ -250,6 +252,32 @@ describe('POST /api/domains/approve', () => {
         expect(applyRollupChangesMock).not.toHaveBeenCalled();
     });
 
+    it('T8: workspaceId/name 이 문자열이 아니거나 공백이면 400 BAD_REQUEST', async () => {
+        const db = buildDbMock({ ownedIds: ['obj-a'] });
+        getDbMock.mockResolvedValue(db);
+
+        const invalidWorkspaceRes = await POST(
+            makeRequest({
+                workspaceId: { value: 'ws-1' },
+                name: '주문',
+                primaryMembers: [{ objectId: 'obj-a', affinity: 0.8, confidence: 0.7 }],
+            }),
+        );
+        expect(invalidWorkspaceRes.status).toBe(400);
+        expect((await invalidWorkspaceRes.json()).error.code).toBe('BAD_REQUEST');
+
+        const blankNameRes = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: '   ',
+                primaryMembers: [{ objectId: 'obj-a', affinity: 0.8, confidence: 0.7 }],
+            }),
+        );
+        expect(blankNameRes.status).toBe(400);
+        expect((await blankNameRes.json()).error.code).toBe('BAD_REQUEST');
+        expect(db.transaction).not.toHaveBeenCalled();
+    });
+
     it('T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME', async () => {
         // 이모지/특수문자만 있는 이름은 /domain/ 로 수렴해 서로 무관한 승인이 같은 도메인으로 섞임 → 차단
         const db = buildDbMock({ ownedIds: ['obj-a'] });
@@ -338,5 +366,33 @@ describe('POST /api/domains/approve', () => {
             expect(event.type).toBe('DOMAIN_AFFINITY_CHANGED');
             expect(event.payload.domainId).toBe('d1');
         }
+    });
+
+    it('T9: rollup 갱신 실패는 warning 과 함께 200 success 로 반환', async () => {
+        const db = buildDbMock({
+            ownedIds: ['obj-a'],
+            insertedDomainId: 'fresh-domain-id',
+        });
+        getDbMock.mockResolvedValue(db);
+        applyRollupChangesMock.mockRejectedValueOnce(new Error('rollup down'));
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: '주문',
+                primaryMembers: [{ objectId: 'obj-a', affinity: 0.8, confidence: 0.7 }],
+            }),
+        );
+
+        expect(res.status).toBe(200);
+        const json = await res.json();
+        expect(json.success).toBe(true);
+        expect(json.data).toMatchObject({
+            domainId: 'fresh-domain-id',
+            rollupApplied: false,
+        });
+        expect(json.warning).toMatchObject({
+            code: 'ROLLUP_REFRESH_FAILED',
+        });
     });
 });

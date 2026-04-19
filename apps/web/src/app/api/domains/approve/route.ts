@@ -32,6 +32,15 @@ interface ApprovalRequestBody {
     secondaryMembers?: ApprovalMemberPayload[];
 }
 
+interface ApprovalSuccessPayload {
+    domainId: string;
+    reused: boolean;
+    memberCount: number;
+    primaryCount: number;
+    secondaryCount: number;
+    rollupApplied: boolean;
+}
+
 function isValidScore(value: unknown): boolean {
     return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1;
 }
@@ -56,12 +65,26 @@ function collectInvalidMemberIndexes(values: unknown[]): number[] {
     return invalidIndexes;
 }
 
+function normalizeRequiredString(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
 export async function POST(req: Request) {
     try {
         const body = (await req.json()) as ApprovalRequestBody;
-        if (!body.workspaceId || !body.name) {
+        const workspaceId = normalizeRequiredString(body.workspaceId);
+        const name = normalizeRequiredString(body.name);
+        if (!workspaceId || !name) {
             return NextResponse.json(
-                { success: false, error: { code: 'BAD_REQUEST', message: 'workspaceId, name 은 필수입니다.' } },
+                {
+                    success: false,
+                    error: {
+                        code: 'BAD_REQUEST',
+                        message: 'workspaceId, name 은 공백이 아닌 문자열이어야 합니다.',
+                    },
+                },
                 { status: 400 },
             );
         }
@@ -106,9 +129,6 @@ export async function POST(req: Request) {
                 { status: 400 },
             );
         }
-
-        const workspaceId = body.workspaceId;
-        const name = body.name;
         const slug = name
             .toLowerCase()
             .replace(/[^a-z0-9가-힣]+/g, '-')
@@ -262,25 +282,42 @@ export async function POST(req: Request) {
             return { domainId: domainObjectId, reused: didReuse };
         });
 
+        const successData: ApprovalSuccessPayload = {
+            domainId,
+            reused,
+            memberCount: allMembers.length,
+            primaryCount: primary.length,
+            secondaryCount: secondary.length,
+            rollupApplied: true,
+        };
+
         // (P1) incremental rollup 발행 — 멤버별 DOMAIN_AFFINITY_CHANGED 이벤트.
         //      도메인-도메인 의존도 등 rollup 기반 화면이 즉시 반영되도록 한다.
         //      트랜잭션 외부에서 호출 — affinity row 가 커밋된 뒤에 rebuild 가 실행돼야
         //      generation meta 에 일관된 상태가 기록된다.
-        await applyRollupChanges(
-            db,
-            workspaceId,
-            allMembers.map((member) => createDomainAffinityChangedEvent(member.objectId, domainId)),
-        );
+        try {
+            await applyRollupChanges(
+                db,
+                workspaceId,
+                allMembers.map((member) => createDomainAffinityChangedEvent(member.objectId, domainId)),
+            );
+        } catch (rollupError) {
+            successData.rollupApplied = false;
+            console.error('[POST /api/domains/approve] rollup refresh failed after commit', rollupError);
+
+            return NextResponse.json({
+                success: true,
+                data: successData,
+                warning: {
+                    code: 'ROLLUP_REFRESH_FAILED',
+                    message: '도메인 승인은 완료되었지만 rollup 갱신에 실패했습니다. 일부 집계 화면은 수동 새로고침 전까지 지연될 수 있습니다.',
+                },
+            });
+        }
 
         return NextResponse.json({
             success: true,
-            data: {
-                domainId,
-                reused,
-                memberCount: allMembers.length,
-                primaryCount: primary.length,
-                secondaryCount: secondary.length,
-            },
+            data: successData,
         });
     } catch (error) {
         console.error('[POST /api/domains/approve]', error);
