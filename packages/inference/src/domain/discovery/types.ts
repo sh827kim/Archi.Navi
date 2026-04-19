@@ -87,7 +87,7 @@ export interface LlmCandidateReview {
     coherent: boolean;
     suggestedName: string;
     responsibilityHint: string;
-    mergeWithCandidateId?: string;
+    mergeWithCandidateId: string | null;
 }
 
 /** 사용자 승인 시 클라이언트가 서버로 보내는 최소 직렬화 형태 */

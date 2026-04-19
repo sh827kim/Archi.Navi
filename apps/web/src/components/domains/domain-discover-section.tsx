@@ -42,7 +42,7 @@ interface CandidateReview {
   coherent: boolean;
   suggestedName: string;
   responsibilityHint: string;
-  mergeWithCandidateId?: string;
+  mergeWithCandidateId: string | null;
 }
 
 interface DiscoveredCandidate {

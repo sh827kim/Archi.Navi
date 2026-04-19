@@ -33,6 +33,7 @@ describe('reviewDomainCandidate', () => {
             coherent: true,
             suggestedName: '주문',
             responsibilityHint: '주문 생성과 조회를 책임진다',
+            mergeWithCandidateId: null,
         }));
 
         await reviewDomainCandidate(
@@ -95,6 +96,7 @@ describe('reviewDomainCandidate', () => {
             coherent: true,
             suggestedName: 'X',
             responsibilityHint: 'x',
+            mergeWithCandidateId: null,
         }));
 
         await reviewDomainCandidate(

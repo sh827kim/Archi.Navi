@@ -352,21 +352,24 @@ const domainReviewSchema = z.object({
   coherent: z.boolean(),
   suggestedName: z.string(),
   responsibilityHint: z.string(),
-  mergeWithCandidateId: z.string().optional(),
+  mergeWithCandidateId: z.string().nullable().default(null),
 });
 
 export function createGenerateDomainReviewFn(
   aiModel: LanguageModel,
   _modelName: string,
 ): GenerateDomainReviewFn {
-  return async (prompt: string): Promise<LlmCandidateReview> => {
+  return async (prompt: string, _inputs): Promise<LlmCandidateReview> => {
     const result = await generateObject({
       model: aiModel,
       schema: domainReviewSchema,
       prompt,
       temperature: 0.1,
     });
-    return result.object as LlmCandidateReview;
+    return {
+      ...result.object,
+      mergeWithCandidateId: result.object.mergeWithCandidateId ?? null,
+    } as LlmCandidateReview;
   };
 }
 

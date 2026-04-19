@@ -61,6 +61,6 @@ export function buildDomainReviewPrompt(inputs: DomainReviewPromptInputs): strin
         `2. coherent 는 멤버들이 한 도메인 책임으로 묶일 수 있을 때 true.`,
         `3. suggestedName 은 한국어 권장 (영문도 허용). 자동 라벨이 충분히 좋다면 그대로 사용.`,
         `4. responsibilityHint 는 1문장 한국어. "이 도메인이 무엇을 책임지는지"의 가설.`,
-        `5. 다른 후보와 사실상 동일하다면 mergeWithCandidateId 에 그 id 를 넣는다. 확실하지 않으면 생략.`,
+        `5. 다른 후보와 사실상 동일하다면 mergeWithCandidateId 에 그 id 를 넣는다. 확실하지 않으면 null 을 넣는다.`,
     ].join('\n');
 }

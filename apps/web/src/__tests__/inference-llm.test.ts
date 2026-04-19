@@ -10,7 +10,11 @@ vi.mock('ai', () => ({
   generateObject: generateObjectMock,
 }));
 
-import { createGenerateBoostSuggestionFn, createGenerateSmartResolutionFn } from '@/lib/inference-llm';
+import {
+  createGenerateBoostSuggestionFn,
+  createGenerateDomainReviewFn,
+  createGenerateSmartResolutionFn,
+} from '@/lib/inference-llm';
 
 describe('createGenerateBoostSuggestionFn', () => {
   beforeEach(() => {
@@ -253,6 +257,47 @@ describe('createGenerateBoostSuggestionFn', () => {
         shouldChallenge: true,
         expectedAction: 'reopen_frontier',
       },
+    });
+  });
+});
+
+describe('createGenerateDomainReviewFn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('domain review generator는 mergeWithCandidateId 가 없어도 null 로 정규화해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        coherent: true,
+        suggestedName: '주문',
+        responsibilityHint: '주문 라이프사이클을 책임한다',
+      },
+    });
+
+    const generateDomainReview = createGenerateDomainReviewFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateDomainReview('review this candidate', {
+      candidate: {
+        slug: 'orders',
+        autoName: 'Orders',
+        members: [],
+        signals: {
+          topPathPrefix: 'orders',
+          topRoutePrefix: '/orders',
+          topTopicPrefix: null,
+        },
+      },
+      objectNameById: new Map(),
+      siblingCandidateIds: [],
+    })).resolves.toEqual({
+      coherent: true,
+      suggestedName: '주문',
+      responsibilityHint: '주문 라이프사이클을 책임한다',
+      mergeWithCandidateId: null,
     });
   });
 });
