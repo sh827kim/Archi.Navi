@@ -166,6 +166,7 @@ export async function fetchDomainSemanticInputs(
             .where(
                 and(
                     eq(interactionIntents.workspaceId, workspaceId),
+                    eq(interactionIntents.status, 'CLOSED_ATOMIC'),
                     or(
                         inArray(interactionIntents.sourceServiceId, memberIds),
                         inArray(interactionIntents.sourceFunctionId, memberIds),

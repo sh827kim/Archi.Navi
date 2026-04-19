@@ -31,6 +31,7 @@ const {
     },
     interactionIntentsTable: {
         workspaceId: 'ii.workspace_id',
+        status: 'ii.status',
         sourceServiceId: 'ii.source_service_id',
         sourceFunctionId: 'ii.source_function_id',
         sourceFilePath: 'ii.source_file_path',
@@ -208,6 +209,16 @@ describe('fetchDomainSemanticInputs', () => {
             ),
         );
         expect(hasFunctionSourceFilter).toBe(true);
+
+        const hasClosedAtomicIntentFilter = db.whereConditions.some((condition) =>
+            hasPredicate(
+                condition,
+                (node) => node.type === 'eq'
+                    && node.col === interactionIntentsTable.status
+                    && node.value === 'CLOSED_ATOMIC',
+            ),
+        );
+        expect(hasClosedAtomicIntentFilter).toBe(true);
     });
 
     it('대표 도메인이 아닌 weak secondary 멤버는 제외하고 relation 은 APPROVED 만 조회한다', async () => {

@@ -28,6 +28,7 @@ const {
         workspaceId: 'interaction_intents.workspace_id',
         status: 'interaction_intents.status',
         sourceServiceId: 'interaction_intents.source_service_id',
+        sourceFunctionId: 'interaction_intents.source_function_id',
         intentType: 'interaction_intents.intent_type',
         externalPathHint: 'interaction_intents.external_path_hint',
         externalRoutePattern: 'interaction_intents.external_route_pattern',
@@ -163,6 +164,75 @@ describe('POST /api/domains/discover', () => {
             data: {
                 llmReviewed: false,
                 candidates: [{ id: 'cand-orders', slug: 'orders' }],
+            },
+        });
+    });
+
+    it('intent 는 sourceFunctionId 가 있으면 function 기준으로 attribution 한다', async () => {
+        const db = buildDbMock([
+            [
+                {
+                    id: 'svc-order',
+                    objectType: 'service',
+                    name: 'OrderService',
+                    displayName: 'OrderService',
+                    path: '/orders',
+                },
+                {
+                    id: 'fn-create-order',
+                    objectType: 'function',
+                    name: 'OrderService.createOrder',
+                    displayName: 'createOrder',
+                    path: '/orders/create',
+                },
+            ],
+            [
+                {
+                    sourceServiceId: 'svc-order',
+                    sourceFunctionId: 'fn-create-order',
+                    intentType: 'http_gateway_route',
+                    externalPathHint: '/orders',
+                    externalRoutePattern: '/orders/**',
+                    messageTopicHints: [],
+                },
+                {
+                    sourceServiceId: 'svc-order',
+                    sourceFunctionId: null,
+                    intentType: 'message_publish',
+                    externalPathHint: null,
+                    externalRoutePattern: null,
+                    messageTopicHints: ['orders.created'],
+                },
+            ],
+            [],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        runDomainDiscoveryMock.mockResolvedValue({ candidates: [] });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1' }));
+
+        expect(res.status).toBe(200);
+        expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
+        expect(runDomainDiscoveryMock.mock.calls[0]?.[0]).toMatchObject({
+            inputs: {
+                workspaceId: 'ws-1',
+                intents: [
+                    {
+                        sourceObjectId: 'fn-create-order',
+                        intentType: 'http_gateway_route',
+                        externalPathHint: '/orders',
+                        externalRoutePattern: '/orders/**',
+                        messageTopicHints: [],
+                    },
+                    {
+                        sourceObjectId: 'svc-order',
+                        intentType: 'message_publish',
+                        externalPathHint: null,
+                        externalRoutePattern: null,
+                        messageTopicHints: ['orders.created'],
+                    },
+                ],
             },
         });
     });

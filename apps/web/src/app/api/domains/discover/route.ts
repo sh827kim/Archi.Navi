@@ -80,7 +80,8 @@ export async function POST(req: Request) {
         //    REJECTED 는 명시적으로 제거된 신호이므로 도메인 클러스터링 입력에 제외.
         const intentRows = await db
             .select({
-                sourceObjectId: interactionIntents.sourceServiceId,
+                sourceServiceId: interactionIntents.sourceServiceId,
+                sourceFunctionId: interactionIntents.sourceFunctionId,
                 intentType: interactionIntents.intentType,
                 externalPathHint: interactionIntents.externalPathHint,
                 externalRoutePattern: interactionIntents.externalRoutePattern,
@@ -95,7 +96,7 @@ export async function POST(req: Request) {
             );
 
         const intentInputs: DiscoveryIntentInput[] = intentRows.map((row) => ({
-            sourceObjectId: row.sourceObjectId,
+            sourceObjectId: row.sourceFunctionId ?? row.sourceServiceId,
             intentType: row.intentType,
             externalPathHint: row.externalPathHint,
             externalRoutePattern: row.externalRoutePattern,
