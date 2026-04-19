@@ -1,8 +1,19 @@
 # 22. 추론 피드백 루프 (SPEC) (Roadmap 4-6)
 
-상태: Implemented
+상태: Partially Deprecated
 작성일: 2026-03-08
-최종 정합화: 2026-03-28
+최종 정합화: 2026-04-19
+
+> **⚠️ Deprecation 배너 (2026-04-19, PR #69)**
+>
+> **Domain feedback 부분은 폐기되었다.** 도메인 추론 엔진 재설계(PR #67/#68/#69)로 다음 계약이 모두 제거되었다.
+> - `PATCH /api/inference/domain-candidates/:id` 승인/거부 API
+> - `TRACK_A:{primaryDomainId}:{purityBucket}` feedback key
+> - Track A seed-based / Track B Louvain 도메인 추론 파이프라인과 관련 테이블(`domain_candidates`, `domain_discovery_runs`, `domain_discovery_memberships`, `domain_inference_profiles`)
+>
+> 신엔진(Phase 1 발견 = `POST /api/domains/discover` / `POST /api/domains/approve`, Phase 2 의미 추출 = `POST /api/domains/[id]/extract-semantic`)에는 **아직 피드백 루프가 없다**. 신엔진용 피드백 루프 설계는 후속 과제로 [docs/03-roadmap.md](../03-roadmap.md)에서 추적한다.
+>
+> **Relation feedback 부분은 여전히 유효하며 Implemented 상태이다.** 본 문서의 §3 이하 항목 중 "Track A domain", "domain candidate", "primaryDomainId" 등 도메인 관련 모든 절은 역사적 기록으로만 읽고, 현재 시스템 동작의 근거로 사용하지 말 것.
 
 후속 relation feedback key specialization은 [docs/spec/36-relation-feedback-key-specialization-spec.md](./36-relation-feedback-key-specialization-spec.md)에서 별도 고정한다.
 
