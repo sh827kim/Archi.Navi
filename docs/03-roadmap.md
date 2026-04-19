@@ -97,32 +97,21 @@
 - **테스트:** 20개 통과
 - **의존:** DB 스키마 메타데이터가 objects 테이블에 등록되어 있어야 함
 
-### ✅ 1-4. Domain Candidates 승인 API + UI (완료)
-- **API:** `GET/PATCH /api/inference/domain-candidates`
-- **구현 완료:**
-  - `approveDomainCandidate.ts` 승인/거부 로직 → `object_domain_affinities` upsert
-  - Approval 페이지에 Relations/Domains 탭 추가 (`DomainApprovalList`, `ApprovalTabs`)
-- **테스트:** 6개 통과 (T1~T6)
-- **참조:** 03-inference-engine.md §8.2
+### ⚠️ 1-4 ~ 1-6. (deprecated, 2026-04-19)
 
-### ✅ 1-5. Discovery 다중 레이어 통합 (완료)
-- **파일:** `packages/inference/src/domain/discovery.ts`
-- **구현 완료:**
-  - SERVICE_TO_DATABASE / SERVICE_TO_BROKER rollup 엣지 추가
-  - `domain_inference_profiles`의 `enabled_layers` + 엣지 가중치 (`edge_w_call`, `edge_w_rw`, `edge_w_msg`) 적용
-  - `addOrMergeEdge` 헬퍼로 동일 노드 쌍 가중치 누적
-  - `domainDiscoveryRuns.inputLayers` 실제 사용 레이어 기록
-- **테스트:** 7개 통과 (T1~T7)
-- **참조:** 03-inference-engine.md §4.2
+> 기존 Track A Seed-based / Track B Louvain Discovery / Label 자동 추출 모듈은
+> 도메인 엔진 재설계(아래 Phase 1/2 신엔진)로 모두 폐기되었다. 관련 코드/테이블/API
+> (`domain_candidates`, `domain_discovery_runs`, `/api/inference/domain-candidates`,
+> `/api/inference/domain-run`, `domain/seedBased.ts`, `domain/discovery.ts`,
+> `domain/labelExtractor.ts`, `domain/approveDomainCandidate.ts`,
+> `domain/feedbackLoop.ts`, `llm/domainLabeler.ts`) 는 PR #69 (2026-04-19) 에서
+> 일괄 제거되었다.
 
-### ✅ 1-6. 클러스터 Label 자동 추출 (완료)
-- **파일:** `packages/inference/src/domain/labelExtractor.ts` (신규), `discovery.ts` (수정)
-- **구현 완료:**
-  - `tokenize()`: camelCase/PascalCase 분리 + 구분자 분리 + STOP_WORDS 필터
-  - `extractLabelCandidates()`: 토큰 빈도 분석 → score = count/totalCount → 상위 3개 후보
-  - `discovery.ts`: 클러스터 멤버 이름 DB 조회 → `labelCandidates` metadata 채움
-- **테스트:** labelExtractor 8개 + discovery T8 통과
-- **참조:** 03-inference-engine.md §4.5
+**대체 흐름:**
+- Phase 1 (발견): `POST /api/domains/discover` + `POST /api/domains/approve`
+  → `packages/inference/src/domain/discovery/{structuralClustering,relationCohesion,llmReviewer,runDomainDiscovery}.ts`
+- Phase 2 (의미 추출): `POST /api/domains/[id]/extract-semantic`
+  → `packages/inference/src/domain/semantic/*` + `domain_semantic_profiles`
 
 ---
 
@@ -169,11 +158,11 @@
   - deterministic 집계 + LLM 포맷팅 (도메인별 서비스 수, 관계 밀도, purity 통계)
   - Query Engine `DOMAIN_SUMMARY` 실응답 경로 연동
 
-### ✅ 2-5. Message 시그널 추출 (완료)
-- **파일:** `packages/inference/src/domain/seedBased.ts`
+### ✅ 2-5. Message 시그널 추출 (완료, ⚠️ 2026-04-19 후속)
+- **파일:** `packages/inference/src/domain/msgSignal.ts`
 - **구현 완료:**
-  - 토픽 네이밍 패턴 분석 → producer/consumer 결합도 → 도메인 affinity
-  - `msgScore` 계산값을 Seed-based 도메인 추론에 실제 반영
+  - 토픽 네이밍 패턴 분석 → producer/consumer 결합도 추출
+  - 신엔진(Phase 1) 의 `topicPrefixMatch` 신호로 활용된다 (구 `seedBased.ts` 통합 경로는 폐기)
 
 ### ✅ 2-6. Inference 운영 오케스트레이션 고도화 (완료)
 - **SPEC:** `docs/spec/12-inference-run-orchestration-spec.md`
@@ -216,7 +205,7 @@
   - `incrementalRebuild` 기반 영향 범위(level/affected service) 계산 + in-place 갱신
   - API 변경 이벤트 연동:
     - `PATCH /api/inference/candidates/:id` (승인)
-    - `PATCH /api/inference/domain-candidates/:id` (승인)
+    - `POST /api/domains/approve` (도메인 발견 후보 즉시 승인 — 2026-04-19 신엔진)
     - `POST /api/relations` (직접 승인 등록)
     - `DELETE /api/relations/:id` (관계 삭제)
   - `expose` 관계는 `EXPOSE_CHANGED` 이벤트로 처리해 caller 역추적 반영
@@ -321,8 +310,7 @@
   - Approval 목록 카드에 LLM 설명 표시
   - `POST /api/inference/run` 에 `llmBoost.enabled`, `codeIntentAnalysis`, `generateExplanations`, `maxCalls` 연결
   - unresolved 동적 호출 코드 시그널을 대상으로 `source="LLM_BOOST"` 보완 후보 생성 및 비용 상한 적용
-  - `POST /api/inference/domain-run` 에 `llmLabel.enabled` 연결
-  - Discovery 도메인 객체 `metadata.llmLabel` 에 한국어/영어 쌍 저장
+  - ⚠️ 구 `POST /api/inference/domain-run` + `llmLabel` 경로는 2026-04-19 도메인 엔진 재설계로 폐기. 신엔진의 LLM 검토는 `POST /api/domains/discover` 내부 `llmReviewer` 가 담당
   - LLM 미설정/실패 시 기존 추론 결과 유지(graceful degradation)
 - **⚠️ UI 미연결 (S1에서 해결):** 프론트엔드에서 `llmBoost` 파라미터를 전달하지 않아 기능 비활성 상태
 
@@ -353,16 +341,13 @@
   - 누적 결과를 기존 relation 후보에 소급하지 않고 다음 inference run부터만 base confidence 보정에 반영
   - `GET/PUT /api/inference/profiles/default` public contract가 `relationFeedback*` / `domainFeedback*` 및 `resetRelationFeedback` / `resetDomainFeedback`로 분리됨
   - Settings가 relation/domain summary, detail, reset 흐름을 분리해 노출함
-  - domain candidate 승인/거절이 Track A only domain feedback를 집계함
-  - domain key는 `TRACK_A:{primaryDomainId}:{purityBucket}`
-  - domain 보정은 승인 직후 소급 적용하지 않고 다음 Track A domain run부터만 반영
-  - `GET /api/inference/domain-candidates`가 Track A domain feedback metadata를 함께 노출함
+  - ⚠️ 구 Track A domain feedback (`TRACK_A:{primaryDomainId}:{purityBucket}` key, `/api/inference/domain-candidates` 노출 포함) 은 2026-04-19 도메인 엔진 재설계로 폐기됨. 신엔진(Phase 1) 의 feedback loop 는 후속 과제
   - code-origin relation feedback가 `framework/language`를 안정적으로 가지면 `relationType:sourceFamily:signalKind:framework:language` specialized key를 사용함
   - framework/language가 없으면 legacy v1 key로 fallback 하며, next-run apply lookup은 `v2 -> legacy v1` dual-read를 사용함
   - `GET /api/inference/candidates` public contract가 3-segment/5-segment feedback key를 opaque string으로 모두 수용함
   - generic alias `feedbackConfig` / `feedbackAdjustments` / `feedbackSummary` / `feedbackEntries` / `resetAll`은 public contract가 아님
 - **범위 제외 / 비주장:**
-  - Track B / domain discovery feedback 집계 및 적용
+  - 도메인 발견(Phase 1) feedback 집계 및 적용 (후속 과제)
   - queued/orchestrated parity claim
 
 ---

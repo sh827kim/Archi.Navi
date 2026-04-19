@@ -35,7 +35,8 @@ Archi.Navi는 단순한 그래프 뷰어가 아니라, 워크스페이스 단위
 │ Application Adapters                                         │
 │ Next.js Route Handlers + Server Actions                      │
 │ - scan / objects / relations / rollups / query / chat        │
-│ - inference(run, runs, smart, candidates, domain-run)        │
+│ - inference(run, runs, smart, candidates)                    │
+│ - domains(discover, approve, [id]/extract-semantic, semantic)│
 ├──────────────────────────────────────────────────────────────┤
 │ Domain Engines                                               │
 │ packages/core       : query-engine, rollup, graph-index      │
@@ -173,7 +174,7 @@ Chat Page
 | `packages/db` | 스키마와 클라이언트 | `schema/core`, `schema/rollup`, `schema/domain`, `schema/code`, `schema/audit`, `schema/layers` |
 | `packages/shared` | 타입/상수/유틸리티 | query/request 타입, enum, `generateId`, path/URN 유틸 |
 | `packages/ui` | 공유 UI primitive | button, badge, input, select, spinner 등 |
-| `packages/cli` | CLI 진입점 | `scan`, `infer`, `rebuild-rollup`, `snapshot`, `up`, `export` |
+| `packages/cli` | CLI 진입점 | `scan`, `rebuild-rollup`, `snapshot`, `up`, `export` |
 
 ---
 
@@ -185,10 +186,11 @@ App Router 기준 주요 API 그룹은 아래와 같다.
 |------|-------------|
 | Workspace/Scan | `/api/workspaces`, `/api/scan`, `/api/scan/paths`, `/api/fs/browse` |
 | Object/Relation | `/api/objects`, `/api/relations`, `/api/tags`, `/api/object-tags` |
-| Inference | `/api/inference/run`, `/api/inference/runs`, `/api/inference/smart`, `/api/inference/candidates`, `/api/inference/domain-run` |
+| Inference | `/api/inference/run`, `/api/inference/runs`, `/api/inference/smart`, `/api/inference/candidates` |
+| Domain | `/api/domains/discover`, `/api/domains/approve`, `/api/domains/[id]/extract-semantic`, `/api/domains/[id]/semantic[/export]` |
 | Rollup/Mapping | `/api/rollups`, `/api/rollup-events`, `/api/mapping/contributors` |
 | Query/Chat | `/api/query`, `/api/chat` |
-| Dashboard/Architecture | `/api/dashboard/summary`, `/api/layers`, `/api/domain-affinities`, `/api/domains` |
+| Dashboard/Architecture | `/api/dashboard/summary`, `/api/layers`, `/api/domains` |
 
 설계 원칙은 동일하다.
 

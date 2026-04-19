@@ -1,33 +1,49 @@
 /**
  * Domain 추론 엔진
- * Track A: Seed 기반 Affinity 계산
- * Track B: Seed-less Discovery (Louvain/Leiden)
- * 승인/거부 처리
+ * Phase 1: 도메인 발견 — 결정적 클러스터링 + LLM 검토
+ * Phase 2: 도메인 의미 추출 — 신호 수집 + LLM 합성
  */
-export { runSeedBasedInference } from './seedBased';
-export { runDiscovery } from './discovery';
-export { approveDomainCandidate } from './approveDomainCandidate';
-export type { ApproveDomainCandidateResult } from './approveDomainCandidate';
+
+// 도메인 발견 (Phase 1) — 결정적 클러스터링 + LLM 검토
 export {
-  DEFAULT_DOMAIN_FEEDBACK_CONFIG,
-  accumulateDomainCandidateFeedback,
-  applyDomainFeedbackToSeedCandidate,
-  computeDomainFeedbackAdjustment,
-  deriveDomainFeedbackDescriptor,
-  getPurityBucket,
-  normalizeDomainFeedbackAdjustments,
-  normalizeDomainFeedbackConfig,
-} from './feedbackLoop';
+    AFFINITY_THRESHOLD,
+    runStructuralClustering,
+    tokenizeName,
+} from './discovery/structuralClustering';
 export type {
-  DomainFeedbackConfig,
-  DomainFeedbackDescriptor,
-  DomainFeedbackMetadata,
-  DomainFeedbackPurityBucket,
-  DomainFeedbackStats,
-  DomainFeedbackTrack,
-} from './feedbackLoop';
-export { extractLabelCandidates } from './labelExtractor';
-export type { LabelCandidate } from './labelExtractor';
+    StructuralClusterCandidate,
+    StructuralClusteringResult,
+} from './discovery/structuralClustering';
+export { computeRelationCohesion } from './discovery/relationCohesion';
+export type {
+    RelationCohesionInput,
+    RelationCohesionResult,
+} from './discovery/relationCohesion';
+export { reviewDomainCandidate } from './discovery/llmReviewer';
+export type {
+    DomainReviewerInputs,
+    GenerateDomainReviewFn,
+} from './discovery/llmReviewer';
+export {
+    runDomainDiscovery,
+    SECONDARY_AFFINITY_THRESHOLD,
+} from './discovery/runDomainDiscovery';
+export type {
+    RunDomainDiscoveryArgs,
+    RunDomainDiscoveryResult,
+} from './discovery/runDomainDiscovery';
+export type {
+    ApprovalMember,
+    CandidateMemberScore,
+    DiscoveryCodeArtifactInput,
+    DiscoveryInputs,
+    DiscoveryIntentInput,
+    DiscoveryObjectInput,
+    DiscoveryRelationInput,
+    DomainCandidate,
+    DomainCandidateApprovalPayload,
+    LlmCandidateReview,
+} from './discovery/types';
 
 // 도메인 의미 추출 엔진 (Phase 2)
 export { collectDomainSemanticSignals } from './semantic/semanticSignalCollector';

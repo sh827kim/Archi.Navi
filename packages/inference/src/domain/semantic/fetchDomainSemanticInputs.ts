@@ -55,6 +55,19 @@ function pickPrimaryDomain(affinities: Array<{ objectId: string; domainId: strin
     return result;
 }
 
+function resolveIntentSourceObjectId(
+    row: {
+        sourceServiceId: string;
+        sourceFunctionId: string | null;
+    },
+    memberIdSet: Set<string>,
+): string {
+    if (row.sourceFunctionId && memberIdSet.has(row.sourceFunctionId)) {
+        return row.sourceFunctionId;
+    }
+    return row.sourceServiceId;
+}
+
 export async function fetchDomainSemanticInputs(
     db: DbClient,
     args: FetchDomainSemanticInputsArgs,
@@ -113,6 +126,7 @@ export async function fetchDomainSemanticInputs(
     // 3) 멤버가 발신한 intents + 그들의 evidences
     let intents: CollectorIntentInput[] = [];
     if (memberIdSet.size > 0) {
+        const memberIds = [...memberIdSet];
         const intentRows = await db
             .select({
                 id: interactionIntents.id,
@@ -134,7 +148,10 @@ export async function fetchDomainSemanticInputs(
             .where(
                 and(
                     eq(interactionIntents.workspaceId, workspaceId),
-                    inArray(interactionIntents.sourceServiceId, [...memberIdSet]),
+                    or(
+                        inArray(interactionIntents.sourceServiceId, memberIds),
+                        inArray(interactionIntents.sourceFunctionId, memberIds),
+                    ),
                 ),
             );
 
@@ -169,7 +186,7 @@ export async function fetchDomainSemanticInputs(
 
         intents = intentRows.map((row) => ({
             id: row.id,
-            sourceObjectId: row.sourceServiceId,
+            sourceObjectId: resolveIntentSourceObjectId(row, memberIdSet),
             sourceFunctionId: row.sourceFunctionId,
             sourceFilePath: row.sourceFilePath,
             intentType: row.intentType,

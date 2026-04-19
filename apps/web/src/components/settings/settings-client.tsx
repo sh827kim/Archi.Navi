@@ -438,7 +438,6 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
           tags?: number;
           relations?: number;
           relationCandidates?: number;
-          domainCandidates?: number;
           codeArtifacts?: number;
           evidences?: number;
         };
@@ -448,7 +447,6 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
           tags?: number;
           relations?: number;
           relationCandidates?: number;
-          domainCandidates?: number;
           codeArtifacts?: number;
           evidences?: number;
         };
@@ -457,7 +455,7 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
         const remaining = data.remaining;
         if (remaining) {
           throw new Error(
-            `초기화 실패 — 남은 데이터: Object ${remaining.objects ?? 0}, 관계 ${remaining.relations ?? 0}, 후보 ${remaining.relationCandidates ?? 0}, 도메인후보 ${remaining.domainCandidates ?? 0}`,
+            `초기화 실패 — 남은 데이터: Object ${remaining.objects ?? 0}, 관계 ${remaining.relations ?? 0}, 후보 ${remaining.relationCandidates ?? 0}`,
           );
         }
         throw new Error(data.error ?? 'reset failed');
@@ -466,7 +464,7 @@ function DevTools({ workspaceId }: { workspaceId: string }) {
       const deleted = data.deleted;
       if (deleted) {
         toast.success(
-          `워크스페이스 초기화 완료 — Object ${deleted.objects ?? 0}, 레이어 ${deleted.layers ?? 0}, 태그 ${deleted.tags ?? 0}, 관계 ${deleted.relations ?? 0}, 후보 ${deleted.relationCandidates ?? 0}, 도메인후보 ${deleted.domainCandidates ?? 0}, 코드아티팩트 ${deleted.codeArtifacts ?? 0} 삭제`,
+          `워크스페이스 초기화 완료 — Object ${deleted.objects ?? 0}, 레이어 ${deleted.layers ?? 0}, 태그 ${deleted.tags ?? 0}, 관계 ${deleted.relations ?? 0}, 후보 ${deleted.relationCandidates ?? 0}, 코드아티팩트 ${deleted.codeArtifacts ?? 0} 삭제`,
         );
       } else {
         toast.success('워크스페이스 데이터 초기화 완료');

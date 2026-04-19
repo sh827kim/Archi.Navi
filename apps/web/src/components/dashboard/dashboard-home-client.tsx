@@ -13,7 +13,6 @@ interface DashboardSummary {
     services: number;
     domains: number;
     pendingRelations: number;
-    pendingDomains: number;
   };
   recentRuns: Array<{
     id: string;
@@ -140,12 +139,13 @@ export function DashboardHomeClient() {
     );
   }
 
-  const pendingTotal = summary.counts.pendingRelations + summary.counts.pendingDomains;
+  // 도메인 후보 큐는 신규 엔진에서 in-memory 발견으로 바뀌어 영구 보관되지 않으므로
+  // 승인 대기 카드는 관계 후보 수만 집계한다.
   const summaryValues = {
     objects: summary.counts.objects,
     services: summary.counts.services,
     domains: summary.counts.domains,
-    pending: pendingTotal,
+    pending: summary.counts.pendingRelations,
   };
 
   return (

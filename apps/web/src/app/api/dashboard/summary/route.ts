@@ -1,7 +1,6 @@
 import { type NextRequest, NextResponse } from 'next/server';
 import { and, eq, sql } from 'drizzle-orm';
 import {
-  domainCandidates,
   getDb,
   objects,
   relationCandidates,
@@ -34,7 +33,6 @@ export async function GET(req: NextRequest) {
       serviceCountRows,
       domainCountRows,
       relationPendingRows,
-      domainPendingRows,
       recentRuns,
     ] = await Promise.all([
       db
@@ -58,15 +56,6 @@ export async function GET(req: NextRequest) {
             eq(relationCandidates.status, 'PENDING'),
           ),
         ),
-      db
-        .select({ count: sql<number>`count(*)` })
-        .from(domainCandidates)
-        .where(
-          and(
-            eq(domainCandidates.workspaceId, workspaceId),
-            eq(domainCandidates.status, 'PENDING'),
-          ),
-        ),
       listInferenceRuns(db, { workspaceId, limit: 5 }),
     ]);
 
@@ -76,7 +65,6 @@ export async function GET(req: NextRequest) {
         services: asCount(serviceCountRows),
         domains: asCount(domainCountRows),
         pendingRelations: asCount(relationPendingRows),
-        pendingDomains: asCount(domainPendingRows),
       },
       recentRuns: recentRuns.map((run) => ({
         id: run.id,

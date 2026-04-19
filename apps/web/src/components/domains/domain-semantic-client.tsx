@@ -116,7 +116,7 @@ export function DomainSemanticClient({ domainId }: Props) {
     <div className="p-6 space-y-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Link href="/services" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1">
+          <Link href="/domains" className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1">
             <ArrowLeft className="h-4 w-4" />
             목록으로
           </Link>

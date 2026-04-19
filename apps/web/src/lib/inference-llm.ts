@@ -8,16 +8,15 @@ import type {
   CandidateContext,
   GenerateAssessmentFn,
   GenerateBoostSuggestionFn,
-  GenerateDomainLabelFn,
+  GenerateDomainReviewFn,
   GenerateExplanationFn,
   GenerateSemanticProfileFn,
   GenerateSmartResolutionFn,
+  LlmCandidateReview,
   LlmAssessment,
   LlmBoostContext,
   LlmBoostSuggestion,
   LlmExplanation,
-  DomainLabelContext,
-  DomainLabelSuggestion,
   SemanticLlmDraft,
   SmartPatchProposal,
   SmartContradictionChallengeProposal,
@@ -48,11 +47,6 @@ const boostSuggestionSchema = z.union([
   }),
   z.null(),
 ]);
-
-const domainLabelSchema = z.object({
-  ko: z.string(),
-  en: z.string(),
-});
 
 const smartAliasBindingProposalSchema = z.object({
   patchType: z.literal('alias_binding'),
@@ -296,30 +290,6 @@ export function createGenerateBoostSuggestionFn(
   };
 }
 
-export function createGenerateDomainLabelFn(
-  aiModel: LanguageModel,
-  _modelName: string,
-): GenerateDomainLabelFn {
-  return async (context: DomainLabelContext): Promise<DomainLabelSuggestion | null> => {
-    const prompt = [
-      '아래 도메인 클러스터에 대해 한국어/영어 도메인 이름을 각각 하나씩 제안하라.',
-      `domainName=${context.domainName}`,
-      `memberNames=${context.memberNames.join(', ')}`,
-      `labelCandidates=${context.labelCandidates.map((item) => item.text).join(', ')}`,
-      '응답은 간결한 명사구로 작성한다.',
-    ].join('\n');
-
-    const result = await generateObject({
-      model: aiModel,
-      schema: domainLabelSchema,
-      prompt,
-      temperature: 0.2,
-    });
-
-    return result.object;
-  };
-}
-
 const domainSemanticDraftSchema = z.object({
   responsibility: z.string(),
   state: z.array(z.object({
@@ -375,6 +345,28 @@ export function createGenerateSemanticProfileFn(
       temperature: 0.2,
     });
     return result.object as SemanticLlmDraft;
+  };
+}
+
+const domainReviewSchema = z.object({
+  coherent: z.boolean(),
+  suggestedName: z.string(),
+  responsibilityHint: z.string(),
+  mergeWithCandidateId: z.string().optional(),
+});
+
+export function createGenerateDomainReviewFn(
+  aiModel: LanguageModel,
+  _modelName: string,
+): GenerateDomainReviewFn {
+  return async (prompt: string): Promise<LlmCandidateReview> => {
+    const result = await generateObject({
+      model: aiModel,
+      schema: domainReviewSchema,
+      prompt,
+      temperature: 0.1,
+    });
+    return result.object as LlmCandidateReview;
   };
 }
 

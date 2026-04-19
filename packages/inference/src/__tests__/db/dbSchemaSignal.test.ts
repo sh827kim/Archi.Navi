@@ -17,8 +17,6 @@ import {
 import { eq, and } from 'drizzle-orm';
 import { generateId } from '@archi-navi/shared';
 import { extractDbSchemaSignals, computeDbScores, extractTablePrefix, matchDomainByPrefix } from '@/db/dbSchemaSignal';
-import { runSeedBasedInference } from '@/domain/seedBased';
-import { domainCandidates } from '@archi-navi/db';
 
 async function createTestDb() {
   return await createEmbeddedTestDb();
@@ -61,22 +59,6 @@ async function createService(db: TestDb, name: string): Promise<string> {
         workspaceId,
         objectType: 'service',
         category: 'COMPUTE',
-        granularity: 'COMPOUND',
-        name,
-        path: `/${id}`,
-        depth: 0,
-        metadata: {},
-    });
-    return id;
-}
-
-/** 도메인 object 생성 헬퍼 */
-async function createDomain(db: TestDb, name: string): Promise<string> {
-    const id = generateId();
-    await db.insert(objects).values({
-        id,
-        workspaceId,
-        objectType: 'domain',
         granularity: 'COMPOUND',
         name,
         path: `/${id}`,
@@ -980,71 +962,3 @@ describe('computeDbScores', () => {
     });
 });
 
-// ─── seedBased.ts 통합: dbScore 반영 확인 ────────────────────────────────────
-
-describe('seedBased dbScore 통합', () => {
-    let db: TestDb;
-
-    beforeEach(async () => {
-        db = await createTestDb();
-        await setupWorkspace(db);
-    });
-
-    it('db_table 없을 때 runSeedBasedInference가 정상 동작해야 한다', async () => {
-        await createDomain(db, 'order');
-        await createService(db, 'order-service');
-
-        // db_table 없어도 에러 없이 candidateCount 반환
-        const result = await runSeedBasedInference(db, { workspaceId });
-        expect(result.candidateCount).toBeGreaterThanOrEqual(0);
-    });
-
-    it('dbScore가 domain_candidates의 signals.db에 저장되어야 한다', async () => {
-
-        const domainId = await createDomain(db, 'order');
-        const serviceId = await createService(db, 'other-service'); // 이름 매칭 없는 서비스
-
-        // db 신호 생성 (order_items → order 도메인 매칭)
-        const artifactId = generateId();
-        await db.insert(codeArtifacts).values({
-            id: artifactId,
-            workspaceId,
-            language: 'java',
-            filePath: '/src/Repo.java',
-            ownerObjectId: serviceId,
-            sha256: generateId(),
-        });
-        const evidenceId = generateId();
-        await db.insert(evidences).values({
-            id: evidenceId,
-            workspaceId,
-            evidenceType: 'FILE',
-            filePath: '/src/Repo.java',
-            lineStart: 5,
-            lineEnd: 5,
-            excerpt: 'FROM order_items',
-            metadata: { kind: 'db_read', confidence: 0.8, language: 'java' },
-        });
-        await db.insert(codeCallEdges).values({
-            id: generateId(),
-            workspaceId,
-            callerArtifactId: artifactId,
-            calleeSymbol: 'order_items',
-            weight: 1,
-            evidenceId,
-        });
-
-        await runSeedBasedInference(db, { workspaceId });
-
-        const candidates = await db
-            .select()
-            .from(domainCandidates)
-            .where(eq(domainCandidates.workspaceId, workspaceId));
-
-        expect(candidates.length).toBeGreaterThanOrEqual(1);
-        const candidate = candidates[0]!;
-        // signals.db가 저장되어 있어야 함
-        const signals = candidate.signals as Record<string, unknown>;
-        expect(signals['db']).toBeDefined();
-    });
-});

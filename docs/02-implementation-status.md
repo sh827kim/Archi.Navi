@@ -13,7 +13,7 @@
 | Query Engine | ✅ | PATH/IMPACT/USAGE/DOMAIN_SUMMARY 구현, `generationVersion` 미지정 시 ACTIVE 자동 적용 |
 | Rollup Engine | ✅ | 4단계 rollup + generation 관리 + seed 후 재빌드 |
 | Relation 추론 파이프라인 | ✅ | config/code/db 실행, AST/hybrid 엔진, code 기반 Atomic 후보(endpoint/topic/queue/db_table), 비동기 run 오케스트레이션까지 구현 완료 |
-| Domain 추론 파이프라인 | ⚠️ | Track A/B 구현 및 승인 API 존재, 실행/운영 UX 고도화 여지 |
+| Domain 추론 파이프라인 | ✅ | 2026-04-19 재설계: Phase 1 결정적 신호 + LLM 검토 / Phase 2 의미 프로파일 추출 (Track A/B 폐기) |
 | AI Reasoning | ✅ | Evidence Assembler/Answer Composer 연동 + rollup provenance(`baseRelationIds`) 반영 |
 | 추론 엔진 고도화 (P4) | ✅ | 4-1~4-6 구현 완료 |
 | **안정화 (S1)** | **✅** | **S1-1~S1-20 완료. Smart reason 계약, AST endpoint 정확도 계약, active 문서 정렬까지 반영되었다.** |
@@ -46,8 +46,10 @@
   - frontier 목록/상세/최근 proof step 조회, latest patch 상태 badge, reason/source service 필터 지원
   - `alias_binding`, `provider_service_selection`, `endpoint_disambiguation`, `method_path_hint`, `route_transform_patch` 수동 patch 제출 지원
   - `보류 저장(applyMode=defer)`으로 manual review pending patch를 저장하고, 승격 시 candidate refresh를 수행
-- ✅ `Approval > 도메인 후보`
-  - `GET/PATCH /api/inference/domain-candidates*`로 승인/거부 처리
+- ✅ `/domains` 도메인 관리 (2026-04-19 신설)
+  - `POST /api/domains/discover` 후보 미리보기 + `POST /api/domains/approve` 즉시 승인
+  - `/domains/[id]` 상세에서 `POST /api/domains/[id]/extract-semantic` 의미 프로파일 추출
+  - JSON export (`GET /api/domains/[id]/semantic/export`) + CLI `--format domain-semantic`
 - ✅ Inference Run 운영 UI/API
   - `GET/POST /api/inference/runs`, `GET /api/inference/runs/:id`
   - quick run과 queued run 모두 binding/cross-validation 최종화 반영
@@ -91,10 +93,10 @@
   - Cross-Signal Validation: `crossValidatePendingRelationCandidates`
   - Config↔Code endpoint binding: `bindConfigToCodeEndpoints`
   - 비동기 실행 오케스트레이션: `createInferenceRun` / `executeInferenceRun` / `listInferenceRuns` / `getInferenceRunDetail`
-- ✅ Domain 추론
-  - Track A(Seed-based): `runSeedBasedInference`
-  - Track B(Discovery): `runDiscovery`
-  - 도메인 후보 승인: `approveDomainCandidate`
+- ✅ Domain 추론 (2026-04-19 재설계)
+  - Phase 1 발견: `structuralClustering` + `relationCohesion` + `llmReviewer` → `runDomainDiscovery`
+  - Phase 2 의미 추출: `semanticSignalCollector` + `scenarioExtractor` + `semanticComposer`
+  - 영속화: `domain_semantic_profiles` (DRAFT → APPROVED)
 
 ### 1.4 AI
 
@@ -157,20 +159,19 @@
 | 기능 | 백엔드 API | 비고 |
 |------|-----------|------|
 | Rollup 수동 리빌드 트리거 | `POST /api/rollups` | 사용자 수동 갱신 버튼 없음 |
-| 도메인 전용 목록 | `GET /api/domains` | `/api/objects?objectType=domain`으로 대체 중 |
-| 도메인 추론 Track 선택 | Track A/B 별도 실행 지원 | UI에서 Track 선택 옵션 미노출 |
+| 도메인 전용 목록 | `/domains` 페이지 | 2026-04-19 신설, `/api/objects?objectType=domain` 직접 사용 |
 
 ---
 
 ## 3) 추론 엔진 고도화 메모 (P4)
 
 - ✅ Cross-Signal Validation, Inter-procedural AST, Spring RequestMapping atomic composition, LLM 추론 부스터, 프레임워크 플러그인 시스템, Delta Rollup + 실시간 갱신은 구현 완료 상태다.
-- ✅ 4-6은 relation feedback canonical key 집계와 next-run-only relation 보정 위에, Track A domain feedback 집계 및 next-run-only domain 보정까지 반영되었다.
+- ✅ 4-6은 relation feedback canonical key 집계와 next-run-only relation 보정 위에, 과거 Track A domain feedback 집계 및 next-run-only domain 보정까지 반영되었다 (Track A 자체는 2026-04-19 도메인 엔진 재설계로 폐기).
 - ✅ 후속 specialization으로 code-origin relation feedback key가 `framework/language`를 안정적으로 가지면 v2 key를 사용하고, 없으면 legacy v1로 fallback 하도록 확장되었다.
 - ✅ next-run relation 보정 lookup은 `v2 -> legacy v1` dual-read를 사용하며, `GET /api/inference/candidates`는 3-segment/5-segment feedback key를 모두 opaque string으로 수용한다.
 - ✅ 공개 프로필 계약은 `relationFeedback*` / `domainFeedback*` 및 `resetRelationFeedback` / `resetDomainFeedback`로 분리되어 있으며, generic alias `feedbackConfig` / `feedbackAdjustments` / `feedbackSummary` / `feedbackEntries` / `resetAll`은 더 이상 public contract가 아니다.
 - ✅ SSE 클라이언트가 Mapping/Architecture 프론트엔드에 연결되어 `rollup-change` 수신 시 자동 refetch 한다.
-- ⚠️ queued/orchestrated parity는 4-6 완료 기준에 포함하지 않으며, Track B / domain discovery feedback도 여전히 범위 밖이다.
+- ⚠️ queued/orchestrated parity는 4-6 완료 기준에 포함하지 않는다. 신규 도메인 발견(Phase 1) 의 feedback loop 는 후속 과제다.
 - ⚠️ 4-5의 실시간 계약은 SSE notification 후 refetch 방식이므로, 대형 그래프에서 재조회 비용 최적화 여지는 남아 있다.
 
 ---
@@ -233,9 +234,11 @@
 - `PATCH /api/inference/candidates/:id`
 - `GET /api/inference/candidates/:id/endpoints`
 - `POST /api/inference/candidates/:id/map-endpoints`
-- `GET /api/inference/domain-candidates`
-- `PATCH /api/inference/domain-candidates/:id`
-- `POST /api/inference/domain-run`
+- `POST /api/domains/discover` (Phase 1, in-memory 후보 반환)
+- `POST /api/domains/approve` (in-memory 후보 → object_domain_affinities)
+- `POST /api/domains/[id]/extract-semantic` (Phase 2)
+- `GET  /api/domains/[id]/semantic`
+- `GET  /api/domains/[id]/semantic/export?format=json`
 - `POST /api/chat`
 
 **LLM 추론 (✅ S1-1 UI 연결 완료)**
@@ -259,7 +262,6 @@
 
 - `anavi up [--port <n>] [--prod]`
 - `anavi scan --workspace <id> [--path|--workspace-dir|--github-repo|--github-org]`
-- `anavi infer --workspace <id> [--track a|b|all]`
 - `anavi rebuild-rollup --workspace <id> [--incremental]`
-- `anavi export --workspace <id> --format <json|dot> --output <path>`
+- `anavi export --workspace <id> [--domain <id>] --format <json|dot|domain-semantic> --output <path>`
 - `anavi snapshot <save|restore> ...`

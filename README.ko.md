@@ -220,9 +220,6 @@ anavi up --port 3000
 anavi scan --workspace <workspaceId> --path /path/to/project
 anavi scan --workspace <workspaceId> --workspace-dir /path/to/workspace
 
-# 도메인 추론 실행 (Track A/B)
-anavi infer --workspace <workspaceId> --track all
-
 # Rollup 그래프 재빌드
 anavi rebuild-rollup --workspace <workspaceId>
 

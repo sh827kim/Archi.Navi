@@ -130,7 +130,6 @@ function parseDomainSummaryData(raw: Record<string, unknown>): DomainSummaryData
         domainName: typeof raw['domainName'] === 'string' ? raw['domainName'] : '',
         memberCount: typeof raw['memberCount'] === 'number' ? raw['memberCount'] : 0,
         membersByType: (raw['membersByType'] as Record<string, number>) ?? {},
-        avgPurity: typeof raw['avgPurity'] === 'number' ? raw['avgPurity'] : null,
         avgAffinity: typeof raw['avgAffinity'] === 'number' ? raw['avgAffinity'] : 0,
         topMembers: Array.isArray(raw['topMembers'])
             ? (raw['topMembers'] as DomainSummaryData['topMembers'])
@@ -172,10 +171,6 @@ function formatSingleDomain(data: DomainSummaryData): string {
     }
 
     lines.push(`평균 소속도(affinity): ${data.avgAffinity.toFixed(2)}`);
-
-    if (data.avgPurity !== null && data.avgPurity !== undefined) {
-        lines.push(`평균 순도(purity): ${data.avgPurity.toFixed(2)}`);
-    }
 
     lines.push(`관계 밀도: ${data.relationDensity.toFixed(3)}`);
 

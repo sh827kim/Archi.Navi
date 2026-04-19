@@ -65,6 +65,10 @@ export const objects = pgTable(
     uniqueIndex('ux_objects_ws_urn')
       .on(table.workspaceId, table.urn)
       .where(sql`"urn" is not null`),
+    // 동일 워크스페이스 내 동일 path 의 domain 객체 중복 방지 (concurrent approve race 차단).
+    uniqueIndex('ux_objects_ws_domain_path')
+      .on(table.workspaceId, table.path)
+      .where(sql`"object_type" = 'domain'`),
     index('ix_objects_ws_type').on(table.workspaceId, table.objectType),
     index('ix_objects_ws_parent').on(table.workspaceId, table.parentId),
     index('ix_objects_ws_path').on(table.workspaceId, table.path),
