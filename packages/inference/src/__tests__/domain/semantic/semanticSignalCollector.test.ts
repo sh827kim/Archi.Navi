@@ -45,7 +45,7 @@ describe('collectDomainSemanticSignals', () => {
         expect(result.evidence).toEqual([]);
     });
 
-    it('T2: http_call intent → action(http) 후보 + evidence 생성', () => {
+    it('T2: http_gateway_route intent → action(http) 후보 + evidence 생성', () => {
         const result = collectDomainSemanticSignals(
             makeInputs({
                 intents: [
@@ -54,7 +54,7 @@ describe('collectDomainSemanticSignals', () => {
                         sourceObjectId: 'svc-order',
                         sourceFunctionId: 'fn-create-order',
                         sourceFilePath: 'src/order/OrderController.java',
-                        intentType: 'http_call',
+                        intentType: 'http_gateway_route',
                         methodHint: 'POST',
                         externalPathHint: '/api/v1/orders',
                         externalRoutePattern: null,
@@ -84,6 +84,41 @@ describe('collectDomainSemanticSignals', () => {
         expect(action?.evidenceIds.length).toBe(1);
         expect(result.evidence).toHaveLength(1);
         expect(result.evidence[0]?.filePath).toBe('src/order/OrderController.java');
+    });
+
+    it('T2.1: outbound http_call intent 는 action 후보에서 제외', () => {
+        const result = collectDomainSemanticSignals(
+            makeInputs({
+                intents: [
+                    {
+                        id: 'intent-1-outbound',
+                        sourceObjectId: 'svc-order',
+                        sourceFunctionId: 'fn-call-payment',
+                        sourceFilePath: 'src/order/PaymentClient.java',
+                        intentType: 'http_call',
+                        methodHint: 'POST',
+                        externalPathHint: '/payments/approve',
+                        externalRoutePattern: null,
+                        dbTableHints: [],
+                        dbSchemaHint: null,
+                        messageTopicHints: [],
+                        messageQueueHints: [],
+                        messageBrokerKind: null,
+                        evidences: [
+                            {
+                                filePath: 'src/order/PaymentClient.java',
+                                lineStart: 21,
+                                lineEnd: 28,
+                                excerpt: 'restTemplate.postForEntity("/payments/approve", ...)',
+                            },
+                        ],
+                    },
+                ],
+            }),
+        );
+
+        expect(result.actions).toEqual([]);
+        expect(result.evidence).toHaveLength(1);
     });
 
     it('T3: message_publish intent → event 후보(publish)', () => {

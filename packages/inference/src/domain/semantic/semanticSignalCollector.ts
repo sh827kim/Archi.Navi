@@ -117,7 +117,6 @@ export function collectDomainSemanticSignals(inputs: CollectorInputs): Collected
         const evidenceIds = registerEvidences(evidencePool, intent);
 
         switch (intent.intentType) {
-            case 'http_call':
             case 'http_gateway_route': {
                 const action = buildHttpAction(intent, evidenceIds);
                 if (action) mergeUnique(actionsBucket, actionKey(action), action);

@@ -156,6 +156,39 @@ describe('createGenerateBoostSuggestionFn', () => {
     });
   });
 
+  it('smart resolution generator는 provider_service_selection 에서 ranking 필드가 없어도 허용해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order-b',
+        selectedServiceName: 'order-api-b',
+        confidence: 0.78,
+        reasoning: 'service name and host hint both match',
+      },
+      usage: {
+        inputTokens: 61,
+        outputTokens: 16,
+      },
+    });
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve provider without ranking')).resolves.toMatchObject({
+      model: 'gpt-4o',
+      promptTokens: 61,
+      completionTokens: 16,
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceId: 'service-order-b',
+      },
+    });
+  });
+
   it('smart resolution generator는 provider_service_selection 응답도 그대로 변환해야 한다', async () => {
     generateObjectMock.mockResolvedValue({
       object: {

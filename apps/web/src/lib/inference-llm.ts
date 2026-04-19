@@ -111,7 +111,7 @@ const smartProviderServiceSelectionProposalSchema = z.object({
     serviceName: z.string().nullable(),
     score: z.number().min(0).max(1).nullable(),
     reasoning: z.string().nullable(),
-  })).nullable(),
+  })).nullable().optional().default(null),
 });
 
 const smartSummaryEnhancementProposalSchema = z.object({

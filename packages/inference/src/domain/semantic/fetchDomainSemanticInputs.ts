@@ -99,7 +99,25 @@ export async function fetchDomainSemanticInputs(
                 eq(objectDomainAffinities.domainId, domainId),
             ),
         );
-    const memberIdList = [...new Set(memberLinks.map((r) => r.objectId))];
+    const linkedMemberIds = [...new Set(memberLinks.map((r) => r.objectId))];
+    let memberIdList: string[] = [];
+    if (linkedMemberIds.length > 0) {
+        const memberAffinityRows = await db
+            .select({
+                objectId: objectDomainAffinities.objectId,
+                domainId: objectDomainAffinities.domainId,
+                affinity: objectDomainAffinities.affinity,
+            })
+            .from(objectDomainAffinities)
+            .where(
+                and(
+                    eq(objectDomainAffinities.workspaceId, workspaceId),
+                    inArray(objectDomainAffinities.objectId, linkedMemberIds),
+                ),
+            );
+        const primaryDomainByObject = pickPrimaryDomain(memberAffinityRows);
+        memberIdList = linkedMemberIds.filter((objectId) => primaryDomainByObject.get(objectId) === domainId);
+    }
 
     let members: CollectorMemberInput[] = [];
     if (memberIdList.length > 0) {
@@ -226,6 +244,7 @@ export async function fetchDomainSemanticInputs(
             .where(
                 and(
                     eq(objectRelations.workspaceId, workspaceId),
+                    eq(objectRelations.status, 'APPROVED'),
                     or(
                         inArray(objectRelations.subjectObjectId, memberIdsArr),
                         inArray(objectRelations.objectId, memberIdsArr),
