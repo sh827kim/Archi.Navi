@@ -55,6 +55,7 @@ const SPRING_HTTP_FRAMEWORK_TOKENS = new Set([
 
 interface ResolvedVariableMap {
     values: VariableMap;
+    expressions: Map<string, string>;
     propertyBackedVariables: Set<string>;
 }
 
@@ -77,6 +78,7 @@ interface SpringMappingExtraction {
  */
 function buildVariableMap(root: SyntaxNode, propertyMap?: AstPropertyMap): ResolvedVariableMap {
     const values: VariableMap = new Map();
+    const expressions = new Map<string, string>();
     const propertyBackedVariables = new Set<string>();
 
     // local_variable_declaration과 field_declaration 모두 처리
@@ -100,12 +102,18 @@ function buildVariableMap(root: SyntaxNode, propertyMap?: AstPropertyMap): Resol
         const declChildren = getChildren(declarator);
         const nameNode = declChildren.find((c) => c.type === 'identifier');
         const valueNode = declChildren.find((c) => c.type === 'string_literal');
+        const expressionNode = declChildren
+            .slice()
+            .reverse()
+            .find((c) => c.type !== 'identifier' && c.type !== '=' && c.type.trim() !== '');
 
         if (nameNode && valueNode) {
             const strValue = extractStringValue(valueNode);
             if (strValue !== null) {
                 values.set(nameNode.text, strValue);
             }
+        } else if (nameNode && expressionNode) {
+            expressions.set(nameNode.text, expressionNode.text);
         }
     }
 
@@ -129,13 +137,14 @@ function buildVariableMap(root: SyntaxNode, propertyMap?: AstPropertyMap): Resol
                 const nameNode = getChildren(declarator).find(isIdentifierNode);
                 if (nameNode) {
                     values.set(nameNode.text, resolvedValue);
+                    expressions.set(nameNode.text, `"${resolvedValue}"`);
                     propertyBackedVariables.add(nameNode.text);
                 }
             }
         }
     }
 
-    return { values, propertyBackedVariables };
+    return { values, expressions, propertyBackedVariables };
 }
 
 /**
@@ -238,23 +247,23 @@ function buildPartialHttpMetadata(
     .replace(/"(?:\\.|[^"\\])*"/g, ' ')
     .replace(/'(?:\\.|[^'\\])*'/g, ' ')
     .replace(/\$\{[^}]+\}/g, ' ');
-  const pathParts = stringLiterals.filter((value) => value.startsWith('/'));
   const pathFromBuilder = [...argText.matchAll(/\.path\(\s*["']([^"']+)["']\s*\)/g)].map((match) => match[1]!.trim());
+  const pathParts = stringLiterals.filter((value) => value.startsWith('/') && !pathFromBuilder.includes(value));
   const pathSegmentArgs = [...argText.matchAll(/\.pathSegment\(([^)]*)\)/g)]
     .flatMap((match) => match[1]!.split(',').map((segment) => segment.trim()).filter((segment) => segment.length > 0))
     .map((segment) => {
       const literal = segment.match(/^["']([^"']+)["']$/)?.[1];
       return literal ? literal : '{id}';
     });
-  const pathHint = normalizeSpringPath([
-    ...pathParts,
-    ...pathFromBuilder,
+  const pathSegments = [
+    ...(pathFromBuilder.length > 0 ? pathFromBuilder : pathParts),
     ...(pathSegmentArgs.length > 0 ? [pathSegmentArgs.map((segment) => `/${segment}`).join('')] : []),
-  ].join(''));
+  ];
+  const pathHint = pathSegments.length > 0 ? normalizeSpringPath(pathSegments.join('')) : '/';
   const hostLiteral = stringLiterals.find((value) => /^[a-z][a-z0-9+.-]*:\/\//i.test(value))
     ?? stringLiterals.find((value) => /^[a-z0-9][a-z0-9._-]*$/i.test(value) && !value.startsWith('/') && !SPRING_HTTP_FRAMEWORK_TOKENS.has(value))
     ?? null;
-  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*(?:BaseUrl|Host|Url))\b/);
+  const baseUrlVarMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_]*(?:BaseUrl|Host|Url))\b(?!\s*\()/);
   const serviceNameHintMatch = expressionText.match(/\b([A-Za-z_][A-Za-z0-9_-]*service[A-Za-z0-9_-]*)\b/i);
   const getterServiceHintMatch = [...argText.matchAll(/\bget([A-Z][A-Za-z0-9]*(?:Service|Manager|Client|Api|Gateway|Mgt)[A-Za-z0-9]*)\s*\(/g)][0]?.[1];
   const serviceNameHint = getterServiceHintMatch ?? serviceNameHintMatch?.[1] ?? null;
@@ -262,7 +271,17 @@ function buildPartialHttpMetadata(
 
   const methodHint = inferHttpMethodFromReceiver(receiverName);
   const hasStaticPath = pathHint !== '/';
-  const hasStaticHost = hostLiteral !== null || configKeys.length > 0 || baseUrlVarMatch !== null;
+  const hasStaticHost = hostLiteral !== null;
+  const dynamicPath = (!hasStaticPath
+    && (/[+{]|UriComponentsBuilder|toUriString\s*\(/.test(expressionText) || hasConfigPlaceholder))
+    || (hasStaticPath && argText.includes('uriBuilder'));
+  const dynamicHost = !hasStaticHost
+    && (/[+{]|baseUrl|host|uriBuilder/i.test(expressionText) || hasConfigPlaceholder || configKeys.length > 0 || baseUrlVarMatch !== null);
+  const pathSource = hasStaticPath
+    ? ((pathFromBuilder.length > 0 || pathSegmentArgs.length > 0 || argText.includes('uriBuilder') || argText.includes('UriComponentsBuilder')) ? 'expression' : 'literal')
+    : 'unknown';
+  const hostSource = hostLiteral ? 'literal' : (configKeys.length > 0 ? 'config' : (baseUrlVarMatch ? 'variable' : 'unknown'));
+  const unsupportedPattern = dynamicPath || dynamicHost;
 
   return {
     methodHint: inferHttpMethodFromReceiver(receiverName),
@@ -271,21 +290,41 @@ function buildPartialHttpMetadata(
     ...(serviceNameHint ? { serviceNameHint } : {}),
     ...(baseUrlVarMatch ? { baseUrlVar: baseUrlVarMatch[1] } : {}),
     clientFamily: /webClient/i.test(receiverName) ? 'WebClient' : /restClient/i.test(receiverName) ? 'RestClient' : /restTemplate/i.test(receiverName) ? 'RestTemplate' : 'HttpClient',
-    pathSource: hasStaticPath ? 'expression' : 'unknown',
-    hostSource: hostLiteral ? 'literal' : (configKeys.length > 0 ? 'config' : (baseUrlVarMatch ? 'variable' : 'unknown')),
+    pathSource,
+    hostSource,
     ...(argText.includes('buildAndExpand(') ? { pathVariables: ['id'] } : {}),
     ...(argText.includes('queryParam(')
       ? { queryKeys: [...new Set([...argText.matchAll(/queryParam\(\s*["']([^"']+)["']/g)].map((match) => match[1]!.trim()))] }
       : {}),
     ...(baseUrlVarMatch ? { baseUrlExpr: baseUrlVarMatch[1] } : {}),
     ...(configKeys.length > 0 ? { configKeys } : {}),
-    dynamicPath: !hasStaticPath
-      && /[+{]|UriComponentsBuilder|toUriString\s*\(/.test(expressionText)
-      || hasConfigPlaceholder,
-    dynamicHost: !hasStaticHost && (/[+{]|baseUrl|host|uriBuilder/i.test(expressionText) || hasConfigPlaceholder),
-    unsupportedPattern: false,
+    dynamicPath,
+    dynamicHost,
+    unsupportedPattern,
     ...(methodHint ? { methodHint } : {}),
   };
+}
+
+function hasUsefulPartialHttpMetadata(metadata: Record<string, unknown>): boolean {
+    const pathHint = metadata['pathHint'];
+    const hostHint = metadata['hostHint'];
+    const baseUrlVar = metadata['baseUrlVar'];
+    const serviceNameHint = metadata['serviceNameHint'];
+    const configKeys = metadata['configKeys'];
+    const pathVariables = metadata['pathVariables'];
+    const queryKeys = metadata['queryKeys'];
+
+    return (
+        (typeof pathHint === 'string' && pathHint.length > 1)
+        || (typeof hostHint === 'string' && hostHint.length > 0)
+        || (typeof baseUrlVar === 'string' && baseUrlVar.length > 0)
+        || (typeof serviceNameHint === 'string' && serviceNameHint.length > 0)
+        || (Array.isArray(configKeys) && configKeys.length > 0)
+        || (Array.isArray(pathVariables) && pathVariables.length > 0)
+        || (Array.isArray(queryKeys) && queryKeys.length > 0)
+        || metadata['dynamicPath'] === true
+        || metadata['dynamicHost'] === true
+    );
 }
 
 /**
@@ -317,12 +356,19 @@ function buildHttpCallFromUriArgs(input: {
     objectName: string;
     methodName: string;
     client: 'WebClient' | 'RestClient';
+    varMap: ResolvedVariableMap;
 }): { symbol: string; metadata: Record<string, unknown> } | null {
-    const { argNodes, objectName, methodName, client } = input;
+    const { argNodes, objectName, methodName, client, varMap } = input;
     const firstArg = argNodes[0];
     if (!firstArg) return null;
 
-    const argExpression = argNodes.map((node) => node.text).join(', ');
+    const variableExpression = firstArg.type === 'identifier'
+        ? varMap.expressions.get(firstArg.text) ?? null
+        : null;
+    const argExpression = [
+        variableExpression ?? firstArg.text,
+        ...argNodes.slice(1).map((node) => node.text),
+    ].join(', ');
     const firstArgIsLiteral = firstArg.type === 'string_literal';
     const firstArgValue = firstArgIsLiteral ? extractStringValue(firstArg) : null;
     const hasMultipleArgs = argNodes.length > 1;
@@ -604,6 +650,26 @@ function findAnnotationsWithNames(node: SyntaxNode, names: Set<string>): SyntaxN
     });
 }
 
+function findDirectAnnotationsWithNames(node: SyntaxNode, names: Set<string>): SyntaxNode[] {
+    const declarationHeaderChildren = getChildren(node).filter((child) => child.type !== 'class_body' && child.type !== 'interface_body');
+    return declarationHeaderChildren.flatMap((child) => {
+        const annotationNodes = child.type === 'annotation' ? [child] : findNodes(child, 'annotation');
+        return annotationNodes.filter((annotationNode) => {
+            const annName = getChildren(annotationNode).find((grandChild) => grandChild.type === 'identifier')?.text;
+            return annName ? names.has(annName) : false;
+        });
+    });
+}
+
+function findAncestorByTypes(node: SyntaxNode, types: string[]): SyntaxNode | null {
+    let current: SyntaxNode | null = node.parent ?? null;
+    while (current) {
+        if (types.includes(current.type)) return current;
+        current = current.parent ?? null;
+    }
+    return null;
+}
+
 function extractRequestMappingInfo(annotation: SyntaxNode): SpringRequestMappingInfo | null {
     const annName = getChildren(annotation).find((child) => child.type === 'identifier')?.text;
     if (!annName) return null;
@@ -637,7 +703,10 @@ function extractRequestMappingInfo(annotation: SyntaxNode): SpringRequestMapping
 }
 
 function extractTypeLevelSpringMapping(typeDecl: SyntaxNode): SpringMappingExtraction | null {
-    const annotations = findAnnotationsWithNames(typeDecl, new Set(['RequestMapping']));
+    const annotations = findDirectAnnotationsWithNames(typeDecl, new Set([
+        'RequestMapping',
+        ...Object.keys(MAPPING_ANNOTATIONS),
+    ]));
     if (annotations.length === 0) return null;
     const first = annotations[0]!;
     const info = extractRequestMappingInfo(first);
@@ -655,7 +724,8 @@ function extractMethodLevelSpringMappings(methodDecl: SyntaxNode): SpringMapping
 
 function isSpringControllerType(typeDecl: SyntaxNode, methodMappings: SpringMappingExtraction[]): boolean {
     if (methodMappings.length > 0) return true;
-    return findAnnotationsWithNames(typeDecl, CONTROLLER_ANNOTATIONS).length > 0;
+    if (extractTypeLevelSpringMapping(typeDecl)) return true;
+    return findDirectAnnotationsWithNames(typeDecl, CONTROLLER_ANNOTATIONS).length > 0;
 }
 
 function combineSpringMappings(
@@ -690,7 +760,7 @@ function processSpringControllerMappings(
     ];
 
     for (const typeDecl of typeDeclarations) {
-        const methodMappings = findNodes(typeDecl, 'method_declaration')
+        const methodMappings = METHOD_DECLARATION_NODE_TYPES.flatMap((nodeType) => findNodes(typeDecl, nodeType))
             .flatMap((methodDecl) =>
                 extractMethodLevelSpringMappings(methodDecl).map((mapping) => ({ methodDecl, mapping })),
             );
@@ -806,6 +876,37 @@ function processSpringMappingAnnotations(
                         },
                     }),
                 );
+            }
+        }
+
+        if (annName in MAPPING_ANNOTATIONS || annName === 'RequestMapping') {
+            const ownerType = findAncestorByTypes(ann, ['class_declaration', 'interface_declaration']);
+            if (ownerType) continue;
+
+            const mappingInfo = extractRequestMappingInfo(ann);
+            if (!mappingInfo) continue;
+            const methods = mappingInfo.methods ?? ['ANY'];
+            const excerpt = ann.text.split('\n')[0] || ann.text;
+            for (const method of methods) {
+                for (const path of mappingInfo.paths) {
+                    signals.push(
+                        makeSignal({
+                            kind: 'expose',
+                            symbol: path,
+                            lineStart: ann.startPosition.row + 1,
+                            lineEnd: ann.endPosition.row + 1,
+                            excerpt,
+                            confidence: 0.95,
+                            metadata: {
+                                method,
+                                path,
+                                annotation: `@${mappingInfo.annotation}`,
+                                framework: 'spring',
+                                mappingSource: 'annotation_flat',
+                            },
+                        }),
+                    );
+                }
             }
         }
 
@@ -965,6 +1066,9 @@ function processMethodInvocations(
                     );
                 } else {
                     const fallbackMetadata = buildPartialHttpMetadata(objectName, args.map((arg) => arg.text).join(', '));
+                    if (!hasUsefulPartialHttpMetadata(fallbackMetadata)) {
+                        continue;
+                    }
                     signals.push(
                         makeSignal({
                             kind: 'call',
@@ -995,6 +1099,7 @@ function processMethodInvocations(
                 objectName,
                 methodName,
                 client: 'WebClient',
+                varMap,
             });
             if (call) {
                 signals.push(
@@ -1019,6 +1124,7 @@ function processMethodInvocations(
                 objectName,
                 methodName,
                 client: 'RestClient',
+                varMap,
             });
             if (call) {
                 signals.push(

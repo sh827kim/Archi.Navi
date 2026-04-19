@@ -2,11 +2,22 @@
 export const SMART_FRONTIER_REASONS_SUPPORTED = [
   'HOST_ALIAS_UNRESOLVED',
   'CONFIG_BINDING_MISSING',
+  'PATH_ONLY_TARGET_UNRESOLVED',
   'ROUTE_FAMILY_DERIVATION_EMPTY',
   'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
+  'PATH_TEMPLATE_UNKNOWN',
   'METHOD_UNKNOWN',
+  'PROVIDER_ENDPOINT_NOT_FOUND',
   'ENDPOINT_MATCH_AMBIGUOUS',
   'PROVIDER_SERVICE_AMBIGUOUS',
+] as const;
+
+export const SMART_FRONTIER_REASONS_UNSUPPORTED = [
+  'PROVIDER_ENDPOINT_INDEX_EMPTY',
+  'DYNAMIC_URI_UNRESOLVED',
+  'PATH_REWRITE_CONFLICT',
+  'ENDPOINT_SET_OPEN',
+  'ROUTE_FAMILY_TOO_BROAD',
 ] as const;
 
 export const SMART_FRONTIER_REASONS = SMART_FRONTIER_REASONS_SUPPORTED;
@@ -14,6 +25,65 @@ export const SMART_FRONTIER_REASONS = SMART_FRONTIER_REASONS_SUPPORTED;
 export type SmartFrontierReason = (typeof SMART_FRONTIER_REASONS)[number];
 
 export type SupportedSmartFrontierReason = (typeof SMART_FRONTIER_REASONS_SUPPORTED)[number];
+
+export const SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED = [
+  'HOST_ALIAS_UNRESOLVED',
+  'CONFIG_BINDING_MISSING',
+  'PATH_ONLY_TARGET_UNRESOLVED',
+  'ROUTE_FAMILY_DERIVATION_EMPTY',
+  'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
+  'PATH_TEMPLATE_UNKNOWN',
+  'METHOD_UNKNOWN',
+  'PROVIDER_ENDPOINT_NOT_FOUND',
+  'ENDPOINT_MATCH_AMBIGUOUS',
+] as const satisfies readonly SupportedSmartFrontierReason[];
+
+export type SupportedSmartFrontierResolutionReason =
+  (typeof SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED)[number];
+
+export const SMART_AMBIGUITY_REASONS_SUPPORTED = [
+  'PROVIDER_SERVICE_AMBIGUOUS',
+] as const satisfies readonly SupportedSmartFrontierReason[];
+
+export type SupportedSmartAmbiguityReason = (typeof SMART_AMBIGUITY_REASONS_SUPPORTED)[number];
+
+export const SMART_CORRELATION_REASONS_SUPPORTED = [
+  'HOST_ALIAS_UNRESOLVED',
+  'CONFIG_BINDING_MISSING',
+] as const satisfies readonly SupportedSmartFrontierReason[];
+
+export type SupportedSmartCorrelationReason = (typeof SMART_CORRELATION_REASONS_SUPPORTED)[number];
+
+const SUPPORTED_SMART_FRONTIER_REASON_SET = new Set<string>(SMART_FRONTIER_REASONS_SUPPORTED);
+const SUPPORTED_SMART_FRONTIER_RESOLUTION_REASON_SET = new Set<string>(
+  SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED,
+);
+const SUPPORTED_SMART_AMBIGUITY_REASON_SET = new Set<string>(SMART_AMBIGUITY_REASONS_SUPPORTED);
+const SUPPORTED_SMART_CORRELATION_REASON_SET = new Set<string>(SMART_CORRELATION_REASONS_SUPPORTED);
+
+export function isSupportedSmartFrontierReason(
+  reason: string | null,
+): reason is SupportedSmartFrontierReason {
+  return typeof reason === 'string' && SUPPORTED_SMART_FRONTIER_REASON_SET.has(reason);
+}
+
+export function isSupportedSmartFrontierResolutionReason(
+  reason: string | null,
+): reason is SupportedSmartFrontierResolutionReason {
+  return typeof reason === 'string' && SUPPORTED_SMART_FRONTIER_RESOLUTION_REASON_SET.has(reason);
+}
+
+export function isSupportedSmartAmbiguityReason(
+  reason: string | null,
+): reason is SupportedSmartAmbiguityReason {
+  return typeof reason === 'string' && SUPPORTED_SMART_AMBIGUITY_REASON_SET.has(reason);
+}
+
+export function isSupportedSmartCorrelationReason(
+  reason: string | null,
+): reason is SupportedSmartCorrelationReason {
+  return typeof reason === 'string' && SUPPORTED_SMART_CORRELATION_REASON_SET.has(reason);
+}
 
 export interface SmartProofConfig {
   enabled: boolean;

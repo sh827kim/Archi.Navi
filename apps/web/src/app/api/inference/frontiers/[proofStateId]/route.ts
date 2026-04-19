@@ -28,9 +28,19 @@ function normalizeLookup(value: unknown): string {
 const PATCHABLE_REASON_MAP: Record<string, string[]> = {
   CONFIG_BINDING_MISSING: ['alias_binding'],
   HOST_ALIAS_UNRESOLVED: ['alias_binding'],
+  PATH_ONLY_TARGET_UNRESOLVED: ['alias_binding'],
   PROVIDER_SERVICE_AMBIGUOUS: ['provider_service_selection'],
   ENDPOINT_MATCH_AMBIGUOUS: ['endpoint_disambiguation'],
+  PROVIDER_ENDPOINT_NOT_FOUND: ['method_path_hint'],
+  METHOD_UNKNOWN: ['method_path_hint'],
+  PATH_TEMPLATE_UNKNOWN: ['method_path_hint'],
+  ROUTE_FAMILY_DERIVATION_EMPTY: ['route_transform_patch'],
+  ROUTE_TO_ENDPOINT_COMPOSITION_FAILED: ['route_transform_patch'],
 };
+
+function normalizeIntentType(value: unknown): string {
+  return typeof value === 'string' ? value.trim().toLowerCase() : '';
+}
 
 export async function GET(
   req: Request,
@@ -132,7 +142,13 @@ export async function GET(
         })
         .slice(0, 20);
 
-    const patchableActions = PATCHABLE_REASON_MAP[frontier.frontierReason] ?? [];
+    const patchableActions = [...(PATCHABLE_REASON_MAP[frontier.frontierReason] ?? [])];
+    if (
+      frontier.frontierReason === 'PATH_TEMPLATE_UNKNOWN'
+      && normalizeIntentType(intent?.intentType) === 'http_gateway_route'
+    ) {
+      patchableActions.push('route_transform_patch');
+    }
     const sourceService = state.consumerServiceId
       ? (await db
         .select({ id: objects.id, name: objects.name })
@@ -172,6 +188,8 @@ export async function GET(
       priority: frontier.priority,
       confidence: state.confidence,
       detail,
+      gatewayKind: intent?.gatewayKind ?? null,
+      externalRoutePattern: intent?.externalRoutePattern ?? null,
       methodResolved: state.methodResolved,
       externalPathResolved: state.externalPathResolved,
       internalPathResolved: state.internalPathResolved,

@@ -1,11 +1,12 @@
 # 17. Inter-procedural AST 분석 (SPEC) (Roadmap 4-1)
 
-상태: Implemented (Phase 1 foundations)
+상태: Implemented (2026-04-19)
 작성일: 2026-03-08
 
 현행 메모:
-- 현재 구현은 `packages/inference/src/code/ast/symbolTable.ts` 기반 symbol table 구축, 인터페이스 구현체 매핑, property resolver, call target 해석까지 반영한다.
-- 본 문서의 장기 범위 중 multi-module 연결, generic 타입 심화, 디스크 캐싱은 아직 후속 범위다.
+- 현재 shipped 범위는 Java/Kotlin AST 경로의 프로젝트 단위 symbol table 구축, 인터페이스 구현체 매핑, property resolver, call target 해석, depth 제한 call chain 전파까지 반영한다.
+- Spring controller expose와 HTTP client partial metadata 정확도는 `100-spring-request-mapping-atomic-composition-spec.md`와 함께 정리되었다.
+- 장기 확장 중 multi-module 연결, generic 타입 심화, 디스크 캐싱은 backlog 후속 범위로 남긴다.
 
 ## 1. 목적
 
@@ -23,7 +24,7 @@
 - 인터페이스 → 구현체 매핑
 - 신뢰도 재조정
 
-### 제외 (후속)
+### 제외 (후속 backlog)
 - 런타임 동적 바인딩 (리플렉션) → Smart Proof Engine escalation 또는 별도 후속 규칙으로 처리
 - Generic/템플릿 타입 해석
 - 다중 모듈(multi-module) 프로젝트 간 참조
@@ -106,7 +107,7 @@ Implementation Map 구축 (interface FQCN → impl FQCN[])
 | T6 | `interProcedural: false`일 때 기존 동작과 동일 (회귀 방지) |
 | T7 | 1000 파일 프로젝트에서 Symbol Table 구축 30초 이내 |
 
-## 7. 후속 범위
+## 7. 후속 backlog 범위
 
 - 다중 모듈 프로젝트 간 Symbol Table 연결
 - Generic 타입 파라미터 해석

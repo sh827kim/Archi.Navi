@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SMART_CORRELATION_REASONS_SUPPORTED } from '@/agent/smartProofTypes';
 import {
   buildSmartCorrelationPrompt,
   isSupportedSmartCorrelationReason,
@@ -25,10 +26,7 @@ function createGroup(): SmartCorrelationFrontierGroup {
 
 describe('smartCorrelationResolver', () => {
   it('지원 correlation reason만 허용해야 한다', () => {
-    expect(SUPPORTED_SMART_CORRELATION_REASONS).toEqual([
-      'HOST_ALIAS_UNRESOLVED',
-      'CONFIG_BINDING_MISSING',
-    ]);
+    expect(SUPPORTED_SMART_CORRELATION_REASONS).toEqual(SMART_CORRELATION_REASONS_SUPPORTED);
     expect(isSupportedSmartCorrelationReason('HOST_ALIAS_UNRESOLVED')).toBe(true);
     expect(isSupportedSmartCorrelationReason('CONFIG_BINDING_MISSING')).toBe(true);
     expect(isSupportedSmartCorrelationReason('PROVIDER_SERVICE_AMBIGUOUS')).toBe(false);

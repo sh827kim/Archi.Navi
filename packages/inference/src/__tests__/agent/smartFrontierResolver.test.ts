@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED } from '@/agent/smartProofTypes';
 import {
   buildEndpointDisambiguationPrompt,
   buildHostAliasResolutionPrompt,
@@ -59,20 +60,16 @@ function createContext(): SmartFrontierResolutionContext {
 
 describe('smartFrontierResolver', () => {
   it('지원 frontier reason만 허용해야 한다', () => {
-    expect(SUPPORTED_SMART_FRONTIER_REASONS).toEqual([
-      'HOST_ALIAS_UNRESOLVED',
-      'CONFIG_BINDING_MISSING',
-      'ROUTE_FAMILY_DERIVATION_EMPTY',
-      'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
-      'METHOD_UNKNOWN',
-      'ENDPOINT_MATCH_AMBIGUOUS',
-    ]);
+    expect(SUPPORTED_SMART_FRONTIER_REASONS).toEqual(SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED);
     expect(isSupportedSmartFrontierReason('HOST_ALIAS_UNRESOLVED')).toBe(true);
     expect(isSupportedSmartFrontierReason('CONFIG_BINDING_MISSING')).toBe(true);
     expect(isSupportedSmartFrontierReason('ROUTE_FAMILY_DERIVATION_EMPTY')).toBe(true);
     expect(isSupportedSmartFrontierReason('ROUTE_TO_ENDPOINT_COMPOSITION_FAILED')).toBe(true);
+    expect(isSupportedSmartFrontierReason('PATH_TEMPLATE_UNKNOWN')).toBe(true);
     expect(isSupportedSmartFrontierReason('METHOD_UNKNOWN')).toBe(true);
+    expect(isSupportedSmartFrontierReason('PROVIDER_ENDPOINT_NOT_FOUND')).toBe(true);
     expect(isSupportedSmartFrontierReason('ENDPOINT_MATCH_AMBIGUOUS')).toBe(true);
+    expect(isSupportedSmartFrontierReason('PROVIDER_SERVICE_AMBIGUOUS')).toBe(false);
   });
 
   it('host alias prompt는 핵심 frontier 문맥을 포함해야 한다', () => {
@@ -146,6 +143,20 @@ describe('smartFrontierResolver', () => {
     expect(routePrompt).toContain('Respond with patchType=route_transform_patch.');
     expect(endpointPrompt).toContain('Respond with patchType=endpoint_disambiguation.');
     expect(methodPrompt).toContain('Respond with patchType=method_path_hint.');
+  });
+
+  it('PATH_TEMPLATE_UNKNOWN은 gateway route가 아니면 method_path_hint 흐름을 유지해야 한다', () => {
+    const prompt = buildSmartFrontierPrompt({
+      ...createContext(),
+      frontierReason: 'PATH_TEMPLATE_UNKNOWN',
+      intent: {
+        ...createContext().intent,
+        type: 'http_call',
+      },
+    });
+
+    expect(prompt).toContain('Respond with patchType=method_path_hint.');
+    expect(prompt).not.toContain('Respond with patchType=route_transform_patch.');
   });
 
   it('endpoint disambiguation prompt는 candidate endpoint 문맥을 포함해야 한다', () => {

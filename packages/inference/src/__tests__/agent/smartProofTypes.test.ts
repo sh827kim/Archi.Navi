@@ -1,9 +1,17 @@
 import { describe, expect, it } from 'vitest';
 import {
+  SMART_AMBIGUITY_REASONS_SUPPORTED,
+  SMART_CORRELATION_REASONS_SUPPORTED,
   SMART_FRONTIER_REASONS,
+  SMART_FRONTIER_REASONS_UNSUPPORTED,
+  SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED,
   SMART_FRONTIER_REASONS_SUPPORTED,
   buildDefaultSmartProofConfig,
   buildEmptySmartModeSummary,
+  isSupportedSmartAmbiguityReason,
+  isSupportedSmartCorrelationReason,
+  isSupportedSmartFrontierReason,
+  isSupportedSmartFrontierResolutionReason,
   normalizeSmartProofConfig,
   resolveSmartProofDecision,
 } from '@/agent/smartProofTypes';
@@ -161,5 +169,44 @@ describe('smartProofTypes', () => {
     expect(SMART_FRONTIER_REASONS).toEqual(SMART_FRONTIER_REASONS_SUPPORTED);
     expect(SMART_FRONTIER_REASONS).toContain('METHOD_UNKNOWN');
     expect(SMART_FRONTIER_REASONS).toContain('PROVIDER_SERVICE_AMBIGUOUS');
+  });
+
+  it('Category B/C/D reason 집합은 canonical frontier reason 계약의 부분집합이어야 한다', () => {
+    expect(SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED).toEqual([
+      'HOST_ALIAS_UNRESOLVED',
+      'CONFIG_BINDING_MISSING',
+      'PATH_ONLY_TARGET_UNRESOLVED',
+      'ROUTE_FAMILY_DERIVATION_EMPTY',
+      'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED',
+      'PATH_TEMPLATE_UNKNOWN',
+      'METHOD_UNKNOWN',
+      'PROVIDER_ENDPOINT_NOT_FOUND',
+      'ENDPOINT_MATCH_AMBIGUOUS',
+    ]);
+    expect(SMART_AMBIGUITY_REASONS_SUPPORTED).toEqual(['PROVIDER_SERVICE_AMBIGUOUS']);
+    expect(SMART_CORRELATION_REASONS_SUPPORTED).toEqual([
+      'HOST_ALIAS_UNRESOLVED',
+      'CONFIG_BINDING_MISSING',
+    ]);
+
+    for (const reason of [
+      ...SMART_FRONTIER_RESOLUTION_REASONS_SUPPORTED,
+      ...SMART_AMBIGUITY_REASONS_SUPPORTED,
+      ...SMART_CORRELATION_REASONS_SUPPORTED,
+    ]) {
+      expect(SMART_FRONTIER_REASONS_SUPPORTED).toContain(reason);
+      expect(SMART_FRONTIER_REASONS_UNSUPPORTED).not.toContain(reason);
+      expect(isSupportedSmartFrontierReason(reason)).toBe(true);
+    }
+  });
+
+  it('category별 type guard는 지원/미지원 reason을 일관되게 판별해야 한다', () => {
+    expect(isSupportedSmartFrontierResolutionReason('METHOD_UNKNOWN')).toBe(true);
+    expect(isSupportedSmartFrontierResolutionReason('PROVIDER_SERVICE_AMBIGUOUS')).toBe(false);
+    expect(isSupportedSmartAmbiguityReason('PROVIDER_SERVICE_AMBIGUOUS')).toBe(true);
+    expect(isSupportedSmartAmbiguityReason('PATH_TEMPLATE_UNKNOWN')).toBe(false);
+    expect(isSupportedSmartCorrelationReason('HOST_ALIAS_UNRESOLVED')).toBe(true);
+    expect(isSupportedSmartCorrelationReason('PROVIDER_ENDPOINT_INDEX_EMPTY')).toBe(false);
+    expect(isSupportedSmartFrontierReason('DYNAMIC_URI_UNRESOLVED')).toBe(false);
   });
 });

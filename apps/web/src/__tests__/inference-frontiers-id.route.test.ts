@@ -82,8 +82,10 @@ function createDbMock() {
             where: vi.fn(() => ({
               limit: vi.fn().mockResolvedValue([{
                 id: 'intent-1',
-                intentType: 'http_call',
+                intentType: 'http_gateway_route',
                 targetServiceHint: 'provider',
+                gatewayKind: 'spring_cloud_gateway',
+                externalRoutePattern: '/api/orders/**',
               }]),
             })),
           };
@@ -171,6 +173,8 @@ describe('GET /api/inference/frontiers/[proofStateId]', () => {
       proofStateId: 'proof-1',
       frontierReason: 'PROVIDER_SERVICE_AMBIGUOUS',
       patchableActions: ['provider_service_selection'],
+      gatewayKind: 'spring_cloud_gateway',
+      externalRoutePattern: '/api/orders/**',
       candidateServices: expect.arrayContaining([
         expect.objectContaining({ id: 'svc-b' }),
       ]),

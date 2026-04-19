@@ -57,7 +57,7 @@
 4. `53-smart-proof-engine-escalation-spec`
    Smart frontier reason coverage를 넓히고, 지원/미지원 reason 구분을 코드와 문서에 같이 고정한다.
 5. `17-inter-procedural-ast-spec`, `100-spring-request-mapping-atomic-composition-spec`
-   foundation은 있으나 후속 범위가 남은 AST/endpoint 정확도 작업을 이어간다.
+   AST/endpoint 정확도 계약을 코드/문서/테스트에 같이 고정했다. 남은 것은 backfill/tooling 계열 후속 범위다.
 
 ---
 

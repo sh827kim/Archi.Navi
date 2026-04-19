@@ -119,6 +119,26 @@ public class OrderController {
         expect(exposeSignals).toHaveLength(0);
     });
 
+    it('메서드 mapping만 있는 클래스는 type-level prefix로 오인하지 않아야 한다', async () => {
+        const content = `
+@RestController
+public class OrderController {
+    @GetMapping("/orders")
+    public Order getOrder() { return null; }
+}
+`;
+        const result = await scanJavaKotlinAst('/src/OrderController.java', content);
+        const exposeSignals = result.signals.filter((signal) => signal.kind === 'expose');
+
+        expect(exposeSignals).toHaveLength(1);
+        expect(exposeSignals[0]?.symbol).toBe('/orders');
+        expect(exposeSignals[0]?.metadata).toMatchObject({
+            method: 'GET',
+            path: '/orders',
+            mappingSource: 'controller_composed',
+        });
+    });
+
     // ─── 멀티라인 어노테이션 처리 (Phase 2 핵심 개선) ────────────────────────
 
     it('멀티라인 @GetMapping 어노테이션을 정확히 추출해야 한다', async () => {
@@ -526,13 +546,32 @@ public class OrderController {
         expect(kinds).toContain('db_mapping');
     });
 
-    it('문자열/식별자가 아닌 첫 번째 인수는 call 신호를 생성하지 않아야 한다', async () => {
+    it('metadata 힌트가 전혀 없는 RestTemplate 식 인수는 call 신호를 생성하지 않아야 한다', async () => {
         const content = `
 String response = restTemplate.getForObject(buildPaymentUrl(), String.class);
 `;
         const result = await scanJavaKotlinAst('/src/OrderService.java', content);
         const calls = result.signals.filter((s) => s.kind === 'call');
         expect(calls).toHaveLength(0);
+    });
+
+    it('expression RestTemplate URL에서도 partial metadata 힌트가 있으면 call 신호를 유지해야 한다', async () => {
+        const content = `
+String response = restTemplate.getForObject(baseUrl + "/orders", String.class);
+`;
+        const result = await scanJavaKotlinAst('/src/OrderService.java', content);
+        const call = result.signals.find((s) => s.kind === 'call');
+
+        expect(call).toBeDefined();
+        expect(call?.metadata).toMatchObject({
+            client: 'RestTemplate',
+            method: 'getForObject',
+            pathHint: '/orders',
+            baseUrlVar: 'baseUrl',
+            dynamicHost: true,
+            pathSource: 'literal',
+            hostSource: 'variable',
+        });
     });
 
     it('인수 없는 어노테이션(Feign/Kafka/Table)은 신호를 생성하지 않아야 한다', async () => {

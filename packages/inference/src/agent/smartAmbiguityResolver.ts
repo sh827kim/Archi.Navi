@@ -14,8 +14,16 @@ import {
   type ProofPatchValidationStatus,
   validateAndApplyProofPatch,
 } from '@/orchestration/intentProofEngine';
-import type { SmartProofConfig, SmartProofDecision } from './smartProofTypes';
-import { resolveSmartProofDecision } from './smartProofTypes';
+import type {
+  SmartProofConfig,
+  SmartProofDecision,
+  SupportedSmartAmbiguityReason as CanonicalSupportedSmartAmbiguityReason,
+} from './smartProofTypes';
+import {
+  isSupportedSmartAmbiguityReason as isCanonicalSupportedSmartAmbiguityReason,
+  resolveSmartProofDecision,
+  SMART_AMBIGUITY_REASONS_SUPPORTED,
+} from './smartProofTypes';
 import type {
   GenerateSmartResolutionFn,
   SmartGenerateResolutionResult,
@@ -23,9 +31,9 @@ import type {
 
 type JsonRecord = Record<string, unknown>;
 
-export const SUPPORTED_SMART_AMBIGUITY_REASONS = ['PROVIDER_SERVICE_AMBIGUOUS'] as const;
+export const SUPPORTED_SMART_AMBIGUITY_REASONS = SMART_AMBIGUITY_REASONS_SUPPORTED;
 
-export type SupportedSmartAmbiguityReason = (typeof SUPPORTED_SMART_AMBIGUITY_REASONS)[number];
+export type SupportedSmartAmbiguityReason = CanonicalSupportedSmartAmbiguityReason;
 
 export interface SmartAmbiguityCandidateService {
   id: string;
@@ -119,8 +127,7 @@ function sha256(value: string): string {
 export function isSupportedSmartAmbiguityReason(
   reason: string | null,
 ): reason is SupportedSmartAmbiguityReason {
-  return typeof reason === 'string'
-    && (SUPPORTED_SMART_AMBIGUITY_REASONS as readonly string[]).includes(reason);
+  return isCanonicalSupportedSmartAmbiguityReason(reason);
 }
 
 export function buildProviderServiceSelectionPrompt(

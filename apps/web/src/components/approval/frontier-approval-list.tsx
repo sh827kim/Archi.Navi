@@ -6,7 +6,12 @@ import { Badge, Button, Sheet, SheetContent, SheetDescription, SheetFooter, Shee
 import { useWorkspace } from '@/contexts/workspace-context';
 import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
 
-type FrontierPatchType = 'alias_binding' | 'provider_service_selection' | 'endpoint_disambiguation';
+type FrontierPatchType =
+  | 'alias_binding'
+  | 'provider_service_selection'
+  | 'endpoint_disambiguation'
+  | 'method_path_hint'
+  | 'route_transform_patch';
 
 interface FrontierListItem {
   proofStateId: string;
@@ -24,10 +29,19 @@ interface FrontierListItem {
   retryStrategy: string;
   priority: number;
   detail: Record<string, unknown>;
+  gatewayKind?: string | null;
+  externalRoutePattern?: string | null;
   methodResolved: string | null;
   externalPathResolved: string | null;
   internalPathResolved: string | null;
   confidence: number;
+  latestPatch?: {
+    id: string;
+    patchType: string;
+    validationStatus: string;
+    sourceKind: string;
+    createdAt: string;
+  } | null;
 }
 
 interface FrontierDetail extends FrontierListItem {
@@ -44,10 +58,19 @@ interface FrontierDetail extends FrontierListItem {
   }>;
 }
 
+type FrontierApplyMode = 'apply' | 'defer';
+
 function normalizeReasonToPatchType(reason: string): FrontierPatchType | null {
   if (reason === 'CONFIG_BINDING_MISSING' || reason === 'HOST_ALIAS_UNRESOLVED') return 'alias_binding';
+  if (reason === 'PATH_ONLY_TARGET_UNRESOLVED') return 'alias_binding';
   if (reason === 'PROVIDER_SERVICE_AMBIGUOUS') return 'provider_service_selection';
   if (reason === 'ENDPOINT_MATCH_AMBIGUOUS') return 'endpoint_disambiguation';
+  if (reason === 'METHOD_UNKNOWN' || reason === 'PROVIDER_ENDPOINT_NOT_FOUND' || reason === 'PATH_TEMPLATE_UNKNOWN') {
+    return 'method_path_hint';
+  }
+  if (reason === 'ROUTE_FAMILY_DERIVATION_EMPTY' || reason === 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED') {
+    return 'route_transform_patch';
+  }
   return null;
 }
 
@@ -60,8 +83,29 @@ function renderReasonBadge(reason: string) {
       return <Badge variant="outline">Provider</Badge>;
     case 'ENDPOINT_MATCH_AMBIGUOUS':
       return <Badge variant="outline">Endpoint</Badge>;
+    case 'METHOD_UNKNOWN':
+    case 'PROVIDER_ENDPOINT_NOT_FOUND':
+    case 'PATH_TEMPLATE_UNKNOWN':
+      return <Badge variant="outline">Method/Path</Badge>;
+    case 'ROUTE_FAMILY_DERIVATION_EMPTY':
+    case 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED':
+      return <Badge variant="outline">Route</Badge>;
     default:
       return <Badge variant="outline">Read Only</Badge>;
+  }
+}
+
+function renderLatestPatchBadge(latestPatch: FrontierListItem['latestPatch']) {
+  if (!latestPatch) return null;
+  switch (latestPatch.validationStatus) {
+    case 'PENDING':
+      return <Badge variant="outline">보류됨</Badge>;
+    case 'ACCEPTED':
+      return <Badge variant="outline">Patch 적용</Badge>;
+    case 'REJECTED':
+      return <Badge variant="outline">Patch 거절</Badge>;
+    default:
+      return <Badge variant="outline">{latestPatch.validationStatus}</Badge>;
   }
 }
 
@@ -81,8 +125,18 @@ export function FrontierApprovalList() {
   const [resolvedServiceId, setResolvedServiceId] = useState('');
   const [selectedServiceId, setSelectedServiceId] = useState('');
   const [endpointId, setEndpointId] = useState('');
+  const [methodHint, setMethodHint] = useState('');
+  const [externalPathHint, setExternalPathHint] = useState('');
+  const [targetServiceHint, setTargetServiceHint] = useState('');
+  const [targetHostAlias, setTargetHostAlias] = useState('');
+  const [selectedPatchType, setSelectedPatchType] = useState<FrontierPatchType | ''>('');
 
   const loadFrontiers = useCallback(async () => {
+    if (!workspaceId) {
+      setItems([]);
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     try {
       const query = new URLSearchParams({ workspaceId });
@@ -101,6 +155,11 @@ export function FrontierApprovalList() {
   }, [reasonFilter, sourceServiceFilter, workspaceId]);
 
   const loadDetail = useCallback(async (proofStateId: string) => {
+    if (!workspaceId) {
+      setDetail(null);
+      setDetailLoading(false);
+      return;
+    }
     setDetailLoading(true);
     try {
       const res = await fetch(
@@ -114,6 +173,11 @@ export function FrontierApprovalList() {
       setResolvedServiceId('');
       setSelectedServiceId('');
       setEndpointId('');
+      setMethodHint('');
+      setExternalPathHint('');
+      setTargetServiceHint('');
+      setTargetHostAlias('');
+      setSelectedPatchType('');
     } catch (error) {
       setDetail(null);
       toast.error(error instanceof Error ? error.message : 'frontier 상세 조회 실패');
@@ -138,11 +202,17 @@ export function FrontierApprovalList() {
     [items],
   );
 
-  const patchType = detail ? normalizeReasonToPatchType(detail.frontierReason) : null;
-  const canPatch = Boolean(detail && patchType && detail.patchableActions.includes(patchType));
+  const patchType = useMemo(() => {
+    if (!detail) return null;
+    if (selectedPatchType && detail.patchableActions.includes(selectedPatchType)) return selectedPatchType;
+    const preferred = normalizeReasonToPatchType(detail.frontierReason);
+    if (preferred && detail.patchableActions.includes(preferred)) return preferred;
+    return detail.patchableActions[0] ?? null;
+  }, [detail, selectedPatchType]);
+  const canPatch = Boolean(detail && patchType);
 
-  async function submitPatch() {
-    if (!detail || !patchType) return;
+  async function submitPatch(applyMode: FrontierApplyMode) {
+    if (!detail || !patchType || !workspaceId) return;
     setSubmittingPatch(true);
     try {
       const proofStateId = detail.proofStateId;
@@ -158,6 +228,23 @@ export function FrontierApprovalList() {
         payload = { selectedServiceId: selectedServiceId.trim() };
       } else if (patchType === 'endpoint_disambiguation') {
         payload = { endpointId: endpointId.trim() };
+      } else if (patchType === 'method_path_hint') {
+        payload = {
+          method: methodHint.trim().toUpperCase(),
+          externalPath: externalPathHint.trim(),
+        };
+      } else if (patchType === 'route_transform_patch') {
+        const matchPath = detail.externalRoutePattern
+          ?? (typeof detail.detail['externalRoutePattern'] === 'string'
+            ? detail.detail['externalRoutePattern']
+            : detail.externalPathResolved);
+        payload = {
+          ownerServiceId: detail.sourceServiceId,
+          gatewayKind: detail.gatewayKind ?? '',
+          matchPath: matchPath ?? '',
+          targetServiceHint: targetServiceHint.trim(),
+          targetHostAlias: targetHostAlias.trim(),
+        };
       }
 
       const res = await fetch(`/api/inference/frontiers/${detail.proofStateId}/patch`, {
@@ -167,6 +254,7 @@ export function FrontierApprovalList() {
           workspaceId,
           patchType,
           payload,
+          applyMode,
         }),
       });
       const body = (await res.json()) as {
@@ -176,7 +264,9 @@ export function FrontierApprovalList() {
       };
       if (!res.ok) throw new Error(body.error ?? 'patch 적용 실패');
 
-      if (body.validationStatus === 'REJECTED') {
+      if (body.validationStatus === 'PENDING') {
+        toast.success('Patch를 보류로 저장했습니다. 수동 검토 대기 상태입니다.');
+      } else if (body.validationStatus === 'REJECTED') {
         toast.warning('Patch가 거절되었습니다. 입력값을 확인하세요.');
       } else if (body.proofStatus === 'CLOSED_ATOMIC') {
         toast.success('Frontier를 승격했습니다. candidate로 이동했습니다.');
@@ -184,7 +274,7 @@ export function FrontierApprovalList() {
         toast.warning('Patch를 적용했지만 아직 frontier 상태입니다.');
       }
 
-      const promotedToCandidate = body.proofStatus === 'CLOSED_ATOMIC';
+      const promotedToCandidate = body.validationStatus !== 'PENDING' && body.proofStatus === 'CLOSED_ATOMIC';
       if (promotedToCandidate) {
         setSelectedProofStateId(null);
         setDetail(null);
@@ -194,7 +284,9 @@ export function FrontierApprovalList() {
       if (!promotedToCandidate) {
         await loadDetail(proofStateId);
       }
-      window.dispatchEvent(new CustomEvent('archi-navi:refresh-approval-candidates'));
+      if (body.validationStatus !== 'PENDING') {
+        window.dispatchEvent(new CustomEvent('archi-navi:refresh-approval-candidates'));
+      }
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'patch 적용 실패');
     } finally {
@@ -264,6 +356,7 @@ export function FrontierApprovalList() {
               </div>
               <div className="flex items-center gap-2">
                 {renderReasonBadge(item.frontierReason)}
+                {renderLatestPatchBadge(item.latestPatch ?? null)}
                 <Badge variant="outline">priority {item.priority}</Badge>
                 <Button size="sm" onClick={() => setSelectedProofStateId(item.proofStateId)}>보정</Button>
               </div>
@@ -298,6 +391,20 @@ export function FrontierApprovalList() {
 
               {canPatch ? (
                 <div className="space-y-3 rounded-lg border border-border/70 p-3">
+                  {detail.patchableActions.length > 1 && (
+                    <label className="block text-xs">
+                      patch type
+                      <select
+                        className="mt-1 w-full rounded border border-input px-2 py-1"
+                        value={patchType ?? ''}
+                        onChange={(event) => setSelectedPatchType(event.target.value as FrontierPatchType)}
+                      >
+                        {detail.patchableActions.map((action) => (
+                          <option key={action} value={action}>{action}</option>
+                        ))}
+                      </select>
+                    </label>
+                  )}
                   {patchType === 'alias_binding' && (
                     <>
                       <label className="block text-xs">
@@ -343,6 +450,52 @@ export function FrontierApprovalList() {
                       </select>
                     </label>
                   )}
+
+                  {patchType === 'method_path_hint' && (
+                    <>
+                      <label className="block text-xs">
+                        method
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="GET"
+                          value={methodHint}
+                          onChange={(event) => setMethodHint(event.target.value)}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        externalPath
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="/api/orders/{id}"
+                          value={externalPathHint}
+                          onChange={(event) => setExternalPathHint(event.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
+
+                  {patchType === 'route_transform_patch' && (
+                    <>
+                      <label className="block text-xs">
+                        targetServiceHint
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="orders-service"
+                          value={targetServiceHint}
+                          onChange={(event) => setTargetServiceHint(event.target.value)}
+                        />
+                      </label>
+                      <label className="block text-xs">
+                        targetHostAlias
+                        <input
+                          className="mt-1 w-full rounded border border-input px-2 py-1"
+                          placeholder="orders.internal"
+                          value={targetHostAlias}
+                          onChange={(event) => setTargetHostAlias(event.target.value)}
+                        />
+                      </label>
+                    </>
+                  )}
                 </div>
               ) : (
                 <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-900 dark:text-amber-200">
@@ -363,7 +516,10 @@ export function FrontierApprovalList() {
 
           <SheetFooter>
             <Button variant="outline" onClick={() => setSelectedProofStateId(null)}>닫기</Button>
-            <Button disabled={!canPatch || submittingPatch} onClick={() => void submitPatch()}>
+            <Button variant="outline" disabled={!canPatch || submittingPatch} onClick={() => void submitPatch('defer')}>
+              {submittingPatch ? '저장 중...' : '보류 저장'}
+            </Button>
+            <Button disabled={!canPatch || submittingPatch} onClick={() => void submitPatch('apply')}>
               {submittingPatch ? '적용 중...' : 'Patch 적용'}
             </Button>
           </SheetFooter>
