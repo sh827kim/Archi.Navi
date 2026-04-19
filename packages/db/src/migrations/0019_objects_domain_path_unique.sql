@@ -44,6 +44,49 @@ WHERE oda.domain_id = tm.dup_id
   );
 --> statement-breakpoint
 
+-- rollup / graph stats 는 materialized 파생 데이터라 duplicate domain 의 ID를
+-- 기계적으로 survivor 로 합치면 edge/stat 중복이 생길 수 있다.
+-- 중복 domain 을 참조하는 파생 row 를 먼저 제거해 FK 위반 없이 dedup + unique index 생성이
+-- 진행되도록 하고, 이후 rollup 재생성 시 survivor 기준으로 다시 계산되게 둔다.
+WITH ranked AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY workspace_id, path
+            ORDER BY created_at ASC, id ASC
+        ) AS rn
+    FROM objects
+    WHERE object_type = 'domain'
+),
+dup_ids AS (
+    SELECT id
+    FROM ranked
+    WHERE rn > 1
+)
+DELETE FROM object_graph_stats
+WHERE object_id IN (SELECT id FROM dup_ids);
+--> statement-breakpoint
+
+WITH ranked AS (
+    SELECT
+        id,
+        ROW_NUMBER() OVER (
+            PARTITION BY workspace_id, path
+            ORDER BY created_at ASC, id ASC
+        ) AS rn
+    FROM objects
+    WHERE object_type = 'domain'
+),
+dup_ids AS (
+    SELECT id
+    FROM ranked
+    WHERE rn > 1
+)
+DELETE FROM object_rollups
+WHERE subject_object_id IN (SELECT id FROM dup_ids)
+   OR object_id IN (SELECT id FROM dup_ids);
+--> statement-breakpoint
+
 WITH ranked AS (
     SELECT
         id,

@@ -28,16 +28,28 @@ import {
     getInferenceModel,
 } from '@/lib/inference-llm';
 
+function normalizeRequiredString(value: unknown): string | null {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
 export async function POST(req: Request) {
     try {
-        const body = (await req.json()) as { workspaceId?: string };
-        if (!body.workspaceId) {
+        const body = (await req.json()) as { workspaceId?: unknown };
+        const workspaceId = normalizeRequiredString(body.workspaceId);
+        if (!workspaceId) {
             return NextResponse.json(
-                { success: false, error: { code: 'BAD_REQUEST', message: 'workspaceId is required' } },
+                {
+                    success: false,
+                    error: {
+                        code: 'BAD_REQUEST',
+                        message: 'workspaceId 는 공백이 아닌 문자열이어야 합니다.',
+                    },
+                },
                 { status: 400 },
             );
         }
-        const workspaceId = body.workspaceId;
 
         const db = await getDb();
 
