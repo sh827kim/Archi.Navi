@@ -46,6 +46,16 @@ function isMemberPayload(value: unknown): value is ApprovalMemberPayload {
     );
 }
 
+function collectInvalidMemberIndexes(values: unknown[]): number[] {
+    const invalidIndexes: number[] = [];
+    values.forEach((value, index) => {
+        if (!isMemberPayload(value)) {
+            invalidIndexes.push(index);
+        }
+    });
+    return invalidIndexes;
+}
+
 export async function POST(req: Request) {
     try {
         const body = (await req.json()) as ApprovalRequestBody;
@@ -55,8 +65,40 @@ export async function POST(req: Request) {
                 { status: 400 },
             );
         }
-        const primary = (body.primaryMembers ?? []).filter(isMemberPayload);
-        const secondary = (body.secondaryMembers ?? []).filter(isMemberPayload);
+        const primaryInput = body.primaryMembers ?? [];
+        const secondaryInput = body.secondaryMembers ?? [];
+        if (!Array.isArray(primaryInput) || !Array.isArray(secondaryInput)) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'INVALID_MEMBER_PAYLOAD',
+                        message: 'primaryMembers, secondaryMembers 는 배열이어야 합니다.',
+                    },
+                },
+                { status: 400 },
+            );
+        }
+
+        const invalidPrimaryIndexes = collectInvalidMemberIndexes(primaryInput);
+        const invalidSecondaryIndexes = collectInvalidMemberIndexes(secondaryInput);
+        if (invalidPrimaryIndexes.length > 0 || invalidSecondaryIndexes.length > 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'INVALID_MEMBER_PAYLOAD',
+                        message: 'primaryMembers, secondaryMembers 에 유효하지 않은 멤버가 포함되어 있습니다.',
+                        invalidPrimaryIndexes,
+                        invalidSecondaryIndexes,
+                    },
+                },
+                { status: 400 },
+            );
+        }
+
+        const primary = primaryInput;
+        const secondary = secondaryInput;
 
         if (primary.length === 0) {
             return NextResponse.json(

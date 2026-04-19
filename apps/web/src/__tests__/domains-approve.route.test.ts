@@ -10,7 +10,7 @@
  *  - T5: 동시 승인 race — insert 가 partial unique index 충돌로 0행을 돌려줘도,
  *        재조회로 동일 domainId 에 합류해 reused:true 로 응답한다.
  *  - T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME 반환
- *  - T7: affinity/confidence 범위 이탈(< 0, > 1, NaN, Infinity) 검증
+ *  - T7: invalid 멤버 payload 가 섞이면 부분 승인하지 않고 400 으로 거절
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -221,11 +221,10 @@ describe('POST /api/domains/approve', () => {
         expect(json.data.domainId).toBe('fresh-domain-id');
     });
 
-    it('T7: affinity/confidence 범위 이탈(1.5, NaN, Infinity) 은 필터되어 멤버 제외', async () => {
-        // isMemberPayload 검증 규칙: affinity, confidence 모두 [0, 1] 범위의 유한 숫자여야 함.
-        // 범위 이탈 멤버는 필터되므로, 범위를 벗어난 멤버들만 보내면
-        // isMemberPayload 필터 후 primaryMembers 가 비어서 400 이 나올 것을 확인.
-        const db = buildDbMock({ ownedIds: ['obj-bad1', 'obj-bad2', 'obj-bad3'] });
+    it('T7: invalid 멤버 payload 가 섞이면 부분 승인하지 않고 400 INVALID_MEMBER_PAYLOAD', async () => {
+        // 혼합 payload 를 조용히 필터하면 일부 멤버만 빠진 채 승인될 수 있으므로,
+        // invalid 멤버가 하나라도 섞이면 전체 요청을 거절해야 한다.
+        const db = buildDbMock({ ownedIds: ['obj-good', 'obj-bad1', 'obj-bad2'] });
         getDbMock.mockResolvedValue(db);
 
         const res = await POST(
@@ -233,18 +232,22 @@ describe('POST /api/domains/approve', () => {
                 workspaceId: 'ws-1',
                 name: '주문',
                 primaryMembers: [
-                    { objectId: 'obj-bad1', affinity: 1.5, confidence: 0.5 }, // affinity > 1 → 필터됨
-                    { objectId: 'obj-bad2', affinity: 0.5, confidence: NaN }, // confidence = NaN → 필터됨
-                    { objectId: 'obj-bad3', affinity: 0.5, confidence: Infinity }, // confidence = Infinity → 필터됨
+                    { objectId: 'obj-good', affinity: 0.8, confidence: 0.7 },
+                    { objectId: 'obj-bad1', affinity: 1.5, confidence: 0.5 }, // affinity > 1
+                ],
+                secondaryMembers: [
+                    { objectId: 'obj-bad2', affinity: 0.5, confidence: Infinity }, // confidence = Infinity
                 ],
             }),
         );
 
-        // 모두 필터되므로 primaryMembers 가 비어있다는 400 에러 반환
         expect(res.status).toBe(400);
         const json = await res.json();
-        expect(json.error.code).toBe('BAD_REQUEST');
-        expect(json.error.message).toContain('primaryMembers');
+        expect(json.error.code).toBe('INVALID_MEMBER_PAYLOAD');
+        expect(json.error.invalidPrimaryIndexes).toEqual([1]);
+        expect(json.error.invalidSecondaryIndexes).toEqual([0]);
+        expect(db.transaction).not.toHaveBeenCalled();
+        expect(applyRollupChangesMock).not.toHaveBeenCalled();
     });
 
     it('T6: name 이 slug 정규화 후 빈 문자열이 되면 400 INVALID_NAME', async () => {
