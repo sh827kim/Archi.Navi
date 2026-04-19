@@ -64,57 +64,63 @@ export async function POST(req: Request) {
 
         const db = await getDb();
 
-        // 1. 도메인 Object 생성
-        const [domain] = await db
-            .insert(objects)
-            .values({
-                workspaceId,
-                objectType: 'domain',
-                category: 'COMPUTE',
-                granularity: 'COMPOUND',
-                name,
-                displayName: name,
-                path: `/domain/${slug}`,
-                depth: 1,
-            })
-            .returning({ id: objects.id });
-
-        if (!domain) {
-            throw new Error('도메인 객체 생성 실패');
-        }
-        const domainId = domain.id;
-
-        // 2. affinity upsert — primary + secondary 를 한 번에
+        // primary + secondary 를 한 번에 upsert 대상으로 묶는다.
         const allMembers = [
             ...primary.map((m) => ({ ...m, isPrimary: true })),
             ...secondary.map((m) => ({ ...m, isPrimary: false })),
         ];
 
-        for (const member of allMembers) {
-            await db
-                .insert(objectDomainAffinities)
+        // 도메인 생성 + affinity upsert 는 하나의 트랜잭션으로 묶어
+        // 중간 실패 시 고아 도메인/부분 affinity 가 남지 않도록 한다.
+        const { domainId } = await db.transaction(async (tx) => {
+            // 1. 도메인 Object 생성
+            const [domain] = await tx
+                .insert(objects)
                 .values({
                     workspaceId,
-                    objectId: member.objectId,
-                    domainId,
-                    affinity: member.affinity,
-                    confidence: member.confidence,
-                    source: 'APPROVED_INFERENCE',
+                    objectType: 'domain',
+                    category: 'COMPUTE',
+                    granularity: 'COMPOUND',
+                    name,
+                    displayName: name,
+                    path: `/domain/${slug}`,
+                    depth: 1,
                 })
-                .onConflictDoUpdate({
-                    target: [
-                        objectDomainAffinities.workspaceId,
-                        objectDomainAffinities.objectId,
-                        objectDomainAffinities.domainId,
-                    ],
-                    set: {
+                .returning({ id: objects.id });
+
+            if (!domain) {
+                throw new Error('도메인 객체 생성 실패');
+            }
+
+            // 2. affinity upsert — primary + secondary 를 한 번에
+            for (const member of allMembers) {
+                await tx
+                    .insert(objectDomainAffinities)
+                    .values({
+                        workspaceId,
+                        objectId: member.objectId,
+                        domainId: domain.id,
                         affinity: member.affinity,
                         confidence: member.confidence,
                         source: 'APPROVED_INFERENCE',
-                        updatedAt: sql`now()`,
-                    },
-                });
-        }
+                    })
+                    .onConflictDoUpdate({
+                        target: [
+                            objectDomainAffinities.workspaceId,
+                            objectDomainAffinities.objectId,
+                            objectDomainAffinities.domainId,
+                        ],
+                        set: {
+                            affinity: member.affinity,
+                            confidence: member.confidence,
+                            source: 'APPROVED_INFERENCE',
+                            updatedAt: sql`now()`,
+                        },
+                    });
+            }
+
+            return { domainId: domain.id };
+        });
 
         return NextResponse.json({
             success: true,

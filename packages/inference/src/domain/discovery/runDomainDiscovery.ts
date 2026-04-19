@@ -15,7 +15,6 @@ import { computeRelationCohesion } from './relationCohesion';
 import { reviewDomainCandidate } from './llmReviewer';
 import type { GenerateDomainReviewFn } from './llmReviewer';
 import { runStructuralClustering } from './structuralClustering';
-import type { StructuralClusterCandidate } from './structuralClustering';
 import type {
     CandidateMemberScore,
     DiscoveryInputs,
@@ -37,21 +36,14 @@ export interface RunDomainDiscoveryResult {
 export async function runDomainDiscovery(
     args: RunDomainDiscoveryArgs,
 ): Promise<RunDomainDiscoveryResult> {
-    // 1. 결정적 클러스터링
+    // 1. 결정적 클러스터링 — affinity 만 채워진 초기 멤버 집합
     const { candidates: structural } = runStructuralClustering(args.inputs);
 
-    // 2. 관계 응집도 보정 — 멤버별 cohesion 채움
-    const enriched: StructuralClusterCandidate[] = structural.map((cand) => {
-        const { members } = computeRelationCohesion({
-            members: cand.members,
-            relations: args.inputs.relations,
-        });
-        return { ...cand, members };
-    });
-
-    // 3. primary/secondary 결정 — 후보별 멤버 목록 재구성
+    // 2. primary/secondary 결정 — 후보별 멤버 목록 1차 확정
+    //    cohesion 은 아직 계산하지 않는다. 최종 멤버 집합이 확정된 뒤 계산해야
+    //    "내부 관계 비율" 이 후보의 실제 멤버를 기준으로 맞춰진다.
     const primaryByObject = new Map<string, { slug: string; affinity: number }>();
-    for (const cand of enriched) {
+    for (const cand of structural) {
         for (const member of cand.members) {
             const current = primaryByObject.get(member.objectId);
             if (!current || member.affinity > current.affinity) {
@@ -60,7 +52,7 @@ export async function runDomainDiscovery(
         }
     }
 
-    const finalCandidates: DomainCandidate[] = enriched
+    const filtered = structural
         .map((cand) => {
             const members: CandidateMemberScore[] = cand.members.filter((member) => {
                 const primary = primaryByObject.get(member.objectId);
@@ -69,16 +61,24 @@ export async function runDomainDiscovery(
                 // secondary: affinity ≥ 0.5 일 때만 보존
                 return member.affinity >= SECONDARY_AFFINITY_THRESHOLD;
             });
-
-            return {
-                id: cand.slug,
-                autoName: cand.autoName,
-                signals: cand.signals,
-                members,
-                review: null,
-            } satisfies DomainCandidate;
+            return { ...cand, members };
         })
         .filter((cand) => cand.members.length > 0);
+
+    // 3. 관계 응집도 계산 — 최종 멤버 집합 기준으로 cohesion 채움
+    const finalCandidates: DomainCandidate[] = filtered.map((cand) => {
+        const { members } = computeRelationCohesion({
+            members: cand.members,
+            relations: args.inputs.relations,
+        });
+        return {
+            id: cand.slug,
+            autoName: cand.autoName,
+            signals: cand.signals,
+            members,
+            review: null,
+        } satisfies DomainCandidate;
+    });
 
     // 4. LLM 검토 (선택)
     if (args.review) {
