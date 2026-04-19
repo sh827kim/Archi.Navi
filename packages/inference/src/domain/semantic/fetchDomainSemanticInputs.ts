@@ -65,7 +65,13 @@ export async function fetchDomainSemanticInputs(
     const domainRows = await db
         .select({ id: objects.id, name: objects.name, displayName: objects.displayName })
         .from(objects)
-        .where(and(eq(objects.workspaceId, workspaceId), eq(objects.id, domainId)))
+        .where(
+            and(
+                eq(objects.workspaceId, workspaceId),
+                eq(objects.id, domainId),
+                eq(objects.objectType, 'domain'),
+            ),
+        )
         .limit(1);
     const domainObj = domainRows[0];
     if (!domainObj) throw new DomainNotFoundError(domainId);

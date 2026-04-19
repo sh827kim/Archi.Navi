@@ -1043,9 +1043,8 @@ function processMethodInvocations(
                         }),
                     );
                 } else {
-                    if (!['string_literal', 'identifier'].includes(firstArg.type)) {
-                        continue;
-                    }
+                    // URL 인자가 리터럴/식별자로 해결되지 않아도 (예: baseUrl + "/orders" 같은 표현식)
+                    // buildPartialHttpMetadata 로 부분 host/path hint 는 뽑아 frontier evidence 로 남긴다.
                     const fallbackMetadata = buildPartialHttpMetadata(objectName, args.map((arg) => arg.text).join(', '));
                     signals.push(
                         makeSignal({
