@@ -60,15 +60,17 @@ Standard Inference
         ↓
 Candidate Store
   - relation_candidates
-  - domain_candidates
+  - (도메인 후보는 in-memory — 영속 큐 없음)
         ↓
 Approval / Mapping
   - approve / reject
   - compound → atomic endpoint mapping
+  - POST /api/domains/approve (in-memory 후보 즉시 승인)
         ↓
 Promoted Data
   - object_relations
   - object_domain_affinities
+  - domain_semantic_profiles (Phase 2 의미 추출)
         ↓
 Delta Rollup + UI refresh
 
@@ -228,22 +230,38 @@ Smart Mode:   Intent → [결정론적 8단계 파이프라인] → [결정론�
 
 ## 7. Domain 추론
 
-도메인 추론은 relation 추론과 별도로 유지되며, 두 축을 가진다.
+> 2026-04-19 재설계. 기존 Seed-based / Louvain Discovery 두 축은 모두 폐기되고
+> **결정적 신호 + 저비용 LLM 검토 + 의미 추출** 의 2단계 엔진으로 교체되었다.
 
-| 축 | 설명 |
-|----|------|
-| Seed-based | 사용자가 정의한 named domain 기준 affinity 계산 |
-| Discovery | 그래프 구조 기반 discovered domain 추출 |
+도메인 추론은 relation 추론과 별도로 유지되며 다음 두 단계로 동작한다.
 
-구현 모듈:
+| Phase | 트리거 | 산출물 |
+|-------|--------|--------|
+| Phase 1 — 발견 | `POST /api/domains/discover` (수동) | in-memory 후보 목록 → 사용자 승인 시 `objects` + `object_domain_affinities` |
+| Phase 2 — 의미 추출 | `POST /api/domains/[id]/extract-semantic` (수동, 도메인별) | `domain_semantic_profiles` 1행 (책임/state/actions/invariants/events/collaborators/scenarios) |
 
-- `domain/seedBased.ts`
-- `domain/discovery.ts`
-- `domain/labelExtractor.ts`
-- `domain/approveDomainCandidate.ts`
-- `domain/feedbackLoop.ts`
+### 7.1 Phase 1 모듈 (도메인 발견)
 
-방향은 단일 라벨 강제가 아니라 **affinity 분포 기반 소속**을 유지하는 것이다.
+| 모듈 | 역할 |
+|------|------|
+| `domain/discovery/structuralClustering.ts` | path/route/topic prefix + name token Jaccard 신호로 1차 후보 산출 |
+| `domain/discovery/relationCohesion.ts` | 후보 멤버 집합 내부 관계 비율 계산 (응집도) |
+| `domain/discovery/llmReviewer.ts` | 후보별 1회 LLM 호출로 일관성/이름 검수 (zod 스키마) |
+| `domain/discovery/runDomainDiscovery.ts` | 위 3개 + 점수 산출(affinity = 4신호 평균, confidence = cohesion) + primary/secondary 결정 |
+
+승인 흐름은 in-memory 후보를 그대로 `POST /api/domains/approve` 에 전달하여
+즉시 `object_domain_affinities` 에 upsert 한다 — 후보 큐 테이블은 사용하지 않는다.
+
+### 7.2 Phase 2 모듈 (의미 추출)
+
+| 모듈 | 역할 |
+|------|------|
+| `domain/semantic/semanticSignalCollector.ts` | AST에서 state/action/invariant/event 후보 수집 |
+| `domain/semantic/scenarioExtractor.ts` | 진입점 기준 BFS 호출 경로 추적 (1~2단계) |
+| `domain/semantic/semanticComposer.ts` + `llm/semanticPrompt.ts` | LLM 합성 (각 항목에 evidenceIds 강제) |
+
+방향은 단일 라벨 강제가 아니라 **affinity 분포 기반 소속 + 사람·AI가 함께
+읽을 수 있는 의미 프로파일** 을 유지하는 것이다.
 
 ---
 
@@ -272,9 +290,14 @@ Approval UI는 아래를 함께 다룬다.
 ## 8.2 도메인 후보
 
 ```text
-domain_candidates
-  → Approval UI
-  → object_domain_affinities
+POST /api/domains/discover  (in-memory 후보 목록)
+  → /domains UI 카드 미리보기
+  → POST /api/domains/approve
+  → objects(object_type='domain') + object_domain_affinities
+
+POST /api/domains/[id]/extract-semantic
+  → /domains/[id] 상세 6개 섹션
+  → domain_semantic_profiles (DRAFT → APPROVED)
 ```
 
 ---
