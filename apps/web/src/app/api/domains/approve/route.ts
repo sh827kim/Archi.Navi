@@ -108,6 +108,10 @@ export async function POST(req: Request) {
         const { domainId, reused } = await db.transaction(async (tx) => {
             // (P2) 같은 (workspace, /domain/<slug>) 가 이미 있으면 재사용.
             //      반복 발견·승인 시 동일 도메인이 중복 생성돼 카드와 분석이 분기되는 문제 방지.
+            //      (P2-race) 동시 승인 race 는 partial unique index `ux_objects_ws_domain_path`
+            //      (workspace_id, path) where object_type='domain' 가 DB 차원에서 막는다.
+            //      여기서는 insert ... on conflict do nothing 후 재조회하는 패턴으로,
+            //      check-then-insert 사이에 다른 트랜잭션이 끼어들어도 도메인이 중복되지 않게 한다.
             const existing = await tx
                 .select({ id: objects.id })
                 .from(objects)
@@ -126,7 +130,7 @@ export async function POST(req: Request) {
                 domainObjectId = existing[0].id;
                 didReuse = true;
             } else {
-                const [created] = await tx
+                const inserted = await tx
                     .insert(objects)
                     .values({
                         workspaceId,
@@ -138,11 +142,34 @@ export async function POST(req: Request) {
                         path: domainPath,
                         depth: 1,
                     })
+                    .onConflictDoNothing({
+                        target: [objects.workspaceId, objects.path],
+                        where: sql`"object_type" = 'domain'`,
+                    })
                     .returning({ id: objects.id });
-                if (!created) {
-                    throw new Error('도메인 객체 생성 실패');
+
+                if (inserted[0]) {
+                    domainObjectId = inserted[0].id;
+                } else {
+                    // 동시 승인이 먼저 같은 도메인을 만들어 unique index 가 충돌한 경우.
+                    // 방금 생성된 행을 다시 조회해 동일 domainId 로 합류한다.
+                    const racedRow = await tx
+                        .select({ id: objects.id })
+                        .from(objects)
+                        .where(
+                            and(
+                                eq(objects.workspaceId, workspaceId),
+                                eq(objects.path, domainPath),
+                                eq(objects.objectType, 'domain'),
+                            ),
+                        )
+                        .limit(1);
+                    if (!racedRow[0]) {
+                        throw new Error('도메인 객체 생성 실패');
+                    }
+                    domainObjectId = racedRow[0].id;
+                    didReuse = true;
                 }
-                domainObjectId = created.id;
             }
 
             // affinity upsert — primary + secondary 를 한 번에

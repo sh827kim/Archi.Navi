@@ -134,6 +134,13 @@
       "when": 1776596400000,
       "tag": "0018_drop_legacy_domain_tables",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1776683700000,
+      "tag": "0019_objects_domain_path_unique",
+      "breakpoints": true
     }
   ]
 }
