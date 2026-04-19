@@ -307,7 +307,7 @@ const domainSemanticDraftSchema = z.object({
   })),
   invariants: z.array(z.object({
     description: z.string(),
-    failureMode: z.string().optional(),
+    failureMode: z.string().nullable(),
     evidenceIds: z.array(z.string()),
   })),
   events: z.array(z.object({
@@ -337,14 +337,20 @@ export function createGenerateSemanticProfileFn(
   aiModel: LanguageModel,
   _modelName: string,
 ): GenerateSemanticProfileFn {
-  return async (prompt: string): Promise<SemanticLlmDraft> => {
+  return async (prompt: string, _inputs): Promise<SemanticLlmDraft> => {
     const result = await generateObject({
       model: aiModel,
       schema: domainSemanticDraftSchema,
       prompt,
       temperature: 0.2,
     });
-    return result.object as SemanticLlmDraft;
+    return {
+      ...result.object,
+      invariants: result.object.invariants.map((invariant) => ({
+        ...invariant,
+        failureMode: invariant.failureMode ?? null,
+      })),
+    } as SemanticLlmDraft;
   };
 }
 

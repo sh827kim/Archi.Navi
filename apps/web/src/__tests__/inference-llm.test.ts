@@ -13,6 +13,7 @@ vi.mock('ai', () => ({
 import {
   createGenerateBoostSuggestionFn,
   createGenerateDomainReviewFn,
+  createGenerateSemanticProfileFn,
   createGenerateSmartResolutionFn,
 } from '@/lib/inference-llm';
 
@@ -298,6 +299,60 @@ describe('createGenerateDomainReviewFn', () => {
       suggestedName: '주문',
       responsibilityHint: '주문 라이프사이클을 책임한다',
       mergeWithCandidateId: null,
+    });
+  });
+});
+
+describe('createGenerateSemanticProfileFn', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('semantic profile generator는 invariant.failureMode 가 없어도 null 로 정규화해야 한다', async () => {
+    generateObjectMock.mockResolvedValue({
+      object: {
+        responsibility: '주문 도메인 책임',
+        state: [],
+        actions: [],
+        invariants: [
+          {
+            description: '주문 수량은 1 이상이어야 한다',
+            evidenceIds: ['ev-1'],
+          },
+        ],
+        events: [],
+        collaborators: [],
+        scenarios: [],
+      },
+    });
+
+    const generateSemanticProfile = createGenerateSemanticProfileFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSemanticProfile('compose semantic profile', {
+      workspaceId: 'ws-1',
+      llmModel: 'gpt-4o',
+      signals: {
+        domainId: 'dom-1',
+        domainName: '주문',
+        members: [],
+        actions: [],
+        events: [],
+        collaborators: [],
+        dbAccesses: [],
+        evidence: [],
+      },
+      scenarios: [],
+    })).resolves.toMatchObject({
+      invariants: [
+        {
+          description: '주문 수량은 1 이상이어야 한다',
+          failureMode: null,
+          evidenceIds: ['ev-1'],
+        },
+      ],
     });
   });
 });

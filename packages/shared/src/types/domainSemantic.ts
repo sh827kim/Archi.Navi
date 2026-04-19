@@ -47,7 +47,7 @@ export interface DomainSemanticAction {
 export interface DomainSemanticInvariant {
     description: string;
     /** 위반 시 발생하는 결과 (예외, 거부 응답 등) */
-    failureMode?: string;
+    failureMode: string | null;
     evidenceIds: string[];
 }
 
