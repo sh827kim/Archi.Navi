@@ -417,7 +417,7 @@ pnpm --filter @archi-navi/inference exec vitest run \
 | 증상 | 원인 | 해결 |
 |------|------|------|
 | AI 채팅 에러: `Invalid prompt: messages do not match ModelMessage[] schema` | ~~UIMessage → ModelMessage 변환 누락~~ | 수정 완료 (`convertToModelMessages` 적용) |
-| `infer` CLI 명령 없음 | CLI 빌드 안 됨 | `pnpm --filter @archi-navi/cli build` |
+| `infer` CLI 명령 없음 | 폐기됨 — 도메인 발견은 `/domains` UI 또는 `POST /api/domains/discover` 사용 |
 | `/api/domains/discover` 빈 후보 | 관계 데이터 부족 | seed 데이터 주입 + 코드 스캔 후 재실행 |
 | Phase 2 의미 추출 5xx | LLM 키 누락 / quota 초과 | `OPENAI_API_KEY` 등 환경변수 확인 |
 | tree-sitter 빌드 에러 | native addon 미빌드 | `cd packages/inference && pnpm rebuild` |

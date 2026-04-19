@@ -174,7 +174,7 @@ Chat Page
 | `packages/db` | 스키마와 클라이언트 | `schema/core`, `schema/rollup`, `schema/domain`, `schema/code`, `schema/audit`, `schema/layers` |
 | `packages/shared` | 타입/상수/유틸리티 | query/request 타입, enum, `generateId`, path/URN 유틸 |
 | `packages/ui` | 공유 UI primitive | button, badge, input, select, spinner 등 |
-| `packages/cli` | CLI 진입점 | `scan`, `infer`, `rebuild-rollup`, `snapshot`, `up`, `export` |
+| `packages/cli` | CLI 진입점 | `scan`, `rebuild-rollup`, `snapshot`, `up`, `export` |
 
 ---
 

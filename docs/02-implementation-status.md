@@ -262,7 +262,6 @@
 
 - `anavi up [--port <n>] [--prod]`
 - `anavi scan --workspace <id> [--path|--workspace-dir|--github-repo|--github-org]`
-- `anavi infer --workspace <id> [--modes config,code,db]` (도메인 발견은 UI/API 전용)
 - `anavi rebuild-rollup --workspace <id> [--incremental]`
 - `anavi export --workspace <id> [--domain <id>] --format <json|dot|domain-semantic> --output <path>`
 - `anavi snapshot <save|restore> ...`
