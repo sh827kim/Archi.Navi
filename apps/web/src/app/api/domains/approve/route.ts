@@ -39,6 +39,14 @@ interface ApprovalSuccessPayload {
     primaryCount: number;
     secondaryCount: number;
     rollupApplied: boolean;
+    /** 이 도메인을 implements 하는 서비스 목록 (트랜잭션 종료 후 DB re-select) */
+    implementingServices: Array<{
+        serviceObjectId: string;
+        serviceName: string;
+        childInDomain: number;
+        childTotal: number;
+        confidence: number;
+    }>;
 }
 
 function isValidScore(value: unknown): boolean {
@@ -539,6 +547,52 @@ export async function POST(req: Request) {
             };
         });
 
+        // Task 9: 트랜잭션이 커밋된 뒤, 이 도메인의 DISCOVERY implements 행을 re-select 해
+        //   응답에 implementingServices 를 포함한다.
+        const implRows = await db
+            .select({
+                subjectObjectId: objectRelations.subjectObjectId,
+                confidence: objectRelations.confidence,
+                metadata: objectRelations.metadata,
+            })
+            .from(objectRelations)
+            .where(
+                and(
+                    eq(objectRelations.workspaceId, workspaceId),
+                    eq(objectRelations.objectId, domainId),
+                    eq(objectRelations.relationType, 'implements'),
+                    eq(objectRelations.source, 'DISCOVERY'),
+                ),
+            );
+
+        // service name 조회 (implRows 가 있는 경우만)
+        const svcRows = implRows.length > 0
+            ? await db
+                .select({ id: objects.id, name: objects.name, displayName: objects.displayName })
+                .from(objects)
+                .where(
+                    and(
+                        eq(objects.workspaceId, workspaceId),
+                        inArray(objects.id, implRows.map((r) => r.subjectObjectId)),
+                    ),
+                )
+            : [];
+        const svcName = new Map(svcRows.map((r) => [r.id, r.displayName ?? r.name]));
+
+        // confidence 내림차순 정렬
+        const implementingServices = implRows
+            .map((r) => {
+                const meta = (r.metadata ?? {}) as { childTotal?: number; childInDomain?: number };
+                return {
+                    serviceObjectId: r.subjectObjectId,
+                    serviceName: svcName.get(r.subjectObjectId) ?? r.subjectObjectId,
+                    childInDomain: meta.childInDomain ?? 0,
+                    childTotal: meta.childTotal ?? 0,
+                    confidence: r.confidence ?? 0,
+                };
+            })
+            .sort((a, b) => b.confidence - a.confidence);
+
         const successData: ApprovalSuccessPayload = {
             domainId,
             reused,
@@ -546,6 +600,7 @@ export async function POST(req: Request) {
             primaryCount: primary.length,
             secondaryCount: secondary.length,
             rollupApplied: true,
+            implementingServices,
         };
 
         // (P1) incremental rollup 발행 — 멤버별 DOMAIN_AFFINITY_CHANGED 이벤트.

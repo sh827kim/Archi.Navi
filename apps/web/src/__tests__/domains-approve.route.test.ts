@@ -136,6 +136,11 @@ function buildDbMock(opts: {
     captureObjectRelationDeletes?: string[];
     /** tx.insert(objectRelations).values(row) 의 row 를 이 배열에 push. */
     captureObjectRelationInserts?: unknown[];
+    /**
+     * Task 9: 트랜잭션 이후 응답 조립 단계에서 service name 을 매핑하는 데 사용.
+     * serviceObjectId → serviceName 매핑. 지정하지 않으면 post-tx svcRows select 를 빈 배열로 반환.
+     */
+    serviceNameById?: Record<string, string>;
 }) {
     const insertSpy = vi.fn();
     const deleteWhereConditions: unknown[] = [];
@@ -313,11 +318,54 @@ function buildDbMock(opts: {
         }),
     };
 
+    // Task 9: post-tx select 지원.
+    //   트랜잭션 종료 후 라우트는 두 번의 db.select 를 호출한다.
+    //     1) objectRelations 테이블: 이 도메인의 DISCOVERY implements 행 조회 → implRows
+    //     2) objects 테이블 (2번째 호출): service name 조회 → svcRows
+    //
+    //   테이블로 분기: objectRelations 테이블이면 implRows, objects 테이블이면
+    //   첫 번째 호출(ownedObjects 조회) 와 두 번째 호출(svcRows 조회) 를 카운터로 구분.
+    const postTxDomainId = existingDomainId ?? 'dom-new';
+
+    // implRows: serviceNameById 가 있으면 primaryAffinityByChild 기반으로 구성, 없으면 빈 배열.
+    let implRows: Array<{ subjectObjectId: string; confidence: number; metadata: { childTotal: number; childInDomain: number } }> = [];
+    if (opts.serviceNameById) {
+        const serviceIds = Object.keys(opts.serviceNameById);
+        implRows = serviceIds.map((svcId) => {
+            // 이 서비스의 코드 자식 중 postTxDomainId 에 affinity 가 있는 것 집계
+            const children = (opts.serviceChildren?.[svcId] ?? []).filter(
+                (c) => c.objectType === 'function' || c.objectType === 'api_endpoint',
+            );
+            const childTotal = children.length;
+            const childInDomain = children.filter(
+                (c) => opts.primaryAffinityByChild?.[c.id] === postTxDomainId,
+            ).length;
+            const confidence = childTotal > 0 ? childInDomain / childTotal : 0;
+            return {
+                subjectObjectId: svcId,
+                confidence,
+                metadata: { childTotal, childInDomain },
+            };
+        }).filter((r) => r.metadata.childInDomain > 0); // implements 관계 있는 것만 포함
+    }
+
+    // svcRows: serviceNameById 가 있으면 id/name 매핑, 없으면 빈 배열
+    const svcRows: Array<{ id: string; name: string; displayName: string | null }> = opts.serviceNameById
+        ? Object.entries(opts.serviceNameById).map(([id, name]) => ({ id, name, displayName: null }))
+        : [];
+
+    // db.select 응답 큐:
+    //   라우트는 순서대로 다음 세 번의 db.select 를 호출한다.
+    //     1) objects (ownedObjects 조회 — 테넌트 격리)
+    //     2) objectRelations (post-tx implRows)
+    //     3) objects (post-tx svcRows) — implRows 가 비어있으면 이 호출 자체가 없음
+    const dbSelectQueue: Array<unknown[]> = [ownedObjects, implRows, svcRows];
+
     const db = {
         select: vi.fn(() => ({
-            from: () => ({
-                // service 는 멤버 허용 타입이 아니므로 기본값은 'function' 을 사용
-                where: async () => ownedObjects,
+            from: (_table: unknown) => ({
+                // 큐에서 순서대로 꺼내 반환. 큐가 비면 빈 배열 반환.
+                where: async () => dbSelectQueue.shift() ?? [],
             }),
         })),
         transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
@@ -861,6 +909,46 @@ describe('POST /api/domains/approve', () => {
             confidence: 1,
             metadata: { childTotal: 1, childInDomain: 1 },
         });
+    });
+
+    it('T-response-impl: 응답에 이 도메인의 implementingServices 가 포함된다', async () => {
+        const db = buildDbMock({
+            members: [{ id: 'f1', objectType: 'function' }],
+            existingDomain: null,
+            parentByMember: { 'f1': 'svcA' },
+            serviceChildren: {
+                svcA: [
+                    { id: 'f1', objectType: 'function' },
+                    { id: 'f2', objectType: 'function' },
+                ],
+            },
+            primaryAffinityByChild: { f1: 'dom-new', f2: null },
+            serviceNameById: { svcA: 'OrdersService' },
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const { POST } = await import('@/app/api/domains/approve/route');
+        const res = await POST(
+            new Request('http://x/api/domains/approve', {
+                method: 'POST',
+                body: JSON.stringify({
+                    workspaceId: 'ws-1',
+                    name: 'D',
+                    primaryMembers: [{ objectId: 'f1', affinity: 0.8, confidence: 0.5 }],
+                    secondaryMembers: [],
+                }),
+            }),
+        );
+        const body = await res.json();
+        expect(body.data.implementingServices).toEqual([
+            {
+                serviceObjectId: 'svcA',
+                serviceName: 'OrdersService',
+                childInDomain: 1,
+                childTotal: 2,
+                confidence: 0.5,
+            },
+        ]);
     });
 
     it('T12: 재승인 시 누락된 기존 멤버 affinity 를 삭제하고 rollup 이벤트를 발행한다', async () => {
