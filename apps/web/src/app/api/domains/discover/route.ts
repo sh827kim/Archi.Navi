@@ -221,16 +221,19 @@ export async function POST(req: Request) {
         });
 
         // 각 candidate 에 implementingServices derived 필드 추가
-        // — 멤버 id 집합 기준으로 어느 service 가 구현체인지 집계
+        // — 멤버 id 집합 기준으로 어느 service 가 구현체인지 집계.
+        // 입력 변환(pure 함수용 shape)은 candidate 수와 무관하므로 루프 밖에서 1회.
+        const implServiceObjects = objectRows.map((o) => ({
+            id: o.id,
+            parentId: o.parentId,
+            objectType: o.objectType,
+            name: o.name,
+        }));
         const candidatesWithImpl = result.candidates.map((cand) => ({
             ...cand,
+            // cand.members = primary affinity 멤버 — secondary 미포함이라 confidence 과대계산 없음
             implementingServices: computeImplementingServices({
-                objects: objectRows.map((o) => ({
-                    id: o.id,
-                    parentId: o.parentId,
-                    objectType: o.objectType,
-                    name: o.name,
-                })),
+                objects: implServiceObjects,
                 memberIds: new Set(cand.members.map((m) => m.objectId)),
             }),
         }));
