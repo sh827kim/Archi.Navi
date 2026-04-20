@@ -60,6 +60,12 @@ vi.mock('@archi-navi/db', () => ({
 vi.mock('drizzle-orm', () => ({
     and: (...args: unknown[]) => ({ type: 'and', args }),
     eq: (col: unknown, value: unknown) => ({ type: 'eq', col, value }),
+    inArray: (col: unknown, values: unknown[]) => ({ type: 'inArray', col, values }),
+    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
+        type: 'sql',
+        strings: Array.from(strings),
+        values,
+    }),
 }));
 
 vi.mock('@archi-navi/inference', () => ({
@@ -137,6 +143,7 @@ describe('POST /api/domains/discover', () => {
 
     it('공백이 섞인 workspaceId 는 trim 후 discovery 입력으로 전달', async () => {
         const db = buildDbMock([
+            [{ count: 1 }],       // precondition 통과
             [
                 {
                     id: 'svc-order',
@@ -195,6 +202,7 @@ describe('POST /api/domains/discover', () => {
 
     it('intent 는 sourceFunctionId 가 있으면 function 기준으로 attribution 한다', async () => {
         const db = buildDbMock([
+            [{ count: 1 }],       // precondition 통과
             [
                 {
                     id: 'svc-order',
@@ -262,8 +270,23 @@ describe('POST /api/domains/discover', () => {
         });
     });
 
+    it('T-pre: workspace 에 service 외 객체가 없으면 400 PREREQUISITE_NOT_MET', async () => {
+        const db = buildDbMock([[{ count: 0 }]]);
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-empty' }));
+
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.error.code).toBe('PREREQUISITE_NOT_MET');
+        expect(body.error.hint?.route).toBe('/inference-runs');
+        expect(runDomainDiscoveryMock).not.toHaveBeenCalled();
+    });
+
     it('mixed messageTopicHints 는 string 요소만 남겨 discovery 입력으로 전달한다', async () => {
         const db = buildDbMock([
+            [{ count: 1 }],       // precondition 통과
             [
                 {
                     id: 'svc-order',

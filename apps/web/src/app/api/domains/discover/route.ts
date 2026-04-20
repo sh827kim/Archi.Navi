@@ -7,7 +7,7 @@
  * 후보는 DB 에 저장되지 않음 — 사용자가 승인할 때만 별도 라우트가 영구화한다.
  */
 import { NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
     codeArtifacts,
     getDb,
@@ -78,6 +78,39 @@ export async function POST(req: Request) {
         }
 
         const db = await getDb();
+
+        // Precondition — 초기 scan 만 돌리고 inference 를 안 돌리면 service row 만 존재한다.
+        // 이 상태에서 service 를 제외하면 후보 풀이 비어버리므로 명시적으로 실패시켜
+        // 사용자에게 원인을 안내한다.
+        const nonServiceCountRows = await db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(objects)
+            .where(
+                and(
+                    eq(objects.workspaceId, workspaceId),
+                    inArray(objects.objectType, [
+                        'function',
+                        'api_endpoint',
+                        'topic',
+                        'queue',
+                        'database',
+                        'db_table',
+                    ]),
+                ),
+            );
+        if ((nonServiceCountRows[0]?.count ?? 0) === 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'PREREQUISITE_NOT_MET',
+                        message: '도메인 발견 전에 inference 를 먼저 실행해주세요.',
+                        hint: { route: '/inference-runs' },
+                    },
+                },
+                { status: 400 },
+            );
+        }
 
         // 1. 객체 — domain 타입은 제외 (멤버 후보가 될 수 있는 service/function/topic 등만)
         const objectRows = await db
