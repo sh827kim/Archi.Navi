@@ -23,6 +23,7 @@ const {
         name: 'objects.name',
         displayName: 'objects.display_name',
         path: 'objects.path',
+        parentId: 'objects.parent_id',  // computeImplementingServices 에서 서비스 계층 추적용
     },
     interactionIntentsTable: {
         workspaceId: 'interaction_intents.workspace_id',
@@ -68,9 +69,15 @@ vi.mock('drizzle-orm', () => ({
     }),
 }));
 
-vi.mock('@archi-navi/inference', () => ({
-    runDomainDiscovery: runDomainDiscoveryMock,
-}));
+vi.mock('@archi-navi/inference', async (importOriginal) => {
+    // computeImplementingServices 는 순수 함수이므로 실제 구현을 유지하고,
+    // runDomainDiscovery 만 mock 으로 교체한다.
+    const actual = await importOriginal<typeof import('@archi-navi/inference')>();
+    return {
+        ...actual,
+        runDomainDiscovery: runDomainDiscoveryMock,
+    };
+});
 
 vi.mock('@/lib/inference-llm', () => ({
     getInferenceModel: getInferenceModelMock,
@@ -151,6 +158,7 @@ describe('POST /api/domains/discover', () => {
                     name: 'OrderService',
                     displayName: 'OrderService',
                     path: '/orders',
+                    parentId: null,
                 },
                 {
                     id: 'dom-order',
@@ -158,6 +166,7 @@ describe('POST /api/domains/discover', () => {
                     name: 'Orders',
                     displayName: 'Orders',
                     path: '/domain/orders',
+                    parentId: null,
                 },
                 {
                     id: 'fn-create',
@@ -165,6 +174,7 @@ describe('POST /api/domains/discover', () => {
                     name: 'OrderService.createOrder',
                     displayName: 'createOrder',
                     path: '/orders/create',
+                    parentId: null,
                 },
             ],
             [],
@@ -218,6 +228,7 @@ describe('POST /api/domains/discover', () => {
                     name: 'OrderService',
                     displayName: 'OrderService',
                     path: '/orders',
+                    parentId: null,
                 },
                 {
                     id: 'fn-create-order',
@@ -225,6 +236,7 @@ describe('POST /api/domains/discover', () => {
                     name: 'OrderService.createOrder',
                     displayName: 'createOrder',
                     path: '/orders/create',
+                    parentId: null,
                 },
             ],
             [
@@ -296,8 +308,8 @@ describe('POST /api/domains/discover', () => {
         const db = buildDbMock([
             [{ count: 2 }], // precondition 통과
             [
-                { id: 'svc-1', objectType: 'service', name: 'Svc', displayName: null, path: '/svc' },
-                { id: 'fn-1', objectType: 'function', name: 'fn', displayName: null, path: '/svc/fn' },
+                { id: 'svc-1', objectType: 'service', name: 'Svc', displayName: null, path: '/svc', parentId: null },
+                { id: 'fn-1', objectType: 'function', name: 'fn', displayName: null, path: '/svc/fn', parentId: null },
             ],
             [],
             [],
@@ -316,6 +328,52 @@ describe('POST /api/domains/discover', () => {
         expect(callArgs.inputs.objects.map((o) => o.id)).toEqual(['fn-1']);
     });
 
+    it('T-impl: candidate 마다 implementingServices 가 멤버의 parent service 로부터 집계된다', async () => {
+        const db = buildDbMock([
+            [{ count: 4 }], // precondition 통과
+            [
+                { id: 'svc-A', objectType: 'service', name: 'OrdersService', displayName: null, path: '/a', parentId: null },
+                { id: 'f1', objectType: 'function', name: 'create', displayName: null, path: '/a/f1', parentId: 'svc-A' },
+                { id: 'f2', objectType: 'function', name: 'update', displayName: null, path: '/a/f2', parentId: 'svc-A' },
+                { id: 'f3', objectType: 'function', name: 'archive', displayName: null, path: '/a/f3', parentId: 'svc-A' },
+                { id: 'db-x', objectType: 'db_table', name: 'orders', displayName: null, path: '/a/tbl', parentId: 'svc-A' },
+            ],
+            [],
+            [],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        runDomainDiscoveryMock.mockResolvedValue({
+            candidates: [
+                {
+                    id: 'orders',
+                    autoName: 'Orders',
+                    signals: { topPathPrefix: null, topRoutePrefix: null, topTopicPrefix: null },
+                    members: [
+                        { objectId: 'f1', pathPrefixMatch: 1, routePrefixMatch: 0, topicPrefixMatch: 0, nameTokenJaccard: 1, affinity: 0.5, relationCohesion: 0.3 },
+                        { objectId: 'f2', pathPrefixMatch: 1, routePrefixMatch: 0, topicPrefixMatch: 0, nameTokenJaccard: 1, affinity: 0.5, relationCohesion: 0.3 },
+                        { objectId: 'db-x', pathPrefixMatch: 1, routePrefixMatch: 0, topicPrefixMatch: 0, nameTokenJaccard: 1, affinity: 0.5, relationCohesion: 0.3 },
+                    ],
+                    review: null,
+                },
+            ],
+        });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1' }));
+
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.data.candidates[0].implementingServices).toEqual([
+            {
+                serviceObjectId: 'svc-A',
+                serviceName: 'OrdersService',
+                childInDomain: 2, // f1, f2 (db-x 는 코드 자식 아님)
+                childTotal: 3,    // f1, f2, f3 (db-x 제외)
+                confidence: 2 / 3,
+            },
+        ]);
+    });
+
     it('mixed messageTopicHints 는 string 요소만 남겨 discovery 입력으로 전달한다', async () => {
         const db = buildDbMock([
             [{ count: 1 }],       // precondition 통과
@@ -326,6 +384,7 @@ describe('POST /api/domains/discover', () => {
                     name: 'OrderService',
                     displayName: 'OrderService',
                     path: '/orders',
+                    parentId: null,
                 },
             ],
             [

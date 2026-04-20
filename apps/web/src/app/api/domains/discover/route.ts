@@ -15,7 +15,10 @@ import {
     objectRelations,
     objects,
 } from '@archi-navi/db';
-import { runDomainDiscovery } from '@archi-navi/inference';
+import {
+    computeImplementingServices,
+    runDomainDiscovery,
+} from '@archi-navi/inference';
 import type {
     DiscoveryCodeArtifactInput,
     DiscoveryInputs,
@@ -122,6 +125,7 @@ export async function POST(req: Request) {
                 name: objects.name,
                 displayName: objects.displayName,
                 path: objects.path,
+                parentId: objects.parentId,  // 서비스 계층 추적을 위해 추가
             })
             .from(objects)
             .where(eq(objects.workspaceId, workspaceId));
@@ -216,10 +220,25 @@ export async function POST(req: Request) {
             ...(review ? { review } : {}),
         });
 
+        // 각 candidate 에 implementingServices derived 필드 추가
+        // — 멤버 id 집합 기준으로 어느 service 가 구현체인지 집계
+        const candidatesWithImpl = result.candidates.map((cand) => ({
+            ...cand,
+            implementingServices: computeImplementingServices({
+                objects: objectRows.map((o) => ({
+                    id: o.id,
+                    parentId: o.parentId,
+                    objectType: o.objectType,
+                    name: o.name,
+                })),
+                memberIds: new Set(cand.members.map((m) => m.objectId)),
+            }),
+        }));
+
         return NextResponse.json({
             success: true,
             data: {
-                candidates: result.candidates,
+                candidates: candidatesWithImpl,
                 llmReviewed: Boolean(modelInfo),
             },
         });
