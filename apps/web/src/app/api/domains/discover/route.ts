@@ -112,7 +112,9 @@ export async function POST(req: Request) {
             );
         }
 
-        // 1. 객체 — domain 타입은 제외 (멤버 후보가 될 수 있는 service/function/topic 등만)
+        // 1. 객체 — domain/service 타입은 제외
+        //    domain: 논리 단위이므로 멤버 후보가 될 수 없음
+        //    service: 물리 구현 매체이므로 도메인 멤버가 아님
         const objectRows = await db
             .select({
                 id: objects.id,
@@ -125,7 +127,7 @@ export async function POST(req: Request) {
             .where(eq(objects.workspaceId, workspaceId));
 
         const memberObjects: DiscoveryObjectInput[] = objectRows
-            .filter((o) => o.objectType !== 'domain')
+            .filter((o) => o.objectType !== 'domain' && o.objectType !== 'service')
             .map((o) => ({
                 id: o.id,
                 objectType: o.objectType,

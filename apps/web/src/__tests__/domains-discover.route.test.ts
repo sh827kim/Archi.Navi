@@ -159,6 +159,13 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'Orders',
                     path: '/domain/orders',
                 },
+                {
+                    id: 'fn-create',
+                    objectType: 'function',
+                    name: 'OrderService.createOrder',
+                    displayName: 'createOrder',
+                    path: '/orders/create',
+                },
             ],
             [],
             [],
@@ -173,16 +180,17 @@ describe('POST /api/domains/discover', () => {
 
         expect(res.status).toBe(200);
         expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
+        // service/domain 은 필터링되고 function 만 통과해야 한다
         expect(runDomainDiscoveryMock.mock.calls[0]?.[0]).toMatchObject({
             inputs: {
                 workspaceId: 'ws-1',
                 objects: [
                     {
-                        id: 'svc-order',
-                        objectType: 'service',
-                        name: 'OrderService',
-                        displayName: 'OrderService',
-                        path: '/orders',
+                        id: 'fn-create',
+                        objectType: 'function',
+                        name: 'OrderService.createOrder',
+                        displayName: 'createOrder',
+                        path: '/orders/create',
                     },
                 ],
                 intents: [],
@@ -282,6 +290,30 @@ describe('POST /api/domains/discover', () => {
         expect(body.error.code).toBe('PREREQUISITE_NOT_MET');
         expect(body.error.hint?.route).toBe('/inference-runs');
         expect(runDomainDiscoveryMock).not.toHaveBeenCalled();
+    });
+
+    it('T-filter: objectType="service" 객체는 멤버 후보 풀에서 제외된다', async () => {
+        const db = buildDbMock([
+            [{ count: 2 }], // precondition 통과
+            [
+                { id: 'svc-1', objectType: 'service', name: 'Svc', displayName: null, path: '/svc' },
+                { id: 'fn-1', objectType: 'function', name: 'fn', displayName: null, path: '/svc/fn' },
+            ],
+            [],
+            [],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        runDomainDiscoveryMock.mockResolvedValue({ candidates: [] });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1' }));
+
+        expect(res.status).toBe(200);
+        expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
+        const callArgs = runDomainDiscoveryMock.mock.calls[0]?.[0] as {
+            inputs: { objects: Array<{ id: string }> };
+        };
+        expect(callArgs.inputs.objects.map((o) => o.id)).toEqual(['fn-1']);
     });
 
     it('mixed messageTopicHints 는 string 요소만 남겨 discovery 입력으로 전달한다', async () => {
