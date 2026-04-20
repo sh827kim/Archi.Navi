@@ -34,12 +34,23 @@ interface ApiEnvelope<T> {
   error?: { code: string; message: string };
 }
 
+/** 도메인을 구현하는 서비스 정보 */
+interface ImplementingService {
+  serviceObjectId: string;
+  serviceName: string;
+  childInDomain: number;
+  childTotal: number;
+  confidence: number;
+}
+
 export function DomainSemanticClient({ domainId }: Props) {
   const workspaceId = useWorkspace((s) => s.workspaceId);
   const [profile, setProfile] = useState<DomainSemanticProfile | null>(null);
   const [loading, setLoading] = useState(false);
   const [extracting, setExtracting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  /** 구현 서비스 목록 */
+  const [implServices, setImplServices] = useState<ImplementingService[]>([]);
 
   const loadProfile = useCallback(async () => {
     if (!workspaceId) return;
@@ -65,6 +76,26 @@ export function DomainSemanticClient({ domainId }: Props) {
   useEffect(() => {
     void loadProfile();
   }, [loadProfile]);
+
+  /** 구현 서비스 목록 로드 */
+  const loadImplServices = useCallback(async () => {
+    if (!workspaceId) return;
+    try {
+      const res = await fetch(
+        `/api/domains/${domainId}/implementing-services?workspaceId=${workspaceId}`,
+      );
+      const json = (await res.json()) as ApiEnvelope<{ implementingServices: ImplementingService[] }>;
+      if (res.ok && json.success && json.data) {
+        setImplServices(json.data.implementingServices);
+      }
+    } catch (e) {
+      console.error('[domain-semantic] loadImplServices', e);
+    }
+  }, [domainId, workspaceId]);
+
+  useEffect(() => {
+    void loadImplServices();
+  }, [loadImplServices]);
 
   const handleExtract = useCallback(async () => {
     if (!workspaceId) {
@@ -182,6 +213,50 @@ export function DomainSemanticClient({ domainId }: Props) {
           </p>
         </div>
       )}
+
+      {/* 구현 서비스 섹션 — 의미 프로파일 섹션들보다 앞에 배치 */}
+      <section className="rounded-lg border border-border bg-card p-4">
+        <header className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold">구현 서비스</h2>
+          <Badge variant="secondary" className="text-xs">
+            {implServices.length}개 서비스
+          </Badge>
+        </header>
+        {implServices.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            아직 이 도메인을 구현하는 서비스가 연결되지 않았습니다.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {implServices.map((s) => {
+              const pct = Math.round(s.confidence * 100);
+              return (
+                <li
+                  key={s.serviceObjectId}
+                  className="flex items-center justify-between gap-3 rounded border border-border/60 px-3 py-2"
+                >
+                  <span className="truncate text-sm font-medium">{s.serviceName}</span>
+                  <div className="flex items-center gap-2">
+                    {/* confidence 시각화 바 */}
+                    <div className="h-1.5 w-24 overflow-hidden rounded bg-muted">
+                      <div
+                        className="h-full bg-primary"
+                        style={{ width: `${pct}%` }}
+                      />
+                    </div>
+                    <span className="w-20 shrink-0 text-right font-mono text-xs text-muted-foreground">
+                      {s.childInDomain}/{s.childTotal} ({pct}%)
+                    </span>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        <p className="mt-3 text-[10px] text-muted-foreground">
+          * 비율은 코드 단위 (function, api_endpoint) 기준입니다.
+        </p>
+      </section>
 
       {profile && <ProfileSections profile={profile} />}
     </div>
