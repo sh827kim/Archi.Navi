@@ -37,6 +37,7 @@ const {
         workspaceId: 'objects.workspace_id',
         path: 'objects.path',
         objectType: 'objects.object_type',
+        parentId: 'objects.parent_id',
     },
     objectDomainAffinitiesTable: {
         workspaceId: 'object_domain_affinities.workspace_id',
@@ -99,17 +100,25 @@ function buildDbMock(opts: {
     insertReturnsEmpty?: boolean;
     /** race fallback 시 두 번째 tx.select 가 돌려줄 domainId */
     raceFallbackDomainId?: string;
+    /** relevantChildren 쿼리 결과 (S_old/S_new 계산용). undefined 면 빈 배열 반환. */
+    relevantChildren?: Array<{ id: string; parentId: string | null }>;
+    /** serviceParent 필터 결과 (service 로 판정될 parent id 들). undefined 면 빈 배열. */
+    serviceParents?: string[];
 }) {
     const insertSpy = vi.fn();
     const deleteWhereConditions: unknown[] = [];
 
     // tx.select 호출 시퀀스를 미리 큐로 정의해두고 차례대로 소비.
-    const selectQueue: Array<Array<{ id: string }>> = [];
+    const selectQueue: Array<Array<{ id: string; parentId?: string | null }>> = [];
     selectQueue.push(opts.existingDomainId ? [{ id: opts.existingDomainId }] : []);
     if (opts.insertReturnsEmpty) {
         // insert 후 fallback 재조회용
         selectQueue.push(opts.raceFallbackDomainId ? [{ id: opts.raceFallbackDomainId }] : []);
     }
+    // S_old/S_new 계산용: relevantChildren, serviceParents 순서로 소비됨.
+    // 라우트가 relevantObjectIds 가 비어있을 때 select 를 호출하지 않으면 queue 에 남아 무시됨.
+    selectQueue.push(opts.relevantChildren ?? []);
+    selectQueue.push((opts.serviceParents ?? []).map((id) => ({ id })));
 
     const txInsertChain = (table: unknown) => {
         const isObjectsTable = table === objectsTable;
@@ -132,12 +141,14 @@ function buildDbMock(opts: {
         select: vi.fn(() => ({
             from: (table: unknown) => ({
                 where: (condition: unknown) => {
+                    void condition;
                     if (table === objectsTable) {
+                        // limit 체인(.limit) 또는 바로 await 양쪽 케이스를 thenable 로 지원.
+                        // .limit 을 호출하면 내부적으로 큐에서 shift 해 그 값을 반환한다.
+                        const consume = () => selectQueue.shift() ?? [];
                         return {
-                            limit: async () => {
-                                void condition;
-                                return selectQueue.shift() ?? [];
-                            },
+                            limit: async () => consume(),
+                            then: (resolve: (value: unknown) => unknown) => resolve(consume()),
                         };
                     }
                     if (table === objectDomainAffinitiesTable) {
@@ -531,6 +542,44 @@ describe('POST /api/domains/approve', () => {
         expect(body.success).toBe(false);
         expect(body.error.code).toBe('INVALID_MEMBER_TYPE');
         expect(body.error.serviceObjectIds).toEqual(['svc-1']);
+    });
+
+    it('T-affected: S_old (기존 멤버 parent) ∪ S_new (신규 멤버 parent) 가 계산된다', async () => {
+        // 1차 승인 상태: 도메인 dom-D 에 f-a1 (parent=svcA), f-b1 (parent=svcB) 가 있음
+        // 2차 재승인 payload: f-a1, f-c1 (parent=svcC)
+        // 기대: affectedServiceIds = { svcA, svcB, svcC } (순서 무관)
+        const db = buildDbMock({
+            ownedIds: ['f-a1', 'f-c1'],
+            ownedObjects: [
+                { id: 'f-a1', objectType: 'function' },
+                { id: 'f-c1', objectType: 'function' },
+            ],
+            existingDomainId: 'dom-D',
+            existingAffinityObjectIds: ['f-a1', 'f-b1'],
+            relevantChildren: [
+                { id: 'f-a1', parentId: 'svcA' },
+                { id: 'f-b1', parentId: 'svcB' },
+                { id: 'f-c1', parentId: 'svcC' },
+            ],
+            serviceParents: ['svcA', 'svcB', 'svcC'],
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: 'D',
+                primaryMembers: [
+                    { objectId: 'f-a1', affinity: 0.8, confidence: 0.5 },
+                    { objectId: 'f-c1', affinity: 0.8, confidence: 0.5 },
+                ],
+                secondaryMembers: [],
+            }),
+        );
+
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(new Set(body.data.affectedServiceIds)).toEqual(new Set(['svcA', 'svcB', 'svcC']));
     });
 
     it('T12: 재승인 시 누락된 기존 멤버 affinity 를 삭제하고 rollup 이벤트를 발행한다', async () => {

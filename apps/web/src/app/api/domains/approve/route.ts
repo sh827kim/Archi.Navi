@@ -39,6 +39,8 @@ interface ApprovalSuccessPayload {
     primaryCount: number;
     secondaryCount: number;
     rollupApplied: boolean;
+    /** Task 7 에서 임시 노출. Task 8 에서 implementingServices 로 대체 예정. */
+    affectedServiceIds: string[];
 }
 
 function isValidScore(value: unknown): boolean {
@@ -271,7 +273,7 @@ export async function POST(req: Request) {
 
         // 도메인 조회/생성 + affinity upsert 는 하나의 트랜잭션으로 묶어
         // 중간 실패 시 고아 도메인/부분 affinity 가 남지 않도록 한다.
-        const { domainId, reused, staleMemberIds } = await db.transaction(async (tx) => {
+        const { domainId, reused, staleMemberIds, affectedServiceIds } = await db.transaction(async (tx) => {
             // (P2) 같은 (workspace, /domain/<slug>) 가 이미 있으면 재사용.
             //      반복 발견·승인 시 동일 도메인이 중복 생성돼 카드와 분석이 분기되는 문제 방지.
             //      (P2-race) 동시 승인 race 는 partial unique index `ux_objects_ws_domain_path`
@@ -347,6 +349,55 @@ export async function POST(req: Request) {
                         eq(objectDomainAffinities.domainId, domainObjectId),
                     ),
                 );
+
+            // Task 7: 이번 승인으로 영향받는 service 집합 (S_old ∪ S_new) 을 계산.
+            //   S_old = 기존 affinity 멤버들의 parent service 집합
+            //   S_new = 이번 payload 멤버들의 parent service 집합
+            // Task 8 에서 이 집합 범위로 implements 관계 재계산에 사용한다.
+            const oldMemberIds = existingAffinityRows.map((row) => row.objectId);
+            const relevantObjectIds = Array.from(new Set([...oldMemberIds, ...memberIds]));
+            const relevantChildren = relevantObjectIds.length > 0
+                ? await tx
+                    .select({ id: objects.id, parentId: objects.parentId })
+                    .from(objects)
+                    .where(
+                        and(
+                            eq(objects.workspaceId, workspaceId),
+                            inArray(objects.id, relevantObjectIds),
+                        ),
+                    )
+                : [];
+            const parentIds = Array.from(
+                new Set(
+                    relevantChildren
+                        .map((row) => row.parentId)
+                        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+                ),
+            );
+            const serviceParentRows = parentIds.length > 0
+                ? await tx
+                    .select({ id: objects.id })
+                    .from(objects)
+                    .where(
+                        and(
+                            eq(objects.workspaceId, workspaceId),
+                            inArray(objects.id, parentIds),
+                            eq(objects.objectType, 'service'),
+                        ),
+                    )
+                : [];
+            const serviceParentSet = new Set(serviceParentRows.map((row) => row.id));
+            const oldMemberSet = new Set(oldMemberIds);
+            const newMemberSet = new Set(memberIds);
+            const sOldSet = new Set<string>();
+            const sNewSet = new Set<string>();
+            for (const row of relevantChildren) {
+                if (!row.parentId || !serviceParentSet.has(row.parentId)) continue;
+                if (oldMemberSet.has(row.id)) sOldSet.add(row.parentId);
+                if (newMemberSet.has(row.id)) sNewSet.add(row.parentId);
+            }
+            const affectedServiceIds = Array.from(new Set([...sOldSet, ...sNewSet]));
+
             const currentMemberIdSet = new Set(memberIds);
             const staleMemberIds = existingAffinityRows
                 .map((row) => row.objectId)
@@ -390,7 +441,12 @@ export async function POST(req: Request) {
                     });
             }
 
-            return { domainId: domainObjectId, reused: didReuse, staleMemberIds };
+            return {
+                domainId: domainObjectId,
+                reused: didReuse,
+                staleMemberIds,
+                affectedServiceIds,
+            };
         });
 
         const successData: ApprovalSuccessPayload = {
@@ -400,6 +456,7 @@ export async function POST(req: Request) {
             primaryCount: primary.length,
             secondaryCount: secondary.length,
             rollupApplied: true,
+            affectedServiceIds,
         };
 
         // (P1) incremental rollup 발행 — 멤버별 DOMAIN_AFFINITY_CHANGED 이벤트.
