@@ -21,6 +21,13 @@ export interface DiscoveryObjectInput {
     displayName: string | null;
     /** materialized path (예: "/payments/order-service") */
     path: string;
+    /** service 의 직접 자식을 따라 service-scope intent 를 상속할 때 사용 */
+    parentId?: string | null;
+    /**
+     * false 면 path/name/intent 신호 추출에는 참여하지만 최종 후보 members 에는 포함되지 않는다.
+     * service 객체를 signal-only 로 유지할 때 사용한다.
+     */
+    memberEligible?: boolean;
 }
 
 /** interaction_intents 한 행 단순화 — 외부/내부 경로/토픽 prefix 신호 추출에 사용 */

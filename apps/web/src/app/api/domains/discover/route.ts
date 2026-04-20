@@ -113,9 +113,10 @@ export async function POST(req: Request) {
             );
         }
 
-        // 1. 객체 — domain/service 타입은 제외
-        //    domain: 논리 단위이므로 멤버 후보가 될 수 없음
-        //    service: 물리 구현 매체이므로 도메인 멤버가 아님
+        // 1. 객체 — domain 타입은 제외, service 는 signal-only 로 유지
+        //    domain: 논리 단위 결과물이므로 발견 입력 후보가 될 수 없음
+        //    service: 물리 구현 매체라 최종 멤버에는 들어가면 안 되지만,
+        //             service-scope intent/path 신호는 discovery scoring 에 필요하다.
         const objectRows = await db
             .select({
                 id: objects.id,
@@ -128,14 +129,16 @@ export async function POST(req: Request) {
             .from(objects)
             .where(eq(objects.workspaceId, workspaceId));
 
-        const memberObjects: DiscoveryObjectInput[] = objectRows
-            .filter((o) => o.objectType !== 'domain' && o.objectType !== 'service')
+        const discoveryObjects: DiscoveryObjectInput[] = objectRows
+            .filter((o) => o.objectType !== 'domain')
             .map((o) => ({
                 id: o.id,
                 objectType: o.objectType,
                 name: o.name,
                 displayName: o.displayName,
                 path: o.path,
+                parentId: o.parentId,
+                memberEligible: o.objectType !== 'service',
             }));
 
         // 2. 인텐트 — externalPath/route/topic 신호용
@@ -201,7 +204,7 @@ export async function POST(req: Request) {
 
         const discoveryInputs: DiscoveryInputs = {
             workspaceId,
-            objects: memberObjects,
+            objects: discoveryObjects,
             intents: intentInputs,
             relations: relationInputs,
             codeArtifacts: artifactInputs,

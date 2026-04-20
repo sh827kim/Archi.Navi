@@ -269,4 +269,50 @@ describe('runStructuralClustering', () => {
         expect(order!.members[0]!.nameTokenJaccard).toBe(1);
         expect(order!.members[0]!.affinity).toBeCloseTo(0.25);
     });
+
+    it('T9: signal-only service 의 intent 는 직접 코드 자식에게 상속되지만 service 자체는 멤버에 포함되지 않는다', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    {
+                        id: 'svc-gateway',
+                        objectType: 'service',
+                        name: 'GatewayService',
+                        displayName: null,
+                        path: '/infra/gateway',
+                        memberEligible: false,
+                    },
+                    {
+                        id: 'fn-create-order',
+                        objectType: 'function',
+                        name: 'create',
+                        displayName: null,
+                        path: '/misc/create',
+                        parentId: 'svc-gateway',
+                    },
+                ],
+                intents: [
+                    {
+                        sourceObjectId: 'svc-gateway',
+                        intentType: 'http_gateway_route',
+                        externalPathHint: '/orders',
+                        externalRoutePattern: '/orders/**',
+                        messageTopicHints: [],
+                    },
+                ],
+            }),
+        );
+
+        const orders = result.candidates.find((c) => c.slug === 'orders');
+        expect(orders).toBeDefined();
+        expect(orders!.members).toEqual([
+            expect.objectContaining({
+                objectId: 'fn-create-order',
+                routePrefixMatch: 1,
+                affinity: 0.25,
+            }),
+        ]);
+        expect(orders!.members.some((member) => member.objectId === 'svc-gateway')).toBe(false);
+        expect(orders!.signals.topRoutePrefix).toBe('/orders');
+    });
 });

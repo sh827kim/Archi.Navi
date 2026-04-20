@@ -104,15 +104,23 @@ if (nonServiceCount[0]?.count === 0) {
 }
 ```
 
-#### 6.2.2 서비스 제외
+#### 6.2.2 서비스 signal-only 유지
 
-- `objectRows` 를 `DiscoveryObjectInput[]` 으로 매핑할 때 **`objectType === 'service'` 제외** 를 추가한다.
+- `objectRows` 를 `DiscoveryObjectInput[]` 으로 매핑할 때:
+  - `domain` 은 discovery 입력에서 제외한다.
+  - `service` 는 **`memberEligible=false` 인 signal-only 객체로 유지** 한다. 이렇게 해야 `sourceFunctionId = null` 인 service-scope intent 와 service path/name 신호가 구조적 클러스터링에 계속 참여한다.
+  - 다만 최종 후보 `members` 에는 `service` 가 포함되지 않아야 한다.
 
 ```ts
-const memberObjects: DiscoveryObjectInput[] = objectRows
-    .filter((o) => o.objectType !== 'domain' && o.objectType !== 'service')
-    .map((o) => ({ ... }));
+const discoveryObjects: DiscoveryObjectInput[] = objectRows
+    .filter((o) => o.objectType !== 'domain')
+    .map((o) => ({
+        ...o,
+        memberEligible: o.objectType !== 'service',
+    }));
 ```
+
+- `sourceFunctionId = null` 인 service-scope intent 는 직접 코드 자식 (`function`, `api_endpoint`) 에도 상속해 route/topic 신호가 실제 논리 멤버의 affinity 계산에 반영되도록 한다.
 
 - 응답 포맷에 각 candidate 의 "구현 서비스 derived 목록" 을 포함한다. 이 값은 DB 에 저장되지 않으며 UI 표시용이다.
 
@@ -307,9 +315,10 @@ ORDER BY r.confidence DESC;
 추가할 테스트 (한국어 describe / it 타이틀):
 
 - **discover 라우트**:
-  - T: `objectType='service'` 객체는 멤버 후보 풀에서 제외된다
+  - T: `objectType='service'` 객체는 discovery 입력에 signal-only 로 남고 `memberEligible=false` 로 전달된다
   - T: 워크스페이스에 service 외 객체가 없으면 400 `PREREQUISITE_NOT_MET` 를 반환한다 (Codex 지적 반영)
   - T: precondition 은 canonical object type 집합에서 `service` / `domain` 만 제외한다 (`db_view`, `cache_instance`, `cache_key`, `message_broker` 도 허용)
+  - T: service-scope intent (`sourceFunctionId = null`) 는 직접 코드 자식의 route/topic affinity 계산에 반영된다
   - T: 각 candidate 의 `implementingServices` 가 멤버의 parent service 로부터 올바르게 집계된다
   - T: `implementingServices` 의 childInDomain/childTotal 는 **function/api_endpoint 만** 기준으로 계산된다 (db_table/topic 은 집계에 기여하지 않음)
   - T: 부모 service 가 없는 멤버 (자식이 아닌 최상위 객체) 는 `implementingServices` 에 기여하지 않는다
@@ -332,7 +341,7 @@ ORDER BY r.confidence DESC;
 
 파일: `apps/web/src/components/domains/domain-discover-section.tsx` (또는 발견 카드 컴포넌트 경로)
 
-- 멤버 목록: function / api_endpoint / topic / queue / db_table 등만 표시. service 는 나타나지 않음 (백엔드에서 제외됨).
+- 멤버 목록: function / api_endpoint / topic / queue / db_table 등만 표시. service 는 discovery 내부에서 signal-only 로 쓰이더라도 최종 응답/표시에는 나타나지 않음.
 - 신규 섹션 "구현 서비스":
   - 응답의 `implementingServices` 를 `confidence` 내림차순 정렬
   - 카드 형태 예시: `RobotService · 6/10 (60%)` + 비중 바

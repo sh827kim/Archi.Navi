@@ -199,17 +199,28 @@ describe('POST /api/domains/discover', () => {
 
         expect(res.status).toBe(200);
         expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
-        // service/domain 은 필터링되고 function 만 통과해야 한다
+        // domain 은 제외되고, service 는 signal-only 로 유지되어야 한다
         expect(runDomainDiscoveryMock.mock.calls[0]?.[0]).toMatchObject({
             inputs: {
                 workspaceId: 'ws-1',
                 objects: [
+                    {
+                        id: 'svc-order',
+                        objectType: 'service',
+                        name: 'OrderService',
+                        displayName: 'OrderService',
+                        path: '/orders',
+                        parentId: null,
+                        memberEligible: false,
+                    },
                     {
                         id: 'fn-create',
                         objectType: 'function',
                         name: 'OrderService.createOrder',
                         displayName: 'createOrder',
                         path: '/orders/create',
+                        parentId: null,
+                        memberEligible: true,
                     },
                 ],
                 intents: [],
@@ -343,7 +354,7 @@ describe('POST /api/domains/discover', () => {
         expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
     });
 
-    it('T-filter: objectType="service" 객체는 멤버 후보 풀에서 제외된다', async () => {
+    it('T-filter: objectType="service" 객체는 discovery 입력에 signal-only 로 남는다', async () => {
         const db = buildDbMock([
             [{ count: 2 }], // precondition 통과
             [
@@ -362,9 +373,12 @@ describe('POST /api/domains/discover', () => {
         expect(res.status).toBe(200);
         expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
         const callArgs = runDomainDiscoveryMock.mock.calls[0]?.[0] as {
-            inputs: { objects: Array<{ id: string }> };
+            inputs: { objects: Array<{ id: string; memberEligible?: boolean }> };
         };
-        expect(callArgs.inputs.objects.map((o) => o.id)).toEqual(['fn-1']);
+        expect(callArgs.inputs.objects).toEqual([
+            { id: 'svc-1', objectType: 'service', name: 'Svc', displayName: null, path: '/svc', parentId: null, memberEligible: false },
+            { id: 'fn-1', objectType: 'function', name: 'fn', displayName: null, path: '/svc/fn', parentId: null, memberEligible: true },
+        ]);
     });
 
     it('T-impl: candidate 마다 implementingServices 가 멤버의 parent service 로부터 집계된다', async () => {
