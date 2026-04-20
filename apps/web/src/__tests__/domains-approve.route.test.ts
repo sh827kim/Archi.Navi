@@ -163,7 +163,8 @@ function buildDbMock(opts: {
     const db = {
         select: vi.fn(() => ({
             from: () => ({
-                where: async () => opts.ownedObjects ?? opts.ownedIds.map((id) => ({ id, objectType: 'service' })),
+                // service 는 멤버 허용 타입이 아니므로 기본값은 'function' 을 사용
+                where: async () => opts.ownedObjects ?? opts.ownedIds.map((id) => ({ id, objectType: 'function' })),
             }),
         })),
         transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
@@ -507,6 +508,29 @@ describe('POST /api/domains/approve', () => {
         expect(json.error.domainObjectIds).toEqual(['dom-a']);
         expect(db.transaction).not.toHaveBeenCalled();
         expect(applyRollupChangesMock).not.toHaveBeenCalled();
+    });
+
+    it('T-service-reject: service objectType 멤버는 400 INVALID_MEMBER_TYPE 으로 거절된다', async () => {
+        const db = buildDbMock({
+            ownedIds: ['svc-1'],
+            ownedObjects: [{ id: 'svc-1', objectType: 'service' }],
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(
+            makeRequest({
+                workspaceId: 'ws-1',
+                name: 'Orders',
+                primaryMembers: [{ objectId: 'svc-1', affinity: 0.8, confidence: 0.5 }],
+                secondaryMembers: [],
+            }),
+        );
+
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.success).toBe(false);
+        expect(body.error.code).toBe('INVALID_MEMBER_TYPE');
+        expect(body.error.serviceObjectIds).toEqual(['svc-1']);
     });
 
     it('T12: 재승인 시 누락된 기존 멤버 affinity 를 삭제하고 rollup 이벤트를 발행한다', async () => {

@@ -251,6 +251,23 @@ export async function POST(req: Request) {
                 { status: 400 },
             );
         }
+        // service 는 물리 단위이므로 도메인 멤버로 승인 불가; implements 관계로 표현해야 함
+        const serviceMembers = ownedRows
+            .filter((row) => row.objectType === 'service')
+            .map((row) => row.id);
+        if (serviceMembers.length > 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'INVALID_MEMBER_TYPE',
+                        message: 'service 객체는 도메인 멤버로 승인할 수 없습니다. 서비스는 implements 관계로 표현됩니다.',
+                        serviceObjectIds: serviceMembers,
+                    },
+                },
+                { status: 400 },
+            );
+        }
 
         // 도메인 조회/생성 + affinity upsert 는 하나의 트랜잭션으로 묶어
         // 중간 실패 시 고아 도메인/부분 affinity 가 남지 않도록 한다.
