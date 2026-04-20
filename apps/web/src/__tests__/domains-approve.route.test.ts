@@ -25,6 +25,7 @@ const {
     createDomainAffinityChangedEventMock,
     objectsTable,
     objectDomainAffinitiesTable,
+    objectRelationsTable,
 } = vi.hoisted(() => ({
     getDbMock: vi.fn(),
     applyRollupChangesMock: vi.fn(async () => undefined),
@@ -43,6 +44,15 @@ const {
         workspaceId: 'object_domain_affinities.workspace_id',
         objectId: 'object_domain_affinities.object_id',
         domainId: 'object_domain_affinities.domain_id',
+        affinity: 'object_domain_affinities.affinity',
+    },
+    objectRelationsTable: {
+        workspaceId: 'object_relations.workspace_id',
+        relationType: 'object_relations.relation_type',
+        subjectObjectId: 'object_relations.subject_object_id',
+        objectId: 'object_relations.object_id',
+        isDerived: 'object_relations.is_derived',
+        source: 'object_relations.source',
     },
 }));
 
@@ -50,6 +60,7 @@ vi.mock('@archi-navi/db', () => ({
     getDb: getDbMock,
     objects: objectsTable,
     objectDomainAffinities: objectDomainAffinitiesTable,
+    objectRelations: objectRelationsTable,
 }));
 
 vi.mock('drizzle-orm', () => ({
@@ -91,7 +102,8 @@ function makeRequest(body: ApproveBody): Request {
  *  - (race 시) 두 번째 select: insert 가 conflict 로 0행이면, raceFallbackDomainId 가 있는 행.
  */
 function buildDbMock(opts: {
-    ownedIds: string[];
+    // 기존 Task 7 계약 유지 (호환)
+    ownedIds?: string[];
     ownedObjects?: Array<{ id: string; objectType: string }>;
     existingDomainId?: string;
     insertedDomainId?: string;
@@ -104,65 +116,195 @@ function buildDbMock(opts: {
     relevantChildren?: Array<{ id: string; parentId: string | null }>;
     /** serviceParent 필터 결과 (service 로 판정될 parent id 들). undefined 면 빈 배열. */
     serviceParents?: string[];
+    // Task 8 추가 계약 ───────────────────────────────────────────
+    /**
+     * Task 8 간편 입력: 멤버 id 와 objectType 만 넘기면 ownedObjects 를 자동 구성.
+     * ownedObjects / ownedIds 가 넘겨지지 않은 경우에만 사용됨.
+     */
+    members?: Array<{ id: string; objectType: string }>;
+    /** Task 8 간편 입력: existingDomainId 대신 객체 형태 */
+    existingDomain?: { id: string } | null;
+    /** Task 8 간편 입력: existingAffinityObjectIds 별칭 */
+    existingAffinityMemberIds?: string[];
+    /** Task 8 간편 입력: memberId → parent serviceId. relevantChildren/serviceParents 자동 구성. */
+    parentByMember?: Record<string, string>;
+    /** service 별 자식 조회용 (Task 8 implements 재계산) */
+    serviceChildren?: Record<string, Array<{ id: string; objectType: string }>>;
+    /** childId → primary affinity domainId (null 이면 affinity 없음) — DISTINCT ON 결과 mock */
+    primaryAffinityByChild?: Record<string, string | null>;
+    /** tx.delete(objectRelations) 호출 시, 순서대로 대응 serviceId 를 이 배열에 push. */
+    captureObjectRelationDeletes?: string[];
+    /** tx.insert(objectRelations).values(row) 의 row 를 이 배열에 push. */
+    captureObjectRelationInserts?: unknown[];
 }) {
     const insertSpy = vi.fn();
     const deleteWhereConditions: unknown[] = [];
 
+    // ownedObjects 유도 — 간편 입력(members/parentByMember) 과 호환
+    const ownedIds = opts.ownedIds ?? Object.keys(opts.parentByMember ?? {});
+    const ownedObjects: Array<{ id: string; objectType: string }> = opts.ownedObjects
+        ?? opts.members
+        ?? ownedIds.map((id) => ({ id, objectType: 'function' }));
+
+    // existingDomainId 유도
+    const existingDomainId = opts.existingDomainId
+        ?? (opts.existingDomain ? opts.existingDomain.id : undefined);
+    const existingAffinityObjectIds = opts.existingAffinityObjectIds
+        ?? opts.existingAffinityMemberIds;
+
+    // relevantChildren / serviceParents 유도 — parentByMember 로부터
+    let relevantChildren = opts.relevantChildren;
+    let serviceParents = opts.serviceParents;
+    if (!relevantChildren && opts.parentByMember) {
+        relevantChildren = Object.entries(opts.parentByMember).map(([id, parentId]) => ({
+            id,
+            parentId,
+        }));
+    }
+    if (!serviceParents && opts.parentByMember) {
+        serviceParents = Array.from(new Set(Object.values(opts.parentByMember)));
+    }
+
     // tx.select 호출 시퀀스를 미리 큐로 정의해두고 차례대로 소비.
     const selectQueue: Array<Array<{ id: string; parentId?: string | null }>> = [];
-    selectQueue.push(opts.existingDomainId ? [{ id: opts.existingDomainId }] : []);
+    selectQueue.push(existingDomainId ? [{ id: existingDomainId }] : []);
     if (opts.insertReturnsEmpty) {
         // insert 후 fallback 재조회용
         selectQueue.push(opts.raceFallbackDomainId ? [{ id: opts.raceFallbackDomainId }] : []);
     }
     // S_old/S_new 계산용: relevantChildren, serviceParents 순서로 소비됨.
     // 라우트가 relevantObjectIds 가 비어있을 때 select 를 호출하지 않으면 queue 에 남아 무시됨.
-    selectQueue.push(opts.relevantChildren ?? []);
-    selectQueue.push((opts.serviceParents ?? []).map((id) => ({ id })));
+    selectQueue.push(relevantChildren ?? []);
+    selectQueue.push((serviceParents ?? []).map((id) => ({ id })));
+
+    // Task 8: affectedServiceIds 순회 순서 (sorted) 에 맞춘 delete 카운터 매핑.
+    //   라우트는 `for (const serviceId of affectedServiceIds)` 로 반복하며 delete 를 호출하므로
+    //   delete 호출 순서 == sorted affectedServiceIds 순서.
+    //   serviceChildren 의 key 를 정렬해 deleteCallIndex 에 매핑한다.
+    const sortedServiceIds = Object.keys(opts.serviceChildren ?? {}).sort();
+    let objectRelationsDeleteCount = 0;
 
     const txInsertChain = (table: unknown) => {
         const isObjectsTable = table === objectsTable;
+        const isObjectRelationsTable = table === objectRelationsTable;
         return {
-            values: () => ({
-                // 신규 코드의 도메인 insert 체인: values().onConflictDoNothing().returning()
-                onConflictDoNothing: () => ({
-                    returning: async () =>
-                        isObjectsTable && opts.insertReturnsEmpty
-                            ? []
-                            : [{ id: opts.insertedDomainId ?? 'new-domain' }],
-                }),
-                // 기존 affinity upsert 체인: values().onConflictDoUpdate()
-                onConflictDoUpdate: async () => undefined,
-            }),
+            values: (row?: unknown) => {
+                if (isObjectRelationsTable && opts.captureObjectRelationInserts && row !== undefined) {
+                    opts.captureObjectRelationInserts.push(row);
+                }
+                return {
+                    // 도메인 insert 체인: values().onConflictDoNothing().returning()
+                    onConflictDoNothing: (_opts?: unknown) => ({
+                        returning: async () =>
+                            isObjectsTable && opts.insertReturnsEmpty
+                                ? []
+                                : [{ id: opts.insertedDomainId ?? 'new-domain' }],
+                        // objectRelations insert 에서는 .returning 없이 바로 await 되는 경우도 지원
+                        then: (resolve: (value: unknown) => unknown) => resolve(undefined),
+                    }),
+                    // affinity upsert 체인: values().onConflictDoUpdate()
+                    onConflictDoUpdate: async () => undefined,
+                };
+            },
         };
     };
 
+    // tx.select 용 where 결과 빌더
+    const makeObjectsSelectResult = () => {
+        const consume = () => selectQueue.shift() ?? [];
+        return {
+            limit: async () => consume(),
+            then: (resolve: (value: unknown) => unknown) => resolve(consume()),
+        };
+    };
+
+    // tx.select 가 반환하는 from builder — 일반 select 용
+    const selectFromBuilder = (table: unknown) => ({
+        where: (condition: unknown) => {
+            void condition;
+            if (table === objectsTable) {
+                return makeObjectsSelectResult();
+            }
+            if (table === objectDomainAffinitiesTable) {
+                return Promise.resolve(
+                    (existingAffinityObjectIds ?? []).map((objectId) => ({ objectId })),
+                );
+            }
+            return Promise.resolve([]);
+        },
+    });
+
+    // tx.select 는 Task 8 의 "service 자식 조회" 에도 사용됨.
+    //   라우트: tx.select({id: objects.id}).from(objects).where(parentId=serviceId AND objectType IN [...])
+    //   이 경로는 serviceChildren 에서 children 을 code 자식 필터로 반환해야 한다.
+    //   간단히 "objects 테이블 + limit 없음" 경로에 추가 레이어를 끼워넣는다 — 쿼리 순서로 구분.
+    //   호출 순서: task8 루프에서 각 serviceId 당 1회씩 호출 (selectQueue 소진 이후).
+    const task8ChildrenQueue: Array<Array<{ id: string }>> = sortedServiceIds.map((svcId) =>
+        (opts.serviceChildren?.[svcId] ?? [])
+            .filter((c) => c.objectType === 'function' || c.objectType === 'api_endpoint')
+            .map((c) => ({ id: c.id })),
+    );
+
     const tx = {
         select: vi.fn(() => ({
-            from: (table: unknown) => ({
-                where: (condition: unknown) => {
-                    void condition;
-                    if (table === objectsTable) {
-                        // limit 체인(.limit) 또는 바로 await 양쪽 케이스를 thenable 로 지원.
-                        // .limit 을 호출하면 내부적으로 큐에서 shift 해 그 값을 반환한다.
-                        const consume = () => selectQueue.shift() ?? [];
-                        return {
-                            limit: async () => consume(),
-                            then: (resolve: (value: unknown) => unknown) => resolve(consume()),
-                        };
-                    }
-                    if (table === objectDomainAffinitiesTable) {
-                        return Promise.resolve(
-                            (opts.existingAffinityObjectIds ?? []).map((objectId) => ({ objectId })),
-                        );
-                    }
-                    return Promise.resolve([]);
-                },
+            from: (table: unknown) => {
+                // Task 8 이후 selectQueue 가 다 소진되고 service 자식 조회 단계에 들어오면
+                //   task8ChildrenQueue 에서 순서대로 꺼내 반환.
+                if (table === objectsTable && selectQueue.length === 0 && task8ChildrenQueue.length > 0) {
+                    return {
+                        where: (condition: unknown) => {
+                            void condition;
+                            const next = task8ChildrenQueue.shift() ?? [];
+                            return {
+                                limit: async () => next,
+                                then: (resolve: (value: unknown) => unknown) => resolve(next),
+                            };
+                        },
+                    };
+                }
+                return selectFromBuilder(table);
+            },
+        })),
+        // Task 8: selectDistinctOn 지원 (primary affinity 조회)
+        selectDistinctOn: vi.fn((_distinctCols: unknown, _selection: unknown) => ({
+            from: (_table: unknown) => ({
+                where: (_cond: unknown) => ({
+                    orderBy: (..._args: unknown[]) => {
+                        // 최근 delete 호출의 serviceId 와 매칭해 해당 service 의 자식에 대한
+                        //   primaryAffinityByChild 를 DISTINCT ON 결과로 반환.
+                        // 호출 순서: 현재 반복 중인 serviceId 는 sortedServiceIds[objectRelationsDeleteCount-1]
+                        const currentServiceId: string | undefined =
+                            sortedServiceIds[objectRelationsDeleteCount - 1];
+                        const children = currentServiceId
+                            ? (opts.serviceChildren?.[currentServiceId] ?? [])
+                                .filter((c: { id: string; objectType: string }) =>
+                                    c.objectType === 'function' || c.objectType === 'api_endpoint')
+                            : [];
+                        const rows = children
+                            .map((c: { id: string; objectType: string }) => {
+                                const domainId = opts.primaryAffinityByChild?.[c.id] ?? null;
+                                return domainId ? { childId: c.id, domainId } : null;
+                            })
+                            .filter(
+                                (r: { childId: string; domainId: string } | null): r is { childId: string; domainId: string } =>
+                                    r !== null,
+                            );
+                        return Promise.resolve(rows);
+                    },
+                }),
             }),
         })),
-        delete: vi.fn(() => ({
+        delete: vi.fn((table: unknown) => ({
             where: async (condition: unknown) => {
                 deleteWhereConditions.push(condition);
+                if (table === objectRelationsTable) {
+                    // delete 호출 순서 == sortedServiceIds 순서 가정
+                    const serviceId = sortedServiceIds[objectRelationsDeleteCount];
+                    if (serviceId !== undefined && opts.captureObjectRelationDeletes) {
+                        opts.captureObjectRelationDeletes.push(serviceId);
+                    }
+                    objectRelationsDeleteCount += 1;
+                }
             },
         })),
         insert: vi.fn((table: unknown) => {
@@ -175,7 +317,7 @@ function buildDbMock(opts: {
         select: vi.fn(() => ({
             from: () => ({
                 // service 는 멤버 허용 타입이 아니므로 기본값은 'function' 을 사용
-                where: async () => opts.ownedObjects ?? opts.ownedIds.map((id) => ({ id, objectType: 'function' })),
+                where: async () => ownedObjects,
             }),
         })),
         transaction: vi.fn(async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx)),
@@ -544,10 +686,10 @@ describe('POST /api/domains/approve', () => {
         expect(body.error.serviceObjectIds).toEqual(['svc-1']);
     });
 
-    it('T-affected: S_old (기존 멤버 parent) ∪ S_new (신규 멤버 parent) 가 계산된다', async () => {
-        // 1차 승인 상태: 도메인 dom-D 에 f-a1 (parent=svcA), f-b1 (parent=svcB) 가 있음
-        // 2차 재승인 payload: f-a1, f-c1 (parent=svcC)
-        // 기대: affectedServiceIds = { svcA, svcB, svcC } (순서 무관)
+    it('T-affected: S_old ∪ S_new 가 실제로 objectRelations DELETE 대상으로 전달된다', async () => {
+        // Task 8: affectedServiceIds 응답 필드는 제거됐으므로,
+        // S_old ∪ S_new 가 delete 호출 대상이 되었는지로 계약을 검증.
+        const capturedDeletes: string[] = [];
         const db = buildDbMock({
             ownedIds: ['f-a1', 'f-c1'],
             ownedObjects: [
@@ -562,6 +704,14 @@ describe('POST /api/domains/approve', () => {
                 { id: 'f-c1', parentId: 'svcC' },
             ],
             serviceParents: ['svcA', 'svcB', 'svcC'],
+            // implements 재계산을 위한 service 자식 mock (childTotal 은 모두 1 로 단순화)
+            serviceChildren: {
+                svcA: [{ id: 'f-a1', objectType: 'function' }],
+                svcB: [{ id: 'f-b1', objectType: 'function' }],
+                svcC: [{ id: 'f-c1', objectType: 'function' }],
+            },
+            primaryAffinityByChild: { 'f-a1': 'dom-D', 'f-b1': null, 'f-c1': 'dom-D' },
+            captureObjectRelationDeletes: capturedDeletes,
         });
         getDbMock.mockResolvedValue(db);
 
@@ -578,8 +728,139 @@ describe('POST /api/domains/approve', () => {
         );
 
         expect(res.status).toBe(200);
-        const body = await res.json();
-        expect(new Set(body.data.affectedServiceIds)).toEqual(new Set(['svcA', 'svcB', 'svcC']));
+        expect(new Set(capturedDeletes)).toEqual(new Set(['svcA', 'svcB', 'svcC']));
+    });
+
+    it('T-impl-single: 단일 도메인 승인 시 영향받는 service 에 올바른 confidence 로 implements 행이 INSERT 된다', async () => {
+        // svcA 의 자식 function 이 3개 (f1, f2, f3), 도메인 D 에 f1, f2 가 멤버
+        // → svcA.implements(D).confidence = 2/3, childInDomain=2, childTotal=3
+        const capturedInserts: unknown[] = [];
+        const db = buildDbMock({
+            members: [
+                { id: 'f1', objectType: 'function' },
+                { id: 'f2', objectType: 'function' },
+            ],
+            existingDomain: null,
+            parentByMember: { 'f1': 'svcA', 'f2': 'svcA' },
+            serviceChildren: {
+                svcA: [
+                    { id: 'f1', objectType: 'function' },
+                    { id: 'f2', objectType: 'function' },
+                    { id: 'f3', objectType: 'function' },
+                ],
+            },
+            primaryAffinityByChild: { f1: 'dom-new', f2: 'dom-new', f3: null },
+            captureObjectRelationInserts: capturedInserts,
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const { POST } = await import('@/app/api/domains/approve/route');
+        await POST(
+            new Request('http://x/api/domains/approve', {
+                method: 'POST',
+                body: JSON.stringify({
+                    workspaceId: 'ws-1',
+                    name: 'D',
+                    primaryMembers: [
+                        { objectId: 'f1', affinity: 0.8, confidence: 0.5 },
+                        { objectId: 'f2', affinity: 0.8, confidence: 0.5 },
+                    ],
+                    secondaryMembers: [],
+                }),
+            }),
+        );
+
+        expect(capturedInserts).toContainEqual(
+            expect.objectContaining({
+                subjectObjectId: 'svcA',
+                relationType: 'implements',
+                source: 'DISCOVERY',
+                isDerived: true,
+                interactionKind: 'STATIC',
+                direction: 'OUT',
+                confidence: 2 / 3,
+                metadata: expect.objectContaining({
+                    childTotal: 3,
+                    childInDomain: 2,
+                    derivedFrom: 'child_membership_ratio',
+                }),
+            }),
+        );
+    });
+
+    it('T-impl-stale: 재승인에서 빠진 멤버의 parent service 도 implements 가 재계산되어 stale 하지 않다', async () => {
+        const capturedDeletes: string[] = [];
+        const capturedInserts: unknown[] = [];
+        const db = buildDbMock({
+            members: [{ id: 'f-a1', objectType: 'function' }],
+            existingDomain: { id: 'dom-D' },
+            existingAffinityMemberIds: ['f-a1', 'f-b1'],
+            parentByMember: { 'f-a1': 'svcA', 'f-b1': 'svcB' },
+            serviceChildren: {
+                svcA: [{ id: 'f-a1', objectType: 'function' }],
+                svcB: [{ id: 'f-b1', objectType: 'function' }],
+            },
+            primaryAffinityByChild: { 'f-a1': 'dom-D', 'f-b1': null },
+            captureObjectRelationDeletes: capturedDeletes,
+            captureObjectRelationInserts: capturedInserts,
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const { POST } = await import('@/app/api/domains/approve/route');
+        await POST(
+            new Request('http://x/api/domains/approve', {
+                method: 'POST',
+                body: JSON.stringify({
+                    workspaceId: 'ws-1',
+                    name: 'D',
+                    primaryMembers: [{ objectId: 'f-a1', affinity: 0.8, confidence: 0.5 }],
+                    secondaryMembers: [],
+                }),
+            }),
+        );
+
+        expect(capturedDeletes).toContain('svcA');
+        expect(capturedDeletes).toContain('svcB');
+        expect(capturedInserts.filter((i) => (i as { subjectObjectId?: string }).subjectObjectId === 'svcA')).toHaveLength(1);
+        expect(capturedInserts.filter((i) => (i as { subjectObjectId?: string }).subjectObjectId === 'svcB')).toHaveLength(0);
+    });
+
+    it('T-impl-storage: db_table 자식은 childTotal/childInDomain 에 포함되지 않는다', async () => {
+        const capturedInserts: unknown[] = [];
+        const db = buildDbMock({
+            members: [{ id: 'f1', objectType: 'function' }],
+            existingDomain: null,
+            parentByMember: { 'f1': 'svcA' },
+            serviceChildren: {
+                svcA: [
+                    { id: 'f1', objectType: 'function' },
+                    { id: 'tbl-1', objectType: 'db_table' },
+                    { id: 'tbl-2', objectType: 'db_table' },
+                ],
+            },
+            primaryAffinityByChild: { f1: 'dom-new', 'tbl-1': null, 'tbl-2': null },
+            captureObjectRelationInserts: capturedInserts,
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const { POST } = await import('@/app/api/domains/approve/route');
+        await POST(
+            new Request('http://x/api/domains/approve', {
+                method: 'POST',
+                body: JSON.stringify({
+                    workspaceId: 'ws-1',
+                    name: 'D',
+                    primaryMembers: [{ objectId: 'f1', affinity: 0.8, confidence: 0.5 }],
+                    secondaryMembers: [],
+                }),
+            }),
+        );
+
+        const svcAInsert = capturedInserts.find((i) => (i as { subjectObjectId?: string }).subjectObjectId === 'svcA');
+        expect(svcAInsert).toMatchObject({
+            confidence: 1,
+            metadata: { childTotal: 1, childInDomain: 1 },
+        });
     });
 
     it('T12: 재승인 시 누락된 기존 멤버 affinity 를 삭제하고 rollup 이벤트를 발행한다', async () => {

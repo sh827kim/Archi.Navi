@@ -13,7 +13,7 @@
  */
 import { NextResponse } from 'next/server';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { getDb, objectDomainAffinities, objects } from '@archi-navi/db';
+import { getDb, objectDomainAffinities, objectRelations, objects } from '@archi-navi/db';
 import {
     applyRollupChanges,
     createDomainAffinityChangedEvent,
@@ -39,8 +39,6 @@ interface ApprovalSuccessPayload {
     primaryCount: number;
     secondaryCount: number;
     rollupApplied: boolean;
-    /** Task 7 에서 임시 노출. Task 8 에서 implementingServices 로 대체 예정. */
-    affectedServiceIds: string[];
 }
 
 function isValidScore(value: unknown): boolean {
@@ -273,7 +271,7 @@ export async function POST(req: Request) {
 
         // 도메인 조회/생성 + affinity upsert 는 하나의 트랜잭션으로 묶어
         // 중간 실패 시 고아 도메인/부분 affinity 가 남지 않도록 한다.
-        const { domainId, reused, staleMemberIds, affectedServiceIds } = await db.transaction(async (tx) => {
+        const { domainId, reused, staleMemberIds } = await db.transaction(async (tx) => {
             // (P2) 같은 (workspace, /domain/<slug>) 가 이미 있으면 재사용.
             //      반복 발견·승인 시 동일 도메인이 중복 생성돼 카드와 분석이 분기되는 문제 방지.
             //      (P2-race) 동시 승인 race 는 partial unique index `ux_objects_ws_domain_path`
@@ -396,7 +394,8 @@ export async function POST(req: Request) {
                 if (oldMemberSet.has(row.id)) sOldSet.add(row.parentId);
                 if (newMemberSet.has(row.id)) sNewSet.add(row.parentId);
             }
-            const affectedServiceIds = Array.from(new Set([...sOldSet, ...sNewSet]));
+            // 결정적 순회 순서를 위해 정렬된 affectedServiceIds 를 사용 (sorted).
+            const affectedServiceIds = Array.from(new Set([...sOldSet, ...sNewSet])).sort();
 
             const currentMemberIdSet = new Set(memberIds);
             const staleMemberIds = existingAffinityRows
@@ -441,11 +440,102 @@ export async function POST(req: Request) {
                     });
             }
 
+            // Task 8: S_old ∪ S_new 각 service 에 대해 DISCOVERY implements 관계를 재계산.
+            // 규칙 (implementingServices.ts 와 동일):
+            //  - 자식 = function | api_endpoint 만 집계
+            //  - primary-only: 자식마다 affinity 가장 높은 domain 1개만 (DISTINCT ON affinity DESC, domainId ASC)
+            //  - childInDomain / childTotal 비율을 confidence 로 저장
+            //  - childTotal == 0 (storage-only) 이면 DELETE 만 하고 INSERT 스킵
+            for (const serviceId of affectedServiceIds) {
+                // 1. 기존 DISCOVERY implements 제거
+                await tx
+                    .delete(objectRelations)
+                    .where(
+                        and(
+                            eq(objectRelations.workspaceId, workspaceId),
+                            eq(objectRelations.subjectObjectId, serviceId),
+                            eq(objectRelations.relationType, 'implements'),
+                            eq(objectRelations.source, 'DISCOVERY'),
+                        ),
+                    );
+
+                // 2. 이 service 의 코드 자식 (function/api_endpoint) 조회
+                const codeChildren = await tx
+                    .select({ id: objects.id })
+                    .from(objects)
+                    .where(
+                        and(
+                            eq(objects.workspaceId, workspaceId),
+                            eq(objects.parentId, serviceId),
+                            inArray(objects.objectType, ['function', 'api_endpoint']),
+                        ),
+                    );
+                const childTotal = codeChildren.length;
+                if (childTotal === 0) continue; // storage-only service — INSERT 스킵
+                const childIds = codeChildren.map((c) => c.id);
+
+                // 3. 자식별 primary domain (affinity DESC, domainId ASC → DISTINCT ON)
+                const primaryRows = await tx
+                    .selectDistinctOn([objectDomainAffinities.objectId], {
+                        childId: objectDomainAffinities.objectId,
+                        domainId: objectDomainAffinities.domainId,
+                    })
+                    .from(objectDomainAffinities)
+                    .where(
+                        and(
+                            eq(objectDomainAffinities.workspaceId, workspaceId),
+                            inArray(objectDomainAffinities.objectId, childIds),
+                        ),
+                    )
+                    .orderBy(
+                        objectDomainAffinities.objectId,
+                        sql`${objectDomainAffinities.affinity} DESC`,
+                        sql`${objectDomainAffinities.domainId} ASC`,
+                    );
+
+                // 4. 도메인별 집계 (childInDomain)
+                const byDomain = new Map<string, number>();
+                for (const row of primaryRows) {
+                    byDomain.set(row.domainId, (byDomain.get(row.domainId) ?? 0) + 1);
+                }
+
+                // 5. 도메인별 INSERT — onConflictDoNothing 으로 동시성 방어
+                for (const [domainId, childInDomain] of byDomain) {
+                    const confidence = childInDomain / childTotal;
+                    await tx
+                        .insert(objectRelations)
+                        .values({
+                            workspaceId,
+                            relationType: 'implements',
+                            subjectObjectId: serviceId,
+                            objectId: domainId,
+                            interactionKind: 'STATIC',
+                            direction: 'OUT',
+                            isDerived: true,
+                            confidence,
+                            source: 'DISCOVERY',
+                            metadata: {
+                                childTotal,
+                                childInDomain,
+                                derivedFrom: 'child_membership_ratio',
+                            },
+                        })
+                        .onConflictDoNothing({
+                            target: [
+                                objectRelations.workspaceId,
+                                objectRelations.relationType,
+                                objectRelations.subjectObjectId,
+                                objectRelations.objectId,
+                                objectRelations.isDerived,
+                            ],
+                        });
+                }
+            }
+
             return {
                 domainId: domainObjectId,
                 reused: didReuse,
                 staleMemberIds,
-                affectedServiceIds,
             };
         });
 
@@ -456,7 +546,6 @@ export async function POST(req: Request) {
             primaryCount: primary.length,
             secondaryCount: secondary.length,
             rollupApplied: true,
-            affectedServiceIds,
         };
 
         // (P1) incremental rollup 발행 — 멤버별 DOMAIN_AFFINITY_CHANGED 이벤트.
