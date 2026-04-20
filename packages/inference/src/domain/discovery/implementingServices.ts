@@ -26,7 +26,12 @@ export interface ComputeImplementingServicesInput {
         objectType: string;
         name: string;
     }>;
-    /** "이 도메인에 속한다" 로 간주할 객체 id 집합 */
+    /**
+     * "이 도메인에 속한다" 로 간주할 객체 id 집합.
+     * ⚠️ primary affinity 멤버만 전달해야 한다. secondary 멤버를 포함하면
+     * childInDomain 이 과대 계산돼 confidence 가 부정확해진다.
+     * (호출자 책임 — discover: cand.members, approve: primary affinity DISTINCT ON)
+     */
     memberIds: Set<string>;
 }
 
