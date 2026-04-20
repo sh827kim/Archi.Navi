@@ -223,20 +223,43 @@ export async function POST(req: Request) {
         // 각 candidate 에 implementingServices derived 필드 추가
         // — 멤버 id 집합 기준으로 어느 service 가 구현체인지 집계.
         // 입력 변환(pure 함수용 shape)은 candidate 수와 무관하므로 루프 밖에서 1회.
+
+        // 전체 후보를 스캔해 객체별 primary candidate id 를 결정.
+        // runDomainDiscovery 가 이미 primary + secondary(affinity ≥ 0.5) 섞인 members 를 반환하므로,
+        // implementingServices 계산에서는 secondary 를 제외해야 한다.
+        // (secondary 를 포함하면 같은 service 자식이 여러 후보에서 카운트돼 confidence 과대계산)
+        const primaryByObject = new Map<string, { candId: string; affinity: number }>();
+        for (const cand of result.candidates) {
+            for (const m of cand.members) {
+                const cur = primaryByObject.get(m.objectId);
+                if (!cur || m.affinity > cur.affinity) {
+                    primaryByObject.set(m.objectId, { candId: cand.id, affinity: m.affinity });
+                }
+            }
+        }
+
         const implServiceObjects = objectRows.map((o) => ({
             id: o.id,
             parentId: o.parentId,
             objectType: o.objectType,
             name: o.name,
         }));
-        const candidatesWithImpl = result.candidates.map((cand) => ({
-            ...cand,
-            // cand.members = primary affinity 멤버 — secondary 미포함이라 confidence 과대계산 없음
-            implementingServices: computeImplementingServices({
-                objects: implServiceObjects,
-                memberIds: new Set(cand.members.map((m) => m.objectId)),
-            }),
-        }));
+        const candidatesWithImpl = result.candidates.map((cand) => {
+            // affinity 최강인 후보에게만 귀속된 primary 멤버 id 만 수집
+            const primaryMemberIds = new Set<string>();
+            for (const m of cand.members) {
+                if (primaryByObject.get(m.objectId)?.candId === cand.id) {
+                    primaryMemberIds.add(m.objectId);
+                }
+            }
+            return {
+                ...cand,
+                implementingServices: computeImplementingServices({
+                    objects: implServiceObjects,
+                    memberIds: primaryMemberIds,
+                }),
+            };
+        });
 
         return NextResponse.json({
             success: true,

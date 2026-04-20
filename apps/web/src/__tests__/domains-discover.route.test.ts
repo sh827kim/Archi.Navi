@@ -374,6 +374,76 @@ describe('POST /api/domains/discover', () => {
         ]);
     });
 
+    it('T-impl-secondary-exclude: secondary 멤버는 implementingServices 집계에서 제외된다', async () => {
+        // fn1 → svcOrders(자식 1개), fn2 → svcPayments(자식 1개)
+        // 후보 A(path=/orders): fn1 primary(0.75), fn2 secondary(0.5)
+        // 후보 B(path=/payments): fn2 primary(0.8), fn1 secondary(0.5)
+        // → A 의 implementingServices 는 svcOrders 만(fn2 제외), B 는 svcPayments 만(fn1 제외)
+        const db = buildDbMock([
+            [{ count: 2 }], // precondition 통과
+            [
+                { id: 'svcOrders',   objectType: 'service',  name: 'OrdersService',   displayName: null, path: '/orders',        parentId: null },
+                { id: 'svcPayments', objectType: 'service',  name: 'PaymentsService', displayName: null, path: '/payments',      parentId: null },
+                { id: 'fn1',         objectType: 'function', name: 'createOrder',     displayName: null, path: '/orders/fn1',    parentId: 'svcOrders' },
+                { id: 'fn2',         objectType: 'function', name: 'processPayment',  displayName: null, path: '/payments/fn2',  parentId: 'svcPayments' },
+            ],
+            [],
+            [],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        // runDomainDiscovery 를 고정값으로 교체 — primary/secondary 섞인 members 시뮬레이션
+        runDomainDiscoveryMock.mockResolvedValue({
+            candidates: [
+                {
+                    id: 'orders',
+                    autoName: 'Orders',
+                    signals: { topPathPrefix: '/orders', topRoutePrefix: null, topTopicPrefix: null },
+                    members: [
+                        { objectId: 'fn1', pathPrefixMatch: 1, routePrefixMatch: 0, topicPrefixMatch: 0, nameTokenJaccard: 1, affinity: 0.75, relationCohesion: 0 },
+                        // fn2 는 secondary (affinity ≥ 0.5 기준 포함됐지만 primary 는 payments)
+                        { objectId: 'fn2', pathPrefixMatch: 0, routePrefixMatch: 0, topicPrefixMatch: 0, nameTokenJaccard: 0, affinity: 0.5,  relationCohesion: 0 },
+                    ],
+                    review: null,
+                },
+                {
+                    id: 'payments',
+                    autoName: 'Payments',
+                    signals: { topPathPrefix: '/payments', topRoutePrefix: null, topTopicPrefix: null },
+                    members: [
+                        { objectId: 'fn2', pathPrefixMatch: 1, routePrefixMatch: 0, topicPrefixMatch: 0, nameTokenJaccard: 1, affinity: 0.8,  relationCohesion: 0 },
+                        // fn1 는 secondary
+                        { objectId: 'fn1', pathPrefixMatch: 0, routePrefixMatch: 0, topicPrefixMatch: 0, nameTokenJaccard: 0, affinity: 0.5,  relationCohesion: 0 },
+                    ],
+                    review: null,
+                },
+            ],
+        });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1' }));
+
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        const candidates = body.data.candidates as Array<{
+            id: string;
+            implementingServices: Array<{ serviceObjectId: string; serviceName: string; childInDomain: number; childTotal: number; confidence: number }>;
+        }>;
+        const candOrders   = candidates.find((c) => c.id === 'orders');
+        const candPayments = candidates.find((c) => c.id === 'payments');
+
+        // 후보 A: svcOrders 만 포함 (fn1 primary), svcPayments 는 포함되지 않아야 함
+        expect(candOrders).toBeDefined();
+        expect(candOrders!.implementingServices).toEqual([
+            { serviceObjectId: 'svcOrders', serviceName: 'OrdersService', childInDomain: 1, childTotal: 1, confidence: 1 },
+        ]);
+
+        // 후보 B: svcPayments 만 포함 (fn2 primary), svcOrders 는 포함되지 않아야 함
+        expect(candPayments).toBeDefined();
+        expect(candPayments!.implementingServices).toEqual([
+            { serviceObjectId: 'svcPayments', serviceName: 'PaymentsService', childInDomain: 1, childTotal: 1, confidence: 1 },
+        ]);
+    });
+
     it('mixed messageTopicHints 는 string 요소만 남겨 discovery 입력으로 전달한다', async () => {
         const db = buildDbMock([
             [{ count: 1 }],       // precondition 통과
