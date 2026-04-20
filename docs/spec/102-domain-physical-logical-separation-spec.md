@@ -263,7 +263,7 @@ type DomainCandidateResponse = {
 5. **uq_object_relations 유니크 충돌 처리**:
    - 기존 유니크 키는 `(workspace_id, relation_type, subject_object_id, object_id, is_derived)`.
    - 4 의 DELETE → INSERT 순서로 인해 같은 트랜잭션에서는 충돌 없음.
-   - 다른 트랜잭션과 동시 실행 시 (극히 드물지만) `ON CONFLICT DO NOTHING` 로 안전 fallback.
+   - 다른 트랜잭션과 동시 실행 시에는 `ON CONFLICT DO UPDATE` 로 `confidence`, `metadata`, `source` 를 최신 재계산 값으로 덮어써 stale implements 비율이 남지 않게 한다.
 
 ### 6.4 `/api/domains/approve` 응답 확장
 
@@ -333,7 +333,7 @@ ORDER BY r.confidence DESC;
   - T: payload 에 service objectId 가 멤버로 섞여 오면 400 `INVALID_MEMBER_TYPE` 반환
   - T: 자식이 하나도 도메인에 할당되지 않은 service 는 implements 행이 생성되지 않는다
   - T: function/api_endpoint 자식이 0 개인 service (storage-only 등) 는 implements 계산 대상에서 빠지며 에러 없이 진행된다
-  - T: 트랜잭션 중 INSERT 충돌 (동시 approve) 시 `ON CONFLICT DO NOTHING` 으로 500 안 나는지 (mock 레벨)
+  - T: 트랜잭션 중 INSERT 충돌 (동시 approve) 시 `ON CONFLICT DO UPDATE` 로 `confidence` / `metadata` 가 최신 값으로 갱신되는지 (mock 레벨)
 
 ## 7) UI 변경
 

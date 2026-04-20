@@ -507,7 +507,7 @@ export async function POST(req: Request) {
                     byDomain.set(row.domainId, (byDomain.get(row.domainId) ?? 0) + 1);
                 }
 
-                // 5. 도메인별 INSERT — onConflictDoNothing 으로 동시성 방어
+                // 5. 도메인별 upsert — 동시 승인 race 에서 confidence/metadata 가 stale 하지 않도록
                 for (const [domainId, childInDomain] of byDomain) {
                     const confidence = childInDomain / childTotal;
                     await tx
@@ -528,7 +528,7 @@ export async function POST(req: Request) {
                                 derivedFrom: 'child_membership_ratio',
                             },
                         })
-                        .onConflictDoNothing({
+                        .onConflictDoUpdate({
                             target: [
                                 objectRelations.workspaceId,
                                 objectRelations.relationType,
@@ -536,6 +536,17 @@ export async function POST(req: Request) {
                                 objectRelations.objectId,
                                 objectRelations.isDerived,
                             ],
+                            set: {
+                                interactionKind: 'STATIC',
+                                direction: 'OUT',
+                                confidence,
+                                source: 'DISCOVERY',
+                                metadata: {
+                                    childTotal,
+                                    childInDomain,
+                                    derivedFrom: 'child_membership_ratio',
+                                },
+                            },
                         });
                 }
             }

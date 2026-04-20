@@ -136,6 +136,8 @@ function buildDbMock(opts: {
     captureObjectRelationDeletes?: string[];
     /** tx.insert(objectRelations).values(row) 의 row 를 이 배열에 push. */
     captureObjectRelationInserts?: unknown[];
+    /** tx.insert(objectRelations).onConflictDoUpdate(opts) 의 opts 를 순서대로 push. */
+    captureObjectRelationUpserts?: unknown[];
     /**
      * Task 9: 트랜잭션 이후 응답 조립 단계에서 service name 을 매핑하는 데 사용.
      * serviceObjectId → serviceName 매핑. 지정하지 않으면 post-tx svcRows select 를 빈 배열로 반환.
@@ -207,8 +209,12 @@ function buildDbMock(opts: {
                         // objectRelations insert 에서는 .returning 없이 바로 await 되는 경우도 지원
                         then: (resolve: (value: unknown) => unknown) => resolve(undefined),
                     }),
-                    // affinity upsert 체인: values().onConflictDoUpdate()
-                    onConflictDoUpdate: async () => undefined,
+                    // affinity / objectRelations upsert 체인: values().onConflictDoUpdate()
+                    onConflictDoUpdate: async (upsertOpts?: unknown) => {
+                        if (isObjectRelationsTable && opts.captureObjectRelationUpserts && upsertOpts !== undefined) {
+                            opts.captureObjectRelationUpserts.push(upsertOpts);
+                        }
+                    },
                 };
             },
         };
@@ -909,6 +915,67 @@ describe('POST /api/domains/approve', () => {
             confidence: 1,
             metadata: { childTotal: 1, childInDomain: 1 },
         });
+    });
+
+    it('T-impl-upsert: implements 충돌 시 onConflictDoUpdate 로 confidence/metadata 를 갱신한다', async () => {
+        const capturedUpserts: unknown[] = [];
+        const db = buildDbMock({
+            members: [
+                { id: 'f1', objectType: 'function' },
+                { id: 'f2', objectType: 'function' },
+            ],
+            existingDomain: null,
+            parentByMember: { f1: 'svcA', f2: 'svcA' },
+            serviceChildren: {
+                svcA: [
+                    { id: 'f1', objectType: 'function' },
+                    { id: 'f2', objectType: 'function' },
+                    { id: 'f3', objectType: 'function' },
+                ],
+            },
+            primaryAffinityByChild: { f1: 'dom-new', f2: 'dom-new', f3: null },
+            captureObjectRelationUpserts: capturedUpserts,
+        });
+        getDbMock.mockResolvedValue(db);
+
+        const { POST } = await import('@/app/api/domains/approve/route');
+        await POST(
+            new Request('http://x/api/domains/approve', {
+                method: 'POST',
+                body: JSON.stringify({
+                    workspaceId: 'ws-1',
+                    name: 'D',
+                    primaryMembers: [
+                        { objectId: 'f1', affinity: 0.8, confidence: 0.5 },
+                        { objectId: 'f2', affinity: 0.8, confidence: 0.5 },
+                    ],
+                    secondaryMembers: [],
+                }),
+            }),
+        );
+
+        expect(capturedUpserts).toContainEqual(
+            expect.objectContaining({
+                target: [
+                    objectRelationsTable.workspaceId,
+                    objectRelationsTable.relationType,
+                    objectRelationsTable.subjectObjectId,
+                    objectRelationsTable.objectId,
+                    objectRelationsTable.isDerived,
+                ],
+                set: expect.objectContaining({
+                    interactionKind: 'STATIC',
+                    direction: 'OUT',
+                    confidence: 2 / 3,
+                    source: 'DISCOVERY',
+                    metadata: {
+                        childTotal: 3,
+                        childInDomain: 2,
+                        derivedFrom: 'child_membership_ratio',
+                    },
+                }),
+            }),
+        );
     });
 
     it('T-response-impl: 응답에 이 도메인의 implementingServices 가 포함된다', async () => {
