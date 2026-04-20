@@ -56,6 +56,8 @@ const NON_DOMAIN_PATH_PREFIXES = new Set([
     'web',
 ]);
 
+const INHERITED_INTENT_CHILD_TYPES = new Set(['function', 'api_endpoint']);
+
 /** v1 / v2 / v10 처럼 "v" + 숫자 형태인지 판정 */
 function isVersionSegment(segment: string): boolean {
     return /^v\d+$/i.test(segment);
@@ -88,7 +90,7 @@ export interface StructuralClusteringResult {
  * 입력 객체/intent 풀에서 후보 슬러그를 수집하고 객체별 affinity 를 계산한다.
  */
 export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClusteringResult {
-    const intentsByObject = groupIntentsByObject(inputs.intents);
+    const intentsByObject = groupIntentsByObject(inputs.intents, inputs.objects);
 
     // 1. 후보 슬러그 풀 — 모든 신호 출처에서 추출
     const slugSet = new Set<string>();
@@ -123,6 +125,18 @@ export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClus
             const affinity = (pathMatch + routeMatch + topicMatch + nameJaccard) / 4;
             if (affinity < AFFINITY_THRESHOLD) continue;
 
+            if (pathMatch === 1 && topPathPrefix === null) {
+                topPathPrefix = firstPathSegment(obj.path);
+            }
+            if (routeMatch === 1 && topRoutePrefix === null) {
+                topRoutePrefix = pickFirstRouteMatch(intents, slug);
+            }
+            if (topicMatch === 1 && topTopicPrefix === null) {
+                topTopicPrefix = pickFirstTopicMatch(intents, slug);
+            }
+
+            if (obj.memberEligible === false) continue;
+
             memberScores.push({
                 objectId: obj.id,
                 pathPrefixMatch: pathMatch,
@@ -133,16 +147,6 @@ export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClus
                 // 관계 응집도는 별도 모듈에서 채움 — 이 단계에서는 0
                 relationCohesion: 0,
             });
-
-            if (pathMatch === 1 && topPathPrefix === null) {
-                topPathPrefix = firstPathSegment(obj.path);
-            }
-            if (routeMatch === 1 && topRoutePrefix === null) {
-                topRoutePrefix = pickFirstRouteMatch(intents, slug);
-            }
-            if (topicMatch === 1 && topTopicPrefix === null) {
-                topTopicPrefix = pickFirstTopicMatch(intents, slug);
-            }
         }
 
         if (memberScores.length === 0) continue;
@@ -172,14 +176,43 @@ export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClus
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
-function groupIntentsByObject(intents: DiscoveryIntentInput[]): Map<string, DiscoveryIntentInput[]> {
+function groupIntentsByObject(
+    intents: DiscoveryIntentInput[],
+    objects: DiscoveryObjectInput[],
+): Map<string, DiscoveryIntentInput[]> {
     const map = new Map<string, DiscoveryIntentInput[]>();
+    const objectById = new Map(objects.map((obj) => [obj.id, obj] as const));
+    const codeChildrenByService = new Map<string, DiscoveryObjectInput[]>();
+
+    for (const obj of objects) {
+        if (!obj.parentId) continue;
+        if (!INHERITED_INTENT_CHILD_TYPES.has(obj.objectType)) continue;
+        const parent = objectById.get(obj.parentId);
+        if (!parent || parent.objectType !== 'service') continue;
+        const list = codeChildrenByService.get(parent.id) ?? [];
+        list.push(obj);
+        codeChildrenByService.set(parent.id, list);
+    }
+
     for (const intent of intents) {
-        const list = map.get(intent.sourceObjectId) ?? [];
-        list.push(intent);
-        map.set(intent.sourceObjectId, list);
+        appendIntent(map, intent.sourceObjectId, intent);
+        const source = objectById.get(intent.sourceObjectId);
+        if (source?.objectType !== 'service') continue;
+        for (const child of codeChildrenByService.get(source.id) ?? []) {
+            appendIntent(map, child.id, intent);
+        }
     }
     return map;
+}
+
+function appendIntent(
+    map: Map<string, DiscoveryIntentInput[]>,
+    objectId: string,
+    intent: DiscoveryIntentInput,
+): void {
+    const list = map.get(objectId) ?? [];
+    list.push(intent);
+    map.set(objectId, list);
 }
 
 /** path 의 첫 "의미 있는" segment 를 슬러그 후보로 추출 (transport/version prefix 는 건너뜀) */

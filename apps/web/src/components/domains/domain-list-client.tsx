@@ -25,6 +25,8 @@ interface DomainListItem {
   name: string;
   displayName: string | null;
   path: string;
+  /** 이 도메인을 구현하는 서비스 수 */
+  implementingServiceCount: number;
 }
 
 export function DomainListClient() {
@@ -112,6 +114,10 @@ export function DomainListClient() {
                       {d.displayName ?? d.name}
                     </h3>
                     <p className="mt-1 truncate text-xs text-muted-foreground">{d.path}</p>
+                    {/* 구현 서비스 수 배지 */}
+                    <Badge variant="secondary" className="mt-2 text-[10px]">
+                      구현 서비스 {d.implementingServiceCount}개
+                    </Badge>
                   </div>
                 </div>
               </Link>

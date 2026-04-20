@@ -25,6 +25,11 @@ export type {
     GenerateDomainReviewFn,
 } from './discovery/llmReviewer';
 export {
+    computeImplementingServices,
+    type ImplementingServiceRow,
+    type ComputeImplementingServicesInput,
+} from './discovery/implementingServices';
+export {
     runDomainDiscovery,
     SECONDARY_AFFINITY_THRESHOLD,
 } from './discovery/runDomainDiscovery';

@@ -45,6 +45,15 @@ interface CandidateReview {
   mergeWithCandidateId: string | null;
 }
 
+/** 이 도메인을 구현하는 서비스 정보 */
+interface ImplementingService {
+  serviceObjectId: string;
+  serviceName: string;
+  childInDomain: number;
+  childTotal: number;
+  confidence: number;
+}
+
 interface DiscoveredCandidate {
   id: string;
   autoName: string;
@@ -55,6 +64,7 @@ interface DiscoveredCandidate {
   };
   members: CandidateMember[];
   review: CandidateReview | null;
+  implementingServices: ImplementingService[];
 }
 
 interface DiscoverResponseData {
@@ -77,6 +87,23 @@ interface CardState {
 }
 
 const PREVIEW_MEMBER_COUNT = 5;
+
+/**
+ * confidence 값에 따라 서비스 중요도 등급 반환
+ * 0.5 이상 → major, 0.2 이상 → secondary, 미만 → minor
+ */
+function implTier(confidence: number): 'major' | 'secondary' | 'minor' {
+  if (confidence >= 0.5) return 'major';
+  if (confidence >= 0.2) return 'secondary';
+  return 'minor';
+}
+
+/** 등급별 배경/텍스트 스타일 */
+const IMPL_TIER_CLASS = {
+  major: 'bg-primary/15 text-primary font-semibold',
+  secondary: 'bg-muted text-foreground',
+  minor: 'bg-muted/50 text-muted-foreground text-xs',
+} as const;
 
 export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
   const [discovering, setDiscovering] = useState(false);
@@ -348,6 +375,44 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                       </>
                     )}
                   </button>
+                ) : null}
+
+                {/* 구현 서비스 섹션 — 멤버 리스트 아래, 액션 직전 */}
+                {c.implementingServices.length > 0 ? (
+                  <section className="mt-3 rounded-md border border-border/50 bg-muted/30 p-3">
+                    <h4 className="mb-2 text-xs font-semibold text-muted-foreground">
+                      이 도메인을 구현하는 서비스
+                    </h4>
+                    <ul className="space-y-1.5">
+                      {c.implementingServices.map((s) => {
+                        const tier = implTier(s.confidence);
+                        const pct = Math.round(s.confidence * 100);
+                        return (
+                          <li
+                            key={s.serviceObjectId}
+                            className={`flex items-center justify-between gap-2 rounded px-2 py-1 ${IMPL_TIER_CLASS[tier]}`}
+                          >
+                            <span className="truncate">{s.serviceName}</span>
+                            <span className="shrink-0 font-mono text-xs">
+                              {s.childInDomain}/{s.childTotal} ({pct}%)
+                            </span>
+                          </li>
+                        );
+                      })}
+                    </ul>
+                    {(() => {
+                      const sum = c.implementingServices.reduce((a, s) => a + s.confidence, 0);
+                      const unassigned = 1 - sum;
+                      return unassigned > 0.001 ? (
+                        <p className="mt-2 text-xs text-muted-foreground">
+                          미분류 {Math.round(unassigned * 100)}%
+                        </p>
+                      ) : null;
+                    })()}
+                    <p className="mt-2 text-[10px] text-muted-foreground">
+                      * 비율은 코드 단위 (function, api_endpoint) 기준이며, DB/메시지 자원은 포함하지 않습니다.
+                    </p>
+                  </section>
                 ) : null}
 
                 {/* 푸터 — 액션 */}

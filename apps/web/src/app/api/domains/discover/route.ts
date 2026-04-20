@@ -7,7 +7,7 @@
  * 후보는 DB 에 저장되지 않음 — 사용자가 승인할 때만 별도 라우트가 영구화한다.
  */
 import { NextResponse } from 'next/server';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import {
     codeArtifacts,
     getDb,
@@ -15,7 +15,11 @@ import {
     objectRelations,
     objects,
 } from '@archi-navi/db';
-import { runDomainDiscovery } from '@archi-navi/inference';
+import {
+    computeImplementingServices,
+    runDomainDiscovery,
+} from '@archi-navi/inference';
+import { OBJECT_TYPES } from '@archi-navi/shared';
 import type {
     DiscoveryCodeArtifactInput,
     DiscoveryInputs,
@@ -27,6 +31,10 @@ import {
     createGenerateDomainReviewFn,
     getInferenceModel,
 } from '@/lib/inference-llm';
+
+const DISCOVERY_PREREQUISITE_OBJECT_TYPES = OBJECT_TYPES.filter(
+    (objectType) => objectType !== 'service' && objectType !== 'domain',
+);
 
 function normalizeRequiredString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -79,7 +87,36 @@ export async function POST(req: Request) {
 
         const db = await getDb();
 
-        // 1. 객체 — domain 타입은 제외 (멤버 후보가 될 수 있는 service/function/topic 등만)
+        // Precondition — 초기 scan 만 돌리고 inference 를 안 돌리면 service row 만 존재한다.
+        // 이 상태에서 service 를 제외하면 후보 풀이 비어버리므로 명시적으로 실패시켜
+        // 사용자에게 원인을 안내한다.
+        const nonServiceCountRows = await db
+            .select({ count: sql<number>`count(*)::int` })
+            .from(objects)
+            .where(
+                and(
+                    eq(objects.workspaceId, workspaceId),
+                    inArray(objects.objectType, DISCOVERY_PREREQUISITE_OBJECT_TYPES),
+                ),
+            );
+        if ((nonServiceCountRows[0]?.count ?? 0) === 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'PREREQUISITE_NOT_MET',
+                        message: '도메인 발견 전에 inference 를 먼저 실행해주세요.',
+                        hint: { route: '/inference-runs' },
+                    },
+                },
+                { status: 400 },
+            );
+        }
+
+        // 1. 객체 — domain 타입은 제외, service 는 signal-only 로 유지
+        //    domain: 논리 단위 결과물이므로 발견 입력 후보가 될 수 없음
+        //    service: 물리 구현 매체라 최종 멤버에는 들어가면 안 되지만,
+        //             service-scope intent/path 신호는 discovery scoring 에 필요하다.
         const objectRows = await db
             .select({
                 id: objects.id,
@@ -87,11 +124,12 @@ export async function POST(req: Request) {
                 name: objects.name,
                 displayName: objects.displayName,
                 path: objects.path,
+                parentId: objects.parentId,  // 서비스 계층 추적을 위해 추가
             })
             .from(objects)
             .where(eq(objects.workspaceId, workspaceId));
 
-        const memberObjects: DiscoveryObjectInput[] = objectRows
+        const discoveryObjects: DiscoveryObjectInput[] = objectRows
             .filter((o) => o.objectType !== 'domain')
             .map((o) => ({
                 id: o.id,
@@ -99,6 +137,8 @@ export async function POST(req: Request) {
                 name: o.name,
                 displayName: o.displayName,
                 path: o.path,
+                parentId: o.parentId,
+                memberEligible: o.objectType !== 'service',
             }));
 
         // 2. 인텐트 — externalPath/route/topic 신호용
@@ -164,7 +204,7 @@ export async function POST(req: Request) {
 
         const discoveryInputs: DiscoveryInputs = {
             workspaceId,
-            objects: memberObjects,
+            objects: discoveryObjects,
             intents: intentInputs,
             relations: relationInputs,
             codeArtifacts: artifactInputs,
@@ -181,10 +221,51 @@ export async function POST(req: Request) {
             ...(review ? { review } : {}),
         });
 
+        // 각 candidate 에 implementingServices derived 필드 추가
+        // — 멤버 id 집합 기준으로 어느 service 가 구현체인지 집계.
+        // 입력 변환(pure 함수용 shape)은 candidate 수와 무관하므로 루프 밖에서 1회.
+
+        // 전체 후보를 스캔해 객체별 primary candidate id 를 결정.
+        // runDomainDiscovery 가 이미 primary + secondary(affinity ≥ 0.5) 섞인 members 를 반환하므로,
+        // implementingServices 계산에서는 secondary 를 제외해야 한다.
+        // (secondary 를 포함하면 같은 service 자식이 여러 후보에서 카운트돼 confidence 과대계산)
+        const primaryByObject = new Map<string, { candId: string; affinity: number }>();
+        for (const cand of result.candidates) {
+            for (const m of cand.members) {
+                const cur = primaryByObject.get(m.objectId);
+                if (!cur || m.affinity > cur.affinity) {
+                    primaryByObject.set(m.objectId, { candId: cand.id, affinity: m.affinity });
+                }
+            }
+        }
+
+        const implServiceObjects = objectRows.map((o) => ({
+            id: o.id,
+            parentId: o.parentId,
+            objectType: o.objectType,
+            name: o.name,
+        }));
+        const candidatesWithImpl = result.candidates.map((cand) => {
+            // affinity 최강인 후보에게만 귀속된 primary 멤버 id 만 수집
+            const primaryMemberIds = new Set<string>();
+            for (const m of cand.members) {
+                if (primaryByObject.get(m.objectId)?.candId === cand.id) {
+                    primaryMemberIds.add(m.objectId);
+                }
+            }
+            return {
+                ...cand,
+                implementingServices: computeImplementingServices({
+                    objects: implServiceObjects,
+                    memberIds: primaryMemberIds,
+                }),
+            };
+        });
+
         return NextResponse.json({
             success: true,
             data: {
-                candidates: result.candidates,
+                candidates: candidatesWithImpl,
                 llmReviewed: Boolean(modelInfo),
             },
         });

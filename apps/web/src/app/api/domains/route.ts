@@ -1,10 +1,13 @@
 /**
  * GET /api/domains — 도메인 목록 조회
+ * 응답: Array<{ id, name, displayName, path, implementingServiceCount }>
+ *
+ * implementingServiceCount 는 objectRelations 의 DISCOVERY implements 행 기준으로
+ * 도메인별 구현 서비스 수를 서브쿼리로 집계한다 (N+1 회피).
  */
 import { type NextRequest, NextResponse } from 'next/server';
-import { getDb } from '@archi-navi/db';
-import { objects } from '@archi-navi/db';
-import { eq, and } from 'drizzle-orm';
+import { and, eq, sql } from 'drizzle-orm';
+import { getDb, objectRelations, objects } from '@archi-navi/db';
 
 export async function GET(req: NextRequest) {
   try {
@@ -16,7 +19,21 @@ export async function GET(req: NextRequest) {
 
     const db = await getDb();
     const domains = await db
-      .select()
+      .select({
+        id: objects.id,
+        name: objects.name,
+        displayName: objects.displayName,
+        path: objects.path,
+        // 서브쿼리로 각 도메인의 implements(DISCOVERY) 관계 수 집계
+        implementingServiceCount: sql<number>`(
+          SELECT count(*)::int
+          FROM ${objectRelations} r
+          WHERE r.workspace_id = ${objects.workspaceId}
+            AND r.object_id = ${objects.id}
+            AND r.relation_type = 'implements'
+            AND r.source = 'DISCOVERY'
+        )`,
+      })
       .from(objects)
       .where(
         and(

@@ -120,7 +120,7 @@ export const objectRelations = pgTable(
       .notNull()
       .references(() => workspaces.id, { onDelete: 'cascade' }),
 
-    relationType: text('relation_type').notNull(), // call, expose, read, write, produce, consume, depend_on, fk_reference
+    relationType: text('relation_type').notNull(), // call, expose, read, write, produce, consume, depend_on, fk_reference, implements
     subjectObjectId: uuid('subject_object_id')
       .notNull()
       .references(() => objects.id, { onDelete: 'cascade' }),
@@ -137,7 +137,7 @@ export const objectRelations = pgTable(
     status: text('status').notNull().default('APPROVED'), // APPROVED, REJECTED
 
     metadata: jsonb('metadata').notNull().default({}),
-    source: text('source').notNull().default('MANUAL'), // MANUAL, INFERRED, ROLLUP
+    source: text('source').notNull().default('MANUAL'), // MANUAL, INFERRED, ROLLUP, DISCOVERY
 
     // Temporal Architecture
     validFrom: timestamp('valid_from', { withTimezone: true }),

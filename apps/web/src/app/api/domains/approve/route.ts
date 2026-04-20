@@ -13,7 +13,7 @@
  */
 import { NextResponse } from 'next/server';
 import { and, eq, inArray, sql } from 'drizzle-orm';
-import { getDb, objectDomainAffinities, objects } from '@archi-navi/db';
+import { getDb, objectDomainAffinities, objectRelations, objects } from '@archi-navi/db';
 import {
     applyRollupChanges,
     createDomainAffinityChangedEvent,
@@ -39,6 +39,14 @@ interface ApprovalSuccessPayload {
     primaryCount: number;
     secondaryCount: number;
     rollupApplied: boolean;
+    /** 이 도메인을 implements 하는 서비스 목록 (트랜잭션 종료 후 DB re-select) */
+    implementingServices: Array<{
+        serviceObjectId: string;
+        serviceName: string;
+        childInDomain: number;
+        childTotal: number;
+        confidence: number;
+    }>;
 }
 
 function isValidScore(value: unknown): boolean {
@@ -251,6 +259,23 @@ export async function POST(req: Request) {
                 { status: 400 },
             );
         }
+        // service 는 물리 단위이므로 도메인 멤버로 승인 불가; implements 관계로 표현해야 함
+        const serviceMembers = ownedRows
+            .filter((row) => row.objectType === 'service')
+            .map((row) => row.id);
+        if (serviceMembers.length > 0) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'INVALID_MEMBER_TYPE',
+                        message: 'service 객체는 도메인 멤버로 승인할 수 없습니다. 서비스는 implements 관계로 표현됩니다.',
+                        serviceObjectIds: serviceMembers,
+                    },
+                },
+                { status: 400 },
+            );
+        }
 
         // 도메인 조회/생성 + affinity upsert 는 하나의 트랜잭션으로 묶어
         // 중간 실패 시 고아 도메인/부분 affinity 가 남지 않도록 한다.
@@ -330,6 +355,56 @@ export async function POST(req: Request) {
                         eq(objectDomainAffinities.domainId, domainObjectId),
                     ),
                 );
+
+            // Task 7: 이번 승인으로 영향받는 service 집합 (S_old ∪ S_new) 을 계산.
+            //   S_old = 기존 affinity 멤버들의 parent service 집합
+            //   S_new = 이번 payload 멤버들의 parent service 집합
+            // Task 8 에서 이 집합 범위로 implements 관계 재계산에 사용한다.
+            const oldMemberIds = existingAffinityRows.map((row) => row.objectId);
+            const relevantObjectIds = Array.from(new Set([...oldMemberIds, ...memberIds]));
+            const relevantChildren = relevantObjectIds.length > 0
+                ? await tx
+                    .select({ id: objects.id, parentId: objects.parentId })
+                    .from(objects)
+                    .where(
+                        and(
+                            eq(objects.workspaceId, workspaceId),
+                            inArray(objects.id, relevantObjectIds),
+                        ),
+                    )
+                : [];
+            const parentIds = Array.from(
+                new Set(
+                    relevantChildren
+                        .map((row) => row.parentId)
+                        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+                ),
+            );
+            const serviceParentRows = parentIds.length > 0
+                ? await tx
+                    .select({ id: objects.id })
+                    .from(objects)
+                    .where(
+                        and(
+                            eq(objects.workspaceId, workspaceId),
+                            inArray(objects.id, parentIds),
+                            eq(objects.objectType, 'service'),
+                        ),
+                    )
+                : [];
+            const serviceParentSet = new Set(serviceParentRows.map((row) => row.id));
+            const oldMemberSet = new Set(oldMemberIds);
+            const newMemberSet = new Set(memberIds);
+            const sOldSet = new Set<string>();
+            const sNewSet = new Set<string>();
+            for (const row of relevantChildren) {
+                if (!row.parentId || !serviceParentSet.has(row.parentId)) continue;
+                if (oldMemberSet.has(row.id)) sOldSet.add(row.parentId);
+                if (newMemberSet.has(row.id)) sNewSet.add(row.parentId);
+            }
+            // 결정적 순회 순서를 위해 정렬된 affectedServiceIds 를 사용 (sorted).
+            const affectedServiceIds = Array.from(new Set([...sOldSet, ...sNewSet])).sort();
+
             const currentMemberIdSet = new Set(memberIds);
             const staleMemberIds = existingAffinityRows
                 .map((row) => row.objectId)
@@ -373,8 +448,161 @@ export async function POST(req: Request) {
                     });
             }
 
-            return { domainId: domainObjectId, reused: didReuse, staleMemberIds };
+            // Task 8: S_old ∪ S_new 각 service 에 대해 DISCOVERY implements 관계를 재계산.
+            // 규칙 (implementingServices.ts 와 동일):
+            //  - 자식 = function | api_endpoint 만 집계
+            //  - primary-only: 자식마다 affinity 가장 높은 domain 1개만 (DISTINCT ON affinity DESC, domainId ASC)
+            //  - childInDomain / childTotal 비율을 confidence 로 저장
+            //  - childTotal == 0 (storage-only) 이면 DELETE 만 하고 INSERT 스킵
+            for (const serviceId of affectedServiceIds) {
+                // 1. 기존 DISCOVERY implements 제거
+                await tx
+                    .delete(objectRelations)
+                    .where(
+                        and(
+                            eq(objectRelations.workspaceId, workspaceId),
+                            eq(objectRelations.subjectObjectId, serviceId),
+                            eq(objectRelations.relationType, 'implements'),
+                            eq(objectRelations.source, 'DISCOVERY'),
+                        ),
+                    );
+
+                // 2. 이 service 의 코드 자식 (function/api_endpoint) 조회
+                const codeChildren = await tx
+                    .select({ id: objects.id })
+                    .from(objects)
+                    .where(
+                        and(
+                            eq(objects.workspaceId, workspaceId),
+                            eq(objects.parentId, serviceId),
+                            inArray(objects.objectType, ['function', 'api_endpoint']),
+                        ),
+                    );
+                const childTotal = codeChildren.length;
+                if (childTotal === 0) continue; // storage-only service — INSERT 스킵
+                const childIds = codeChildren.map((c) => c.id);
+
+                // 3. 자식별 primary domain (affinity DESC, domainId ASC → DISTINCT ON)
+                const primaryRows = await tx
+                    .selectDistinctOn([objectDomainAffinities.objectId], {
+                        childId: objectDomainAffinities.objectId,
+                        domainId: objectDomainAffinities.domainId,
+                    })
+                    .from(objectDomainAffinities)
+                    .where(
+                        and(
+                            eq(objectDomainAffinities.workspaceId, workspaceId),
+                            inArray(objectDomainAffinities.objectId, childIds),
+                        ),
+                    )
+                    .orderBy(
+                        objectDomainAffinities.objectId,
+                        sql`${objectDomainAffinities.affinity} DESC`,
+                        sql`${objectDomainAffinities.domainId} ASC`,
+                    );
+
+                // 4. 도메인별 집계 (childInDomain)
+                const byDomain = new Map<string, number>();
+                for (const row of primaryRows) {
+                    byDomain.set(row.domainId, (byDomain.get(row.domainId) ?? 0) + 1);
+                }
+
+                // 5. 도메인별 upsert — 동시 승인 race 에서 confidence/metadata 가 stale 하지 않도록
+                for (const [domainId, childInDomain] of byDomain) {
+                    const confidence = childInDomain / childTotal;
+                    await tx
+                        .insert(objectRelations)
+                        .values({
+                            workspaceId,
+                            relationType: 'implements',
+                            subjectObjectId: serviceId,
+                            objectId: domainId,
+                            interactionKind: 'STATIC',
+                            direction: 'OUT',
+                            isDerived: true,
+                            confidence,
+                            source: 'DISCOVERY',
+                            metadata: {
+                                childTotal,
+                                childInDomain,
+                                derivedFrom: 'child_membership_ratio',
+                            },
+                        })
+                        .onConflictDoUpdate({
+                            target: [
+                                objectRelations.workspaceId,
+                                objectRelations.relationType,
+                                objectRelations.subjectObjectId,
+                                objectRelations.objectId,
+                                objectRelations.isDerived,
+                            ],
+                            set: {
+                                interactionKind: 'STATIC',
+                                direction: 'OUT',
+                                confidence,
+                                source: 'DISCOVERY',
+                                metadata: {
+                                    childTotal,
+                                    childInDomain,
+                                    derivedFrom: 'child_membership_ratio',
+                                },
+                            },
+                        });
+                }
+            }
+
+            return {
+                domainId: domainObjectId,
+                reused: didReuse,
+                staleMemberIds,
+            };
         });
+
+        // Task 9: 트랜잭션이 커밋된 뒤, 이 도메인의 DISCOVERY implements 행을 re-select 해
+        //   응답에 implementingServices 를 포함한다.
+        const implRows = await db
+            .select({
+                subjectObjectId: objectRelations.subjectObjectId,
+                confidence: objectRelations.confidence,
+                metadata: objectRelations.metadata,
+            })
+            .from(objectRelations)
+            .where(
+                and(
+                    eq(objectRelations.workspaceId, workspaceId),
+                    eq(objectRelations.objectId, domainId),
+                    eq(objectRelations.relationType, 'implements'),
+                    eq(objectRelations.source, 'DISCOVERY'),
+                ),
+            );
+
+        // service name 조회 (implRows 가 있는 경우만)
+        const svcRows = implRows.length > 0
+            ? await db
+                .select({ id: objects.id, name: objects.name, displayName: objects.displayName })
+                .from(objects)
+                .where(
+                    and(
+                        eq(objects.workspaceId, workspaceId),
+                        inArray(objects.id, implRows.map((r) => r.subjectObjectId)),
+                    ),
+                )
+            : [];
+        const svcName = new Map(svcRows.map((r) => [r.id, r.displayName ?? r.name]));
+
+        // confidence 내림차순 정렬
+        const implementingServices = implRows
+            .map((r) => {
+                const meta = (r.metadata ?? {}) as { childTotal?: number; childInDomain?: number };
+                return {
+                    serviceObjectId: r.subjectObjectId,
+                    serviceName: svcName.get(r.subjectObjectId) ?? r.subjectObjectId,
+                    childInDomain: meta.childInDomain ?? 0,
+                    childTotal: meta.childTotal ?? 0,
+                    confidence: r.confidence ?? 0,
+                };
+            })
+            .sort((a, b) => b.confidence - a.confidence);
 
         const successData: ApprovalSuccessPayload = {
             domainId,
@@ -383,6 +611,7 @@ export async function POST(req: Request) {
             primaryCount: primary.length,
             secondaryCount: secondary.length,
             rollupApplied: true,
+            implementingServices,
         };
 
         // (P1) incremental rollup 발행 — 멤버별 DOMAIN_AFFINITY_CHANGED 이벤트.
