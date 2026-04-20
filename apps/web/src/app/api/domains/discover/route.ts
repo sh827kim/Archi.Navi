@@ -19,6 +19,7 @@ import {
     computeImplementingServices,
     runDomainDiscovery,
 } from '@archi-navi/inference';
+import { OBJECT_TYPES } from '@archi-navi/shared';
 import type {
     DiscoveryCodeArtifactInput,
     DiscoveryInputs,
@@ -30,6 +31,10 @@ import {
     createGenerateDomainReviewFn,
     getInferenceModel,
 } from '@/lib/inference-llm';
+
+const DISCOVERY_PREREQUISITE_OBJECT_TYPES = OBJECT_TYPES.filter(
+    (objectType) => objectType !== 'service' && objectType !== 'domain',
+);
 
 function normalizeRequiredString(value: unknown): string | null {
     if (typeof value !== 'string') return null;
@@ -91,14 +96,7 @@ export async function POST(req: Request) {
             .where(
                 and(
                     eq(objects.workspaceId, workspaceId),
-                    inArray(objects.objectType, [
-                        'function',
-                        'api_endpoint',
-                        'topic',
-                        'queue',
-                        'database',
-                        'db_table',
-                    ]),
+                    inArray(objects.objectType, DISCOVERY_PREREQUISITE_OBJECT_TYPES),
                 ),
             );
         if ((nonServiceCountRows[0]?.count ?? 0) === 0) {

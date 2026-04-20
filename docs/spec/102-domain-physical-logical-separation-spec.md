@@ -74,6 +74,10 @@ PR-2 가 구현 중인 도메인 발견 엔진이 "1 object = 1 primary domain" 
 초기 스캔만 돌린 워크스페이스는 `objects` 에 service row 만 존재한다. 이 상태에서 service 를 제외하면 후보 풀이 비어버린다. 이를 명시적으로 실패시켜 사용자에게 원인을 알린다.
 
 ```ts
+const discoveryPrerequisiteObjectTypes = OBJECT_TYPES.filter(
+    (objectType) => objectType !== 'service' && objectType !== 'domain',
+);
+
 // workspaceId 확정 후, 객체 로드 전에 선행 검사
 const nonServiceCount = await db
     .select({ count: sql<number>`count(*)::int` })
@@ -81,9 +85,7 @@ const nonServiceCount = await db
     .where(
         and(
             eq(objects.workspaceId, workspaceId),
-            inArray(objects.objectType, [
-                'function', 'api_endpoint', 'topic', 'queue', 'database', 'db_table',
-            ]),
+            inArray(objects.objectType, discoveryPrerequisiteObjectTypes),
         ),
     );
 
@@ -307,6 +309,7 @@ ORDER BY r.confidence DESC;
 - **discover 라우트**:
   - T: `objectType='service'` 객체는 멤버 후보 풀에서 제외된다
   - T: 워크스페이스에 service 외 객체가 없으면 400 `PREREQUISITE_NOT_MET` 를 반환한다 (Codex 지적 반영)
+  - T: precondition 은 canonical object type 집합에서 `service` / `domain` 만 제외한다 (`db_view`, `cache_instance`, `cache_key`, `message_broker` 도 허용)
   - T: 각 candidate 의 `implementingServices` 가 멤버의 parent service 로부터 올바르게 집계된다
   - T: `implementingServices` 의 childInDomain/childTotal 는 **function/api_endpoint 만** 기준으로 계산된다 (db_table/topic 은 집계에 기여하지 않음)
   - T: 부모 service 가 없는 멤버 (자식이 아닌 최상위 객체) 는 `implementingServices` 에 기여하지 않는다
@@ -362,7 +365,7 @@ ORDER BY r.confidence DESC;
 - 이미 승인된 도메인 카드 그리드에 "구현 서비스 N개" 배지 추가 (DB 쿼리에서 implements 개수 집계).
 - 쿼리 1개 추가 (도메인별 implements count GROUP BY). 부하 낮음.
 - **"도메인 발견" 버튼 precondition 처리** (Codex 지적 반영):
-  - 페이지 서버 컴포넌트에서 `objectType IN ('function', 'api_endpoint', 'topic', 'queue', 'database', 'db_table')` 의 존재 여부를 같이 조회
+  - 페이지 서버 컴포넌트에서 canonical object type 집합 중 `service` / `domain` 을 제외한 객체의 존재 여부를 같이 조회
   - 없으면 버튼 disabled + 툴팁 "도메인 발견 전에 inference 를 먼저 실행해주세요"
   - 버튼 옆에 `/inference-runs` 로 가는 링크 ("inference 실행하러 가기") 표시
   - discover API 가 어쨌든 400 로 방어하지만, UI 가 사전 차단하는 편이 사용자 경험이 깔끔함

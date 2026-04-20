@@ -7,6 +7,10 @@ const {
     runDomainDiscoveryMock,
     getInferenceModelMock,
     createGenerateDomainReviewFnMock,
+    andMock,
+    eqMock,
+    inArrayMock,
+    sqlMock,
     objectsTable,
     interactionIntentsTable,
     objectRelationsTable,
@@ -16,6 +20,14 @@ const {
     runDomainDiscoveryMock: vi.fn(),
     getInferenceModelMock: vi.fn(() => null),
     createGenerateDomainReviewFnMock: vi.fn(),
+    andMock: vi.fn((...args: unknown[]) => ({ type: 'and', args })),
+    eqMock: vi.fn((col: unknown, value: unknown) => ({ type: 'eq', col, value })),
+    inArrayMock: vi.fn((col: unknown, values: unknown[]) => ({ type: 'inArray', col, values })),
+    sqlMock: vi.fn((strings: TemplateStringsArray, ...values: unknown[]) => ({
+        type: 'sql',
+        strings: Array.from(strings),
+        values,
+    })),
     objectsTable: {
         id: 'objects.id',
         workspaceId: 'objects.workspace_id',
@@ -59,14 +71,10 @@ vi.mock('@archi-navi/db', () => ({
 }));
 
 vi.mock('drizzle-orm', () => ({
-    and: (...args: unknown[]) => ({ type: 'and', args }),
-    eq: (col: unknown, value: unknown) => ({ type: 'eq', col, value }),
-    inArray: (col: unknown, values: unknown[]) => ({ type: 'inArray', col, values }),
-    sql: (strings: TemplateStringsArray, ...values: unknown[]) => ({
-        type: 'sql',
-        strings: Array.from(strings),
-        values,
-    }),
+    and: andMock,
+    eq: eqMock,
+    inArray: inArrayMock,
+    sql: sqlMock,
 }));
 
 vi.mock('@archi-navi/inference', async (importOriginal) => {
@@ -85,6 +93,7 @@ vi.mock('@/lib/inference-llm', () => ({
 }));
 
 import { POST } from '@/app/api/domains/discover/route';
+import { OBJECT_TYPES } from '@archi-navi/shared';
 
 function makeRequest(body: unknown): Request {
     return new Request('http://localhost/api/domains/discover', {
@@ -302,6 +311,36 @@ describe('POST /api/domains/discover', () => {
         expect(body.error.code).toBe('PREREQUISITE_NOT_MET');
         expect(body.error.hint?.route).toBe('/inference-runs');
         expect(runDomainDiscoveryMock).not.toHaveBeenCalled();
+    });
+
+    it('T-pre-types: precondition 은 canonical object type 에서 service/domain 만 제외한다', async () => {
+        const db = buildDbMock([
+            [{ count: 1 }],
+            [
+                {
+                    id: 'view-1',
+                    objectType: 'db_view',
+                    name: 'orders_view',
+                    displayName: 'orders_view',
+                    path: '/db/orders_view',
+                    parentId: null,
+                },
+            ],
+            [],
+            [],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        runDomainDiscoveryMock.mockResolvedValue({ candidates: [] });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1' }));
+
+        expect(res.status).toBe(200);
+        expect(inArrayMock).toHaveBeenCalledWith(
+            objectsTable.objectType,
+            OBJECT_TYPES.filter((objectType) => objectType !== 'service' && objectType !== 'domain'),
+        );
+        expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
     });
 
     it('T-filter: objectType="service" 객체는 멤버 후보 풀에서 제외된다', async () => {
