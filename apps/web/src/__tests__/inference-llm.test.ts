@@ -254,20 +254,20 @@ describe('createGenerateBoostSuggestionFn', () => {
   });
 
   it('smart resolution generator는 contradiction_challenge 응답도 그대로 변환해야 한다', async () => {
-    generateObjectMock.mockResolvedValue({
-      object: {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
         patchType: 'contradiction_challenge',
         shouldChallenge: true,
         confidence: 0.84,
         reasoning: 'closed proof is too weak and should be reopened',
         challengeReasons: ['LOW_CONFIDENCE_FALSE_POSITIVE'],
         expectedAction: 'reopen_frontier',
-      },
+      }),
       usage: {
         inputTokens: 42,
         outputTokens: 12,
       },
-    });
+    }));
 
     const generateSmartResolution = createGenerateSmartResolutionFn(
       { provider: 'openai' } as never,
@@ -290,7 +290,6 @@ describe('createGenerateBoostSuggestionFn', () => {
     generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
       object: params.schema.parse({
         patchType: 'contradiction_challenge',
-        resolved: false,
         shouldChallenge: true,
         confidence: 0.84,
         reasoning: 'closed proof is too weak and should be reopened',
