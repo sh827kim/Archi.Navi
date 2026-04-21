@@ -938,6 +938,11 @@ export function ApprovalList() {
             async: true,
             pipeline: pipelineMeta.name,
             pipelineVersion: pipelineMeta.version,
+            smartProof: {
+              categories: {
+                ambiguityResolution: true,
+              },
+            },
           }),
         });
         const payload = (await res.json()) as unknown;

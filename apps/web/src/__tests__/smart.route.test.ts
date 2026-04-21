@@ -194,6 +194,11 @@ describe('/api/inference/smart', () => {
         enableAgentPatches: true,
         maxAgentFrontiers: 4,
         pipeline: 'redesign',
+        smartProof: {
+          categories: {
+            ambiguityResolution: true,
+          },
+        },
       }),
     }));
 
@@ -205,7 +210,11 @@ describe('/api/inference/smart', () => {
         triggerType: 'INTENT_PROOF_ENGINE',
         modes: ['config', 'code'],
         incremental: true,
-        smartProof: true,
+        smartProof: {
+          categories: {
+            ambiguityResolution: true,
+          },
+        },
         enableAgentPatches: true,
         maxAgentFrontiers: 4,
         sources: [{ type: 'local', ref: repoRoot }],
@@ -451,6 +460,11 @@ describe('/api/inference/smart', () => {
         status: 'SUCCEEDED',
         triggerType: 'INTENT_PROOF_ENGINE',
         stats: {
+          requestedSmartProof: {
+            categories: {
+              ambiguityResolution: true,
+            },
+          },
           proofSummary: {
             engine: 'intent_proof',
             intentCount: 4,
@@ -507,6 +521,15 @@ describe('/api/inference/smart', () => {
         summary: {
           frontierBreakdown: {
             PATH_NOT_MATCHED: 2,
+          },
+        },
+      },
+      run: {
+        stats: {
+          requestedSmartProof: {
+            categories: {
+              ambiguityResolution: true,
+            },
           },
         },
       },

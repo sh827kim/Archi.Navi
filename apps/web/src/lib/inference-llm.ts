@@ -170,6 +170,12 @@ function resolveProviderApiKey(provider: string, headerApiKey: string | null): s
   }
 }
 
+function resolveGenerationSettings(modelName: string, temperature: number): { temperature?: number } {
+  // GPT-5 계열은 temperature 파라미터를 지원하지 않아 warning 이 발생할 수 있다.
+  if (modelName.toLowerCase().startsWith('gpt-5')) return {};
+  return { temperature };
+}
+
 export function getInferenceModel(req: Request): { model: LanguageModel; modelName: string } | null {
   const headerProvider = req.headers.get('x-ai-provider');
   const headerApiKey = req.headers.get('x-ai-api-key');
@@ -218,7 +224,7 @@ export function createGenerateAssessmentFn(
       model: aiModel,
       schema: assessmentSchema,
       prompt,
-      temperature: 0.2,
+      ...resolveGenerationSettings(modelName, 0.2),
     });
 
     return {
@@ -238,7 +244,7 @@ export function createGenerateExplanationFn(
       model: aiModel,
       schema: explanationSchema,
       prompt,
-      temperature: 0.2,
+      ...resolveGenerationSettings(modelName, 0.2),
     });
 
     const explainedAt = new Date().toISOString();
@@ -275,7 +281,7 @@ export function createGenerateBoostSuggestionFn(
       model: aiModel,
       schema: boostSuggestionSchema,
       prompt,
-      temperature: 0.1,
+      ...resolveGenerationSettings(modelName, 0.1),
     });
 
     if (!result.object) return null;
@@ -335,14 +341,14 @@ const domainSemanticDraftSchema = z.object({
 
 export function createGenerateSemanticProfileFn(
   aiModel: LanguageModel,
-  _modelName: string,
+  modelName: string,
 ): GenerateSemanticProfileFn {
   return async (prompt: string, _inputs): Promise<SemanticLlmDraft> => {
     const result = await generateObject({
       model: aiModel,
       schema: domainSemanticDraftSchema,
       prompt,
-      temperature: 0.2,
+      ...resolveGenerationSettings(modelName, 0.2),
     });
     return {
       ...result.object,
@@ -363,14 +369,14 @@ const domainReviewSchema = z.object({
 
 export function createGenerateDomainReviewFn(
   aiModel: LanguageModel,
-  _modelName: string,
+  modelName: string,
 ): GenerateDomainReviewFn {
   return async (prompt: string, _inputs): Promise<LlmCandidateReview> => {
     const result = await generateObject({
       model: aiModel,
       schema: domainReviewSchema,
       prompt,
-      temperature: 0.1,
+      ...resolveGenerationSettings(modelName, 0.1),
     });
     return {
       ...result.object,
@@ -390,7 +396,7 @@ export function createGenerateSmartResolutionFn(
       model: aiModel,
       schema: smartPatchProposalSchema,
       prompt,
-      temperature: 0.1,
+      ...resolveGenerationSettings(modelName, 0.1),
     });
 
     const usage = (result as { usage?: { inputTokens?: number; outputTokens?: number } }).usage;
