@@ -646,6 +646,11 @@ describe('ApprovalList', () => {
           async: true,
           pipeline: 'reinforced',
           pipelineVersion: 'reinforced-v1',
+          smartProof: {
+            categories: {
+              ambiguityResolution: true,
+            },
+          },
         }),
       }),
     );
