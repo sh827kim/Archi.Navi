@@ -131,7 +131,9 @@ export function FrontierApprovalList() {
   const [targetServiceHint, setTargetServiceHint] = useState('');
   const [targetHostAlias, setTargetHostAlias] = useState('');
   const [selectedPatchType, setSelectedPatchType] = useState<FrontierPatchType | ''>('');
-  const [reviewingSmart, setReviewingSmart] = useState(false);
+  const [reviewingSmartIds, setReviewingSmartIds] = useState<string[]>([]);
+  const [reviewingSmartBulk, setReviewingSmartBulk] = useState(false);
+  const [selectedSmartProofStateIds, setSelectedSmartProofStateIds] = useState<string[]>([]);
 
   const loadFrontiers = useCallback(async () => {
     if (!workspaceId) {
@@ -191,6 +193,15 @@ export function FrontierApprovalList() {
   useEffect(() => {
     void loadFrontiers();
   }, [loadFrontiers]);
+
+  useEffect(() => {
+    const selectableIds = new Set(
+      items
+        .filter((item) => item.frontierReason === 'PROVIDER_SERVICE_AMBIGUOUS')
+        .map((item) => item.proofStateId),
+    );
+    setSelectedSmartProofStateIds((prev) => prev.filter((id) => selectableIds.has(id)));
+  }, [items]);
 
   useEffect(() => {
     if (!selectedProofStateId) return;
@@ -296,9 +307,17 @@ export function FrontierApprovalList() {
     }
   }
 
-  async function runSmartReview(proofStateId: string) {
+  async function runSmartReview(proofStateIds: string[]) {
     if (!workspaceId) return;
-    setReviewingSmart(true);
+    const targetIds = [...new Set(proofStateIds)];
+    if (targetIds.length === 0) return;
+    const isBulk = targetIds.length > 1;
+    if (isBulk) {
+      setReviewingSmartBulk(true);
+    } else {
+      setReviewingSmartIds((prev) => [...new Set([...prev, ...targetIds])]);
+    }
+
     try {
       const aiHeaders = getClientAiRequestHeaders();
       const res = await fetch('/api/inference/frontiers/smart-review', {
@@ -306,7 +325,7 @@ export function FrontierApprovalList() {
         headers: { 'Content-Type': 'application/json', ...aiHeaders },
         body: JSON.stringify({
           workspaceId,
-          proofStateId,
+          ...(targetIds.length === 1 ? { proofStateId: targetIds[0] } : { proofStateIds: targetIds }),
           smartProof: {
             categories: {
               ambiguityResolution: true,
@@ -330,22 +349,39 @@ export function FrontierApprovalList() {
       toast.success(`Smart 재검토 완료 (accepted ${accepted}, pending ${pending}, skipped ${skipped})`);
 
       await loadFrontiers();
-      if (selectedProofStateId === proofStateId) {
-        const stillFrontier = payload.remainingProofStateIds?.includes(proofStateId) ?? false;
+      if (selectedProofStateId && targetIds.includes(selectedProofStateId)) {
+        const stillFrontier = payload.remainingProofStateIds?.includes(selectedProofStateId) ?? false;
         if (stillFrontier) {
-          await loadDetail(proofStateId);
+          await loadDetail(selectedProofStateId);
         } else {
           setSelectedProofStateId(null);
           setDetail(null);
         }
       }
+      setSelectedSmartProofStateIds((prev) => prev.filter((id) => payload.remainingProofStateIds?.includes(id)));
       window.dispatchEvent(new CustomEvent('archi-navi:refresh-approval-candidates'));
     } catch (error) {
       toast.error(error instanceof Error ? error.message : 'Smart 재검토 실행 실패');
     } finally {
-      setReviewingSmart(false);
+      if (isBulk) {
+        setReviewingSmartBulk(false);
+      } else {
+        setReviewingSmartIds((prev) => prev.filter((id) => !targetIds.includes(id)));
+      }
     }
   }
+
+  const smartReviewTargetItems = useMemo(
+    () => items.filter((item) => item.frontierReason === 'PROVIDER_SERVICE_AMBIGUOUS'),
+    [items],
+  );
+  const allSmartSelected = smartReviewTargetItems.length > 0
+    && smartReviewTargetItems.every((item) => selectedSmartProofStateIds.includes(item.proofStateId));
+  const isSelectedSmartReviewInFlight = selectedSmartProofStateIds
+    .some((proofStateId) => reviewingSmartIds.includes(proofStateId));
+  const canRunBulkSmartReview = selectedSmartProofStateIds.length > 0
+    && !reviewingSmartBulk
+    && !isSelectedSmartReviewInFlight;
 
   if (loading) {
     return (
@@ -397,6 +433,31 @@ export function FrontierApprovalList() {
           ))}
         </select>
         <Button variant="outline" onClick={() => void loadFrontiers()}>새로고침</Button>
+        {smartReviewTargetItems.length > 0 && (
+          <>
+            <label className="flex items-center gap-2 text-xs text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={allSmartSelected}
+                onChange={(event) => {
+                  if (event.target.checked) {
+                    setSelectedSmartProofStateIds(smartReviewTargetItems.map((item) => item.proofStateId));
+                  } else {
+                    setSelectedSmartProofStateIds([]);
+                  }
+                }}
+              />
+              Smart 대상 전체 선택
+            </label>
+            <Button
+              variant="outline"
+              disabled={!canRunBulkSmartReview}
+              onClick={() => void runSmartReview(selectedSmartProofStateIds)}
+            >
+              {reviewingSmartBulk ? '선택 항목 재검토 중...' : `선택 항목 Smart 재검토 (${selectedSmartProofStateIds.length})`}
+            </Button>
+          </>
+        )}
       </div>
 
       <div className="space-y-2">
@@ -412,14 +473,30 @@ export function FrontierApprovalList() {
                 {renderLatestPatchBadge(item.latestPatch ?? null)}
                 <Badge variant="outline">priority {item.priority}</Badge>
                 {item.frontierReason === 'PROVIDER_SERVICE_AMBIGUOUS' && (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={reviewingSmart}
-                    onClick={() => void runSmartReview(item.proofStateId)}
-                  >
-                    {reviewingSmart ? '재검토 중...' : 'Smart 재검토'}
-                  </Button>
+                  <>
+                    <label className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <input
+                        type="checkbox"
+                        checked={selectedSmartProofStateIds.includes(item.proofStateId)}
+                        onChange={(event) => {
+                          if (event.target.checked) {
+                            setSelectedSmartProofStateIds((prev) => [...new Set([...prev, item.proofStateId])]);
+                          } else {
+                            setSelectedSmartProofStateIds((prev) => prev.filter((id) => id !== item.proofStateId));
+                          }
+                        }}
+                      />
+                      선택
+                    </label>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={reviewingSmartBulk || reviewingSmartIds.includes(item.proofStateId)}
+                      onClick={() => void runSmartReview([item.proofStateId])}
+                    >
+                      {reviewingSmartIds.includes(item.proofStateId) ? '재검토 중...' : 'Smart 재검토'}
+                    </Button>
+                  </>
                 )}
                 <Button size="sm" onClick={() => setSelectedProofStateId(item.proofStateId)}>보정</Button>
               </div>
@@ -583,8 +660,12 @@ export function FrontierApprovalList() {
               {submittingPatch ? '저장 중...' : '보류 저장'}
             </Button>
             {detail?.frontierReason === 'PROVIDER_SERVICE_AMBIGUOUS' && (
-              <Button variant="outline" disabled={reviewingSmart} onClick={() => void runSmartReview(detail.proofStateId)}>
-                {reviewingSmart ? '재검토 중...' : 'Smart 재검토'}
+              <Button
+                variant="outline"
+                disabled={reviewingSmartBulk || reviewingSmartIds.includes(detail.proofStateId)}
+                onClick={() => void runSmartReview([detail.proofStateId])}
+              >
+                {reviewingSmartIds.includes(detail.proofStateId) ? '재검토 중...' : 'Smart 재검토'}
               </Button>
             )}
             <Button disabled={!canPatch || submittingPatch} onClick={() => void submitPatch('apply')}>

@@ -194,6 +194,69 @@ describe('createGenerateBoostSuggestionFn', () => {
     });
   });
 
+  it('smart resolution generator는 provider_service_selection 에 selectedServiceId 가 없으면 거부해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceName: 'order-api-b',
+        confidence: 0.78,
+        reasoning: 'service name and host hint both match',
+      }),
+      usage: {
+        inputTokens: 61,
+        outputTokens: 16,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve provider without selectedServiceId')).rejects.toThrow(
+      'provider_service_selection requires selectedServiceId when resolved is true',
+    );
+  });
+
+  it('smart resolution generator는 provider_service_selection unresolved 응답에서 selectedServiceId 없이도 허용해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'provider_service_selection',
+        resolved: false,
+        confidence: 0.42,
+        reasoning: 'multiple services still plausible',
+        ranking: [
+          {
+            serviceId: 'service-order-a',
+            serviceName: 'order-api-a',
+            score: 0.42,
+            reasoning: 'insufficient evidence',
+          },
+        ],
+      }),
+      usage: {
+        inputTokens: 40,
+        outputTokens: 12,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve unresolved provider ambiguity')).resolves.toMatchObject({
+      model: 'gpt-4o',
+      promptTokens: 40,
+      completionTokens: 12,
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: false,
+      },
+    });
+  });
+
   it('smart resolution generator는 provider_service_selection 응답도 그대로 변환해야 한다', async () => {
     generateObjectMock.mockResolvedValue({
       object: {
@@ -229,20 +292,20 @@ describe('createGenerateBoostSuggestionFn', () => {
   });
 
   it('smart resolution generator는 contradiction_challenge 응답도 그대로 변환해야 한다', async () => {
-    generateObjectMock.mockResolvedValue({
-      object: {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
         patchType: 'contradiction_challenge',
         shouldChallenge: true,
         confidence: 0.84,
         reasoning: 'closed proof is too weak and should be reopened',
         challengeReasons: ['LOW_CONFIDENCE_FALSE_POSITIVE'],
         expectedAction: 'reopen_frontier',
-      },
+      }),
       usage: {
         inputTokens: 42,
         outputTokens: 12,
       },
-    });
+    }));
 
     const generateSmartResolution = createGenerateSmartResolutionFn(
       { provider: 'openai' } as never,
@@ -259,6 +322,31 @@ describe('createGenerateBoostSuggestionFn', () => {
         expectedAction: 'reopen_frontier',
       },
     });
+  });
+
+  it('smart resolution generator는 shouldChallenge=true 인 contradiction_challenge 에 challengeReasons가 없으면 실패해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'contradiction_challenge',
+        shouldChallenge: true,
+        confidence: 0.84,
+        reasoning: 'closed proof is too weak and should be reopened',
+        expectedAction: 'reopen_frontier',
+      }),
+      usage: {
+        inputTokens: 40,
+        outputTokens: 10,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(
+      generateSmartResolution('review this low-confidence proof without challenge reasons'),
+    ).rejects.toThrow('contradiction_challenge requires challengeReasons when shouldChallenge is true');
   });
 });
 
