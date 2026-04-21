@@ -16,16 +16,18 @@ import {
     objects,
 } from '@archi-navi/db';
 import {
-    computeImplementingServices,
+    computeImplementingServices as computeImplementingServicesFromInference,
     runDomainDiscovery,
 } from '@archi-navi/inference';
 import { OBJECT_TYPES } from '@archi-navi/shared';
 import type {
+    ComputeImplementingServicesInput,
     DiscoveryCodeArtifactInput,
     DiscoveryInputs,
     DiscoveryIntentInput,
     DiscoveryObjectInput,
     DiscoveryRelationInput,
+    ImplementingServiceRow,
 } from '@archi-navi/inference';
 import {
     createGenerateDomainReviewFn,
@@ -35,6 +37,62 @@ import {
 const DISCOVERY_PREREQUISITE_OBJECT_TYPES = OBJECT_TYPES.filter(
     (objectType) => objectType !== 'service' && objectType !== 'domain',
 );
+
+const CODE_CHILD_TYPES = new Set(['function', 'api_endpoint']);
+
+function computeImplementingServicesFallback(
+    input: ComputeImplementingServicesInput,
+): ImplementingServiceRow[] {
+    const serviceById = new Map<string, { id: string; name: string }>();
+    for (const obj of input.objects) {
+        if (obj.objectType === 'service') {
+            serviceById.set(obj.id, { id: obj.id, name: obj.name });
+        }
+    }
+
+    const childTotalByService = new Map<string, number>();
+    const childInDomainByService = new Map<string, number>();
+
+    for (const obj of input.objects) {
+        if (!CODE_CHILD_TYPES.has(obj.objectType)) continue;
+        if (!obj.parentId) continue;
+        if (!serviceById.has(obj.parentId)) continue;
+
+        childTotalByService.set(obj.parentId, (childTotalByService.get(obj.parentId) ?? 0) + 1);
+        if (input.memberIds.has(obj.id)) {
+            childInDomainByService.set(
+                obj.parentId,
+                (childInDomainByService.get(obj.parentId) ?? 0) + 1,
+            );
+        }
+    }
+
+    const rows: ImplementingServiceRow[] = [];
+    for (const [serviceId, childTotal] of childTotalByService) {
+        const childInDomain = childInDomainByService.get(serviceId) ?? 0;
+        if (childInDomain === 0) continue;
+        const service = serviceById.get(serviceId);
+        if (!service) continue;
+        rows.push({
+            serviceObjectId: serviceId,
+            serviceName: service.name,
+            childInDomain,
+            childTotal,
+            confidence: childInDomain / childTotal,
+        });
+    }
+
+    rows.sort((a, b) => {
+        if (b.confidence !== a.confidence) return b.confidence - a.confidence;
+        return a.serviceObjectId.localeCompare(b.serviceObjectId);
+    });
+    return rows;
+}
+
+const computeImplementingServices =
+    typeof computeImplementingServicesFromInference === 'function'
+        ? computeImplementingServicesFromInference
+        : computeImplementingServicesFallback;
 
 function normalizeRequiredString(value: unknown): string | null {
     if (typeof value !== 'string') return null;

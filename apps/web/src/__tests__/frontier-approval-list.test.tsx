@@ -393,4 +393,58 @@ describe('FrontierApprovalList', () => {
       },
     });
   });
+
+  it('PROVIDER_SERVICE_AMBIGUOUS frontier에서 Smart 재검토 성공 시 frontier/candidate를 함께 새로고침해야 한다', async () => {
+    const item = createFrontierItem();
+    const detail = createFrontierDetail();
+    const dispatchSpy = vi.spyOn(window, 'dispatchEvent');
+    let frontierFetchCount = 0;
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        frontierFetchCount += 1;
+        return Promise.resolve(jsonResponse([item]));
+      }
+      if (url.includes('/api/inference/frontiers/proof-1?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse(detail));
+      }
+      if (url.endsWith('/api/inference/frontiers/smart-review') && init?.method === 'POST') {
+        expect(JSON.parse(String(init.body))).toMatchObject({
+          workspaceId: 'ws-1',
+          proofStateId: 'proof-1',
+          smartProof: {
+            categories: {
+              ambiguityResolution: true,
+            },
+          },
+        });
+        return Promise.resolve(jsonResponse({
+          success: true,
+          summary: {
+            acceptedCount: 1,
+            pendingCount: 0,
+            skippedCount: 0,
+          },
+          remainingProofStateIds: [],
+        }));
+      }
+
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findByTestId('frontier-card');
+    fireEvent.click(screen.getByRole('button', { name: 'Smart 재검토' }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (accepted 1, pending 0, skipped 0)');
+    });
+    await waitFor(() => {
+      expect(frontierFetchCount).toBeGreaterThanOrEqual(2);
+    });
+    expect(dispatchSpy).toHaveBeenCalledWith(expect.any(CustomEvent));
+  });
 });
