@@ -198,11 +198,13 @@ const smartPatchProposalSchema = z.object({
   }
 
   if (proposal.patchType === 'provider_service_selection') {
+    if (proposal.resolved === false) return;
+
     if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
 
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
-      message: 'provider_service_selection requires selectedServiceId',
+      message: 'provider_service_selection requires selectedServiceId when resolved is true',
       path: ['selectedServiceId'],
     });
     return;

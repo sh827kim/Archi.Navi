@@ -215,8 +215,46 @@ describe('createGenerateBoostSuggestionFn', () => {
     );
 
     await expect(generateSmartResolution('resolve provider without selectedServiceId')).rejects.toThrow(
-      'provider_service_selection requires selectedServiceId',
+      'provider_service_selection requires selectedServiceId when resolved is true',
     );
+  });
+
+  it('smart resolution generator는 provider_service_selection unresolved 응답에서 selectedServiceId 없이도 허용해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'provider_service_selection',
+        resolved: false,
+        confidence: 0.42,
+        reasoning: 'multiple services still plausible',
+        ranking: [
+          {
+            serviceId: 'service-order-a',
+            serviceName: 'order-api-a',
+            score: 0.42,
+            reasoning: 'insufficient evidence',
+          },
+        ],
+      }),
+      usage: {
+        inputTokens: 40,
+        outputTokens: 12,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve unresolved provider ambiguity')).resolves.toMatchObject({
+      model: 'gpt-4o',
+      promptTokens: 40,
+      completionTokens: 12,
+      object: {
+        patchType: 'provider_service_selection',
+        resolved: false,
+      },
+    });
   });
 
   it('smart resolution generator는 provider_service_selection 응답도 그대로 변환해야 한다', async () => {
