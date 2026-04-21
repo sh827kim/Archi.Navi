@@ -187,6 +187,15 @@ const smartPatchProposalSchema = z.object({
   patchRationale: smartSummaryEnhancementProposalSchema.shape.patchRationale.optional(),
   challengeReasons: smartContradictionChallengeProposalSchema.shape.challengeReasons.optional(),
   expectedAction: smartContradictionChallengeProposalSchema.shape.expectedAction.optional(),
+}).superRefine((proposal, ctx) => {
+  if (proposal.patchType !== 'provider_service_selection') return;
+  if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'provider_service_selection requires selectedServiceId',
+    path: ['selectedServiceId'],
+  });
 });
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {

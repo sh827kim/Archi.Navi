@@ -194,6 +194,31 @@ describe('createGenerateBoostSuggestionFn', () => {
     });
   });
 
+  it('smart resolution generator는 provider_service_selection 에 selectedServiceId 가 없으면 거부해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'provider_service_selection',
+        resolved: true,
+        selectedServiceName: 'order-api-b',
+        confidence: 0.78,
+        reasoning: 'service name and host hint both match',
+      }),
+      usage: {
+        inputTokens: 61,
+        outputTokens: 16,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve provider without selectedServiceId')).rejects.toThrow(
+      'provider_service_selection requires selectedServiceId',
+    );
+  });
+
   it('smart resolution generator는 provider_service_selection 응답도 그대로 변환해야 한다', async () => {
     generateObjectMock.mockResolvedValue({
       object: {
