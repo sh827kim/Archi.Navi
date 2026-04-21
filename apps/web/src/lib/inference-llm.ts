@@ -114,6 +114,8 @@ const smartProviderServiceSelectionProposalSchema = z.object({
   })).nullable().optional().default(null),
 });
 
+const looseObjectSchema = z.object({}).passthrough();
+
 const smartSummaryEnhancementProposalSchema = z.object({
   patchType: z.literal('function_summary_patch'),
   resolved: z.boolean(),
@@ -122,9 +124,9 @@ const smartSummaryEnhancementProposalSchema = z.object({
   reasoning: z.string(),
   summaryKind: z.enum(['http', 'db', 'message', 'mixed']).nullable().optional(),
   serviceId: z.string().nullable().optional(),
-  outboundHttp: z.record(z.string(), z.unknown()).nullable().optional(),
-  outboundDb: z.record(z.string(), z.unknown()).nullable().optional(),
-  outboundMessage: z.record(z.string(), z.unknown()).nullable().optional(),
+  outboundHttp: looseObjectSchema.nullable().optional(),
+  outboundDb: looseObjectSchema.nullable().optional(),
+  outboundMessage: looseObjectSchema.nullable().optional(),
   callChainHints: z.array(z.string()).nullable().optional(),
   aliasHints: z.array(z.string()).nullable().optional(),
   signalSources: z.array(z.string()).nullable().optional(),
@@ -132,7 +134,7 @@ const smartSummaryEnhancementProposalSchema = z.object({
   extractionStrategy: z.string().nullable().optional(),
   unresolvedReasons: z.array(z.string()).nullable().optional(),
   summaryCompleteness: z.number().min(0).max(1).nullable().optional(),
-  flags: z.record(z.string(), z.unknown()).nullable().optional(),
+  flags: looseObjectSchema.nullable().optional(),
   confidenceScore: z.number().min(0).max(1).nullable().optional(),
   evidenceIds: z.array(z.string()).nullable().optional(),
   patchRationale: z.string().nullable().optional(),
