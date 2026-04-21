@@ -377,7 +377,11 @@ export function FrontierApprovalList() {
   );
   const allSmartSelected = smartReviewTargetItems.length > 0
     && smartReviewTargetItems.every((item) => selectedSmartProofStateIds.includes(item.proofStateId));
-  const canRunBulkSmartReview = selectedSmartProofStateIds.length > 0 && !reviewingSmartBulk;
+  const isSelectedSmartReviewInFlight = selectedSmartProofStateIds
+    .some((proofStateId) => reviewingSmartIds.includes(proofStateId));
+  const canRunBulkSmartReview = selectedSmartProofStateIds.length > 0
+    && !reviewingSmartBulk
+    && !isSelectedSmartReviewInFlight;
 
   if (loading) {
     return (

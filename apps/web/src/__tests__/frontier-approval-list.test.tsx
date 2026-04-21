@@ -492,4 +492,48 @@ describe('FrontierApprovalList', () => {
       proofStateId: 'proof-1',
     });
   });
+
+  it('단건 Smart 재검토 진행 중에는 선택 항목 Smart 재검토 버튼이 비활성화되어야 한다', async () => {
+    const item = createFrontierItem();
+    const requests: Array<Record<string, unknown>> = [];
+    let resolveSmartReview: ((value: Response) => void) | null = null;
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item]));
+      }
+      if (url.endsWith('/api/inference/frontiers/smart-review') && init?.method === 'POST') {
+        requests.push(JSON.parse(String(init.body)));
+        return new Promise<Response>((resolve) => {
+          resolveSmartReview = resolve;
+        });
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+    await screen.findByTestId('frontier-card');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: '선택' }));
+    const bulkButton = screen.getByRole('button', { name: '선택 항목 Smart 재검토 (1)' });
+    const smartButton = screen.getByRole('button', { name: 'Smart 재검토' });
+
+    fireEvent.click(smartButton);
+
+    await waitFor(() => {
+      expect(requests).toHaveLength(1);
+      expect(bulkButton).toHaveProperty('disabled', true);
+    });
+
+    resolveSmartReview?.(jsonResponse({
+      success: true,
+      summary: { acceptedCount: 1, pendingCount: 0, skippedCount: 0 },
+      remainingProofStateIds: [],
+    }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (accepted 1, pending 0, skipped 0)');
+    });
+  });
 });
