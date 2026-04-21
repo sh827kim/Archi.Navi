@@ -200,4 +200,49 @@ describe('POST /api/inference/frontiers/smart-review', () => {
       error: expect.objectContaining({ code: 'SMART_MODEL_NOT_CONFIGURED' }),
     }));
   });
+
+  it('proofStateIds 배열이 전달되면 inArray 필터 기반으로 선택 실행해야 한다', async () => {
+    getDbMock.mockResolvedValue(createDbMock());
+    normalizeSmartProofConfigMock.mockReturnValue({
+      enabled: true,
+      categories: { ambiguityResolution: true },
+      budget: {
+        maxLlmCallsPerRun: 2,
+        maxInputTokensPerCall: 200,
+        maxTotalTokensPerRun: 1000,
+      },
+    });
+    getInferenceModelMock.mockReturnValue({ model: { provider: 'openai' }, modelName: 'gpt-4o' });
+    createGenerateSmartResolutionFnMock.mockReturnValue(vi.fn());
+    createSmartBudgetTrackerMock.mockReturnValue({ callsUsed: 0, tokensUsed: 0 });
+    canAffordSmartBudgetCallMock.mockReturnValue(true);
+    recordSmartBudgetCallMock.mockReturnValue({ callsUsed: 1, tokensUsed: 18 });
+    resolveSmartAmbiguityMock.mockResolvedValue({
+      proofStateId: 'proof-1',
+      frontierReason: 'PROVIDER_SERVICE_AMBIGUOUS',
+      attempted: true,
+      resolved: true,
+      confidence: 0.9,
+      reasoning: 'resolved',
+      decision: 'ACCEPTED',
+      patch: null,
+      validationStatus: 'ACCEPTED',
+      errors: [],
+      resolution: null,
+      llmCallId: null,
+      tokensUsed: { input: 11, output: 7 },
+    });
+
+    const response = await POST(new Request('http://localhost/api/inference/frontiers/smart-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'ws-1', proofStateIds: ['proof-1', 'proof-2'] }),
+    }));
+
+    expect(response.status).toBe(200);
+    expect(resolveSmartAmbiguityMock).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ proofStateId: 'proof-1' }),
+    );
+  });
 });

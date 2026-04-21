@@ -18,11 +18,17 @@ import { createGenerateSmartResolutionFn, getInferenceModel } from '@/lib/infere
 interface SmartFrontierReviewRequest {
   workspaceId?: string;
   proofStateId?: string;
+  proofStateIds?: string[];
   smartProof?: boolean | Record<string, unknown>;
 }
 
 function asString(value: unknown): string {
   return typeof value === 'string' ? value.trim() : '';
+}
+
+function asStringArray(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return [...new Set(value.map((entry) => asString(entry)).filter((entry) => entry.length > 0))];
 }
 
 function buildRequestedSmartProof(input?: SmartFrontierReviewRequest['smartProof']) {
@@ -42,6 +48,11 @@ export async function POST(req: Request) {
     const body = (await req.json().catch(() => ({}))) as SmartFrontierReviewRequest;
     const workspaceId = asString(body.workspaceId);
     const requestedProofStateId = asString(body.proofStateId);
+    const requestedProofStateIds = asStringArray(body.proofStateIds);
+    const requestedIds = [...new Set([
+      ...(requestedProofStateId ? [requestedProofStateId] : []),
+      ...requestedProofStateIds,
+    ])];
 
     if (!workspaceId) {
       return NextResponse.json(
@@ -75,17 +86,17 @@ export async function POST(req: Request) {
           eq(proofFrontiers.workspaceId, workspaceId),
           eq(proofFrontiers.frontierReason, 'PROVIDER_SERVICE_AMBIGUOUS'),
           eq(proofStates.status, 'FRONTIER'),
-          ...(requestedProofStateId ? [eq(proofFrontiers.proofStateId, requestedProofStateId)] : []),
+          ...(requestedIds.length > 0 ? [inArray(proofFrontiers.proofStateId, requestedIds)] : []),
         ),
       );
 
-    if (requestedProofStateId && targetRows.length === 0) {
+    if (requestedIds.length > 0 && targetRows.length === 0) {
       return NextResponse.json(
         {
           success: false,
           error: {
             code: 'NOT_FOUND',
-            message: '해당 proofStateId의 pending PROVIDER_SERVICE_AMBIGUOUS frontier를 찾지 못했습니다.',
+            message: '요청한 proofStateId의 pending PROVIDER_SERVICE_AMBIGUOUS frontier를 찾지 못했습니다.',
           },
         },
         { status: 404 },

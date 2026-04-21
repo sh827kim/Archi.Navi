@@ -455,4 +455,41 @@ describe('FrontierApprovalList', () => {
     });
     expect(dispatchSpy).toHaveBeenCalledWith(expect.any(CustomEvent));
   });
+
+  it('선택한 항목만 일괄 Smart 재검토 요청을 보내야 한다', async () => {
+    const item1 = createFrontierItem();
+    const item2 = { ...createFrontierItem(), proofStateId: 'proof-2', sourceServiceName: 'source-service-2' };
+    const requests: Array<Record<string, unknown>> = [];
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item1, item2]));
+      }
+      if (url.endsWith('/api/inference/frontiers/smart-review') && init?.method === 'POST') {
+        requests.push(JSON.parse(String(init.body)));
+        return Promise.resolve(jsonResponse({
+          success: true,
+          summary: { acceptedCount: 1, pendingCount: 0, skippedCount: 1 },
+          remainingProofStateIds: ['proof-2'],
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+    await screen.findAllByTestId('frontier-card');
+
+    const rowCheckboxes = screen.getAllByRole('checkbox', { name: '선택' });
+    fireEvent.click(rowCheckboxes[0]!);
+    fireEvent.click(screen.getByRole('button', { name: '선택 항목 Smart 재검토 (1)' }));
+
+    await waitFor(() => {
+      expect(requests).toHaveLength(1);
+    });
+    expect(requests[0]).toMatchObject({
+      workspaceId: 'ws-1',
+      proofStateId: 'proof-1',
+    });
+  });
 });

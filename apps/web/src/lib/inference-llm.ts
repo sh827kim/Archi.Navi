@@ -147,15 +147,47 @@ const smartContradictionChallengeProposalSchema = z.object({
   expectedAction: z.enum(['reopen_frontier']).nullable(),
 });
 
-const smartPatchProposalSchema = z.discriminatedUnion('patchType', [
-  smartAliasBindingProposalSchema,
-  smartRouteTransformProposalSchema,
-  smartEndpointDisambiguationProposalSchema,
-  smartMethodPathHintProposalSchema,
-  smartProviderServiceSelectionProposalSchema,
-  smartSummaryEnhancementProposalSchema,
-  smartContradictionChallengeProposalSchema,
-]);
+const smartPatchProposalSchema = z.object({
+  patchType: z.enum([
+    'alias_binding',
+    'route_transform_patch',
+    'endpoint_disambiguation',
+    'method_path_hint',
+    'provider_service_selection',
+    'function_summary_patch',
+    'contradiction_challenge',
+  ]),
+  resolved: z.boolean().optional(),
+  selectedServiceId: z.string().nullable().optional(),
+  selectedServiceName: z.string().nullable().optional(),
+  functionId: z.string().optional(),
+  shouldChallenge: z.boolean().optional(),
+  confidence: z.number().min(0).max(1),
+  reasoning: z.string(),
+  aliasBinding: smartAliasBindingProposalSchema.shape.aliasBinding.optional(),
+  routeTransform: smartRouteTransformProposalSchema.shape.routeTransform.optional(),
+  endpointSelection: smartEndpointDisambiguationProposalSchema.shape.endpointSelection.optional(),
+  methodPathHint: smartMethodPathHintProposalSchema.shape.methodPathHint.optional(),
+  ranking: smartProviderServiceSelectionProposalSchema.shape.ranking.optional(),
+  summaryKind: smartSummaryEnhancementProposalSchema.shape.summaryKind.optional(),
+  serviceId: smartSummaryEnhancementProposalSchema.shape.serviceId.optional(),
+  outboundHttp: smartSummaryEnhancementProposalSchema.shape.outboundHttp.optional(),
+  outboundDb: smartSummaryEnhancementProposalSchema.shape.outboundDb.optional(),
+  outboundMessage: smartSummaryEnhancementProposalSchema.shape.outboundMessage.optional(),
+  callChainHints: smartSummaryEnhancementProposalSchema.shape.callChainHints.optional(),
+  aliasHints: smartSummaryEnhancementProposalSchema.shape.aliasHints.optional(),
+  signalSources: smartSummaryEnhancementProposalSchema.shape.signalSources.optional(),
+  provenanceEvidenceIds: smartSummaryEnhancementProposalSchema.shape.provenanceEvidenceIds.optional(),
+  extractionStrategy: smartSummaryEnhancementProposalSchema.shape.extractionStrategy.optional(),
+  unresolvedReasons: smartSummaryEnhancementProposalSchema.shape.unresolvedReasons.optional(),
+  summaryCompleteness: smartSummaryEnhancementProposalSchema.shape.summaryCompleteness.optional(),
+  flags: smartSummaryEnhancementProposalSchema.shape.flags.optional(),
+  confidenceScore: smartSummaryEnhancementProposalSchema.shape.confidenceScore.optional(),
+  evidenceIds: smartSummaryEnhancementProposalSchema.shape.evidenceIds.optional(),
+  patchRationale: smartSummaryEnhancementProposalSchema.shape.patchRationale.optional(),
+  challengeReasons: smartContradictionChallengeProposalSchema.shape.challengeReasons.optional(),
+  expectedAction: smartContradictionChallengeProposalSchema.shape.expectedAction.optional(),
+});
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
   if (headerApiKey) return headerApiKey;
