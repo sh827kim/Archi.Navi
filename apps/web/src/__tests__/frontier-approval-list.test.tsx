@@ -22,6 +22,10 @@ vi.mock('@/components/shared/empty-state-guide', () => ({
   EmptyStateGuide: ({ title }: { title: string }) => <div>{title}</div>,
 }));
 
+vi.mock('@/lib/client-ai-settings', () => ({
+  getClientAiRequestHeaders: () => ({ 'x-ai-provider': 'openai' }),
+}));
+
 vi.mock('@archi-navi/ui', () => ({
   Badge: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
   Button: ({ children, ...props }: React.ButtonHTMLAttributes<HTMLButtonElement>) => (
@@ -411,6 +415,10 @@ describe('FrontierApprovalList', () => {
         return Promise.resolve(jsonResponse(detail));
       }
       if (url.endsWith('/api/inference/frontiers/smart-review') && init?.method === 'POST') {
+        expect(init.headers).toMatchObject({
+          'Content-Type': 'application/json',
+          'x-ai-provider': 'openai',
+        });
         expect(JSON.parse(String(init.body))).toMatchObject({
           workspaceId: 'ws-1',
           proofStateId: 'proof-1',

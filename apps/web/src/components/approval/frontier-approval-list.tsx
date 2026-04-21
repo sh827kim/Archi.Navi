@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Badge, Button, Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
+import { getClientAiRequestHeaders } from '@/lib/client-ai-settings';
 
 type FrontierPatchType =
   | 'alias_binding'
@@ -299,9 +300,10 @@ export function FrontierApprovalList() {
     if (!workspaceId) return;
     setReviewingSmart(true);
     try {
+      const aiHeaders = getClientAiRequestHeaders();
       const res = await fetch('/api/inference/frontiers/smart-review', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', ...aiHeaders },
         body: JSON.stringify({
           workspaceId,
           proofStateId,
