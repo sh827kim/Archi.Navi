@@ -157,7 +157,7 @@ const smartPatchProposalSchema = z.object({
     'function_summary_patch',
     'contradiction_challenge',
   ]),
-  resolved: z.boolean().optional(),
+  resolved: z.boolean(),
   selectedServiceId: z.string().nullable().optional(),
   selectedServiceName: z.string().nullable().optional(),
   functionId: z.string().optional(),
