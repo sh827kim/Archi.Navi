@@ -5,6 +5,7 @@ import { toast } from 'sonner';
 import { Badge, Button, Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
 import { EmptyStateGuide } from '@/components/shared/empty-state-guide';
+import { getClientAiRequestHeaders } from '@/lib/client-ai-settings';
 
 type FrontierPatchType =
   | 'alias_binding'
@@ -130,6 +131,7 @@ export function FrontierApprovalList() {
   const [targetServiceHint, setTargetServiceHint] = useState('');
   const [targetHostAlias, setTargetHostAlias] = useState('');
   const [selectedPatchType, setSelectedPatchType] = useState<FrontierPatchType | ''>('');
+  const [reviewingSmart, setReviewingSmart] = useState(false);
 
   const loadFrontiers = useCallback(async () => {
     if (!workspaceId) {
@@ -294,6 +296,57 @@ export function FrontierApprovalList() {
     }
   }
 
+  async function runSmartReview(proofStateId: string) {
+    if (!workspaceId) return;
+    setReviewingSmart(true);
+    try {
+      const aiHeaders = getClientAiRequestHeaders();
+      const res = await fetch('/api/inference/frontiers/smart-review', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...aiHeaders },
+        body: JSON.stringify({
+          workspaceId,
+          proofStateId,
+          smartProof: {
+            categories: {
+              ambiguityResolution: true,
+            },
+          },
+        }),
+      });
+      const payload = (await res.json()) as {
+        success?: boolean;
+        error?: { message?: string };
+        summary?: { acceptedCount?: number; pendingCount?: number; skippedCount?: number };
+        remainingProofStateIds?: string[];
+      };
+      if (!res.ok || payload.success !== true) {
+        throw new Error(payload.error?.message ?? 'Smart 재검토 실행 실패');
+      }
+
+      const accepted = payload.summary?.acceptedCount ?? 0;
+      const pending = payload.summary?.pendingCount ?? 0;
+      const skipped = payload.summary?.skippedCount ?? 0;
+      toast.success(`Smart 재검토 완료 (accepted ${accepted}, pending ${pending}, skipped ${skipped})`);
+
+      await loadFrontiers();
+      if (selectedProofStateId === proofStateId) {
+        const stillFrontier = payload.remainingProofStateIds?.includes(proofStateId) ?? false;
+        if (stillFrontier) {
+          await loadDetail(proofStateId);
+        } else {
+          setSelectedProofStateId(null);
+          setDetail(null);
+        }
+      }
+      window.dispatchEvent(new CustomEvent('archi-navi:refresh-approval-candidates'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'Smart 재검토 실행 실패');
+    } finally {
+      setReviewingSmart(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="flex h-40 items-center justify-center">
@@ -358,6 +411,16 @@ export function FrontierApprovalList() {
                 {renderReasonBadge(item.frontierReason)}
                 {renderLatestPatchBadge(item.latestPatch ?? null)}
                 <Badge variant="outline">priority {item.priority}</Badge>
+                {item.frontierReason === 'PROVIDER_SERVICE_AMBIGUOUS' && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={reviewingSmart}
+                    onClick={() => void runSmartReview(item.proofStateId)}
+                  >
+                    {reviewingSmart ? '재검토 중...' : 'Smart 재검토'}
+                  </Button>
+                )}
                 <Button size="sm" onClick={() => setSelectedProofStateId(item.proofStateId)}>보정</Button>
               </div>
             </div>
@@ -519,6 +582,11 @@ export function FrontierApprovalList() {
             <Button variant="outline" disabled={!canPatch || submittingPatch} onClick={() => void submitPatch('defer')}>
               {submittingPatch ? '저장 중...' : '보류 저장'}
             </Button>
+            {detail?.frontierReason === 'PROVIDER_SERVICE_AMBIGUOUS' && (
+              <Button variant="outline" disabled={reviewingSmart} onClick={() => void runSmartReview(detail.proofStateId)}>
+                {reviewingSmart ? '재검토 중...' : 'Smart 재검토'}
+              </Button>
+            )}
             <Button disabled={!canPatch || submittingPatch} onClick={() => void submitPatch('apply')}>
               {submittingPatch ? '적용 중...' : 'Patch 적용'}
             </Button>
