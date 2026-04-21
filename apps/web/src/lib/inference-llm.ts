@@ -188,13 +188,24 @@ const smartPatchProposalSchema = z.object({
   challengeReasons: smartContradictionChallengeProposalSchema.shape.challengeReasons.optional(),
   expectedAction: smartContradictionChallengeProposalSchema.shape.expectedAction.optional(),
 }).superRefine((proposal, ctx) => {
-  if (proposal.patchType !== 'provider_service_selection') return;
-  if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
+  if (proposal.patchType === 'provider_service_selection') {
+    if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
+
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'provider_service_selection requires selectedServiceId',
+      path: ['selectedServiceId'],
+    });
+    return;
+  }
+
+  if (proposal.patchType !== 'contradiction_challenge' || !proposal.shouldChallenge) return;
+  if (Array.isArray(proposal.challengeReasons) && proposal.challengeReasons.length > 0) return;
 
   ctx.addIssue({
     code: z.ZodIssueCode.custom,
-    message: 'provider_service_selection requires selectedServiceId',
-    path: ['selectedServiceId'],
+    message: 'contradiction_challenge requires challengeReasons when shouldChallenge is true',
+    path: ['challengeReasons'],
   });
 });
 

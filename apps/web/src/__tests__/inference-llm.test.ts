@@ -285,6 +285,32 @@ describe('createGenerateBoostSuggestionFn', () => {
       },
     });
   });
+
+  it('smart resolution generator는 shouldChallenge=true 인 contradiction_challenge 에 challengeReasons가 없으면 실패해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'contradiction_challenge',
+        resolved: false,
+        shouldChallenge: true,
+        confidence: 0.84,
+        reasoning: 'closed proof is too weak and should be reopened',
+        expectedAction: 'reopen_frontier',
+      }),
+      usage: {
+        inputTokens: 40,
+        outputTokens: 10,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(
+      generateSmartResolution('review this low-confidence proof without challenge reasons'),
+    ).rejects.toThrow('contradiction_challenge requires challengeReasons when shouldChallenge is true');
+  });
 });
 
 describe('createGenerateDomainReviewFn', () => {
