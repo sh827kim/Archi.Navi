@@ -202,14 +202,14 @@ export async function POST(req: Request) {
       );
     const remainingProofStateIds = [...new Set(remainingRows.map((row) => row.proofStateId))];
 
-    const reclassificationCounts = results.reduce<Record<string, number>>((acc, result) => {
-      if (result.validationStatus !== 'ACCEPTED') return acc;
+    const acceptedResults = results.filter((result) => result.validationStatus === 'ACCEPTED');
+    const reclassificationCounts = acceptedResults.reduce<Record<string, number>>((acc, result) => {
       const patchType = asString(asRecord(result.patch)['patchType']);
       if (!patchType) return acc;
       acc[patchType] = (acc[patchType] ?? 0) + 1;
       return acc;
     }, {});
-    const reclassifiedCount = Object.values(reclassificationCounts).reduce((sum, count) => sum + count, 0);
+    const reclassifiedCount = acceptedResults.length;
     const promotedCount = results.filter((result) => (
       result.validationStatus === 'ACCEPTED'
       && asString(asRecord(result.resolution)['status']) === 'CLOSED_ATOMIC'
@@ -223,7 +223,7 @@ export async function POST(req: Request) {
       promotedCount,
       reclassificationCounts,
       // Backward-compatible field. UI should present reclassification/promoted semantics instead.
-      acceptedCount: results.filter((result) => result.validationStatus === 'ACCEPTED').length,
+      acceptedCount: acceptedResults.length,
       pendingCount: results.filter((result) => result.validationStatus === 'PENDING').length,
       skippedCount: results.filter((result) => result.decision === 'SKIPPED').length,
       budget,

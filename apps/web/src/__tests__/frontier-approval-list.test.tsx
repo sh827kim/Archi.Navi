@@ -584,4 +584,32 @@ describe('FrontierApprovalList', () => {
     expect(screen.getAllByTitle('설정 키, host alias, service discovery 이름을 실제 서비스와 연결해야 하는 frontier입니다.').length).toBeGreaterThanOrEqual(1);
     expect(screen.queryByText('ALIAS')).toBeNull();
   });
+
+  it('latest patch 타입도 저장 가능한 patch type 전체를 한글로 표시해야 한다', async () => {
+    const item = {
+      ...createFrontierItem(),
+      latestPatch: {
+        id: 'patch-summary',
+        patchType: 'function_summary_patch',
+        validationStatus: 'ACCEPTED',
+        sourceKind: 'smart_agent',
+        createdAt: '2026-04-22T00:00:00.000Z',
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findByTestId('frontier-card');
+    expect(document.body.textContent).toContain('함수 요약 보강');
+    expect(document.body.textContent).toContain('재분류 적용');
+    expect(screen.queryByText('function_summary_patch')).toBeNull();
+  });
 });

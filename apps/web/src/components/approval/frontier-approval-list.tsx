@@ -197,6 +197,18 @@ const PATCH_TYPE_META: Record<string, TypeDisplayMeta> = {
     label: '라우트 변환',
     description: '게이트웨이 route가 내부 서비스 endpoint로 이어지는 변환 정보를 보정합니다.',
   },
+  function_summary_patch: {
+    label: '함수 요약 보강',
+    description: '함수 요약의 outbound HTTP/DB/message 신호를 보강해 proof 해소에 사용합니다.',
+  },
+  contradiction_challenge: {
+    label: '모순 재검토',
+    description: '닫힌 proof가 약하거나 상충될 때 다시 frontier로 열도록 요청합니다.',
+  },
+  reject_patch: {
+    label: '재분류 반려',
+    description: '제안된 patch를 적용하지 않고 반려한 기록입니다.',
+  },
 };
 
 const VALIDATION_STATUS_META: Record<string, TypeDisplayMeta> = {

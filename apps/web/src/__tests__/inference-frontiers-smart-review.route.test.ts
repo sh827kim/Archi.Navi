@@ -249,4 +249,52 @@ describe('POST /api/inference/frontiers/smart-review', () => {
       expect.objectContaining({ proofStateId: 'proof-1' }),
     );
   });
+
+  it('ACCEPTED 결과에 patch metadata가 없어도 재분류 집계에 포함해야 한다', async () => {
+    getDbMock.mockResolvedValue(createDbMock());
+    normalizeSmartProofConfigMock.mockReturnValue({
+      enabled: true,
+      categories: { ambiguityResolution: true },
+      budget: {
+        maxLlmCallsPerRun: 2,
+        maxInputTokensPerCall: 200,
+        maxTotalTokensPerRun: 1000,
+      },
+    });
+    getInferenceModelMock.mockReturnValue({ model: { provider: 'openai' }, modelName: 'gpt-4o' });
+    createGenerateSmartResolutionFnMock.mockReturnValue(vi.fn());
+    createSmartBudgetTrackerMock.mockReturnValue({ callsUsed: 0, tokensUsed: 0 });
+    canAffordSmartBudgetCallMock.mockReturnValue(true);
+    recordSmartBudgetCallMock.mockReturnValue({ callsUsed: 1, tokensUsed: 18 });
+    resolveSmartAmbiguityMock.mockResolvedValue({
+      proofStateId: 'proof-1',
+      frontierReason: 'PROVIDER_SERVICE_AMBIGUOUS',
+      attempted: true,
+      resolved: true,
+      confidence: 0.9,
+      reasoning: 'resolved without patch metadata',
+      decision: 'ACCEPTED',
+      patch: null,
+      validationStatus: 'ACCEPTED',
+      errors: [],
+      resolution: null,
+      llmCallId: null,
+      tokensUsed: { input: 11, output: 7 },
+    });
+
+    const response = await POST(new Request('http://localhost/api/inference/frontiers/smart-review', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workspaceId: 'ws-1', proofStateId: 'proof-1' }),
+    }));
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual(expect.objectContaining({
+      summary: expect.objectContaining({
+        acceptedCount: 1,
+        reclassifiedCount: 1,
+        reclassificationCounts: {},
+      }),
+    }));
+  });
 });
