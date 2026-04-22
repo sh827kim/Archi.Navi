@@ -100,9 +100,21 @@ const FRONTIER_REASON_META: Record<string, TypeDisplayMeta> = {
     label: '경로 템플릿 미확정',
     description: '외부 경로와 내부 endpoint path template을 안정적으로 맞추지 못한 상태입니다.',
   },
+  DYNAMIC_URI_UNRESOLVED: {
+    label: '동적 URI 미해결',
+    description: '동적으로 조합된 URI라 호출 대상 경로나 endpoint를 정적으로 확정하지 못한 상태입니다.',
+  },
   ROUTE_FAMILY_DERIVATION_EMPTY: {
     label: '라우트 파생 실패',
     description: '게이트웨이 라우트에서 대상 서비스나 내부 경로를 파생하지 못한 상태입니다.',
+  },
+  ROUTE_FAMILY_TOO_BROAD: {
+    label: '라우트 범위 과다',
+    description: '게이트웨이 라우트가 너무 넓은 endpoint 집합으로 이어져 단일 대상을 확정하지 못한 상태입니다.',
+  },
+  ENDPOINT_SET_OPEN: {
+    label: '엔드포인트 집합 미확정',
+    description: '라우트가 연결될 수 있는 endpoint 집합이 열려 있어 proof를 닫지 못한 상태입니다.',
   },
   ROUTE_TO_ENDPOINT_COMPOSITION_FAILED: {
     label: '라우트-엔드포인트 조합 실패',

@@ -687,4 +687,63 @@ describe('FrontierApprovalList', () => {
     expect(screen.queryByText('DB_SCHEMA_AMBIGUOUS')).toBeNull();
     expect(screen.queryByText('MESSAGE_TARGET_UNRESOLVED')).toBeNull();
   });
+
+  it('동적 URI와 gateway frontier reason도 한글 라벨과 설명으로 표시해야 한다', async () => {
+    const dynamicUriItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-dynamic-uri',
+      sourceServiceName: 'dynamic-uri-service',
+      frontierReason: 'DYNAMIC_URI_UNRESOLVED',
+      frontierClass: 'METHOD_PATH',
+    };
+    const broadRouteItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-broad-route',
+      sourceServiceName: 'broad-route-service',
+      intentType: 'http_gateway_route',
+      frontierReason: 'ROUTE_FAMILY_TOO_BROAD',
+      frontierClass: 'ROUTE',
+    };
+    const openEndpointItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-open-endpoint',
+      sourceServiceName: 'open-endpoint-service',
+      intentType: 'http_gateway_route',
+      frontierReason: 'ENDPOINT_SET_OPEN',
+      frontierClass: 'ROUTE',
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([dynamicUriItem, broadRouteItem, openEndpointItem]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findAllByTestId('frontier-card');
+    expect(screen.getAllByText('동적 URI 미해결').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('라우트 범위 과다').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('엔드포인트 집합 미확정').length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getByTitle(
+        '동적으로 조합된 URI라 호출 대상 경로나 endpoint를 정적으로 확정하지 못한 상태입니다.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        '게이트웨이 라우트가 너무 넓은 endpoint 집합으로 이어져 단일 대상을 확정하지 못한 상태입니다.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        '라우트가 연결될 수 있는 endpoint 집합이 열려 있어 proof를 닫지 못한 상태입니다.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('DYNAMIC_URI_UNRESOLVED')).toBeNull();
+    expect(screen.queryByText('ROUTE_FAMILY_TOO_BROAD')).toBeNull();
+    expect(screen.queryByText('ENDPOINT_SET_OPEN')).toBeNull();
+  });
 });
