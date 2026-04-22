@@ -503,6 +503,44 @@ describe('FrontierApprovalList', () => {
     });
   });
 
+  it('재분류 타입별 집계가 일부만 있어도 총 재분류 수를 toast에 유지해야 한다', async () => {
+    const item1 = createFrontierItem();
+    const item2 = { ...createFrontierItem(), proofStateId: 'proof-2', sourceServiceName: 'source-service-2' };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item1, item2]));
+      }
+      if (url.endsWith('/api/inference/frontiers/smart-review') && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          summary: {
+            reclassifiedCount: 2,
+            promotedCount: 1,
+            reclassificationCounts: { provider_service_selection: 1 },
+            pendingCount: 0,
+            skippedCount: 0,
+          },
+          remainingProofStateIds: [],
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+    await screen.findAllByTestId('frontier-card');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Smart 대상 전체 선택' }));
+    fireEvent.click(screen.getByRole('button', { name: '선택 항목 Smart 재검토 (2)' }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        'Smart 재검토 완료 (재분류: 제공 서비스 선택 1, 유형 미확인 1, 후보 승격 1, 보류 0, 건너뜀 0)',
+      );
+    });
+  });
+
   it('단건 Smart 재검토 진행 중에는 선택 항목 Smart 재검토 버튼이 비활성화되어야 한다', async () => {
     const item = createFrontierItem();
     const requests: Array<Record<string, unknown>> = [];
@@ -611,5 +649,42 @@ describe('FrontierApprovalList', () => {
     expect(document.body.textContent).toContain('함수 요약 보강');
     expect(document.body.textContent).toContain('재분류 적용');
     expect(screen.queryByText('function_summary_patch')).toBeNull();
+  });
+
+  it('DB와 메시지 frontier reason도 한글 라벨과 설명으로 표시해야 한다', async () => {
+    const dbItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-db',
+      sourceServiceName: 'db-service',
+      intentType: 'db_access',
+      frontierReason: 'DB_SCHEMA_AMBIGUOUS',
+      frontierClass: 'TARGET',
+    };
+    const messageItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-message',
+      sourceServiceName: 'message-service',
+      intentType: 'message_publish',
+      frontierReason: 'MESSAGE_TARGET_UNRESOLVED',
+      frontierClass: 'TARGET',
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([dbItem, messageItem]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findAllByTestId('frontier-card');
+    expect(screen.getAllByText('DB 스키마 모호').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('메시지 대상 미해결').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByTitle('같은 테이블명이 여러 스키마에 있어 대상 DB 테이블을 하나로 확정해야 합니다.')).toBeTruthy();
+    expect(screen.getByTitle('메시지 topic/queue 힌트가 부족하거나 대상 채널을 찾지 못한 상태입니다.')).toBeTruthy();
+    expect(screen.queryByText('DB_SCHEMA_AMBIGUOUS')).toBeNull();
+    expect(screen.queryByText('MESSAGE_TARGET_UNRESOLVED')).toBeNull();
   });
 });

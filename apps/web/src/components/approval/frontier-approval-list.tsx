@@ -108,6 +108,46 @@ const FRONTIER_REASON_META: Record<string, TypeDisplayMeta> = {
     label: '라우트-엔드포인트 조합 실패',
     description: '게이트웨이 라우트와 서비스 endpoint를 합성해 proof를 닫지 못한 상태입니다.',
   },
+  PATH_REWRITE_CONFLICT: {
+    label: '경로 재작성 충돌',
+    description: '게이트웨이 경로 재작성 규칙이 충돌해 내부 endpoint 경로를 확정하지 못한 상태입니다.',
+  },
+  PROVIDER_ENDPOINT_INDEX_EMPTY: {
+    label: '제공 엔드포인트 색인 없음',
+    description: '대상 서비스의 endpoint 색인이 비어 있어 매칭을 진행하지 못한 상태입니다.',
+  },
+  DB_ACTION_UNKNOWN: {
+    label: 'DB 동작 미확정',
+    description: 'DB 접근 intent가 읽기/쓰기 중 어떤 동작인지 확정하지 못한 상태입니다.',
+  },
+  DB_SCHEMA_AMBIGUOUS: {
+    label: 'DB 스키마 모호',
+    description: '같은 테이블명이 여러 스키마에 있어 대상 DB 테이블을 하나로 확정해야 합니다.',
+  },
+  DB_TABLE_UNRESOLVED: {
+    label: 'DB 테이블 미해결',
+    description: 'DB 테이블 힌트와 일치하는 대상 테이블을 찾지 못한 상태입니다.',
+  },
+  TABLE_MATCH_AMBIGUOUS: {
+    label: '테이블 매칭 모호',
+    description: 'DB 테이블 후보가 여러 개라 실제 접근 대상을 하나로 확정해야 합니다.',
+  },
+  MESSAGE_TARGET_UNRESOLVED: {
+    label: '메시지 대상 미해결',
+    description: '메시지 topic/queue 힌트가 부족하거나 대상 채널을 찾지 못한 상태입니다.',
+  },
+  TOPIC_MATCH_AMBIGUOUS: {
+    label: '토픽 매칭 모호',
+    description: '메시지 topic/queue 후보가 여러 개라 실제 채널을 하나로 확정해야 합니다.',
+  },
+  SMART_CONTRADICTION_CHALLENGED: {
+    label: 'Smart 모순 재검토',
+    description: 'Smart 재검토가 닫힌 proof의 근거를 다시 확인하도록 frontier로 되돌린 상태입니다.',
+  },
+  LOW_CONFIDENCE_CLOSED_ATOMIC: {
+    label: '낮은 신뢰도 닫힘',
+    description: '닫힌 proof의 신뢰도가 낮아 Smart 재검토 대상이 된 상태입니다.',
+  },
 };
 
 const INTENT_TYPE_META: Record<string, TypeDisplayMeta> = {
@@ -275,9 +315,15 @@ function renderLatestPatchBadge(latestPatch: FrontierListItem['latestPatch']) {
 function formatReclassificationCounts(counts: Record<string, number> | undefined, fallbackCount: number): string {
   const entries = Object.entries(counts ?? {}).filter(([, count]) => count > 0);
   if (entries.length === 0) return fallbackCount > 0 ? `재분류 ${fallbackCount}` : '재분류 0';
-  return `재분류: ${entries
+  const typedCount = entries.reduce((sum, [, count]) => sum + count, 0);
+  const untypedCount = Math.max(fallbackCount - typedCount, 0);
+  const typedSummary = entries
     .map(([patchType, count]) => `${getMeta(PATCH_TYPE_META, patchType, '재분류').label} ${count}`)
-    .join(', ')}`;
+    .join(', ');
+  return `재분류: ${[
+    typedSummary,
+    ...(untypedCount > 0 ? [`유형 미확인 ${untypedCount}`] : []),
+  ].join(', ')}`;
 }
 
 export function FrontierApprovalList() {
