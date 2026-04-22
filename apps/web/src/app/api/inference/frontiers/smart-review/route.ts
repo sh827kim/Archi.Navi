@@ -31,6 +31,12 @@ function asStringArray(value: unknown): string[] {
   return [...new Set(value.map((entry) => asString(entry)).filter((entry) => entry.length > 0))];
 }
 
+function asRecord(value: unknown): Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : {};
+}
+
 function buildRequestedSmartProof(input?: SmartFrontierReviewRequest['smartProof']) {
   const normalizedBase = normalizeSmartProofConfig(input ?? true);
   return normalizeSmartProofConfig({
@@ -112,6 +118,9 @@ export async function POST(req: Request) {
           targetCount: 0,
           attemptedCount: 0,
           resolvedCount: 0,
+          reclassifiedCount: 0,
+          promotedCount: 0,
+          reclassificationCounts: {},
           acceptedCount: 0,
           pendingCount: 0,
           skippedCount: 0,
@@ -193,11 +202,28 @@ export async function POST(req: Request) {
       );
     const remainingProofStateIds = [...new Set(remainingRows.map((row) => row.proofStateId))];
 
+    const acceptedResults = results.filter((result) => result.validationStatus === 'ACCEPTED');
+    const reclassificationCounts = acceptedResults.reduce<Record<string, number>>((acc, result) => {
+      const patchType = asString(asRecord(result.patch)['patchType']);
+      if (!patchType) return acc;
+      acc[patchType] = (acc[patchType] ?? 0) + 1;
+      return acc;
+    }, {});
+    const reclassifiedCount = acceptedResults.length;
+    const promotedCount = results.filter((result) => (
+      result.validationStatus === 'ACCEPTED'
+      && asString(asRecord(result.resolution)['status']) === 'CLOSED_ATOMIC'
+    )).length;
+
     const summary = {
       targetCount: targetProofStateIds.length,
       attemptedCount: results.filter((result) => result.attempted).length,
       resolvedCount: results.filter((result) => result.resolved).length,
-      acceptedCount: results.filter((result) => result.validationStatus === 'ACCEPTED').length,
+      reclassifiedCount,
+      promotedCount,
+      reclassificationCounts,
+      // Backward-compatible field. UI should present reclassification/promoted semantics instead.
+      acceptedCount: acceptedResults.length,
       pendingCount: results.filter((result) => result.validationStatus === 'PENDING').length,
       skippedCount: results.filter((result) => result.decision === 'SKIPPED').length,
       budget,

@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Info } from 'lucide-react';
 import { toast } from 'sonner';
 import { Badge, Button, Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle, Spinner } from '@archi-navi/ui';
 import { useWorkspace } from '@/contexts/workspace-context';
@@ -61,6 +62,243 @@ interface FrontierDetail extends FrontierListItem {
 
 type FrontierApplyMode = 'apply' | 'defer';
 
+interface TypeDisplayMeta {
+  label: string;
+  description: string;
+}
+
+const FRONTIER_REASON_META: Record<string, TypeDisplayMeta> = {
+  CONFIG_BINDING_MISSING: {
+    label: '설정 바인딩 누락',
+    description: '설정 키나 환경 변수는 보였지만 어느 서비스 별칭인지 확정하지 못한 상태입니다.',
+  },
+  HOST_ALIAS_UNRESOLVED: {
+    label: '호스트 별칭 미해결',
+    description: '호스트나 base URL alias가 실제 서비스로 연결되지 않은 상태입니다.',
+  },
+  PATH_ONLY_TARGET_UNRESOLVED: {
+    label: '경로 기반 대상 미해결',
+    description: '경로 힌트만 있고 호출 대상 서비스를 확정할 alias나 provider 단서가 부족한 상태입니다.',
+  },
+  PROVIDER_SERVICE_AMBIGUOUS: {
+    label: '제공 서비스 모호',
+    description: '후보 서비스가 여러 개라 호출 대상 서비스를 하나로 확정해야 합니다.',
+  },
+  ENDPOINT_MATCH_AMBIGUOUS: {
+    label: '엔드포인트 모호',
+    description: '같은 서비스 안에서 연결 가능한 엔드포인트 후보가 여러 개인 상태입니다.',
+  },
+  METHOD_UNKNOWN: {
+    label: '메서드 미확정',
+    description: 'HTTP method 힌트가 부족해 엔드포인트 매칭을 완료하지 못한 상태입니다.',
+  },
+  PROVIDER_ENDPOINT_NOT_FOUND: {
+    label: '제공 엔드포인트 없음',
+    description: '대상 서비스는 추정했지만 대응되는 endpoint 객체를 찾지 못한 상태입니다.',
+  },
+  PATH_TEMPLATE_UNKNOWN: {
+    label: '경로 템플릿 미확정',
+    description: '외부 경로와 내부 endpoint path template을 안정적으로 맞추지 못한 상태입니다.',
+  },
+  DYNAMIC_URI_UNRESOLVED: {
+    label: '동적 URI 미해결',
+    description: '동적으로 조합된 URI라 호출 대상 경로나 endpoint를 정적으로 확정하지 못한 상태입니다.',
+  },
+  ROUTE_FAMILY_DERIVATION_EMPTY: {
+    label: '라우트 파생 실패',
+    description: '게이트웨이 라우트에서 대상 서비스나 내부 경로를 파생하지 못한 상태입니다.',
+  },
+  ROUTE_FAMILY_TOO_BROAD: {
+    label: '라우트 범위 과다',
+    description: '게이트웨이 라우트가 너무 넓은 endpoint 집합으로 이어져 단일 대상을 확정하지 못한 상태입니다.',
+  },
+  ENDPOINT_SET_OPEN: {
+    label: '엔드포인트 집합 미확정',
+    description: '라우트가 연결될 수 있는 endpoint 집합이 열려 있어 proof를 닫지 못한 상태입니다.',
+  },
+  ROUTE_TO_ENDPOINT_COMPOSITION_FAILED: {
+    label: '라우트-엔드포인트 조합 실패',
+    description: '게이트웨이 라우트와 서비스 endpoint를 합성해 proof를 닫지 못한 상태입니다.',
+  },
+  PATH_REWRITE_CONFLICT: {
+    label: '경로 재작성 충돌',
+    description: '게이트웨이 경로 재작성 규칙이 충돌해 내부 endpoint 경로를 확정하지 못한 상태입니다.',
+  },
+  PROVIDER_ENDPOINT_INDEX_EMPTY: {
+    label: '제공 엔드포인트 색인 없음',
+    description: '대상 서비스의 endpoint 색인이 비어 있어 매칭을 진행하지 못한 상태입니다.',
+  },
+  DB_ACTION_UNKNOWN: {
+    label: 'DB 동작 미확정',
+    description: 'DB 접근 intent가 읽기/쓰기 중 어떤 동작인지 확정하지 못한 상태입니다.',
+  },
+  DB_SCHEMA_AMBIGUOUS: {
+    label: 'DB 스키마 모호',
+    description: '같은 테이블명이 여러 스키마에 있어 대상 DB 테이블을 하나로 확정해야 합니다.',
+  },
+  DB_TABLE_UNRESOLVED: {
+    label: 'DB 테이블 미해결',
+    description: 'DB 테이블 힌트와 일치하는 대상 테이블을 찾지 못한 상태입니다.',
+  },
+  TABLE_MATCH_AMBIGUOUS: {
+    label: '테이블 매칭 모호',
+    description: 'DB 테이블 후보가 여러 개라 실제 접근 대상을 하나로 확정해야 합니다.',
+  },
+  MESSAGE_TARGET_UNRESOLVED: {
+    label: '메시지 대상 미해결',
+    description: '메시지 topic/queue 힌트가 부족하거나 대상 채널을 찾지 못한 상태입니다.',
+  },
+  TOPIC_MATCH_AMBIGUOUS: {
+    label: '토픽 매칭 모호',
+    description: '메시지 topic/queue 후보가 여러 개라 실제 채널을 하나로 확정해야 합니다.',
+  },
+  SMART_CONTRADICTION_CHALLENGED: {
+    label: 'Smart 모순 재검토',
+    description: 'Smart 재검토가 닫힌 proof의 근거를 다시 확인하도록 frontier로 되돌린 상태입니다.',
+  },
+  LOW_CONFIDENCE_CLOSED_ATOMIC: {
+    label: '낮은 신뢰도 닫힘',
+    description: '닫힌 proof의 신뢰도가 낮아 Smart 재검토 대상이 된 상태입니다.',
+  },
+};
+
+const INTENT_TYPE_META: Record<string, TypeDisplayMeta> = {
+  http_call: {
+    label: 'HTTP 호출',
+    description: '서비스 코드에서 다른 서비스의 HTTP endpoint를 호출하는 의도입니다.',
+  },
+  HTTP_CLIENT: {
+    label: 'HTTP 호출',
+    description: '서비스 코드에서 다른 서비스의 HTTP endpoint를 호출하는 의도입니다.',
+  },
+  http_gateway_route: {
+    label: '게이트웨이 라우트',
+    description: '게이트웨이 route 설정이 내부 서비스 endpoint로 이어지는 의도입니다.',
+  },
+  db_access: {
+    label: 'DB 접근',
+    description: '서비스 코드가 DB table이나 schema에 접근하는 의도입니다.',
+  },
+  message_publish: {
+    label: '메시지 발행',
+    description: '서비스가 queue/topic으로 메시지를 발행하는 의도입니다.',
+  },
+  message_consume: {
+    label: '메시지 소비',
+    description: '서비스가 queue/topic 메시지를 소비하는 의도입니다.',
+  },
+};
+
+const FRONTIER_CLASS_META: Record<string, TypeDisplayMeta> = {
+  ALIAS: {
+    label: '별칭 해소',
+    description: '설정 키, host alias, service discovery 이름을 실제 서비스와 연결해야 하는 frontier입니다.',
+  },
+  ROUTE: {
+    label: '라우트 해소',
+    description: '게이트웨이 route가 내부 서비스 endpoint로 이어지는 경로 변환을 보정해야 하는 frontier입니다.',
+  },
+  PATH: {
+    label: '경로 해소',
+    description: 'path template 또는 route scope를 확정해야 하는 frontier입니다.',
+  },
+  METHOD: {
+    label: '메서드 해소',
+    description: 'HTTP method 힌트를 확정해야 하는 frontier입니다.',
+  },
+  METHOD_PATH: {
+    label: '메서드/경로 해소',
+    description: 'HTTP method와 path 힌트를 함께 보정해야 하는 frontier입니다.',
+  },
+  TARGET: {
+    label: '대상 해소',
+    description: '호출 대상, 엔드포인트, alias처럼 proof의 대상 식별을 보정해야 하는 frontier입니다.',
+  },
+  SUMMARY: {
+    label: '요약 보강',
+    description: '함수 요약이나 신호 추출 결과를 보강해야 proof를 닫을 수 있는 frontier입니다.',
+  },
+  CONTRADICTION: {
+    label: '모순 검토',
+    description: '닫힌 proof의 근거가 약하거나 상충되어 다시 frontier로 열어야 하는지 검토하는 유형입니다.',
+  },
+  UNSUPPORTED: {
+    label: '미지원 유형',
+    description: '현재 UI에서 직접 보정할 수 없는 frontier 유형입니다.',
+  },
+};
+
+const PATCH_TYPE_META: Record<string, TypeDisplayMeta> = {
+  alias_binding: {
+    label: '별칭 연결',
+    description: '설정 키, base URL, host alias를 실제 서비스에 연결합니다.',
+  },
+  provider_service_selection: {
+    label: '제공 서비스 선택',
+    description: '여러 후보 중 실제 호출 대상 서비스를 선택합니다.',
+  },
+  endpoint_disambiguation: {
+    label: '엔드포인트 선택',
+    description: '여러 endpoint 후보 중 실제 호출 endpoint를 선택합니다.',
+  },
+  method_path_hint: {
+    label: '메서드/경로 보정',
+    description: '부족한 HTTP method 또는 path 힌트를 보정합니다.',
+  },
+  route_transform_patch: {
+    label: '라우트 변환',
+    description: '게이트웨이 route가 내부 서비스 endpoint로 이어지는 변환 정보를 보정합니다.',
+  },
+  function_summary_patch: {
+    label: '함수 요약 보강',
+    description: '함수 요약의 outbound HTTP/DB/message 신호를 보강해 proof 해소에 사용합니다.',
+  },
+  contradiction_challenge: {
+    label: '모순 재검토',
+    description: '닫힌 proof가 약하거나 상충될 때 다시 frontier로 열도록 요청합니다.',
+  },
+  reject_patch: {
+    label: '재분류 반려',
+    description: '제안된 patch를 적용하지 않고 반려한 기록입니다.',
+  },
+};
+
+const VALIDATION_STATUS_META: Record<string, TypeDisplayMeta> = {
+  PENDING: {
+    label: '보류',
+    description: 'patch를 저장했지만 아직 proof 재평가에 적용하지 않은 상태입니다.',
+  },
+  ACCEPTED: {
+    label: '재분류 적용',
+    description: 'patch 검증을 통과해 frontier proof 재평가에 적용된 상태입니다.',
+  },
+  REJECTED: {
+    label: '재분류 거절',
+    description: 'patch 검증을 통과하지 못해 proof에 적용되지 않은 상태입니다.',
+  },
+};
+
+function getMeta(meta: Record<string, TypeDisplayMeta>, code: string | null | undefined, fallbackLabel = '알 수 없음'): TypeDisplayMeta {
+  if (!code) return { label: fallbackLabel, description: '타입 정보가 없습니다.' };
+  return meta[code] ?? {
+    label: code,
+    description: '아직 한글 설명이 등록되지 않은 타입입니다.',
+  };
+}
+
+function TypeLabel({ meta }: { meta: TypeDisplayMeta }) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <span>{meta.label}</span>
+      <Info
+        aria-label={`${meta.label} 설명`}
+        className="h-3.5 w-3.5 text-muted-foreground"
+        title={meta.description}
+      />
+    </span>
+  );
+}
+
 function normalizeReasonToPatchType(reason: string): FrontierPatchType | null {
   if (reason === 'CONFIG_BINDING_MISSING' || reason === 'HOST_ALIAS_UNRESOLVED') return 'alias_binding';
   if (reason === 'PATH_ONLY_TARGET_UNRESOLVED') return 'alias_binding';
@@ -76,38 +314,28 @@ function normalizeReasonToPatchType(reason: string): FrontierPatchType | null {
 }
 
 function renderReasonBadge(reason: string) {
-  switch (reason) {
-    case 'CONFIG_BINDING_MISSING':
-    case 'HOST_ALIAS_UNRESOLVED':
-      return <Badge variant="outline">Alias</Badge>;
-    case 'PROVIDER_SERVICE_AMBIGUOUS':
-      return <Badge variant="outline">Provider</Badge>;
-    case 'ENDPOINT_MATCH_AMBIGUOUS':
-      return <Badge variant="outline">Endpoint</Badge>;
-    case 'METHOD_UNKNOWN':
-    case 'PROVIDER_ENDPOINT_NOT_FOUND':
-    case 'PATH_TEMPLATE_UNKNOWN':
-      return <Badge variant="outline">Method/Path</Badge>;
-    case 'ROUTE_FAMILY_DERIVATION_EMPTY':
-    case 'ROUTE_TO_ENDPOINT_COMPOSITION_FAILED':
-      return <Badge variant="outline">Route</Badge>;
-    default:
-      return <Badge variant="outline">Read Only</Badge>;
-  }
+  return <Badge variant="outline"><TypeLabel meta={getMeta(FRONTIER_REASON_META, reason)} /></Badge>;
 }
 
 function renderLatestPatchBadge(latestPatch: FrontierListItem['latestPatch']) {
   if (!latestPatch) return null;
-  switch (latestPatch.validationStatus) {
-    case 'PENDING':
-      return <Badge variant="outline">보류됨</Badge>;
-    case 'ACCEPTED':
-      return <Badge variant="outline">Patch 적용</Badge>;
-    case 'REJECTED':
-      return <Badge variant="outline">Patch 거절</Badge>;
-    default:
-      return <Badge variant="outline">{latestPatch.validationStatus}</Badge>;
-  }
+  const statusMeta = getMeta(VALIDATION_STATUS_META, latestPatch.validationStatus);
+  const patchMeta = getMeta(PATCH_TYPE_META, latestPatch.patchType, 'patch');
+  return <Badge variant="outline">{patchMeta.label} · <TypeLabel meta={statusMeta} /></Badge>;
+}
+
+function formatReclassificationCounts(counts: Record<string, number> | undefined, fallbackCount: number): string {
+  const entries = Object.entries(counts ?? {}).filter(([, count]) => count > 0);
+  if (entries.length === 0) return fallbackCount > 0 ? `재분류 ${fallbackCount}` : '재분류 0';
+  const typedCount = entries.reduce((sum, [, count]) => sum + count, 0);
+  const untypedCount = Math.max(fallbackCount - typedCount, 0);
+  const typedSummary = entries
+    .map(([patchType, count]) => `${getMeta(PATCH_TYPE_META, patchType, '재분류').label} ${count}`)
+    .join(', ');
+  return `재분류: ${[
+    typedSummary,
+    ...(untypedCount > 0 ? [`유형 미확인 ${untypedCount}`] : []),
+  ].join(', ')}`;
 }
 
 export function FrontierApprovalList() {
@@ -336,17 +564,29 @@ export function FrontierApprovalList() {
       const payload = (await res.json()) as {
         success?: boolean;
         error?: { message?: string };
-        summary?: { acceptedCount?: number; pendingCount?: number; skippedCount?: number };
+        summary?: {
+          acceptedCount?: number;
+          reclassifiedCount?: number;
+          promotedCount?: number;
+          pendingCount?: number;
+          skippedCount?: number;
+          reclassificationCounts?: Record<string, number>;
+        };
         remainingProofStateIds?: string[];
       };
       if (!res.ok || payload.success !== true) {
         throw new Error(payload.error?.message ?? 'Smart 재검토 실행 실패');
       }
 
-      const accepted = payload.summary?.acceptedCount ?? 0;
+      const reclassified = payload.summary?.reclassifiedCount ?? payload.summary?.acceptedCount ?? 0;
+      const promoted = payload.summary?.promotedCount ?? 0;
       const pending = payload.summary?.pendingCount ?? 0;
       const skipped = payload.summary?.skippedCount ?? 0;
-      toast.success(`Smart 재검토 완료 (accepted ${accepted}, pending ${pending}, skipped ${skipped})`);
+      const reclassificationSummary = formatReclassificationCounts(
+        payload.summary?.reclassificationCounts,
+        reclassified,
+      );
+      toast.success(`Smart 재검토 완료 (${reclassificationSummary}, 후보 승격 ${promoted}, 보류 ${pending}, 건너뜀 ${skipped})`);
 
       await loadFrontiers();
       if (selectedProofStateId && targetIds.includes(selectedProofStateId)) {
@@ -416,9 +656,9 @@ export function FrontierApprovalList() {
           value={reasonFilter}
           onChange={(event) => setReasonFilter(event.target.value)}
         >
-          <option value="all">모든 reason</option>
+          <option value="all">모든 유형</option>
           {[...new Set(items.map((item) => item.frontierReason))].sort().map((reason) => (
-            <option key={reason} value={reason}>{reason}</option>
+            <option key={reason} value={reason}>{getMeta(FRONTIER_REASON_META, reason).label}</option>
           ))}
         </select>
         <select
@@ -466,7 +706,11 @@ export function FrontierApprovalList() {
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="space-y-1">
                 <div className="text-sm font-semibold">{item.sourceServiceName ?? item.sourceServiceId ?? 'unknown service'}</div>
-                <div className="text-xs text-muted-foreground">{item.intentType ?? 'unknown intent'} · {item.frontierReason}</div>
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <TypeLabel meta={getMeta(INTENT_TYPE_META, item.intentType, '알 수 없는 의도')} />
+                  <span>·</span>
+                  <TypeLabel meta={getMeta(FRONTIER_CLASS_META, item.frontierClass, '알 수 없는 frontier')} />
+                </div>
               </div>
               <div className="flex items-center gap-2">
                 {renderReasonBadge(item.frontierReason)}
@@ -522,9 +766,15 @@ export function FrontierApprovalList() {
           ) : (
             <div className="space-y-4">
               <div className="rounded-lg border border-border/70 p-3 text-sm">
-                <div className="font-medium">{detail.frontierReason}</div>
-                <div className="text-xs text-muted-foreground mt-1">
-                  source {detail.sourceServiceName ?? '-'} · provider {detail.providerServiceName ?? '-'} · status {detail.status}
+                <div className="font-medium"><TypeLabel meta={getMeta(FRONTIER_REASON_META, detail.frontierReason)} /></div>
+                <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  <span>source {detail.sourceServiceName ?? '-'}</span>
+                  <span>·</span>
+                  <span>provider {detail.providerServiceName ?? '-'}</span>
+                  <span>·</span>
+                  <TypeLabel meta={getMeta(INTENT_TYPE_META, detail.intentType, '알 수 없는 의도')} />
+                  <span>·</span>
+                  <TypeLabel meta={getMeta(FRONTIER_CLASS_META, detail.frontierClass, '알 수 없는 frontier')} />
                 </div>
                 <pre className="mt-2 overflow-auto rounded-md bg-muted p-2 text-[11px]">{JSON.stringify(detail.detail, null, 2)}</pre>
               </div>
@@ -533,14 +783,14 @@ export function FrontierApprovalList() {
                 <div className="space-y-3 rounded-lg border border-border/70 p-3">
                   {detail.patchableActions.length > 1 && (
                     <label className="block text-xs">
-                      patch type
+                      재분류 타입
                       <select
                         className="mt-1 w-full rounded border border-input px-2 py-1"
                         value={patchType ?? ''}
                         onChange={(event) => setSelectedPatchType(event.target.value as FrontierPatchType)}
                       >
                         {detail.patchableActions.map((action) => (
-                          <option key={action} value={action}>{action}</option>
+                          <option key={action} value={action}>{getMeta(PATCH_TYPE_META, action).label}</option>
                         ))}
                       </select>
                     </label>

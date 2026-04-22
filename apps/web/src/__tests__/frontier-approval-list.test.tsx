@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const { toast } = vi.hoisted(() => ({
   toast: {
@@ -308,7 +308,7 @@ describe('FrontierApprovalList', () => {
 
     render(<FrontierApprovalList />);
 
-    await screen.findByText('보류됨');
+    await screen.findByText('보류');
     await screen.findByTestId('frontier-card');
     fireEvent.click(screen.getByRole('button', { name: '보정' }));
     await screen.findByText('Frontier 보정');
@@ -431,7 +431,11 @@ describe('FrontierApprovalList', () => {
         return Promise.resolve(jsonResponse({
           success: true,
           summary: {
-            acceptedCount: 1,
+            reclassifiedCount: 1,
+            promotedCount: 1,
+            reclassificationCounts: {
+              provider_service_selection: 1,
+            },
             pendingCount: 0,
             skippedCount: 0,
           },
@@ -448,7 +452,7 @@ describe('FrontierApprovalList', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Smart 재검토' }));
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (accepted 1, pending 0, skipped 0)');
+      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (재분류: 제공 서비스 선택 1, 후보 승격 1, 보류 0, 건너뜀 0)');
     });
     await waitFor(() => {
       expect(frontierFetchCount).toBeGreaterThanOrEqual(2);
@@ -470,7 +474,13 @@ describe('FrontierApprovalList', () => {
         requests.push(JSON.parse(String(init.body)));
         return Promise.resolve(jsonResponse({
           success: true,
-          summary: { acceptedCount: 1, pendingCount: 0, skippedCount: 1 },
+          summary: {
+            reclassifiedCount: 1,
+            promotedCount: 0,
+            reclassificationCounts: { provider_service_selection: 1 },
+            pendingCount: 0,
+            skippedCount: 1,
+          },
           remainingProofStateIds: ['proof-2'],
         }));
       }
@@ -490,6 +500,44 @@ describe('FrontierApprovalList', () => {
     expect(requests[0]).toMatchObject({
       workspaceId: 'ws-1',
       proofStateId: 'proof-1',
+    });
+  });
+
+  it('재분류 타입별 집계가 일부만 있어도 총 재분류 수를 toast에 유지해야 한다', async () => {
+    const item1 = createFrontierItem();
+    const item2 = { ...createFrontierItem(), proofStateId: 'proof-2', sourceServiceName: 'source-service-2' };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item1, item2]));
+      }
+      if (url.endsWith('/api/inference/frontiers/smart-review') && init?.method === 'POST') {
+        return Promise.resolve(jsonResponse({
+          success: true,
+          summary: {
+            reclassifiedCount: 2,
+            promotedCount: 1,
+            reclassificationCounts: { provider_service_selection: 1 },
+            pendingCount: 0,
+            skippedCount: 0,
+          },
+          remainingProofStateIds: [],
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+    await screen.findAllByTestId('frontier-card');
+
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Smart 대상 전체 선택' }));
+    fireEvent.click(screen.getByRole('button', { name: '선택 항목 Smart 재검토 (2)' }));
+
+    await waitFor(() => {
+      expect(toast.success).toHaveBeenCalledWith(
+        'Smart 재검토 완료 (재분류: 제공 서비스 선택 1, 유형 미확인 1, 후보 승격 1, 보류 0, 건너뜀 0)',
+      );
     });
   });
 
@@ -528,12 +576,174 @@ describe('FrontierApprovalList', () => {
 
     resolveSmartReview?.(jsonResponse({
       success: true,
-      summary: { acceptedCount: 1, pendingCount: 0, skippedCount: 0 },
+      summary: {
+        reclassifiedCount: 1,
+        promotedCount: 1,
+        reclassificationCounts: { provider_service_selection: 1 },
+        pendingCount: 0,
+        skippedCount: 0,
+      },
       remainingProofStateIds: [],
     }));
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (accepted 1, pending 0, skipped 0)');
+      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (재분류: 제공 서비스 선택 1, 후보 승격 1, 보류 0, 건너뜀 0)');
     });
+  });
+
+  it('frontier 타입 코드는 카드와 상세에서 한글 라벨과 설명으로 표시해야 한다', async () => {
+    const item = { ...createFrontierItem(), frontierClass: 'ALIAS' };
+    const detail = { ...createFrontierDetail(), frontierClass: 'ALIAS' };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item]));
+      }
+      if (url.includes('/api/inference/frontiers/proof-1?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse(detail));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    const card = await screen.findByTestId('frontier-card');
+    expect(screen.getByText('HTTP 호출')).toBeTruthy();
+    expect(within(card).getAllByText('제공 서비스 모호')).toHaveLength(1);
+    expect(screen.getByTitle('후보 서비스가 여러 개라 호출 대상 서비스를 하나로 확정해야 합니다.')).toBeTruthy();
+    expect(screen.queryByText('HTTP_CLIENT · PROVIDER_SERVICE_AMBIGUOUS')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '보정' }));
+    await screen.findByText('Frontier 보정');
+
+    expect(screen.getAllByText('제공 서비스 모호').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('별칭 해소').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle('설정 키, host alias, service discovery 이름을 실제 서비스와 연결해야 하는 frontier입니다.').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('ALIAS')).toBeNull();
+  });
+
+  it('latest patch 타입도 저장 가능한 patch type 전체를 한글로 표시해야 한다', async () => {
+    const item = {
+      ...createFrontierItem(),
+      latestPatch: {
+        id: 'patch-summary',
+        patchType: 'function_summary_patch',
+        validationStatus: 'ACCEPTED',
+        sourceKind: 'smart_agent',
+        createdAt: '2026-04-22T00:00:00.000Z',
+      },
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findByTestId('frontier-card');
+    expect(document.body.textContent).toContain('함수 요약 보강');
+    expect(document.body.textContent).toContain('재분류 적용');
+    expect(screen.queryByText('function_summary_patch')).toBeNull();
+  });
+
+  it('DB와 메시지 frontier reason도 한글 라벨과 설명으로 표시해야 한다', async () => {
+    const dbItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-db',
+      sourceServiceName: 'db-service',
+      intentType: 'db_access',
+      frontierReason: 'DB_SCHEMA_AMBIGUOUS',
+      frontierClass: 'TARGET',
+    };
+    const messageItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-message',
+      sourceServiceName: 'message-service',
+      intentType: 'message_publish',
+      frontierReason: 'MESSAGE_TARGET_UNRESOLVED',
+      frontierClass: 'TARGET',
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([dbItem, messageItem]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findAllByTestId('frontier-card');
+    expect(screen.getAllByText('DB 스키마 모호').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('메시지 대상 미해결').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByTitle('같은 테이블명이 여러 스키마에 있어 대상 DB 테이블을 하나로 확정해야 합니다.')).toBeTruthy();
+    expect(screen.getByTitle('메시지 topic/queue 힌트가 부족하거나 대상 채널을 찾지 못한 상태입니다.')).toBeTruthy();
+    expect(screen.queryByText('DB_SCHEMA_AMBIGUOUS')).toBeNull();
+    expect(screen.queryByText('MESSAGE_TARGET_UNRESOLVED')).toBeNull();
+  });
+
+  it('동적 URI와 gateway frontier reason도 한글 라벨과 설명으로 표시해야 한다', async () => {
+    const dynamicUriItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-dynamic-uri',
+      sourceServiceName: 'dynamic-uri-service',
+      frontierReason: 'DYNAMIC_URI_UNRESOLVED',
+      frontierClass: 'METHOD_PATH',
+    };
+    const broadRouteItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-broad-route',
+      sourceServiceName: 'broad-route-service',
+      intentType: 'http_gateway_route',
+      frontierReason: 'ROUTE_FAMILY_TOO_BROAD',
+      frontierClass: 'ROUTE',
+    };
+    const openEndpointItem = {
+      ...createFrontierItem(),
+      proofStateId: 'proof-open-endpoint',
+      sourceServiceName: 'open-endpoint-service',
+      intentType: 'http_gateway_route',
+      frontierReason: 'ENDPOINT_SET_OPEN',
+      frontierClass: 'ROUTE',
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([dynamicUriItem, broadRouteItem, openEndpointItem]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    await screen.findAllByTestId('frontier-card');
+    expect(screen.getAllByText('동적 URI 미해결').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('라우트 범위 과다').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('엔드포인트 집합 미확정').length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.getByTitle(
+        '동적으로 조합된 URI라 호출 대상 경로나 endpoint를 정적으로 확정하지 못한 상태입니다.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        '게이트웨이 라우트가 너무 넓은 endpoint 집합으로 이어져 단일 대상을 확정하지 못한 상태입니다.',
+      ),
+    ).toBeTruthy();
+    expect(
+      screen.getByTitle(
+        '라우트가 연결될 수 있는 endpoint 집합이 열려 있어 proof를 닫지 못한 상태입니다.',
+      ),
+    ).toBeTruthy();
+    expect(screen.queryByText('DYNAMIC_URI_UNRESOLVED')).toBeNull();
+    expect(screen.queryByText('ROUTE_FAMILY_TOO_BROAD')).toBeNull();
+    expect(screen.queryByText('ENDPOINT_SET_OPEN')).toBeNull();
   });
 });
