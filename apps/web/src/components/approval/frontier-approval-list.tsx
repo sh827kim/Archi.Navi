@@ -138,17 +138,41 @@ const INTENT_TYPE_META: Record<string, TypeDisplayMeta> = {
 };
 
 const FRONTIER_CLASS_META: Record<string, TypeDisplayMeta> = {
+  ALIAS: {
+    label: '별칭 해소',
+    description: '설정 키, host alias, service discovery 이름을 실제 서비스와 연결해야 하는 frontier입니다.',
+  },
+  ROUTE: {
+    label: '라우트 해소',
+    description: '게이트웨이 route가 내부 서비스 endpoint로 이어지는 경로 변환을 보정해야 하는 frontier입니다.',
+  },
+  PATH: {
+    label: '경로 해소',
+    description: 'path template 또는 route scope를 확정해야 하는 frontier입니다.',
+  },
+  METHOD: {
+    label: '메서드 해소',
+    description: 'HTTP method 힌트를 확정해야 하는 frontier입니다.',
+  },
+  METHOD_PATH: {
+    label: '메서드/경로 해소',
+    description: 'HTTP method와 path 힌트를 함께 보정해야 하는 frontier입니다.',
+  },
   TARGET: {
     label: '대상 해소',
     description: '호출 대상, 엔드포인트, alias처럼 proof의 대상 식별을 보정해야 하는 frontier입니다.',
   },
-  target: {
-    label: '대상 해소',
-    description: '호출 대상, 엔드포인트, alias처럼 proof의 대상 식별을 보정해야 하는 frontier입니다.',
+  SUMMARY: {
+    label: '요약 보강',
+    description: '함수 요약이나 신호 추출 결과를 보강해야 proof를 닫을 수 있는 frontier입니다.',
   },
-  alias_binding: {
-    label: '별칭 연결',
-    description: '설정 키나 호스트 별칭을 실제 서비스와 연결해야 하는 frontier입니다.',
+  CONTRADICTION: {
+    label: '모순 검토',
+    description: '닫힌 proof의 근거가 약하거나 상충되어 다시 frontier로 열어야 하는지 검토하는 유형입니다.',
+  },
+  UNSUPPORTED: {
+    label: '미지원 유형',
+    description: '현재 UI에서 직접 보정할 수 없는 frontier 유형입니다.',
   },
 };
 

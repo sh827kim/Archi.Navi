@@ -554,8 +554,8 @@ describe('FrontierApprovalList', () => {
   });
 
   it('frontier 타입 코드는 카드와 상세에서 한글 라벨과 설명으로 표시해야 한다', async () => {
-    const item = createFrontierItem();
-    const detail = createFrontierDetail();
+    const item = { ...createFrontierItem(), frontierClass: 'ALIAS' };
+    const detail = { ...createFrontierDetail(), frontierClass: 'ALIAS' };
 
     vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
       const url = String(input);
@@ -580,7 +580,8 @@ describe('FrontierApprovalList', () => {
     await screen.findByText('Frontier 보정');
 
     expect(screen.getAllByText('제공 서비스 모호').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('대상 해소').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByTitle('호출 대상, 엔드포인트, alias처럼 proof의 대상 식별을 보정해야 하는 frontier입니다.').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('별칭 해소').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle('설정 키, host alias, service discovery 이름을 실제 서비스와 연결해야 하는 frontier입니다.').length).toBeGreaterThanOrEqual(1);
+    expect(screen.queryByText('ALIAS')).toBeNull();
   });
 });
