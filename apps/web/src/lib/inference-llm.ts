@@ -111,10 +111,10 @@ const smartProviderServiceSelectionProposalSchema = z.object({
     serviceName: z.string().nullable(),
     score: z.number().min(0).max(1).nullable(),
     reasoning: z.string().nullable(),
-  })).nullable(),
+  })).nullable().optional().default(null),
 });
 
-const looseUnknownValueSchema = z.unknown().nullable();
+const looseObjectSchema = z.object({}).passthrough();
 
 const smartSummaryEnhancementProposalSchema = z.object({
   patchType: z.literal('function_summary_patch'),
@@ -122,22 +122,22 @@ const smartSummaryEnhancementProposalSchema = z.object({
   functionId: z.string(),
   confidence: z.number().min(0).max(1),
   reasoning: z.string(),
-  summaryKind: z.enum(['http', 'db', 'message', 'mixed']).nullable(),
-  serviceId: z.string().nullable(),
-  outboundHttp: looseUnknownValueSchema,
-  outboundDb: looseUnknownValueSchema,
-  outboundMessage: looseUnknownValueSchema,
-  callChainHints: z.array(z.string()).nullable(),
-  aliasHints: z.array(z.string()).nullable(),
-  signalSources: z.array(z.string()).nullable(),
-  provenanceEvidenceIds: z.array(z.string()).nullable(),
-  extractionStrategy: z.string().nullable(),
-  unresolvedReasons: z.array(z.string()).nullable(),
-  summaryCompleteness: z.number().min(0).max(1).nullable(),
-  flags: looseUnknownValueSchema,
-  confidenceScore: z.number().min(0).max(1).nullable(),
-  evidenceIds: z.array(z.string()).nullable(),
-  patchRationale: z.string().nullable(),
+  summaryKind: z.enum(['http', 'db', 'message', 'mixed']).nullable().optional(),
+  serviceId: z.string().nullable().optional(),
+  outboundHttp: looseObjectSchema.nullable().optional(),
+  outboundDb: looseObjectSchema.nullable().optional(),
+  outboundMessage: looseObjectSchema.nullable().optional(),
+  callChainHints: z.array(z.string()).nullable().optional(),
+  aliasHints: z.array(z.string()).nullable().optional(),
+  signalSources: z.array(z.string()).nullable().optional(),
+  provenanceEvidenceIds: z.array(z.string()).nullable().optional(),
+  extractionStrategy: z.string().nullable().optional(),
+  unresolvedReasons: z.array(z.string()).nullable().optional(),
+  summaryCompleteness: z.number().min(0).max(1).nullable().optional(),
+  flags: looseObjectSchema.nullable().optional(),
+  confidenceScore: z.number().min(0).max(1).nullable().optional(),
+  evidenceIds: z.array(z.string()).nullable().optional(),
+  patchRationale: z.string().nullable().optional(),
 });
 
 const smartContradictionChallengeProposalSchema = z.object({
