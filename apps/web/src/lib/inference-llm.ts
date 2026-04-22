@@ -112,6 +112,15 @@ const smartProviderServiceSelectionProposalSchema = z.object({
     score: z.number().min(0).max(1).nullable(),
     reasoning: z.string().nullable(),
   })).nullable().optional().default(null),
+}).superRefine((proposal, ctx) => {
+  if (proposal.resolved === false) return;
+  if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'provider_service_selection requires selectedServiceId when resolved is true',
+    path: ['selectedServiceId'],
+  });
 });
 
 const looseObjectSchema = z.object({}).passthrough();
@@ -145,11 +154,19 @@ const smartContradictionChallengeProposalSchema = z.object({
   shouldChallenge: z.boolean(),
   confidence: z.number().min(0).max(1),
   reasoning: z.string(),
-  challengeReasons: z.array(z.string()),
-  expectedAction: z.enum(['reopen_frontier']).nullable(),
+  challengeReasons: z.array(z.string()).optional().default([]),
+  expectedAction: z.enum(['reopen_frontier']).nullable().optional().default(null),
+}).superRefine((proposal, ctx) => {
+  if (!proposal.shouldChallenge || proposal.challengeReasons.length > 0) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'contradiction_challenge requires challengeReasons when shouldChallenge is true',
+    path: ['challengeReasons'],
+  });
 });
 
-const smartPatchProposalSchema = z.object({
+const smartPatchProposalFallbackSchema = z.object({
   patchType: z.enum([
     'alias_binding',
     'route_transform_patch',
@@ -221,6 +238,30 @@ const smartPatchProposalSchema = z.object({
     path: ['challengeReasons'],
   });
 });
+
+function selectSmartPatchProposalSchema(prompt: string): z.ZodTypeAny {
+  const patchTypeMatch = prompt.match(/patchType\s*=\s*([a-z_]+)/i);
+  const requestedPatchType = patchTypeMatch?.[1]?.toLowerCase();
+
+  switch (requestedPatchType) {
+    case 'alias_binding':
+      return smartAliasBindingProposalSchema;
+    case 'route_transform_patch':
+      return smartRouteTransformProposalSchema;
+    case 'endpoint_disambiguation':
+      return smartEndpointDisambiguationProposalSchema;
+    case 'method_path_hint':
+      return smartMethodPathHintProposalSchema;
+    case 'provider_service_selection':
+      return smartProviderServiceSelectionProposalSchema;
+    case 'function_summary_patch':
+      return smartSummaryEnhancementProposalSchema;
+    case 'contradiction_challenge':
+      return smartContradictionChallengeProposalSchema;
+    default:
+      return smartPatchProposalFallbackSchema;
+  }
+}
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
   if (headerApiKey) return headerApiKey;
@@ -460,7 +501,7 @@ export function createGenerateSmartResolutionFn(
     const result = await generateObject({
       model: aiModel,
       mode: 'json',
-      schema: smartPatchProposalSchema,
+      schema: selectSmartPatchProposalSchema(prompt),
       prompt,
       ...resolveGenerationSettings(modelName, 0.1),
     });
