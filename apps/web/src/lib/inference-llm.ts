@@ -459,6 +459,7 @@ export function createGenerateSmartResolutionFn(
   return async (prompt: string) => {
     const result = await generateObject({
       model: aiModel,
+      mode: 'json',
       schema: smartPatchProposalSchema,
       prompt,
       ...resolveGenerationSettings(modelName, 0.1),
