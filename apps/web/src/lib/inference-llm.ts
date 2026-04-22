@@ -112,6 +112,15 @@ const smartProviderServiceSelectionProposalSchema = z.object({
     score: z.number().min(0).max(1).nullable(),
     reasoning: z.string().nullable(),
   })).nullable().optional().default(null),
+}).superRefine((proposal, ctx) => {
+  if (proposal.resolved === false) return;
+  if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'provider_service_selection requires selectedServiceId when resolved is true',
+    path: ['selectedServiceId'],
+  });
 });
 
 const looseObjectSchema = z.object({}).passthrough();
@@ -145,8 +154,16 @@ const smartContradictionChallengeProposalSchema = z.object({
   shouldChallenge: z.boolean(),
   confidence: z.number().min(0).max(1),
   reasoning: z.string(),
-  challengeReasons: z.array(z.string()),
-  expectedAction: z.enum(['reopen_frontier']).nullable(),
+  challengeReasons: z.array(z.string()).optional().default([]),
+  expectedAction: z.enum(['reopen_frontier']).nullable().optional().default(null),
+}).superRefine((proposal, ctx) => {
+  if (!proposal.shouldChallenge || proposal.challengeReasons.length > 0) return;
+
+  ctx.addIssue({
+    code: z.ZodIssueCode.custom,
+    message: 'contradiction_challenge requires challengeReasons when shouldChallenge is true',
+    path: ['challengeReasons'],
+  });
 });
 
 const smartPatchProposalFallbackSchema = z.object({
