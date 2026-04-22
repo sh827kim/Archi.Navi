@@ -3,7 +3,7 @@
 - 작성일: 2026-04-15
 - 대상 범위: `apps/web`, `packages/inference`
 - 상태: Current
-- 상태 메모: Frontier 탭, 목록/상세/patch API, patch 후 refresh/승격 처리까지 구현되었다. reason별 patch form은 alias/provider/endpoint 외 method_path/route_transform까지 확장되었고, 수동 review defer(`보류 저장`)도 지원한다.
+- 상태 메모: Frontier 탭, 목록/상세/patch API, patch 후 refresh/승격 처리까지 구현되었다. reason별 patch form은 alias/provider/endpoint 외 method_path/route_transform까지 확장되었고, 수동 review defer(`보류 저장`)도 지원한다. Smart 재검토 결과는 `accepted` 대신 재분류/후보 승격을 분리해 표시한다.
 
 ## 1) 배경
 
@@ -107,8 +107,8 @@
 ### 7.2 Frontier 카드 최소 정보
 
 - source service / source function
-- intent type
-- frontier reason / class
+- intent type (사용자에게는 한글 라벨로 표시)
+- frontier reason / class (사용자에게는 한글 라벨로 표시하고 설명 tooltip 제공)
 - provider service(현재/후보)
 - method/path 힌트
 - detail 요약
@@ -128,6 +128,20 @@
 - `PROVIDER_SERVICE_AMBIGUOUS` -> `provider_service_selection`
 - `ENDPOINT_MATCH_AMBIGUOUS` -> `endpoint_disambiguation`
 - 미지원 reason은 read-only 안내 메시지
+
+### 7.5 Smart 재검토 결과 용어
+
+- `accepted`는 사용자-facing 용어로 사용하지 않는다.
+- LLM이 patch를 제안하고 검증을 통과한 경우는 `재분류`로 표시한다.
+- `재분류`는 patch type 기준으로 `별칭 연결`, `제공 서비스 선택`, `엔드포인트 선택`, `메서드/경로 보정`, `라우트 변환`처럼 한글 타입을 함께 표시한다.
+- proof가 `CLOSED_ATOMIC`이 되어 기존 후보 플로우로 이동한 경우만 `후보 승격`으로 표시한다.
+- 보류/건너뜀은 각각 `보류`, `건너뜀`으로 표시한다.
+
+### 7.6 타입 라벨 설명
+
+- Frontier 카드와 상세 화면에 코드값을 직접 노출하지 않는다.
+- 필터 option value는 API 호환을 위해 코드값을 유지할 수 있지만, 표시 텍스트는 한글 라벨이어야 한다.
+- 각 주요 타입 라벨에는 정보 tooltip을 제공해 사용자가 의미를 확인할 수 있어야 한다.
 
 ## 8) API 설계
 

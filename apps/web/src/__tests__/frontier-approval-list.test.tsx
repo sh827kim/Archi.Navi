@@ -2,7 +2,7 @@
 
 import React from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 
 const { toast } = vi.hoisted(() => ({
   toast: {
@@ -308,7 +308,7 @@ describe('FrontierApprovalList', () => {
 
     render(<FrontierApprovalList />);
 
-    await screen.findByText('보류됨');
+    await screen.findByText('보류');
     await screen.findByTestId('frontier-card');
     fireEvent.click(screen.getByRole('button', { name: '보정' }));
     await screen.findByText('Frontier 보정');
@@ -431,7 +431,11 @@ describe('FrontierApprovalList', () => {
         return Promise.resolve(jsonResponse({
           success: true,
           summary: {
-            acceptedCount: 1,
+            reclassifiedCount: 1,
+            promotedCount: 1,
+            reclassificationCounts: {
+              provider_service_selection: 1,
+            },
             pendingCount: 0,
             skippedCount: 0,
           },
@@ -448,7 +452,7 @@ describe('FrontierApprovalList', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Smart 재검토' }));
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (accepted 1, pending 0, skipped 0)');
+      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (재분류: 제공 서비스 선택 1, 후보 승격 1, 보류 0, 건너뜀 0)');
     });
     await waitFor(() => {
       expect(frontierFetchCount).toBeGreaterThanOrEqual(2);
@@ -470,7 +474,13 @@ describe('FrontierApprovalList', () => {
         requests.push(JSON.parse(String(init.body)));
         return Promise.resolve(jsonResponse({
           success: true,
-          summary: { acceptedCount: 1, pendingCount: 0, skippedCount: 1 },
+          summary: {
+            reclassifiedCount: 1,
+            promotedCount: 0,
+            reclassificationCounts: { provider_service_selection: 1 },
+            pendingCount: 0,
+            skippedCount: 1,
+          },
           remainingProofStateIds: ['proof-2'],
         }));
       }
@@ -528,12 +538,49 @@ describe('FrontierApprovalList', () => {
 
     resolveSmartReview?.(jsonResponse({
       success: true,
-      summary: { acceptedCount: 1, pendingCount: 0, skippedCount: 0 },
+      summary: {
+        reclassifiedCount: 1,
+        promotedCount: 1,
+        reclassificationCounts: { provider_service_selection: 1 },
+        pendingCount: 0,
+        skippedCount: 0,
+      },
       remainingProofStateIds: [],
     }));
 
     await waitFor(() => {
-      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (accepted 1, pending 0, skipped 0)');
+      expect(toast.success).toHaveBeenCalledWith('Smart 재검토 완료 (재분류: 제공 서비스 선택 1, 후보 승격 1, 보류 0, 건너뜀 0)');
     });
+  });
+
+  it('frontier 타입 코드는 카드와 상세에서 한글 라벨과 설명으로 표시해야 한다', async () => {
+    const item = createFrontierItem();
+    const detail = createFrontierDetail();
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/frontiers?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse([item]));
+      }
+      if (url.includes('/api/inference/frontiers/proof-1?workspaceId=ws-1')) {
+        return Promise.resolve(jsonResponse(detail));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<FrontierApprovalList />);
+
+    const card = await screen.findByTestId('frontier-card');
+    expect(screen.getByText('HTTP 호출')).toBeTruthy();
+    expect(within(card).getAllByText('제공 서비스 모호')).toHaveLength(1);
+    expect(screen.getByTitle('후보 서비스가 여러 개라 호출 대상 서비스를 하나로 확정해야 합니다.')).toBeTruthy();
+    expect(screen.queryByText('HTTP_CLIENT · PROVIDER_SERVICE_AMBIGUOUS')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '보정' }));
+    await screen.findByText('Frontier 보정');
+
+    expect(screen.getAllByText('제공 서비스 모호').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('대상 해소').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByTitle('호출 대상, 엔드포인트, alias처럼 proof의 대상 식별을 보정해야 하는 frontier입니다.').length).toBeGreaterThanOrEqual(1);
   });
 });

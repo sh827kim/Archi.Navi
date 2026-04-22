@@ -167,7 +167,11 @@ describe('POST /api/inference/frontiers/smart-review', () => {
       summary: expect.objectContaining({
         targetCount: 1,
         attemptedCount: 1,
-        acceptedCount: 1,
+        reclassifiedCount: 1,
+        promotedCount: 1,
+        reclassificationCounts: {
+          provider_service_selection: 1,
+        },
       }),
       results: [expect.objectContaining({ proofStateId: 'proof-1', validationStatus: 'ACCEPTED' })],
       smartCallRecords: [expect.objectContaining({ id: 'call-1', patchId: 'patch-1' })],
