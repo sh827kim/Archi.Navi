@@ -111,8 +111,10 @@ const smartProviderServiceSelectionProposalSchema = z.object({
     serviceName: z.string().nullable(),
     score: z.number().min(0).max(1).nullable(),
     reasoning: z.string().nullable(),
-  })).nullable().optional().default(null),
+  })).nullable(),
 });
+
+const looseUnknownValueSchema = z.unknown().nullable();
 
 const smartSummaryEnhancementProposalSchema = z.object({
   patchType: z.literal('function_summary_patch'),
@@ -120,22 +122,22 @@ const smartSummaryEnhancementProposalSchema = z.object({
   functionId: z.string(),
   confidence: z.number().min(0).max(1),
   reasoning: z.string(),
-  summaryKind: z.enum(['http', 'db', 'message', 'mixed']).nullable().optional(),
-  serviceId: z.string().nullable().optional(),
-  outboundHttp: z.record(z.string(), z.unknown()).nullable().optional(),
-  outboundDb: z.record(z.string(), z.unknown()).nullable().optional(),
-  outboundMessage: z.record(z.string(), z.unknown()).nullable().optional(),
-  callChainHints: z.array(z.string()).nullable().optional(),
-  aliasHints: z.array(z.string()).nullable().optional(),
-  signalSources: z.array(z.string()).nullable().optional(),
-  provenanceEvidenceIds: z.array(z.string()).nullable().optional(),
-  extractionStrategy: z.string().nullable().optional(),
-  unresolvedReasons: z.array(z.string()).nullable().optional(),
-  summaryCompleteness: z.number().min(0).max(1).nullable().optional(),
-  flags: z.record(z.string(), z.unknown()).nullable().optional(),
-  confidenceScore: z.number().min(0).max(1).nullable().optional(),
-  evidenceIds: z.array(z.string()).nullable().optional(),
-  patchRationale: z.string().nullable().optional(),
+  summaryKind: z.enum(['http', 'db', 'message', 'mixed']).nullable(),
+  serviceId: z.string().nullable(),
+  outboundHttp: looseUnknownValueSchema,
+  outboundDb: looseUnknownValueSchema,
+  outboundMessage: looseUnknownValueSchema,
+  callChainHints: z.array(z.string()).nullable(),
+  aliasHints: z.array(z.string()).nullable(),
+  signalSources: z.array(z.string()).nullable(),
+  provenanceEvidenceIds: z.array(z.string()).nullable(),
+  extractionStrategy: z.string().nullable(),
+  unresolvedReasons: z.array(z.string()).nullable(),
+  summaryCompleteness: z.number().min(0).max(1).nullable(),
+  flags: looseUnknownValueSchema,
+  confidenceScore: z.number().min(0).max(1).nullable(),
+  evidenceIds: z.array(z.string()).nullable(),
+  patchRationale: z.string().nullable(),
 });
 
 const smartContradictionChallengeProposalSchema = z.object({
@@ -147,7 +149,7 @@ const smartContradictionChallengeProposalSchema = z.object({
   expectedAction: z.enum(['reopen_frontier']).nullable(),
 });
 
-const smartPatchProposalSchema = z.object({
+const smartPatchProposalFallbackSchema = z.object({
   patchType: z.enum([
     'alias_binding',
     'route_transform_patch',
@@ -219,6 +221,30 @@ const smartPatchProposalSchema = z.object({
     path: ['challengeReasons'],
   });
 });
+
+function selectSmartPatchProposalSchema(prompt: string): z.ZodTypeAny {
+  const patchTypeMatch = prompt.match(/patchType\s*=\s*([a-z_]+)/i);
+  const requestedPatchType = patchTypeMatch?.[1]?.toLowerCase();
+
+  switch (requestedPatchType) {
+    case 'alias_binding':
+      return smartAliasBindingProposalSchema;
+    case 'route_transform_patch':
+      return smartRouteTransformProposalSchema;
+    case 'endpoint_disambiguation':
+      return smartEndpointDisambiguationProposalSchema;
+    case 'method_path_hint':
+      return smartMethodPathHintProposalSchema;
+    case 'provider_service_selection':
+      return smartProviderServiceSelectionProposalSchema;
+    case 'function_summary_patch':
+      return smartSummaryEnhancementProposalSchema;
+    case 'contradiction_challenge':
+      return smartContradictionChallengeProposalSchema;
+    default:
+      return smartPatchProposalFallbackSchema;
+  }
+}
 
 function resolveProviderApiKey(provider: string, headerApiKey: string | null): string | null {
   if (headerApiKey) return headerApiKey;
@@ -457,7 +483,8 @@ export function createGenerateSmartResolutionFn(
   return async (prompt: string) => {
     const result = await generateObject({
       model: aiModel,
-      schema: smartPatchProposalSchema,
+      mode: 'json',
+      schema: selectSmartPatchProposalSchema(prompt),
       prompt,
       ...resolveGenerationSettings(modelName, 0.1),
     });
