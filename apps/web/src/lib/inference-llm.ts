@@ -111,7 +111,7 @@ const smartProviderServiceSelectionProposalSchema = z.object({
     serviceName: z.string().nullable(),
     score: z.number().min(0).max(1).nullable(),
     reasoning: z.string().nullable(),
-  })).nullable().optional().default(null),
+  })).nullable(),
 }).superRefine((proposal, ctx) => {
   if (proposal.resolved === false) return;
   if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
@@ -166,79 +166,6 @@ const smartContradictionChallengeProposalSchema = z.object({
   });
 });
 
-const smartPatchProposalFallbackSchema = z.object({
-  patchType: z.enum([
-    'alias_binding',
-    'route_transform_patch',
-    'endpoint_disambiguation',
-    'method_path_hint',
-    'provider_service_selection',
-    'function_summary_patch',
-    'contradiction_challenge',
-  ]),
-  resolved: z.boolean().optional(),
-  selectedServiceId: z.string().nullable().optional(),
-  selectedServiceName: z.string().nullable().optional(),
-  functionId: z.string().optional(),
-  shouldChallenge: z.boolean().optional(),
-  confidence: z.number().min(0).max(1),
-  reasoning: z.string(),
-  aliasBinding: smartAliasBindingProposalSchema.shape.aliasBinding.optional(),
-  routeTransform: smartRouteTransformProposalSchema.shape.routeTransform.optional(),
-  endpointSelection: smartEndpointDisambiguationProposalSchema.shape.endpointSelection.optional(),
-  methodPathHint: smartMethodPathHintProposalSchema.shape.methodPathHint.optional(),
-  ranking: smartProviderServiceSelectionProposalSchema.shape.ranking.optional(),
-  summaryKind: smartSummaryEnhancementProposalSchema.shape.summaryKind.optional(),
-  serviceId: smartSummaryEnhancementProposalSchema.shape.serviceId.optional(),
-  outboundHttp: smartSummaryEnhancementProposalSchema.shape.outboundHttp.optional(),
-  outboundDb: smartSummaryEnhancementProposalSchema.shape.outboundDb.optional(),
-  outboundMessage: smartSummaryEnhancementProposalSchema.shape.outboundMessage.optional(),
-  callChainHints: smartSummaryEnhancementProposalSchema.shape.callChainHints.optional(),
-  aliasHints: smartSummaryEnhancementProposalSchema.shape.aliasHints.optional(),
-  signalSources: smartSummaryEnhancementProposalSchema.shape.signalSources.optional(),
-  provenanceEvidenceIds: smartSummaryEnhancementProposalSchema.shape.provenanceEvidenceIds.optional(),
-  extractionStrategy: smartSummaryEnhancementProposalSchema.shape.extractionStrategy.optional(),
-  unresolvedReasons: smartSummaryEnhancementProposalSchema.shape.unresolvedReasons.optional(),
-  summaryCompleteness: smartSummaryEnhancementProposalSchema.shape.summaryCompleteness.optional(),
-  flags: smartSummaryEnhancementProposalSchema.shape.flags.optional(),
-  confidenceScore: smartSummaryEnhancementProposalSchema.shape.confidenceScore.optional(),
-  evidenceIds: smartSummaryEnhancementProposalSchema.shape.evidenceIds.optional(),
-  patchRationale: smartSummaryEnhancementProposalSchema.shape.patchRationale.optional(),
-  challengeReasons: smartContradictionChallengeProposalSchema.shape.challengeReasons.optional(),
-  expectedAction: smartContradictionChallengeProposalSchema.shape.expectedAction.optional(),
-}).superRefine((proposal, ctx) => {
-  if (proposal.patchType !== 'contradiction_challenge' && typeof proposal.resolved !== 'boolean') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: `${proposal.patchType} requires resolved`,
-      path: ['resolved'],
-    });
-    return;
-  }
-
-  if (proposal.patchType === 'provider_service_selection') {
-    if (proposal.resolved === false) return;
-
-    if (typeof proposal.selectedServiceId === 'string' && proposal.selectedServiceId.length > 0) return;
-
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'provider_service_selection requires selectedServiceId when resolved is true',
-      path: ['selectedServiceId'],
-    });
-    return;
-  }
-
-  if (proposal.patchType !== 'contradiction_challenge' || !proposal.shouldChallenge) return;
-  if (Array.isArray(proposal.challengeReasons) && proposal.challengeReasons.length > 0) return;
-
-  ctx.addIssue({
-    code: z.ZodIssueCode.custom,
-    message: 'contradiction_challenge requires challengeReasons when shouldChallenge is true',
-    path: ['challengeReasons'],
-  });
-});
-
 function selectSmartPatchProposalSchema(prompt: string): z.ZodTypeAny {
   const patchTypeMatch = prompt.match(/patchType\s*=\s*([a-z_]+)/i);
   const requestedPatchType = patchTypeMatch?.[1]?.toLowerCase();
@@ -259,7 +186,7 @@ function selectSmartPatchProposalSchema(prompt: string): z.ZodTypeAny {
     case 'contradiction_challenge':
       return smartContradictionChallengeProposalSchema;
     default:
-      return smartPatchProposalFallbackSchema;
+      throw new Error(`Unsupported Smart patchType in prompt: ${requestedPatchType ?? 'unknown'}`);
   }
 }
 

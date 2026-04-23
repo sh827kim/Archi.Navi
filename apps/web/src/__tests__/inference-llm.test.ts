@@ -68,7 +68,7 @@ describe('createGenerateBoostSuggestionFn', () => {
       'gpt-4o',
     );
 
-    await expect(generateSmartResolution('resolve this frontier')).resolves.toMatchObject({
+    await expect(generateSmartResolution('Respond with patchType=alias_binding.\nresolve this frontier')).resolves.toMatchObject({
       model: 'gpt-4o',
       promptTokens: 123,
       completionTokens: 45,
@@ -105,7 +105,7 @@ describe('createGenerateBoostSuggestionFn', () => {
       'gpt-4o',
     );
 
-    await expect(generateSmartResolution('resolve this gateway frontier')).resolves.toMatchObject({
+    await expect(generateSmartResolution('Respond with patchType=route_transform_patch.\nresolve this gateway frontier')).resolves.toMatchObject({
       model: 'gpt-4o',
       promptTokens: 88,
       completionTokens: 21,
@@ -149,7 +149,7 @@ describe('createGenerateBoostSuggestionFn', () => {
       'gpt-4o',
     );
 
-    await expect(generateSmartResolution('resolve provider ambiguity')).resolves.toMatchObject({
+    await expect(generateSmartResolution('Respond with patchType=provider_service_selection.\nresolve provider ambiguity')).resolves.toMatchObject({
       model: 'gpt-4o',
       promptTokens: 77,
       completionTokens: 19,
@@ -183,7 +183,7 @@ describe('createGenerateBoostSuggestionFn', () => {
       'gpt-4o',
     );
 
-    await expect(generateSmartResolution('resolve provider without selectedServiceId')).rejects.toThrow(
+    await expect(generateSmartResolution('Respond with patchType=provider_service_selection.\nresolve provider without selectedServiceId')).rejects.toThrow(
       'provider_service_selection requires selectedServiceId when resolved is true',
     );
   });
@@ -210,7 +210,7 @@ describe('createGenerateBoostSuggestionFn', () => {
       'gpt-4o',
     );
 
-    await expect(generateSmartResolution('resolve unresolved provider ambiguity')).resolves.toMatchObject({
+    await expect(generateSmartResolution('Respond with patchType=provider_service_selection.\nresolve unresolved provider ambiguity')).resolves.toMatchObject({
       model: 'gpt-4o',
       promptTokens: 40,
       completionTokens: 12,
@@ -259,6 +259,64 @@ describe('createGenerateBoostSuggestionFn', () => {
       mode: 'json',
       prompt: expect.stringContaining('patchType=provider_service_selection'),
     }));
+  });
+
+  it('smart-review provider 전용 schema는 ranking=null 을 허용해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'provider_service_selection',
+        resolved: false,
+        selectedServiceId: null,
+        selectedServiceName: null,
+        confidence: 0.51,
+        reasoning: 'still ambiguous',
+        ranking: null,
+      }),
+      usage: {
+        inputTokens: 33,
+        outputTokens: 11,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(
+      generateSmartResolution('Respond with patchType=provider_service_selection.\nTask: choose provider'),
+    ).resolves.toMatchObject({
+      object: {
+        patchType: 'provider_service_selection',
+        ranking: null,
+      },
+    });
+  });
+
+  it('smart-review provider 전용 schema는 ranking 필드가 누락되면 실패해야 한다', async () => {
+    generateObjectMock.mockImplementation(async (params: { schema: { parse: (input: unknown) => unknown } }) => ({
+      object: params.schema.parse({
+        patchType: 'provider_service_selection',
+        resolved: false,
+        selectedServiceId: null,
+        selectedServiceName: null,
+        confidence: 0.51,
+        reasoning: 'still ambiguous',
+      }),
+      usage: {
+        inputTokens: 33,
+        outputTokens: 11,
+      },
+    }));
+
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(
+      generateSmartResolution('Respond with patchType=provider_service_selection.\nTask: choose provider'),
+    ).rejects.toThrow('ranking');
   });
 
   it('smart-review provider 전용 schema도 resolved=true 이면 selectedServiceId를 요구해야 한다', async () => {
@@ -310,7 +368,7 @@ describe('createGenerateBoostSuggestionFn', () => {
       'gpt-4o',
     );
 
-    await expect(generateSmartResolution('resolve this provider ambiguity')).resolves.toMatchObject({
+    await expect(generateSmartResolution('Respond with patchType=provider_service_selection.\nresolve this provider ambiguity')).resolves.toMatchObject({
       model: 'gpt-4o',
       promptTokens: 55,
       completionTokens: 14,
@@ -343,7 +401,7 @@ describe('createGenerateBoostSuggestionFn', () => {
       'gpt-4o',
     );
 
-    await expect(generateSmartResolution('review this low-confidence proof')).resolves.toMatchObject({
+    await expect(generateSmartResolution('Respond with patchType=contradiction_challenge.\nreview this low-confidence proof')).resolves.toMatchObject({
       model: 'gpt-4o',
       promptTokens: 42,
       completionTokens: 12,
@@ -433,8 +491,20 @@ describe('createGenerateBoostSuggestionFn', () => {
     );
 
     await expect(
-      generateSmartResolution('review this low-confidence proof without challenge reasons'),
+      generateSmartResolution('Respond with patchType=contradiction_challenge.\nreview this low-confidence proof without challenge reasons'),
     ).rejects.toThrow('contradiction_challenge requires challengeReasons when shouldChallenge is true');
+  });
+
+  it('smart resolution generator는 patchType 없는 프롬프트에서 명시적 에러를 던져야 한다', async () => {
+    const generateSmartResolution = createGenerateSmartResolutionFn(
+      { provider: 'openai' } as never,
+      'gpt-4o',
+    );
+
+    await expect(generateSmartResolution('resolve this frontier without explicit patch type')).rejects.toThrow(
+      'Unsupported Smart patchType in prompt: unknown',
+    );
+    expect(generateObjectMock).not.toHaveBeenCalled();
   });
 });
 
