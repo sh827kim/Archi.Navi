@@ -285,7 +285,7 @@ describe('runDomainDiscovery', () => {
           responsibilityHint: '주문 API',
           reason: 'route 기반 분리',
           confidence: 1,
-          memberSelectors: [{ kind: 'route_prefix', value: '/orders' }],
+          memberSelectors: [{ kind: 'route_prefix', value: '/:tenant/orders' }],
           evidenceHints: [],
         });
       }

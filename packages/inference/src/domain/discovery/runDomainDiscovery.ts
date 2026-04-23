@@ -247,14 +247,17 @@ function normalizeRouteSegment(value: string): string | null {
   const segments = value
     .toLowerCase()
     .split(/[\/]/)
-    .map((segment) => segment.trim().replace(/[^a-z0-9가-힣]/g, ''))
-    .filter(
-      (segment) => segment.length > 0 && !segment.startsWith(':') && !segment.startsWith('{'),
-    );
+    .map((segment) => segment.trim())
+    .filter((segment) => segment.length > 0 && !isDynamicRouteSegment(segment))
+    .map((segment) => segment.replace(/[^a-z0-9가-힣]/g, ''));
   for (const segment of segments) {
     if (!isNonDomainRouteSegment(segment)) return segment;
   }
   return segments[segments.length - 1] ?? null;
+}
+
+function isDynamicRouteSegment(segment: string): boolean {
+  return segment.startsWith(':') || segment.startsWith('{');
 }
 
 function isNonDomainRouteSegment(segment: string): boolean {
