@@ -25,6 +25,20 @@ const STRIPPABLE_NAME_SUFFIXES = [
 ];
 
 const LOW_VALUE_TOKENS = new Set(['robot', 'core', 'mgt', 'mgmt', 'robotcore', 'rb']);
+const TABLE_OBJECT_TYPES = new Set(['db_table', 'db_view', 'database_table', 'table']);
+const PACKAGE_NAMESPACE_ROOTS = new Set([
+  'com',
+  'org',
+  'net',
+  'io',
+  'dev',
+  'app',
+  'co',
+  'kr',
+  'jp',
+  'uk',
+  'us',
+]);
 const NON_DOMAIN_PATH_PREFIXES = new Set([
   'api',
   'apis',
@@ -193,7 +207,9 @@ function buildSeedIndex(inputs: DiscoveryInputs): SeedIndex {
     const metaFilePath = asString(obj.metadata?.['filePath']);
     for (const seed of extractClassSeeds(className)) seeds.push(seed);
     for (const seed of extractFilePathSeeds(metaFilePath)) seeds.push(seed);
-    for (const seed of extractTableSeeds(obj.name)) seeds.push(seed);
+    if (isTableLikeObject(obj)) {
+      for (const seed of extractTableSeeds(obj.name)) seeds.push(seed);
+    }
 
     for (const artifact of artifactsByOwner.get(obj.id) ?? []) {
       for (const seed of extractFilePathSeeds(artifact.filePath)) seeds.push(seed);
@@ -299,11 +315,13 @@ function extractClassSeeds(className: string | null): DomainSeed[] {
 
 function extractPackageSeeds(packageName: string | null): DomainSeed[] {
   if (!packageName) return [];
-  return packageName
-    .split(/[./]/)
-    .map((s) => normalizeSlug(s))
-    .filter(isUsefulSlug)
-    .map((slug) => makeSeed(slug, 'package', packageName));
+  const slugs = packageName.split(/[./]/).map((segment) => normalizeSlug(segment));
+  const startsWithNamespaceRoot = PACKAGE_NAMESPACE_ROOTS.has(slugs[0] ?? '');
+  const semanticStart = startsWithNamespaceRoot ? Math.min(2, slugs.length - 1) : 0;
+  return slugs
+    .map((slug, index) => ({ slug, index }))
+    .filter(({ slug, index }) => index >= semanticStart && isUsefulPackageSlug(slug, index))
+    .map(({ slug }) => makeSeed(slug, 'package', packageName));
 }
 
 function extractFilePathSeeds(filePath: string | null): DomainSeed[] {
@@ -323,6 +341,12 @@ function extractTableSeeds(name: string): DomainSeed[] {
     .map((p) => normalizeSlug(p))
     .filter(isUsefulSlug);
   return parts.map((slug) => makeSeed(slug, 'table', name));
+}
+
+function isTableLikeObject(obj: DiscoveryObjectInput): boolean {
+  if (TABLE_OBJECT_TYPES.has(obj.objectType.toLowerCase())) return true;
+  const metadataType = asString(obj.metadata?.['objectType']) ?? asString(obj.metadata?.['type']);
+  return metadataType !== null && TABLE_OBJECT_TYPES.has(metadataType.toLowerCase());
 }
 
 function extractIntentRouteSeeds(intent: DiscoveryIntentInput): DomainSeed[] {
@@ -461,6 +485,13 @@ function isUsefulSlug(slug: string): boolean {
   if (!slug) return false;
   if (LOW_VALUE_TOKENS.has(slug)) return false;
   return slug.length >= 2 || /[가-힣]/.test(slug);
+}
+
+function isUsefulPackageSlug(slug: string, index: number): boolean {
+  if (!isUsefulSlug(slug)) return false;
+  if (PACKAGE_NAMESPACE_ROOTS.has(slug)) return false;
+  if (index === 0 && slug.length <= 3) return false;
+  return true;
 }
 
 function capitalize(s: string): string {
