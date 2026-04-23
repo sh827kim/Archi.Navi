@@ -24,6 +24,7 @@
   "devDependencies": {
     "@tailwindcss/postcss": "^4.2.1",
     "prettier": "^3.8.1",
+    "prettier-plugin-tailwindcss": "0.0.0-insiders.f7d2598",
     "tailwindcss": "^4.2.1",
     "turbo": "^2.8.12",
     "typescript": "^5.9.3"
