@@ -34,6 +34,9 @@ interface CandidateMember {
   routePrefixMatch: 0 | 1;
   topicPrefixMatch: 0 | 1;
   nameTokenJaccard: number;
+  codeFamilyMatch: 0 | 1;
+  tableFamilyMatch: 0 | 1;
+  seedSources: string[];
   affinity: number;
   relationCohesion: number;
 }
@@ -43,6 +46,14 @@ interface CandidateReview {
   suggestedName: string;
   responsibilityHint: string;
   mergeWithCandidateId: string | null;
+  splitSuggestions: Array<{
+    suggestedName: string;
+    responsibilityHint: string;
+    reason: string;
+    confidence: number;
+    memberSelectors: Array<{ kind: string; value: string }>;
+    evidenceHints: string[];
+  }>;
 }
 
 /** 이 도메인을 구현하는 서비스 정보 */
@@ -61,10 +72,17 @@ interface DiscoveredCandidate {
     topPathPrefix: string | null;
     topRoutePrefix: string | null;
     topTopicPrefix: string | null;
+    topCodeFamily: string | null;
+    topTableFamily: string | null;
+    seedSourceSummary: Array<{ source: string; value: string }>;
   };
   members: CandidateMember[];
   review: CandidateReview | null;
   implementingServices: ImplementingService[];
+  origin?: 'structural' | 'llm_split';
+  parentCandidateId?: string | null;
+  splitReason?: string | null;
+  splitEvidenceHints?: string[];
 }
 
 interface DiscoverResponseData {
@@ -337,6 +355,17 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                       topic: {c.signals.topTopicPrefix}
                     </Badge>
                   ) : null}
+                  {c.signals.topCodeFamily ? (
+                    <Badge variant="outline" className="text-xs">
+                      code: {c.signals.topCodeFamily}
+                    </Badge>
+                  ) : null}
+                  {c.signals.topTableFamily ? (
+                    <Badge variant="outline" className="text-xs">
+                      table: {c.signals.topTableFamily}
+                    </Badge>
+                  ) : null}
+                  {c.origin === 'llm_split' ? <Badge variant="secondary">LLM 분할 후보</Badge> : null}
                   <Badge variant="secondary" className="ml-auto text-xs">
                     멤버 {c.members.length}
                   </Badge>
@@ -347,6 +376,29 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                   <p className="mt-2 text-sm text-muted-foreground">
                     {c.review.responsibilityHint}
                   </p>
+                ) : null}
+
+                {c.origin === 'llm_split' && c.splitReason ? (
+                  <div className="mt-2 rounded border border-border/60 bg-muted/30 p-2 text-xs">
+                    <p className="font-medium">분할 추천에서 생성됨</p>
+                    <p className="text-muted-foreground">{c.splitReason}</p>
+                  </div>
+                ) : null}
+
+                {c.origin !== 'llm_split' && c.review?.splitSuggestions?.length > 0 ? (
+                  <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs">
+                    <p className="font-medium">분할 권장 - 자동 후보 생성 실패</p>
+                  </div>
+                ) : null}
+
+                {c.signals.seedSourceSummary && c.signals.seedSourceSummary.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {c.signals.seedSourceSummary.slice(0, 8).map((seed) => (
+                      <Badge key={`${seed.source}:${seed.value}`} variant="secondary">
+                        {seed.source}: {seed.value}
+                      </Badge>
+                    ))}
+                  </div>
                 ) : null}
 
                 <ul className="mt-3 space-y-1 text-xs text-muted-foreground">

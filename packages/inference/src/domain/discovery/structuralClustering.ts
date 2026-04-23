@@ -1,26 +1,13 @@
-/**
- * 구조적 클러스터링 — 결정적 신호 4종으로 도메인 후보 슬러그를 추출하고,
- * 각 객체↔후보 쌍의 친화도(affinity)를 계산한다.
- *
- * 신호 4종 (모두 0 또는 1, 단 nameTokenJaccard 만 0~1):
- *  - pathPrefixMatch   : 객체 path 가 후보 슬러그로 시작하면 1
- *  - routePrefixMatch  : 객체 intent 의 externalPath/route 가 후보 슬러그로 시작하면 1
- *  - topicPrefixMatch  : 객체 intent 의 messageTopic 이 후보 슬러그로 시작하면 1
- *  - nameTokenJaccard  : 객체 이름 토큰(Service/Controller/Entity suffix 제거 후) ↔ 후보 토큰 Jaccard
- *
- * affinity = 4개 신호의 단순 평균. confidence 는 본 모듈의 책임이 아님 (relationCohesion 모듈 담당).
- */
 import type {
     CandidateMemberScore,
+    DiscoveryCodeArtifactInput,
     DiscoveryInputs,
     DiscoveryIntentInput,
     DiscoveryObjectInput,
 } from './types';
 
-/** 친화도 임계값 — 이 값 미만이면 후보 멤버에서 제외 (4개 중 1개 일치 = 0.25) */
 export const AFFINITY_THRESHOLD = 0.25;
 
-/** 의미 없는 객체 이름 suffix (제거 대상) */
 const STRIPPABLE_NAME_SUFFIXES = [
     'service',
     'controller',
@@ -34,51 +21,37 @@ const STRIPPABLE_NAME_SUFFIXES = [
     'provider',
     'component',
     'module',
+    'mapper',
 ];
 
-/**
- * URL/경로 앞단의 도메인이 아닌 prefix.
- * `/api/orders`, `/v1/payments`, `/rest/inventory` 같은 흔한 transport·버전 segment 가
- * 슬러그로 잡히면 서로 다른 도메인이 한 후보(`api`/`v1`)로 묶여 발견 결과가 희석된다.
- */
+const LOW_VALUE_TOKENS = new Set(['robot', 'core', 'mgt', 'mgmt', 'robotcore', 'rb']);
 const NON_DOMAIN_PATH_PREFIXES = new Set([
-    'api',
-    'apis',
-    'rest',
-    'graphql',
-    'gql',
-    'rpc',
-    'grpc',
-    'public',
-    'internal',
-    'private',
-    'app',
-    'web',
+    'api', 'apis', 'rest', 'graphql', 'gql', 'rpc', 'grpc', 'public', 'internal', 'private', 'app', 'web',
 ]);
-
 const INHERITED_INTENT_CHILD_TYPES = new Set(['function', 'api_endpoint']);
 
-/** v1 / v2 / v10 처럼 "v" + 숫자 형태인지 판정 */
-function isVersionSegment(segment: string): boolean {
-    return /^v\d+$/i.test(segment);
+interface DomainSeed {
+    slug: string;
+    source: 'path' | 'name' | 'route' | 'topic' | 'class' | 'file' | 'table' | 'package';
+    value: string;
+    label: string;
 }
 
-function isNonDomainSegment(segment: string): boolean {
-    return NON_DOMAIN_PATH_PREFIXES.has(segment.toLowerCase()) || isVersionSegment(segment);
+interface SeedIndex {
+    seedsByObjectId: Map<string, DomainSeed[]>;
 }
 
 export interface StructuralClusterCandidate {
-    /** 후보 슬러그 (정규화된 소문자 — 예: "payments") */
     slug: string;
-    /** UI 표시용 자동 라벨 (slug 그대로, 첫 글자 대문자) */
     autoName: string;
-    /** affinity ≥ 0.25 인 멤버 점수 */
     members: CandidateMemberScore[];
-    /** 강한 신호 — UI 칩으로 표시 */
     signals: {
         topPathPrefix: string | null;
         topRoutePrefix: string | null;
         topTopicPrefix: string | null;
+        topCodeFamily: string | null;
+        topTableFamily: string | null;
+        seedSourceSummary: Array<{ source: string; value: string }>;
     };
 }
 
@@ -86,53 +59,70 @@ export interface StructuralClusteringResult {
     candidates: StructuralClusterCandidate[];
 }
 
-/**
- * 입력 객체/intent 풀에서 후보 슬러그를 수집하고 객체별 affinity 를 계산한다.
- */
 export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClusteringResult {
     const intentsByObject = groupIntentsByObject(inputs.intents, inputs.objects);
+    const seedIndex = buildSeedIndex(inputs);
 
-    // 1. 후보 슬러그 풀 — 모든 신호 출처에서 추출
     const slugSet = new Set<string>();
     for (const obj of inputs.objects) {
-        for (const slug of extractPathSlugs(obj.path)) slugSet.add(slug);
-        for (const slug of extractNameSlugs(obj.name)) slugSet.add(slug);
+        for (const seed of seedIndex.seedsByObjectId.get(obj.id) ?? []) slugSet.add(seed.slug);
         const intents = intentsByObject.get(obj.id) ?? [];
         for (const intent of intents) {
-            for (const slug of extractIntentRouteSlugs(intent)) slugSet.add(slug);
-            for (const slug of extractIntentTopicSlugs(intent)) slugSet.add(slug);
+            for (const seed of extractIntentRouteSeeds(intent)) slugSet.add(seed.slug);
+            for (const seed of extractIntentTopicSeeds(intent)) slugSet.add(seed.slug);
         }
     }
 
-    // 2. 슬러그별로 객체-후보 친화도 계산
     const candidates: StructuralClusterCandidate[] = [];
     for (const slug of slugSet) {
         const memberScores: CandidateMemberScore[] = [];
         const candidateTokens = new Set([slug]);
-        // 강한 신호 추적용 — 첫 매칭만 기록
         let topPathPrefix: string | null = null;
         let topRoutePrefix: string | null = null;
         let topTopicPrefix: string | null = null;
+        let topCodeFamily: string | null = null;
+        let topTableFamily: string | null = null;
+        const signalSummary = new Map<string, { source: string; value: string }>();
 
         for (const obj of inputs.objects) {
             const intents = intentsByObject.get(obj.id) ?? [];
             const pathMatch = matchPathPrefix(obj.path, slug);
             const routeMatch = matchRoutePrefix(intents, slug);
             const topicMatch = matchTopicPrefix(intents, slug);
-            const nameTokens = tokenizeName(obj.name);
-            const nameJaccard = jaccardSimilarity(nameTokens, candidateTokens);
+            const nameJaccard = jaccardSimilarity(tokenizeName(obj.name), candidateTokens);
+            const objectSeeds = seedIndex.seedsByObjectId.get(obj.id) ?? [];
+            const codeMatch = hasSeedSlug(objectSeeds, slug, ['class', 'file', 'package']) ? 1 : 0;
+            const tableMatch = hasSeedSlug(objectSeeds, slug, ['table']) ? 1 : 0;
 
-            const affinity = (pathMatch + routeMatch + topicMatch + nameJaccard) / 4;
+            const affinity = Math.min(
+                1,
+                (pathMatch + routeMatch + topicMatch + nameJaccard + codeMatch + tableMatch) / 4,
+            );
             if (affinity < AFFINITY_THRESHOLD) continue;
 
-            if (pathMatch === 1 && topPathPrefix === null) {
-                topPathPrefix = firstPathSegment(obj.path);
+            if (pathMatch === 1 && topPathPrefix === null) topPathPrefix = firstPathSegment(obj.path);
+            if (routeMatch === 1 && topRoutePrefix === null) topRoutePrefix = pickFirstRouteMatch(intents, slug);
+            if (topicMatch === 1 && topTopicPrefix === null) topTopicPrefix = pickFirstTopicMatch(intents, slug);
+            if (codeMatch === 1 && topCodeFamily === null) {
+                topCodeFamily = (objectSeeds.find((seed) => seed.slug === slug && ['class', 'file', 'package'].includes(seed.source))?.label) ?? capitalize(slug);
             }
-            if (routeMatch === 1 && topRoutePrefix === null) {
-                topRoutePrefix = pickFirstRouteMatch(intents, slug);
+            if (tableMatch === 1 && topTableFamily === null) {
+                topTableFamily = (objectSeeds.find((seed) => seed.slug === slug && seed.source === 'table')?.label) ?? capitalize(slug);
             }
-            if (topicMatch === 1 && topTopicPrefix === null) {
-                topTopicPrefix = pickFirstTopicMatch(intents, slug);
+
+            const directSeedSources: string[] = [];
+            if (pathMatch === 1) directSeedSources.push(`path:${slug}`);
+            if (routeMatch === 1 && topRoutePrefix) directSeedSources.push(`route:${topRoutePrefix}`);
+            if (topicMatch === 1 && topTopicPrefix) directSeedSources.push(`topic:${topTopicPrefix}`);
+            if (codeMatch === 1) directSeedSources.push(`code:${slug}`);
+            if (tableMatch === 1) directSeedSources.push(`table:${slug}`);
+
+            const allObjectSeedSources = collectObjectSeedSources(obj, intents, objectSeeds);
+            for (const seedSource of uniqueStrings([...directSeedSources, ...allObjectSeedSources])) {
+                const [sourceRaw, ...rest] = seedSource.split(':');
+                const source = sourceRaw ?? 'seed';
+                const value = rest.join(':');
+                signalSummary.set(`${source}:${value}`, { source, value });
             }
 
             if (obj.memberEligible === false) continue;
@@ -143,8 +133,10 @@ export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClus
                 routePrefixMatch: routeMatch,
                 topicPrefixMatch: topicMatch,
                 nameTokenJaccard: round3(nameJaccard),
+                codeFamilyMatch: codeMatch,
+                tableFamilyMatch: tableMatch,
+                seedSources: uniqueStrings([...directSeedSources, ...allObjectSeedSources]),
                 affinity: round3(affinity),
-                // 관계 응집도는 별도 모듈에서 채움 — 이 단계에서는 0
                 relationCohesion: 0,
             });
         }
@@ -159,34 +151,80 @@ export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClus
                 topPathPrefix,
                 topRoutePrefix,
                 topTopicPrefix,
+                topCodeFamily,
+                topTableFamily,
+                seedSourceSummary: Array.from(signalSummary.values()).slice(0, 12),
             },
         });
     }
 
-    // 후보 정렬 — 멤버 수 내림차순, 같으면 슬러그 사전순
-    candidates.sort((a, b) => {
-        if (b.members.length !== a.members.length) return b.members.length - a.members.length;
-        return a.slug.localeCompare(b.slug);
-    });
-
+    candidates.sort((a, b) => (b.members.length - a.members.length) || a.slug.localeCompare(b.slug));
     return { candidates };
 }
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Helpers
-// ──────────────────────────────────────────────────────────────────────────────
+function buildSeedIndex(inputs: DiscoveryInputs): SeedIndex {
+    const seedsByObjectId = new Map<string, DomainSeed[]>();
+    const artifactsByOwner = groupArtifactsByOwner(inputs.codeArtifacts);
 
-function groupIntentsByObject(
-    intents: DiscoveryIntentInput[],
-    objects: DiscoveryObjectInput[],
-): Map<string, DiscoveryIntentInput[]> {
+    for (const obj of inputs.objects) {
+        const seeds: DomainSeed[] = [];
+        for (const slug of extractPathSlugs(obj.path)) seeds.push(makeSeed(slug, 'path', obj.path));
+        for (const slug of extractNameSlugs(obj.name)) seeds.push(makeSeed(slug, 'name', obj.name));
+
+        const className = asString(obj.metadata?.['className']);
+        const metaFilePath = asString(obj.metadata?.['filePath']);
+        for (const seed of extractClassSeeds(className)) seeds.push(seed);
+        for (const seed of extractFilePathSeeds(metaFilePath)) seeds.push(seed);
+        for (const seed of extractTableSeeds(obj.name)) seeds.push(seed);
+
+        for (const artifact of artifactsByOwner.get(obj.id) ?? []) {
+            for (const seed of extractFilePathSeeds(artifact.filePath)) seeds.push(seed);
+            for (const seed of extractPackageSeeds(artifact.packageName)) seeds.push(seed);
+        }
+
+        const uniqSeeds = uniqueSeeds(seeds);
+        seedsByObjectId.set(obj.id, uniqSeeds);
+    }
+
+    return { seedsByObjectId };
+}
+
+function groupArtifactsByOwner(artifacts: DiscoveryCodeArtifactInput[]): Map<string, DiscoveryCodeArtifactInput[]> {
+    const map = new Map<string, DiscoveryCodeArtifactInput[]>();
+    for (const artifact of artifacts) {
+        if (!artifact.ownerObjectId) continue;
+        const list = map.get(artifact.ownerObjectId) ?? [];
+        list.push(artifact);
+        map.set(artifact.ownerObjectId, list);
+    }
+    return map;
+}
+
+
+function asString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim().length > 0 ? value.trim() : null;
+}
+
+function collectObjectSeedSources(obj: DiscoveryObjectInput, intents: DiscoveryIntentInput[], objectSeeds: DomainSeed[]): string[] {
+    const sources: string[] = [];
+    const pathPrefix = firstPathSegment(obj.path);
+    if (pathPrefix) sources.push(`path:${pathPrefix}`);
+    sources.push(`name:${obj.name}`);
+    for (const seed of objectSeeds) sources.push(`${seed.source}:${seed.value}`);
+    for (const intent of intents) {
+        for (const routeSeed of extractIntentRouteSeeds(intent)) {
+            sources.push(`route:/${routeSeed.value.replace(/^\/+/, '').split('/')[0] ?? routeSeed.value}`);
+        }
+    }
+    return uniqueStrings(sources);
+}
+
+function groupIntentsByObject(intents: DiscoveryIntentInput[], objects: DiscoveryObjectInput[]): Map<string, DiscoveryIntentInput[]> {
     const map = new Map<string, DiscoveryIntentInput[]>();
     const objectById = new Map(objects.map((obj) => [obj.id, obj] as const));
     const codeChildrenByService = new Map<string, DiscoveryObjectInput[]>();
-
     for (const obj of objects) {
-        if (!obj.parentId) continue;
-        if (!INHERITED_INTENT_CHILD_TYPES.has(obj.objectType)) continue;
+        if (!obj.parentId || !INHERITED_INTENT_CHILD_TYPES.has(obj.objectType)) continue;
         const parent = objectById.get(obj.parentId);
         if (!parent || parent.objectType !== 'service') continue;
         const list = codeChildrenByService.get(parent.id) ?? [];
@@ -198,55 +236,75 @@ function groupIntentsByObject(
         appendIntent(map, intent.sourceObjectId, intent);
         const source = objectById.get(intent.sourceObjectId);
         if (source?.objectType !== 'service') continue;
-        for (const child of codeChildrenByService.get(source.id) ?? []) {
-            appendIntent(map, child.id, intent);
-        }
+        for (const child of codeChildrenByService.get(source.id) ?? []) appendIntent(map, child.id, intent);
     }
     return map;
 }
 
-function appendIntent(
-    map: Map<string, DiscoveryIntentInput[]>,
-    objectId: string,
-    intent: DiscoveryIntentInput,
-): void {
+function appendIntent(map: Map<string, DiscoveryIntentInput[]>, objectId: string, intent: DiscoveryIntentInput): void {
     const list = map.get(objectId) ?? [];
     list.push(intent);
     map.set(objectId, list);
 }
 
-/** path 의 첫 "의미 있는" segment 를 슬러그 후보로 추출 (transport/version prefix 는 건너뜀) */
 function extractPathSlugs(path: string): string[] {
     const seg = firstPathSegment(path);
     if (!seg) return [];
     const slug = normalizeSlug(seg);
-    return slug.length >= 2 ? [slug] : [];
+    return isUsefulSlug(slug) ? [slug] : [];
 }
 
-/** 객체 이름에서 의미 있는 토큰만 추출 (Service/Controller 등 suffix 제거) */
 function extractNameSlugs(name: string): string[] {
-    const tokens = tokenizeName(name);
-    return Array.from(tokens).filter((t) => t.length >= 3 || /[가-힣]/.test(t));
+    return Array.from(tokenizeName(name)).filter(isUsefulSlug);
 }
 
-function extractIntentRouteSlugs(intent: DiscoveryIntentInput): string[] {
-    const slugs: string[] = [];
-    const candidates = [intent.externalPathHint, intent.externalRoutePattern];
-    for (const candidate of candidates) {
+function extractClassSeeds(className: string | null): DomainSeed[] {
+    if (!className) return [];
+    return Array.from(tokenizeName(className)).filter(isUsefulSlug).map((slug) => makeSeed(slug, 'class', className));
+}
+
+function extractPackageSeeds(packageName: string | null): DomainSeed[] {
+    if (!packageName) return [];
+    return packageName.split(/[./]/).map((s) => normalizeSlug(s)).filter(isUsefulSlug).map((slug) => makeSeed(slug, 'package', packageName));
+}
+
+function extractFilePathSeeds(filePath: string | null): DomainSeed[] {
+    if (!filePath) return [];
+    const parts = filePath.split(/[\/]/).filter(Boolean);
+    const name = parts[parts.length - 1] ?? '';
+    const withoutExt = name.replace(/\.[^.]+$/, '');
+    return Array.from(tokenizeName(withoutExt)).filter(isUsefulSlug).map((slug) => makeSeed(slug, 'file', filePath));
+}
+
+function extractTableSeeds(name: string): DomainSeed[] {
+    if (!name.includes('_')) return [];
+    const parts = name.split('_').map((p) => normalizeSlug(p)).filter(isUsefulSlug);
+    return parts.map((slug) => makeSeed(slug, 'table', name));
+}
+
+function extractIntentRouteSeeds(intent: DiscoveryIntentInput): DomainSeed[] {
+    const seeds: DomainSeed[] = [];
+    for (const candidate of [intent.externalPathHint, intent.externalRoutePattern]) {
         if (!candidate) continue;
         const seg = firstPathSegment(candidate);
-        if (seg) slugs.push(normalizeSlug(seg));
+        if (!seg) continue;
+        const slug = normalizeSlug(seg);
+        if (!isUsefulSlug(slug)) continue;
+        seeds.push(makeSeed(slug, 'route', candidate));
     }
-    return slugs.filter((s) => s.length >= 2);
+    return uniqueSeeds(seeds);
 }
 
-function extractIntentTopicSlugs(intent: DiscoveryIntentInput): string[] {
-    const slugs: string[] = [];
+function extractIntentTopicSeeds(intent: DiscoveryIntentInput): DomainSeed[] {
+    const seeds: DomainSeed[] = [];
     for (const topic of intent.messageTopicHints) {
         const seg = firstTopicSegment(topic);
-        if (seg) slugs.push(normalizeSlug(seg));
+        if (!seg) continue;
+        const slug = normalizeSlug(seg);
+        if (!isUsefulSlug(slug)) continue;
+        seeds.push(makeSeed(slug, 'topic', topic));
     }
-    return slugs.filter((s) => s.length >= 2);
+    return uniqueSeeds(seeds);
 }
 
 function matchPathPrefix(path: string, slug: string): 0 | 1 {
@@ -257,10 +315,8 @@ function matchPathPrefix(path: string, slug: string): 0 | 1 {
 
 function matchRoutePrefix(intents: DiscoveryIntentInput[], slug: string): 0 | 1 {
     for (const intent of intents) {
-        for (const candidate of [intent.externalPathHint, intent.externalRoutePattern]) {
-            if (!candidate) continue;
-            const seg = firstPathSegment(candidate);
-            if (seg && normalizeSlug(seg) === slug) return 1;
+        for (const seed of extractIntentRouteSeeds(intent)) {
+            if (seed.slug === slug) return 1;
         }
     }
     return 0;
@@ -268,9 +324,8 @@ function matchRoutePrefix(intents: DiscoveryIntentInput[], slug: string): 0 | 1 
 
 function matchTopicPrefix(intents: DiscoveryIntentInput[], slug: string): 0 | 1 {
     for (const intent of intents) {
-        for (const topic of intent.messageTopicHints) {
-            const seg = firstTopicSegment(topic);
-            if (seg && normalizeSlug(seg) === slug) return 1;
+        for (const seed of extractIntentTopicSeeds(intent)) {
+            if (seed.slug === slug) return 1;
         }
     }
     return 0;
@@ -278,10 +333,10 @@ function matchTopicPrefix(intents: DiscoveryIntentInput[], slug: string): 0 | 1 
 
 function pickFirstRouteMatch(intents: DiscoveryIntentInput[], slug: string): string | null {
     for (const intent of intents) {
-        for (const candidate of [intent.externalPathHint, intent.externalRoutePattern]) {
-            if (!candidate) continue;
-            const seg = firstPathSegment(candidate);
-            if (seg && normalizeSlug(seg) === slug) return `/${seg}`;
+        for (const seed of extractIntentRouteSeeds(intent)) {
+            if (seed.slug !== slug) continue;
+            const segment = firstPathSegment(seed.value);
+            if (segment) return `/${segment}`;
         }
     }
     return null;
@@ -289,18 +344,19 @@ function pickFirstRouteMatch(intents: DiscoveryIntentInput[], slug: string): str
 
 function pickFirstTopicMatch(intents: DiscoveryIntentInput[], slug: string): string | null {
     for (const intent of intents) {
-        for (const topic of intent.messageTopicHints) {
-            const seg = firstTopicSegment(topic);
-            if (seg && normalizeSlug(seg) === slug) return seg;
+        for (const seed of extractIntentTopicSeeds(intent)) {
+            if (seed.slug === slug) return firstTopicSegment(seed.value);
         }
     }
     return null;
 }
 
+function hasSeedSlug(seeds: DomainSeed[], slug: string, sources: DomainSeed['source'][]): boolean {
+    return seeds.some((seed) => seed.slug === slug && sources.includes(seed.source));
+}
+
 function firstPathSegment(input: string): string | null {
     const segments = input.split(/[\/]/).filter((s) => s.length > 0 && !s.startsWith(':') && !s.startsWith('{'));
-    // transport prefix(api, rest, …) / 버전(v1, v2) 는 도메인 슬러그가 아니므로
-    // 첫 "의미 있는" segment 가 나올 때까지 건너뛴다. 모두 prefix 라면 마지막 segment 를 fallback.
     for (const segment of segments) {
         if (!isNonDomainSegment(segment)) return segment;
     }
@@ -308,19 +364,14 @@ function firstPathSegment(input: string): string | null {
 }
 
 function firstTopicSegment(topic: string): string | null {
-    // 메시지 토픽은 보통 "domain.action" 또는 "domain-action" 형태
     const segments = topic.split(/[.\-_/]/).filter((s) => s.length > 0);
     return segments[0] ?? null;
 }
 
-// approve route 과 일관성 있게 한글(가-힣)을 포함해 정규화.
-// 한글만 있는 후보(예: "주문") 를 빈 문자열로 변환하지 않아야 discovery 와 approval
-// 동작의 일관성이 유지됨.
 function normalizeSlug(input: string): string {
     return input.toLowerCase().replace(/[^a-z0-9가-힣]/g, '');
 }
 
-/** 객체 이름을 의미 토큰으로 분해 — pascalCase / camelCase / snake_case / kebab-case 지원 */
 export function tokenizeName(name: string): Set<string> {
     const tokens = name
         .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
@@ -334,12 +385,37 @@ export function tokenizeName(name: string): Set<string> {
 function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
     if (a.size === 0 || b.size === 0) return 0;
     let intersection = 0;
-    for (const item of a) {
-        if (b.has(item)) intersection += 1;
-    }
+    for (const item of a) if (b.has(item)) intersection += 1;
     const union = a.size + b.size - intersection;
-    if (union === 0) return 0;
-    return intersection / union;
+    return union === 0 ? 0 : intersection / union;
+}
+
+function makeSeed(slug: string, source: DomainSeed['source'], value: string): DomainSeed {
+    return { slug, source, value, label: capitalize(slug) };
+}
+
+function uniqueSeeds(seeds: DomainSeed[]): DomainSeed[] {
+    const map = new Map<string, DomainSeed>();
+    for (const seed of seeds) map.set(`${seed.source}:${seed.slug}:${seed.value}`, seed);
+    return Array.from(map.values());
+}
+
+function uniqueStrings(values: string[]): string[] {
+    return Array.from(new Set(values));
+}
+
+function isVersionSegment(segment: string): boolean {
+    return /^v\d+$/i.test(segment);
+}
+
+function isNonDomainSegment(segment: string): boolean {
+    return NON_DOMAIN_PATH_PREFIXES.has(segment.toLowerCase()) || isVersionSegment(segment);
+}
+
+function isUsefulSlug(slug: string): boolean {
+    if (!slug) return false;
+    if (LOW_VALUE_TOKENS.has(slug)) return false;
+    return slug.length >= 2 || /[가-힣]/.test(slug);
 }
 
 function capitalize(s: string): string {

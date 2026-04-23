@@ -182,7 +182,8 @@ export async function POST(req: Request) {
                 name: objects.name,
                 displayName: objects.displayName,
                 path: objects.path,
-                parentId: objects.parentId,  // 서비스 계층 추적을 위해 추가
+                parentId: objects.parentId,
+                metadata: objects.metadata,
             })
             .from(objects)
             .where(eq(objects.workspaceId, workspaceId));
@@ -197,6 +198,7 @@ export async function POST(req: Request) {
                 path: o.path,
                 parentId: o.parentId,
                 memberEligible: o.objectType !== 'service',
+                ...(o.metadata ? { metadata: o.metadata as Record<string, unknown> } : {}),
             }));
 
         // 2. 인텐트 — externalPath/route/topic 신호용

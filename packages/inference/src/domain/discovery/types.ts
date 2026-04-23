@@ -28,6 +28,8 @@ export interface DiscoveryObjectInput {
      * service 객체를 signal-only 로 유지할 때 사용한다.
      */
     memberEligible?: boolean;
+    /** 스캐너/ETL 에서 저장한 부가 메타데이터(className/filePath/endpoint 등) */
+    metadata?: Record<string, unknown> | null;
 }
 
 /** interaction_intents 한 행 단순화 — 외부/내부 경로/토픽 prefix 신호 추출에 사용 */
@@ -54,7 +56,7 @@ export interface DiscoveryCodeArtifactInput {
     filePath: string;
 }
 
-/** 결정적 신호 4종 + 관계 응집도 (한 객체 ↔ 한 후보 사이 점수) */
+/** 결정적 신호 + 관계 응집도 (한 객체 ↔ 한 후보 사이 점수) */
 export interface CandidateMemberScore {
     objectId: string;
     /** 후보 path prefix 와 일치하면 1, 아니면 0 */
@@ -65,10 +67,29 @@ export interface CandidateMemberScore {
     topicPrefixMatch: 0 | 1;
     /** 객체 이름 토큰 ↔ 후보 이름 토큰 Jaccard 유사도 (0~1) */
     nameTokenJaccard: number;
-    /** affinity = 4개 신호의 단순 평균 (0~1) */
+    /** class/controller/mapper/file family 매칭 */
+    codeFamilyMatch: 0 | 1;
+    /** db table/resource family 매칭 */
+    tableFamilyMatch: 0 | 1;
+    /** 후보 매칭 + 객체 전체 근거(route/class/table/name/path) */
+    seedSources: string[];
+    /** affinity = (path + route + topic + name + code + table) / 4 capped */
     affinity: number;
     /** 객체의 outgoing/incoming 관계 중 후보 멤버로 향하는 비율 (0~1) */
     relationCohesion: number;
+}
+
+export type LlmSplitSelectorKind =
+    | 'route_prefix'
+    | 'class_name'
+    | 'file_path'
+    | 'table_name'
+    | 'seed_source'
+    | 'object_name';
+
+export interface LlmSplitSelector {
+    kind: LlmSplitSelectorKind;
+    value: string;
 }
 
 /** 한 후보 도메인 그룹 — 결정적 클러스터링 산출 + LLM 검토 후 풍부화 */
@@ -77,16 +98,23 @@ export interface DomainCandidate {
     id: string;
     /** 자동 라벨 (path/route/topic prefix 중 하나에서 도출한 한글/영문) */
     autoName: string;
-    /** 강한 신호 — UI 카드의 칩으로 표시 (각 신호 1개) */
+    /** 강한 신호 — UI 카드의 칩으로 표시 */
     signals: {
         topPathPrefix: string | null;
         topRoutePrefix: string | null;
         topTopicPrefix: string | null;
+        topCodeFamily: string | null;
+        topTableFamily: string | null;
+        seedSourceSummary: Array<{ source: string; value: string }>;
     };
     /** affinity ≥ 0.25 인 멤버들 */
     members: CandidateMemberScore[];
     /** LLM 검토 결과 (검토 전이면 null) */
     review: LlmCandidateReview | null;
+    origin?: 'structural' | 'llm_split';
+    parentCandidateId?: string | null;
+    splitReason?: string | null;
+    splitEvidenceHints?: string[];
 }
 
 /** LLM 검토 응답 (zod 스키마와 동일) */
@@ -95,6 +123,14 @@ export interface LlmCandidateReview {
     suggestedName: string;
     responsibilityHint: string;
     mergeWithCandidateId: string | null;
+    splitSuggestions: Array<{
+        suggestedName: string;
+        responsibilityHint: string;
+        reason: string;
+        confidence: number;
+        memberSelectors: LlmSplitSelector[];
+        evidenceHints: string[];
+    }>;
 }
 
 /** 사용자 승인 시 클라이언트가 서버로 보내는 최소 직렬화 형태 */

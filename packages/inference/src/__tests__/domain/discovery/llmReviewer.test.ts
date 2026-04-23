@@ -14,6 +14,9 @@ function candidate(overrides: Partial<StructuralClusterCandidate> = {}): Structu
                 routePrefixMatch: 1,
                 topicPrefixMatch: 0,
                 nameTokenJaccard: 1,
+                codeFamilyMatch: 0,
+                tableFamilyMatch: 0,
+                seedSources: ['route:/orders'],
                 affinity: 0.75,
                 relationCohesion: 0.8,
             },
@@ -22,6 +25,9 @@ function candidate(overrides: Partial<StructuralClusterCandidate> = {}): Structu
             topPathPrefix: 'orders',
             topRoutePrefix: '/orders',
             topTopicPrefix: null,
+            topCodeFamily: 'Orders',
+            topTableFamily: null,
+            seedSourceSummary: [{ source: 'route', value: '/orders' }],
         },
         ...overrides,
     };
@@ -34,6 +40,7 @@ describe('reviewDomainCandidate', () => {
             suggestedName: '주문',
             responsibilityHint: '주문 생성과 조회를 책임진다',
             mergeWithCandidateId: null,
+            splitSuggestions: [],
         }));
 
         await reviewDomainCandidate(
@@ -62,6 +69,7 @@ describe('reviewDomainCandidate', () => {
             suggestedName: 'Misc',
             responsibilityHint: '책임이 분산되어 일관성이 부족',
             mergeWithCandidateId: 'payments',
+            splitSuggestions: [],
         }));
 
         const result = await reviewDomainCandidate(
@@ -78,16 +86,20 @@ describe('reviewDomainCandidate', () => {
             suggestedName: 'Misc',
             responsibilityHint: '책임이 분산되어 일관성이 부족',
             mergeWithCandidateId: 'payments',
+            splitSuggestions: [],
         });
     });
 
-    it('T3: 멤버 이름이 10개를 초과하면 첫 10개만 프롬프트에 포함', async () => {
+    it('T3: 멤버 이름이 많아도 전체 멤버가 프롬프트에 포함', async () => {
         const lotsOfMembers = Array.from({ length: 15 }, (_, i) => ({
             objectId: `m-${i}`,
             pathPrefixMatch: 1 as const,
             routePrefixMatch: 0 as const,
             topicPrefixMatch: 0 as const,
             nameTokenJaccard: 0,
+            codeFamilyMatch: 0 as const,
+            tableFamilyMatch: 0 as const,
+            seedSources: ['route:/x'],
             affinity: 0.25,
             relationCohesion: 0,
         }));
@@ -97,6 +109,7 @@ describe('reviewDomainCandidate', () => {
             suggestedName: 'X',
             responsibilityHint: 'x',
             mergeWithCandidateId: null,
+            splitSuggestions: [],
         }));
 
         await reviewDomainCandidate(
@@ -111,7 +124,7 @@ describe('reviewDomainCandidate', () => {
         const prompt = vi.mocked(generate).mock.calls[0]![0];
         expect(prompt).toContain('Member0');
         expect(prompt).toContain('Member9');
-        expect(prompt).not.toContain('Member10');
-        expect(prompt).not.toContain('Member14');
+        expect(prompt).toContain('Member10');
+        expect(prompt).toContain('Member14');
     });
 });

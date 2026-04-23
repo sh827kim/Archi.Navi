@@ -519,6 +519,8 @@ describe('createGenerateDomainReviewFn', () => {
         coherent: true,
         suggestedName: '주문',
         responsibilityHint: '주문 라이프사이클을 책임한다',
+        mergeWithCandidateId: null,
+        splitSuggestions: [],
       },
     });
 
@@ -536,6 +538,9 @@ describe('createGenerateDomainReviewFn', () => {
           topPathPrefix: 'orders',
           topRoutePrefix: '/orders',
           topTopicPrefix: null,
+          topCodeFamily: null,
+          topTableFamily: null,
+          seedSourceSummary: [],
         },
       },
       objectNameById: new Map(),
@@ -545,6 +550,7 @@ describe('createGenerateDomainReviewFn', () => {
       suggestedName: '주문',
       responsibilityHint: '주문 라이프사이클을 책임한다',
       mergeWithCandidateId: null,
+      splitSuggestions: [],
     });
   });
 });

@@ -99,6 +99,7 @@ describe('runDomainDiscovery', () => {
                 suggestedName: '결제',
                 responsibilityHint: '결제 처리',
                 mergeWithCandidateId: null,
+                splitSuggestions: [],
             };
         });
 
@@ -126,6 +127,7 @@ describe('runDomainDiscovery', () => {
             suggestedName: '주문',
             responsibilityHint: '주문 라이프사이클을 책임',
             mergeWithCandidateId: null,
+            splitSuggestions: [],
         }));
 
         const result = await runDomainDiscovery({
@@ -158,6 +160,7 @@ describe('runDomainDiscovery', () => {
                 suggestedName: '주문',
                 responsibilityHint: '주문 라이프사이클을 책임',
                 mergeWithCandidateId: null,
+                splitSuggestions: [],
             });
         }
     });
