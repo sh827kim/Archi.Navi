@@ -264,6 +264,7 @@ describe('runDomainDiscovery', () => {
     const parent = result.candidates.find((c) => c.id === 'orders')!;
     expect(parent.members).toHaveLength(1);
     expect(parent.members[0]).toMatchObject({ objectId: 'audit', relationCohesion: 0 });
+    expect(parent.review).toBeNull();
 
     const highConfidenceSplit = result.candidates.find(
       (c) => c.id === 'orders--split-주문-처리-1',

@@ -166,7 +166,12 @@ function materializeSplitCandidates(
 
     const remainingMembers = candidate.members.filter((m) => !assignedMemberIds.has(m.objectId));
     if (remainingMembers.length > 0) {
-      result.push(withRecomputedCohesion({ ...candidate, members: remainingMembers }, relations));
+      result.push(
+        withRecomputedCohesion(
+          { ...candidate, members: remainingMembers, review: null },
+          relations,
+        ),
+      );
     }
     result.push(...splitCandidates);
   }
