@@ -281,6 +281,19 @@ export async function POST(req: Request) {
             ...(review ? { review } : {}),
         });
 
+
+        const objectMetaById = new Map(
+            discoveryObjects.map((o) => [
+                o.id,
+                {
+                    objectName: o.name,
+                    objectDisplayName: o.displayName,
+                    objectPath: o.path,
+                    objectType: o.objectType,
+                },
+            ] as const),
+        );
+
         // 각 candidate 에 implementingServices derived 필드 추가
         // — 멤버 id 집합 기준으로 어느 service 가 구현체인지 집계.
         // 입력 변환(pure 함수용 shape)은 candidate 수와 무관하므로 루프 밖에서 1회.
@@ -315,6 +328,10 @@ export async function POST(req: Request) {
             }
             return {
                 ...cand,
+                members: cand.members.map((m) => ({
+                    ...m,
+                    ...(objectMetaById.get(m.objectId) ?? {}),
+                })),
                 implementingServices: computeImplementingServices({
                     objects: implServiceObjects,
                     memberIds: primaryMemberIds,

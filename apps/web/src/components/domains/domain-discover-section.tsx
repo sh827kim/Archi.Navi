@@ -39,6 +39,10 @@ interface CandidateMember {
   seedSources: string[];
   affinity: number;
   relationCohesion: number;
+  objectName?: string;
+  objectDisplayName?: string | null;
+  objectPath?: string;
+  objectType?: string;
 }
 
 interface CandidateReview {
@@ -401,15 +405,32 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                   </div>
                 ) : null}
 
-                <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
-                  {previewMembers.map((m) => (
-                    <li key={m.objectId} className="flex items-center justify-between gap-2">
-                      <span className="truncate font-mono">{m.objectId}</span>
-                      <span className="shrink-0">
-                        affinity {m.affinity.toFixed(2)} · cohesion {m.relationCohesion.toFixed(2)}
-                      </span>
-                    </li>
-                  ))}
+                <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+                  {previewMembers.map((m) => {
+                    const readableName = m.objectDisplayName ?? m.objectName ?? m.objectId;
+                    const seedPreview = m.seedSources.slice(0, 2).join(' · ');
+
+                    return (
+                      <li key={m.objectId} className="rounded border border-border/50 bg-muted/20 p-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-foreground">{readableName}</p>
+                            <p className="truncate font-mono text-[11px]">{m.objectId}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p>친화도 {m.affinity.toFixed(2)}</p>
+                            <p>응집도 {m.relationCohesion.toFixed(2)}</p>
+                          </div>
+                        </div>
+                        {m.objectType || m.objectPath ? (
+                          <p className="mt-1 truncate text-[11px]">
+                            {[m.objectType, m.objectPath].filter(Boolean).join(' · ')}
+                          </p>
+                        ) : null}
+                        {seedPreview ? <p className="mt-1 truncate text-[11px]">근거: {seedPreview}</p> : null}
+                      </li>
+                    );
+                  })}
                 </ul>
                 {hiddenCount > 0 ? (
                   <button
