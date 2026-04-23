@@ -10,6 +10,22 @@ import type {
 } from './types';
 
 export const SECONDARY_AFFINITY_THRESHOLD = 0.5;
+export const SPLIT_COHERENCE_CONFIDENCE_THRESHOLD = 0.7;
+
+const NON_DOMAIN_ROUTE_SEGMENTS = new Set([
+    'api',
+    'apis',
+    'rest',
+    'graphql',
+    'gql',
+    'rpc',
+    'grpc',
+    'public',
+    'internal',
+    'private',
+    'app',
+    'web',
+]);
 
 export interface RunDomainDiscoveryArgs {
     inputs: DiscoveryInputs;
@@ -85,42 +101,50 @@ export async function runDomainDiscovery(args: RunDomainDiscoveryArgs): Promise<
         }
     }
 
-    return { candidates: materializeSplitCandidates(finalCandidates) };
+    return { candidates: materializeSplitCandidates(finalCandidates, args.inputs.relations) };
 }
 
-function materializeSplitCandidates(candidates: DomainCandidate[]): DomainCandidate[] {
+function materializeSplitCandidates(
+    candidates: DomainCandidate[],
+    relations: DiscoveryInputs['relations'],
+): DomainCandidate[] {
     const result: DomainCandidate[] = [];
 
     for (const candidate of candidates) {
         const assignedMemberIds = new Set<string>();
         const splitCandidates: DomainCandidate[] = [];
 
-        for (const suggestion of candidate.review?.splitSuggestions ?? []) {
+        for (const [suggestionIndex, suggestion] of (candidate.review?.splitSuggestions ?? []).entries()) {
             const selectors = normalizeSplitSelectors(suggestion.memberSelectors, suggestion.evidenceHints);
             const matchedMembers = candidate.members.filter(
-                (member) => !assignedMemberIds.has(member.objectId) && selectors.some((selector) => memberMatchesSelector(member, selector)),
+                (member) =>
+                    !assignedMemberIds.has(member.objectId) &&
+                    selectors.some((selector) => memberMatchesSelector(member, selector)),
             );
 
             if (matchedMembers.length === 0) continue;
             matchedMembers.forEach((m) => assignedMemberIds.add(m.objectId));
 
-            splitCandidates.push({
-                id: `${candidate.id}--split-${slugify(suggestion.suggestedName)}`,
-                autoName: suggestion.suggestedName,
-                signals: candidate.signals,
-                members: matchedMembers,
-                review: {
-                    coherent: true,
-                    suggestedName: suggestion.suggestedName,
-                    responsibilityHint: suggestion.responsibilityHint,
-                    mergeWithCandidateId: null,
-                    splitSuggestions: [],
+            splitCandidates.push(
+                withRecomputedCohesion({
+                    id: `${candidate.id}--split-${slugify(suggestion.suggestedName)}-${suggestionIndex + 1}`,
+                    autoName: suggestion.suggestedName,
+                    signals: candidate.signals,
+                    members: matchedMembers,
+                    review: {
+                        coherent: suggestion.confidence >= SPLIT_COHERENCE_CONFIDENCE_THRESHOLD,
+                        suggestedName: suggestion.suggestedName,
+                        responsibilityHint: suggestion.responsibilityHint,
+                        mergeWithCandidateId: null,
+                        splitSuggestions: [],
+                    },
+                    origin: 'llm_split',
+                    parentCandidateId: candidate.id,
+                    splitReason: suggestion.reason,
+                    splitEvidenceHints: suggestion.evidenceHints,
                 },
-                origin: 'llm_split',
-                parentCandidateId: candidate.id,
-                splitReason: suggestion.reason,
-                splitEvidenceHints: suggestion.evidenceHints,
-            });
+                relations),
+            );
         }
 
         if (splitCandidates.length === 0) {
@@ -130,12 +154,20 @@ function materializeSplitCandidates(candidates: DomainCandidate[]): DomainCandid
 
         const remainingMembers = candidate.members.filter((m) => !assignedMemberIds.has(m.objectId));
         if (remainingMembers.length > 0) {
-            result.push({ ...candidate, members: remainingMembers });
+            result.push(withRecomputedCohesion({ ...candidate, members: remainingMembers }, relations));
         }
         result.push(...splitCandidates);
     }
 
     return result;
+}
+
+function withRecomputedCohesion(
+    candidate: DomainCandidate,
+    relations: DiscoveryInputs['relations'],
+): DomainCandidate {
+    const { members } = computeRelationCohesion({ members: candidate.members, relations });
+    return { ...candidate, members };
 }
 
 function normalizeSplitSelectors(selectors: LlmSplitSelector[], evidenceHints: string[]): LlmSplitSelector[] {
@@ -151,8 +183,17 @@ function memberMatchesSelector(member: CandidateMemberScore, selector: LlmSplitS
     const value = selector.value.toLowerCase();
     if (!value) return false;
 
-    if (selector.kind === 'seed_source' || selector.kind === 'route_prefix') {
+    if (selector.kind === 'seed_source') {
         return member.seedSources.some((source) => source.toLowerCase().includes(value));
+    }
+
+    if (selector.kind === 'route_prefix') {
+        const selectorSegment = normalizeRouteSegment(value);
+        if (!selectorSegment) return false;
+        return member.seedSources.some((source) => {
+            const routeSegment = normalizeRouteSourceSegment(source);
+            return routeSegment === selectorSegment;
+        });
     }
 
     if (selector.kind === 'object_name') {
@@ -172,6 +213,29 @@ function memberMatchesSelector(member: CandidateMemberScore, selector: LlmSplitS
     }
 
     return false;
+}
+
+function normalizeRouteSourceSegment(source: string): string | null {
+    const [kind, ...rest] = source.split(':');
+    if (!kind) return null;
+    if (kind.toLowerCase() !== 'route') return null;
+    return normalizeRouteSegment(rest.join(':'));
+}
+
+function normalizeRouteSegment(value: string): string | null {
+    const segments = value
+        .toLowerCase()
+        .split(/[\/]/)
+        .map((segment) => segment.trim().replace(/[^a-z0-9가-힣]/g, ''))
+        .filter((segment) => segment.length > 0 && !segment.startsWith(':') && !segment.startsWith('{'));
+    for (const segment of segments) {
+        if (!isNonDomainRouteSegment(segment)) return segment;
+    }
+    return segments[segments.length - 1] ?? null;
+}
+
+function isNonDomainRouteSegment(segment: string): boolean {
+    return NON_DOMAIN_ROUTE_SEGMENTS.has(segment) || /^v\d+$/i.test(segment);
 }
 
 function buildObjectNameLookup(inputs: DiscoveryInputs): Map<string, string> {

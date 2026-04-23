@@ -213,7 +213,8 @@ function collectObjectSeedSources(obj: DiscoveryObjectInput, intents: DiscoveryI
     for (const seed of objectSeeds) sources.push(`${seed.source}:${seed.value}`);
     for (const intent of intents) {
         for (const routeSeed of extractIntentRouteSeeds(intent)) {
-            sources.push(`route:/${routeSeed.value.replace(/^\/+/, '').split('/')[0] ?? routeSeed.value}`);
+            const segment = firstPathSegment(routeSeed.value);
+            if (segment) sources.push(`route:/${segment}`);
         }
     }
     return uniqueStrings(sources);

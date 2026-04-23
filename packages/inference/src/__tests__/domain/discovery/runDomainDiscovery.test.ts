@@ -2,8 +2,9 @@ import { describe, expect, it, vi } from 'vitest';
 import {
     runDomainDiscovery,
     SECONDARY_AFFINITY_THRESHOLD,
+    SPLIT_COHERENCE_CONFIDENCE_THRESHOLD,
 } from '@/domain/discovery/runDomainDiscovery';
-import type { DiscoveryInputs } from '@/domain/discovery/types';
+import type { DiscoveryInputs, LlmCandidateReview } from '@/domain/discovery/types';
 
 function makeInputs(overrides: Partial<DiscoveryInputs> = {}): DiscoveryInputs {
     return {
@@ -163,5 +164,151 @@ describe('runDomainDiscovery', () => {
                 splitSuggestions: [],
             });
         }
+    });
+
+    it('T6: LLM split 은 ID 충돌 없이 생성되고 split 후 relationCohesion 을 재계산한다', async () => {
+        const review = vi.fn(async (_prompt, inputs) => {
+            const splitSuggestions: LlmCandidateReview['splitSuggestions'] = [];
+            if (inputs.candidate.slug === 'orders') {
+                splitSuggestions.push(
+                    {
+                        suggestedName: '주문 처리',
+                        responsibilityHint: '주문 처리',
+                        reason: '명령 객체 분리',
+                        confidence: SPLIT_COHERENCE_CONFIDENCE_THRESHOLD,
+                        memberSelectors: [{ kind: 'object_name', value: 'OrderCommand' }],
+                        evidenceHints: [],
+                    },
+                    {
+                        suggestedName: '주문 처리',
+                        responsibilityHint: '주문 조회',
+                        reason: '조회 객체 분리',
+                        confidence: SPLIT_COHERENCE_CONFIDENCE_THRESHOLD - 0.01,
+                        memberSelectors: [{ kind: 'object_name', value: 'OrderQuery' }],
+                        evidenceHints: [],
+                    },
+                );
+            }
+
+            return {
+                coherent: true,
+                suggestedName: inputs.candidate.autoName,
+                responsibilityHint: '후보 책임',
+                mergeWithCandidateId: null,
+                splitSuggestions,
+            };
+        });
+
+        const result = await runDomainDiscovery({
+            inputs: makeInputs({
+                objects: [
+                    {
+                        id: 'cmd',
+                        objectType: 'service',
+                        name: 'OrderCommand',
+                        displayName: null,
+                        path: '/orders/cmd',
+                    },
+                    {
+                        id: 'query',
+                        objectType: 'service',
+                        name: 'OrderQuery',
+                        displayName: null,
+                        path: '/orders/query',
+                    },
+                    {
+                        id: 'audit',
+                        objectType: 'service',
+                        name: 'OrderAudit',
+                        displayName: null,
+                        path: '/orders/audit',
+                    },
+                ],
+                relations: [
+                    { subjectObjectId: 'cmd', objectId: 'query', relationType: 'call' },
+                    { subjectObjectId: 'audit', objectId: 'cmd', relationType: 'call' },
+                ],
+            }),
+            review,
+        });
+
+        const splitIds = result.candidates.filter((c) => c.parentCandidateId === 'orders').map((c) => c.id);
+        expect(splitIds).toEqual(['orders--split-주문-처리-1', 'orders--split-주문-처리-2']);
+
+        const parent = result.candidates.find((c) => c.id === 'orders')!;
+        expect(parent.members).toHaveLength(1);
+        expect(parent.members[0]).toMatchObject({ objectId: 'audit', relationCohesion: 0 });
+
+        const highConfidenceSplit = result.candidates.find((c) => c.id === 'orders--split-주문-처리-1')!;
+        expect(highConfidenceSplit.review?.coherent).toBe(true);
+        expect(highConfidenceSplit.members[0]).toMatchObject({ objectId: 'cmd', relationCohesion: 0 });
+
+        const lowConfidenceSplit = result.candidates.find((c) => c.id === 'orders--split-주문-처리-2')!;
+        expect(lowConfidenceSplit.review?.coherent).toBe(false);
+        expect(lowConfidenceSplit.members[0]).toMatchObject({ objectId: 'query', relationCohesion: 0 });
+    });
+
+    it('T7: route_prefix split selector 는 route seed 에만 매칭하고 prefixed API route 도 semantic segment 로 잡는다', async () => {
+        const review = vi.fn(async (_prompt, inputs) => {
+            const splitSuggestions: LlmCandidateReview['splitSuggestions'] = [];
+            if (inputs.candidate.slug === 'orders') {
+                splitSuggestions.push(
+                    {
+                        suggestedName: '주문 API',
+                        responsibilityHint: '주문 API',
+                        reason: 'route 기반 분리',
+                        confidence: 1,
+                        memberSelectors: [{ kind: 'route_prefix', value: '/orders' }],
+                        evidenceHints: [],
+                    },
+                );
+            }
+
+            return {
+                coherent: true,
+                suggestedName: inputs.candidate.autoName,
+                responsibilityHint: '후보 책임',
+                mergeWithCandidateId: null,
+                splitSuggestions,
+            };
+        });
+
+        const result = await runDomainDiscovery({
+            inputs: makeInputs({
+                objects: [
+                    {
+                        id: 'route-member',
+                        objectType: 'api_endpoint',
+                        name: 'OrdersEndpoint',
+                        displayName: null,
+                        path: '/billing/endpoint',
+                    },
+                    {
+                        id: 'path-member',
+                        objectType: 'service',
+                        name: 'Worker',
+                        displayName: null,
+                        path: '/orders/worker',
+                    },
+                ],
+                intents: [
+                    {
+                        sourceObjectId: 'route-member',
+                        intentType: 'http',
+                        externalPathHint: '/api/v1/orders/{id}',
+                        externalRoutePattern: null,
+                        messageTopicHints: [],
+                    },
+                ],
+            }),
+            review,
+        });
+
+        const split = result.candidates.find((c) => c.id === 'orders--split-주문-api-1')!;
+        expect(split.members.map((m) => m.objectId)).toEqual(['route-member']);
+        expect(split.members[0]?.seedSources).toContain('route:/orders');
+
+        const parent = result.candidates.find((c) => c.id === 'orders')!;
+        expect(parent.members.map((m) => m.objectId)).toEqual(['path-member']);
     });
 });
