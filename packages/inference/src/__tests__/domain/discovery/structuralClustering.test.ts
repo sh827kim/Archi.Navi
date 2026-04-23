@@ -315,4 +315,70 @@ describe('runStructuralClustering', () => {
         expect(orders!.members.some((member) => member.objectId === 'svc-gateway')).toBe(false);
         expect(orders!.signals.topRoutePrefix).toBe('/orders');
     });
+
+    it('T10: snake_case 이름이어도 DB 테이블 객체가 아니면 table family 신호로 쓰지 않는다', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    {
+                        id: 'fn-order-items',
+                        objectType: 'function',
+                        name: 'order_items',
+                        displayName: null,
+                        path: '/order/function',
+                    },
+                    {
+                        id: 'table-order-items',
+                        objectType: 'db_table',
+                        name: 'order_items',
+                        displayName: null,
+                        path: '/storage/order-items',
+                    },
+                ],
+            }),
+        );
+
+        const order = result.candidates.find((c) => c.slug === 'order')!;
+        const functionMember = order.members.find((m) => m.objectId === 'fn-order-items')!;
+        const tableMember = order.members.find((m) => m.objectId === 'table-order-items')!;
+
+        expect(functionMember.tableFamilyMatch).toBe(0);
+        expect(functionMember.seedSources).not.toContain('table:order');
+        expect(tableMember.tableFamilyMatch).toBe(1);
+        expect(tableMember.seedSources).toContain('table:order');
+    });
+
+    it('T11: package seed 는 com/org 같은 namespace root 와 회사 prefix 를 제외한다', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    {
+                        id: 'svc-orders',
+                        objectType: 'service',
+                        name: 'Worker',
+                        displayName: null,
+                        path: '/misc/worker',
+                    },
+                ],
+                codeArtifacts: [
+                    {
+                        ownerObjectId: 'svc-orders',
+                        packageName: 'com.example.orders',
+                        filePath: 'src/main/java/com/example/orders/Worker.java',
+                    },
+                ],
+            }),
+        );
+
+        const slugs = result.candidates.map((c) => c.slug);
+        expect(slugs).not.toContain('com');
+        expect(slugs).not.toContain('example');
+        expect(slugs).toContain('orders');
+
+        const orders = result.candidates.find((c) => c.slug === 'orders')!;
+        expect(orders.members[0]).toMatchObject({
+            objectId: 'svc-orders',
+            codeFamilyMatch: 1,
+        });
+    });
 });

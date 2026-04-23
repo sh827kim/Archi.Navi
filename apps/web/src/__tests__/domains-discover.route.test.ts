@@ -36,6 +36,7 @@ const {
         displayName: 'objects.display_name',
         path: 'objects.path',
         parentId: 'objects.parent_id',  // computeImplementingServices 에서 서비스 계층 추적용
+        metadata: 'objects.metadata',
     },
     interactionIntentsTable: {
         workspaceId: 'interaction_intents.workspace_id',
@@ -168,6 +169,7 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'OrderService',
                     path: '/orders',
                     parentId: null,
+                    metadata: null,
                 },
                 {
                     id: 'dom-order',
@@ -176,6 +178,7 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'Orders',
                     path: '/domain/orders',
                     parentId: null,
+                    metadata: null,
                 },
                 {
                     id: 'fn-create',
@@ -184,6 +187,7 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'createOrder',
                     path: '/orders/create',
                     parentId: null,
+                    metadata: null,
                 },
             ],
             [],
@@ -221,6 +225,7 @@ describe('POST /api/domains/discover', () => {
                         path: '/orders/create',
                         parentId: null,
                         memberEligible: true,
+                        metadata: { className: 'OrderService', filePath: 'src/order/service.ts' },
                     },
                 ],
                 intents: [],
@@ -249,6 +254,7 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'OrderService',
                     path: '/orders',
                     parentId: null,
+                    metadata: null,
                 },
                 {
                     id: 'fn-create-order',
@@ -257,6 +263,7 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'createOrder',
                     path: '/orders/create',
                     parentId: null,
+                    metadata: null,
                 },
             ],
             [
@@ -335,6 +342,7 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'orders_view',
                     path: '/db/orders_view',
                     parentId: null,
+                    metadata: null,
                 },
             ],
             [],
@@ -508,6 +516,7 @@ describe('POST /api/domains/discover', () => {
                     displayName: 'OrderService',
                     path: '/orders',
                     parentId: null,
+                    metadata: null,
                 },
             ],
             [

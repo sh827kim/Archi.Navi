@@ -34,8 +34,15 @@ interface CandidateMember {
   routePrefixMatch: 0 | 1;
   topicPrefixMatch: 0 | 1;
   nameTokenJaccard: number;
+  codeFamilyMatch: 0 | 1;
+  tableFamilyMatch: 0 | 1;
+  seedSources: string[];
   affinity: number;
   relationCohesion: number;
+  objectName?: string;
+  objectDisplayName?: string | null;
+  objectPath?: string;
+  objectType?: string;
 }
 
 interface CandidateReview {
@@ -43,6 +50,14 @@ interface CandidateReview {
   suggestedName: string;
   responsibilityHint: string;
   mergeWithCandidateId: string | null;
+  splitSuggestions: Array<{
+    suggestedName: string;
+    responsibilityHint: string;
+    reason: string;
+    confidence: number;
+    memberSelectors: Array<{ kind: string; value: string }>;
+    evidenceHints: string[];
+  }>;
 }
 
 /** 이 도메인을 구현하는 서비스 정보 */
@@ -61,10 +76,17 @@ interface DiscoveredCandidate {
     topPathPrefix: string | null;
     topRoutePrefix: string | null;
     topTopicPrefix: string | null;
+    topCodeFamily: string | null;
+    topTableFamily: string | null;
+    seedSourceSummary: Array<{ source: string; value: string }>;
   };
   members: CandidateMember[];
   review: CandidateReview | null;
   implementingServices: ImplementingService[];
+  origin?: 'structural' | 'llm_split';
+  parentCandidateId?: string | null;
+  splitReason?: string | null;
+  splitEvidenceHints?: string[];
 }
 
 interface DiscoverResponseData {
@@ -337,6 +359,17 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                       topic: {c.signals.topTopicPrefix}
                     </Badge>
                   ) : null}
+                  {c.signals.topCodeFamily ? (
+                    <Badge variant="outline" className="text-xs">
+                      code: {c.signals.topCodeFamily}
+                    </Badge>
+                  ) : null}
+                  {c.signals.topTableFamily ? (
+                    <Badge variant="outline" className="text-xs">
+                      table: {c.signals.topTableFamily}
+                    </Badge>
+                  ) : null}
+                  {c.origin === 'llm_split' ? <Badge variant="secondary">LLM 분할 후보</Badge> : null}
                   <Badge variant="secondary" className="ml-auto text-xs">
                     멤버 {c.members.length}
                   </Badge>
@@ -349,15 +382,55 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                   </p>
                 ) : null}
 
-                <ul className="mt-3 space-y-1 text-xs text-muted-foreground">
-                  {previewMembers.map((m) => (
-                    <li key={m.objectId} className="flex items-center justify-between gap-2">
-                      <span className="truncate font-mono">{m.objectId}</span>
-                      <span className="shrink-0">
-                        affinity {m.affinity.toFixed(2)} · cohesion {m.relationCohesion.toFixed(2)}
-                      </span>
-                    </li>
-                  ))}
+                {c.origin === 'llm_split' && c.splitReason ? (
+                  <div className="mt-2 rounded border border-border/60 bg-muted/30 p-2 text-xs">
+                    <p className="font-medium">분할 추천에서 생성됨</p>
+                    <p className="text-muted-foreground">{c.splitReason}</p>
+                  </div>
+                ) : null}
+
+                {c.origin !== 'llm_split' && c.review?.splitSuggestions?.length > 0 ? (
+                  <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs">
+                    <p className="font-medium">분할 권장 - 자동 후보 생성 실패</p>
+                  </div>
+                ) : null}
+
+                {c.signals.seedSourceSummary && c.signals.seedSourceSummary.length > 0 ? (
+                  <div className="mt-3 flex flex-wrap gap-1.5">
+                    {c.signals.seedSourceSummary.slice(0, 8).map((seed) => (
+                      <Badge key={`${seed.source}:${seed.value}`} variant="secondary">
+                        {seed.source}: {seed.value}
+                      </Badge>
+                    ))}
+                  </div>
+                ) : null}
+
+                <ul className="mt-3 space-y-2 text-xs text-muted-foreground">
+                  {previewMembers.map((m) => {
+                    const readableName = m.objectDisplayName ?? m.objectName ?? m.objectId;
+                    const seedPreview = m.seedSources.slice(0, 2).join(' · ');
+
+                    return (
+                      <li key={m.objectId} className="rounded border border-border/50 bg-muted/20 p-2">
+                        <div className="flex items-center justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-medium text-foreground">{readableName}</p>
+                            <p className="truncate font-mono text-[11px]">{m.objectId}</p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p>친화도 {m.affinity.toFixed(2)}</p>
+                            <p>응집도 {m.relationCohesion.toFixed(2)}</p>
+                          </div>
+                        </div>
+                        {m.objectType || m.objectPath ? (
+                          <p className="mt-1 truncate text-[11px]">
+                            {[m.objectType, m.objectPath].filter(Boolean).join(' · ')}
+                          </p>
+                        ) : null}
+                        {seedPreview ? <p className="mt-1 truncate text-[11px]">근거: {seedPreview}</p> : null}
+                      </li>
+                    );
+                  })}
                 </ul>
                 {hiddenCount > 0 ? (
                   <button

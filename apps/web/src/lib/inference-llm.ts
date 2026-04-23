@@ -398,6 +398,17 @@ const domainReviewSchema = z.object({
   suggestedName: z.string(),
   responsibilityHint: z.string(),
   mergeWithCandidateId: z.string().nullable(),
+  splitSuggestions: z.array(z.object({
+    suggestedName: z.string(),
+    responsibilityHint: z.string(),
+    reason: z.string(),
+    confidence: z.number().min(0).max(1),
+    memberSelectors: z.array(z.object({
+      kind: z.enum(['route_prefix', 'class_name', 'file_path', 'table_name', 'seed_source', 'object_name']),
+      value: z.string(),
+    })),
+    evidenceHints: z.array(z.string()),
+  })),
 });
 
 export function createGenerateDomainReviewFn(

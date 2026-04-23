@@ -182,7 +182,8 @@ export async function POST(req: Request) {
                 name: objects.name,
                 displayName: objects.displayName,
                 path: objects.path,
-                parentId: objects.parentId,  // 서비스 계층 추적을 위해 추가
+                parentId: objects.parentId,
+                metadata: objects.metadata,
             })
             .from(objects)
             .where(eq(objects.workspaceId, workspaceId));
@@ -197,6 +198,7 @@ export async function POST(req: Request) {
                 path: o.path,
                 parentId: o.parentId,
                 memberEligible: o.objectType !== 'service',
+                ...(o.metadata ? { metadata: o.metadata as Record<string, unknown> } : {}),
             }));
 
         // 2. 인텐트 — externalPath/route/topic 신호용
@@ -279,6 +281,19 @@ export async function POST(req: Request) {
             ...(review ? { review } : {}),
         });
 
+
+        const objectMetaById = new Map(
+            discoveryObjects.map((o) => [
+                o.id,
+                {
+                    objectName: o.name,
+                    objectDisplayName: o.displayName,
+                    objectPath: o.path,
+                    objectType: o.objectType,
+                },
+            ] as const),
+        );
+
         // 각 candidate 에 implementingServices derived 필드 추가
         // — 멤버 id 집합 기준으로 어느 service 가 구현체인지 집계.
         // 입력 변환(pure 함수용 shape)은 candidate 수와 무관하므로 루프 밖에서 1회.
@@ -313,6 +328,10 @@ export async function POST(req: Request) {
             }
             return {
                 ...cand,
+                members: cand.members.map((m) => ({
+                    ...m,
+                    ...(objectMetaById.get(m.objectId) ?? {}),
+                })),
                 implementingServices: computeImplementingServices({
                     objects: implServiceObjects,
                     memberIds: primaryMemberIds,
