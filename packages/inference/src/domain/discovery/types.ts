@@ -73,7 +73,7 @@ export interface CandidateMemberScore {
     tableFamilyMatch: 0 | 1;
     /** 후보 매칭 + 객체 전체 근거(route/class/table/name/path) */
     seedSources: string[];
-    /** affinity = (path + route + topic + name + code + table) / 4 capped */
+    /** affinity = weighted(path, route, topic, name, code, table) capped */
     affinity: number;
     /** 객체의 outgoing/incoming 관계 중 후보 멤버로 향하는 비율 (0~1) */
     relationCohesion: number;

@@ -105,6 +105,92 @@ function asStringArray(value: unknown): string[] {
     return value.filter((item): item is string => typeof item === 'string');
 }
 
+function normalizeOptionalStringArray(value: unknown): string[] | null {
+    if (value === undefined) return [];
+    if (!Array.isArray(value)) return null;
+    const normalized = value
+        .map((item) => normalizeRequiredString(item))
+        .filter((item): item is string => item !== null);
+    return normalized.length === value.length ? Array.from(new Set(normalized)) : null;
+}
+
+function readMetadataString(metadata: unknown, key: string): string | null {
+    if (typeof metadata !== 'object' || metadata === null || Array.isArray(metadata)) return null;
+    const value = (metadata as Record<string, unknown>)[key];
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+}
+
+function extractEndpointPath(
+    object: Pick<DiscoveryObjectInput, 'name' | 'displayName' | 'metadata'>,
+): string | null {
+    const metadataPath =
+        readMetadataString(object.metadata, 'path') ??
+        readMetadataString(object.metadata, 'route') ??
+        readMetadataString(object.metadata, 'routePattern');
+    if (metadataPath?.startsWith('/')) return metadataPath;
+
+    for (const value of [object.displayName, object.name]) {
+        if (typeof value !== 'string') continue;
+        const match = value.trim().match(/^(GET|POST|PUT|DELETE|PATCH|OPTIONS|HEAD|ANY)\s+(.+)$/i);
+        const route = match?.[2]?.trim();
+        if (route?.startsWith('/')) return route;
+    }
+    return null;
+}
+
+function buildEndpointIntentInputs(objects: DiscoveryObjectInput[]): DiscoveryIntentInput[] {
+    return objects
+        .filter((object) => object.objectType === 'api_endpoint')
+        .flatMap((object) => {
+            const endpointPath = extractEndpointPath(object);
+            if (!endpointPath) return [];
+            return [
+                {
+                    sourceObjectId: object.id,
+                    intentType: 'inbound_endpoint',
+                    externalPathHint: endpointPath,
+                    externalRoutePattern: endpointPath,
+                    messageTopicHints: [],
+                },
+            ];
+        });
+}
+
+function buildSelectedObjectScope(
+    objectRows: Array<{ id: string; objectType: string; parentId: string | null }>,
+    relationRows: Array<{ subjectObjectId: string; objectId: string }>,
+    selectedServiceIds: string[],
+): Set<string> | null {
+    if (selectedServiceIds.length === 0) return null;
+
+    const scope = new Set(selectedServiceIds);
+    let changed = true;
+    while (changed) {
+        changed = false;
+        for (const object of objectRows) {
+            if (!object.parentId || !scope.has(object.parentId) || scope.has(object.id)) continue;
+            scope.add(object.id);
+            changed = true;
+        }
+    }
+
+    const baseScope = new Set(scope);
+    const objectTypeById = new Map(objectRows.map((object) => [object.id, object.objectType]));
+    for (const relation of relationRows) {
+        if (!baseScope.has(relation.subjectObjectId)) continue;
+        if (objectTypeById.get(relation.objectId) === 'service') continue;
+        scope.add(relation.objectId);
+    }
+    return scope;
+}
+
+function inSelectedScope(scope: Set<string> | null, objectId: string | null | undefined): boolean {
+    if (!scope) return true;
+    return typeof objectId === 'string' && scope.has(objectId);
+}
+
 export async function POST(req: Request) {
     try {
         let parsedBody: unknown;
@@ -128,7 +214,7 @@ export async function POST(req: Request) {
                 { status: 400 },
             );
         }
-        const body = parsedBody as { workspaceId?: unknown };
+        const body = parsedBody as { workspaceId?: unknown; selectedServiceIds?: unknown };
         const workspaceId = normalizeRequiredString(body.workspaceId);
         if (!workspaceId) {
             return NextResponse.json(
@@ -137,6 +223,19 @@ export async function POST(req: Request) {
                     error: {
                         code: 'BAD_REQUEST',
                         message: 'workspaceId 는 공백이 아닌 문자열이어야 합니다.',
+                    },
+                },
+                { status: 400 },
+            );
+        }
+        const selectedServiceIds = normalizeOptionalStringArray(body.selectedServiceIds);
+        if (selectedServiceIds === null) {
+            return NextResponse.json(
+                {
+                    success: false,
+                    error: {
+                        code: 'BAD_REQUEST',
+                        message: 'selectedServiceIds 는 공백이 아닌 문자열 배열이어야 합니다.',
                     },
                 },
                 { status: 400 },
@@ -171,6 +270,34 @@ export async function POST(req: Request) {
             );
         }
 
+        if (selectedServiceIds.length > 0) {
+            const selectedServiceRows = await db
+                .select({ id: objects.id })
+                .from(objects)
+                .where(
+                    and(
+                        eq(objects.workspaceId, workspaceId),
+                        eq(objects.objectType, 'service'),
+                        inArray(objects.id, selectedServiceIds),
+                    ),
+                );
+            const selectedServiceSet = new Set(selectedServiceRows.map((row) => row.id));
+            const invalidServiceIds = selectedServiceIds.filter((id) => !selectedServiceSet.has(id));
+            if (invalidServiceIds.length > 0) {
+                return NextResponse.json(
+                    {
+                        success: false,
+                        error: {
+                            code: 'INVALID_SERVICE_SCOPE',
+                            message: '선택한 물리 서비스가 워크스페이스에 없거나 service 객체가 아닙니다.',
+                            invalidServiceIds,
+                        },
+                    },
+                    { status: 400 },
+                );
+            }
+        }
+
         // 1. 객체 — domain 타입은 제외, service 는 signal-only 로 유지
         //    domain: 논리 단위 결과물이므로 발견 입력 후보가 될 수 없음
         //    service: 물리 구현 매체라 최종 멤버에는 들어가면 안 되지만,
@@ -187,19 +314,6 @@ export async function POST(req: Request) {
             })
             .from(objects)
             .where(eq(objects.workspaceId, workspaceId));
-
-        const discoveryObjects: DiscoveryObjectInput[] = objectRows
-            .filter((o) => o.objectType !== 'domain')
-            .map((o) => ({
-                id: o.id,
-                objectType: o.objectType,
-                name: o.name,
-                displayName: o.displayName,
-                path: o.path,
-                parentId: o.parentId,
-                memberEligible: o.objectType !== 'service',
-                ...(o.metadata ? { metadata: o.metadata as Record<string, unknown> } : {}),
-            }));
 
         // 2. 인텐트 — externalPath/route/topic 신호용
         //    CLOSED_ATOMIC 상태만 신뢰할 수 있음. NEW/RESOLVING/FRONTIER 는 미해결 추론,
@@ -221,14 +335,6 @@ export async function POST(req: Request) {
                 ),
             );
 
-        const intentInputs: DiscoveryIntentInput[] = intentRows.map((row) => ({
-            sourceObjectId: row.sourceFunctionId ?? row.sourceServiceId,
-            intentType: row.intentType,
-            externalPathHint: row.externalPathHint,
-            externalRoutePattern: row.externalRoutePattern,
-            messageTopicHints: asStringArray(row.messageTopicHints),
-        }));
-
         // 3. 관계 — APPROVED 만 사용
         const relationRows = await db
             .select({
@@ -244,8 +350,6 @@ export async function POST(req: Request) {
                 ),
             );
 
-        const relationInputs: DiscoveryRelationInput[] = relationRows;
-
         // 4. codeArtifacts — 패키지/파일 신호 (현재는 입력만, 향후 확장)
         const artifactRows = await db
             .select({
@@ -256,16 +360,55 @@ export async function POST(req: Request) {
             .from(codeArtifacts)
             .where(eq(codeArtifacts.workspaceId, workspaceId));
 
-        const artifactInputs: DiscoveryCodeArtifactInput[] = artifactRows.map((a) => ({
-            ownerObjectId: a.ownerObjectId,
-            packageName: a.packageName,
-            filePath: a.filePath,
-        }));
+        const selectedObjectScope = buildSelectedObjectScope(
+            objectRows,
+            relationRows,
+            selectedServiceIds,
+        );
+
+        const discoveryObjects: DiscoveryObjectInput[] = objectRows
+            .filter((o) => o.objectType !== 'domain')
+            .filter((o) => inSelectedScope(selectedObjectScope, o.id))
+            .map((o) => ({
+                id: o.id,
+                objectType: o.objectType,
+                name: o.name,
+                displayName: o.displayName,
+                path: o.path,
+                parentId: o.parentId,
+                memberEligible: o.objectType !== 'service',
+                ...(o.metadata ? { metadata: o.metadata as Record<string, unknown> } : {}),
+            }));
+
+        const intentInputs: DiscoveryIntentInput[] = intentRows
+            .map((row) => ({
+                sourceObjectId: row.sourceFunctionId ?? row.sourceServiceId,
+                intentType: row.intentType,
+                externalPathHint: row.externalPathHint,
+                externalRoutePattern: row.externalRoutePattern,
+                messageTopicHints: asStringArray(row.messageTopicHints),
+            }))
+            .filter((intent) => inSelectedScope(selectedObjectScope, intent.sourceObjectId));
+        const endpointIntentInputs = buildEndpointIntentInputs(discoveryObjects);
+
+        const relationInputs: DiscoveryRelationInput[] = relationRows.filter(
+            (relation) =>
+                inSelectedScope(selectedObjectScope, relation.subjectObjectId)
+                && inSelectedScope(selectedObjectScope, relation.objectId),
+        );
+
+        const artifactInputs: DiscoveryCodeArtifactInput[] = artifactRows
+            .filter((a) => inSelectedScope(selectedObjectScope, a.ownerObjectId))
+            .map((a) => ({
+                ownerObjectId: a.ownerObjectId,
+                packageName: a.packageName,
+                filePath: a.filePath,
+            }));
 
         const discoveryInputs: DiscoveryInputs = {
             workspaceId,
             objects: discoveryObjects,
-            intents: intentInputs,
+            intents: [...intentInputs, ...endpointIntentInputs],
             relations: relationInputs,
             codeArtifacts: artifactInputs,
         };

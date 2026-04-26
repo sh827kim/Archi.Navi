@@ -39,7 +39,26 @@ vi.mock('@archi-navi/ui', () => {
     cn: (...values: Array<string | false | null | undefined>) => values.filter(Boolean).join(' '),
     Badge: ({ children }: { children?: React.ReactNode }) => <span>{children}</span>,
     Spinner: () => <div>loading...</div>,
-    ConfirmDialog: () => null,
+    ConfirmDialog: ({
+      open,
+      title,
+      description,
+      confirmLabel,
+      onConfirm,
+    }: {
+      open: boolean;
+      title: string;
+      description?: string;
+      confirmLabel?: string;
+      onConfirm: () => void;
+    }) => (
+      open ? (
+        <div role="dialog" aria-label={title}>
+          {description ? <p>{description}</p> : null}
+          <button type="button" onClick={onConfirm}>{confirmLabel ?? '확인'}</button>
+        </div>
+      ) : null
+    ),
     Sheet: ({ open, children }: { open: boolean; children: React.ReactNode }) => (
       open ? <div data-testid="mapping-sheet">{children}</div> : null
     ),
@@ -141,6 +160,32 @@ function createCandidate(
     status: 'PENDING',
     ...(llmExplanation ? { llmExplanation } : {}),
     ...(crossValidation ? { crossValidation } : {}),
+  };
+}
+
+function createSameDbTableCandidate(): RelationCandidate {
+  return {
+    id: 'same-db-cand',
+    subjectName: 'robot_instance',
+    subjectGranularity: 'ATOMIC',
+    subjectParentName: 'robot-db',
+    subjectObjectType: 'db_table',
+    relationType: 'same_db_table',
+    objectName: 'schema_a.robot_instance',
+    objectGranularity: 'ATOMIC',
+    objectParentName: 'robot-db',
+    objectObjectType: 'db_table',
+    objectId: 'qualified-table',
+    subjectObjectId: 'unqualified-table',
+    confidence: 0.65,
+    source: 'CODE',
+    status: 'PENDING',
+    metadata: {
+      databaseKey: 'robot-db',
+      table: 'robot_instance',
+      qualifiedSchema: 'schema_a',
+      reason: 'implicit_schema_match',
+    },
   };
 }
 
@@ -309,6 +354,73 @@ describe('ApprovalList', () => {
     expect(screen.queryByRole('button', { name: /승인/ })).toBeNull();
     fireEvent.click(screen.getByRole('button', { name: /세부 매핑/ }));
     await screen.findByText('/service-2/dependency');
+  });
+
+  it('same_db_table 후보는 전용 라벨과 병합 액션으로 표시한다', async () => {
+    const candidate = createSameDbTableCandidate();
+    let merged = false;
+    const fetchMock = vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse(merged ? [] : [candidate]));
+      }
+      if (url === '/api/db-tables/merge-candidate' && init?.method === 'POST') {
+        merged = true;
+        return Promise.resolve(jsonResponse({
+          success: true,
+          sourceObjectId: 'unqualified-table',
+          targetObjectId: 'qualified-table',
+          affectedDomainIds: [],
+        }));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    render(<ApprovalList />);
+
+    await screen.findByText('암묵 schema 테이블 후보');
+    expect(screen.getByText('robot_instance')).toBeTruthy();
+    expect(screen.getByText('schema_a.robot_instance')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: /승인/ })).toBeNull();
+    expect(screen.queryByText('표시 후보 전체 선택')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: /병합/ }));
+    await screen.findByRole('dialog', { name: 'DB 테이블 병합' });
+    const mergeButtons = screen.getAllByRole('button', { name: '병합' });
+    fireEvent.click(mergeButtons[mergeButtons.length - 1]!);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith('/api/db-tables/merge-candidate', expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({ workspaceId: 'ws-1', candidateId: 'same-db-cand' }),
+      }));
+    });
+    expect(toast.success).toHaveBeenCalledWith('DB 테이블 후보를 병합했습니다.');
+  });
+
+  it('다중 schema same_db_table 후보는 확인 모달에 경고를 표시한다', async () => {
+    const candidate = createSameDbTableCandidate();
+    candidate.confidence = 0.4;
+    candidate.metadata = {
+      ...candidate.metadata,
+      ambiguity: 'multiple_schema_candidates',
+    };
+
+    vi.stubGlobal('fetch', vi.fn((input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes('/api/inference/candidates?')) {
+        return Promise.resolve(jsonResponse([candidate]));
+      }
+      throw new Error(`Unexpected fetch: ${url}`);
+    }));
+
+    render(<ApprovalList />);
+
+    await screen.findByText('다중 schema 후보');
+    fireEvent.click(screen.getByRole('button', { name: /병합/ }));
+
+    await screen.findByText(/같은 이름의 schema-qualified table이 여러 개 있습니다/);
   });
 
   it('proof chain과 frontier queue 정보를 렌더링해야 한다', async () => {

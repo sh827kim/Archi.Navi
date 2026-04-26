@@ -256,6 +256,223 @@ export function scanJavaKotlin(filePath: string, content: string): FileScanResul
 
 // ─── MyBatis XML 스캐너 ───────────────────────────────────────────────────────
 
+const SQL_RESERVED_WORDS = new Set([
+    'select',
+    'from',
+    'join',
+    'inner',
+    'left',
+    'right',
+    'full',
+    'outer',
+    'cross',
+    'on',
+    'where',
+    'group',
+    'order',
+    'having',
+    'limit',
+    'offset',
+    'union',
+    'intersect',
+    'except',
+    'insert',
+    'into',
+    'values',
+    'update',
+    'set',
+    'delete',
+    'with',
+    'as',
+    'and',
+    'or',
+    'when',
+    'then',
+    'else',
+    'end',
+    'using',
+    'returning',
+]);
+
+interface SqlTableExtraction {
+    tables: string[];
+    aliases: Record<string, string>;
+    statementType: 'select' | 'write' | 'unknown';
+    parser: 'tokenizer' | 'fallback_regex';
+    parseWarnings: string[];
+}
+
+function stripSqlComments(sql: string): string {
+    return sql
+        .replace(/\/\*[\s\S]*?\*\//g, ' ')
+        .replace(/--[^\n\r]*/g, ' ');
+}
+
+function normalizeSqlBuffer(sql: string): string {
+    return stripSqlComments(sql)
+        .replace(/<!\[CDATA\[([\s\S]*?)\]\]>/gi, '$1')
+        .replace(/#\{[^}]*\}/g, '?')
+        .replace(/\$\{[^}]*\}/g, '?')
+        .replace(/<[^>]+>/g, ' ');
+}
+
+function tokenizeSql(sql: string): string[] {
+    const tokens: string[] = [];
+    let i = 0;
+
+    while (i < sql.length) {
+        const ch = sql[i]!;
+        if (/\s/.test(ch)) {
+            i += 1;
+            continue;
+        }
+
+        if (ch === '"' || ch === '`' || ch === "'") {
+            const quote = ch;
+            let value = '';
+            i += 1;
+            while (i < sql.length) {
+                const current = sql[i]!;
+                if (current === quote) {
+                    i += 1;
+                    break;
+                }
+                value += current;
+                i += 1;
+            }
+            if (value.trim().length > 0) tokens.push(value.trim());
+            continue;
+        }
+
+        if (ch === '[') {
+            let value = '';
+            i += 1;
+            while (i < sql.length && sql[i] !== ']') {
+                value += sql[i]!;
+                i += 1;
+            }
+            if (sql[i] === ']') i += 1;
+            if (value.trim().length > 0) tokens.push(value.trim());
+            continue;
+        }
+
+        if (/[(),.;]/.test(ch)) {
+            tokens.push(ch);
+            i += 1;
+            continue;
+        }
+
+        let value = '';
+        while (i < sql.length && !/\s/.test(sql[i]!) && !/[(),.;"'`\[\]]/.test(sql[i]!)) {
+            value += sql[i]!;
+            i += 1;
+        }
+        if (value.trim().length > 0) tokens.push(value.trim());
+    }
+
+    return tokens;
+}
+
+function normalizeSqlIdentifier(identifier: string): string | null {
+    const cleaned = identifier
+        .trim()
+        .replace(/^[`"'\[]+|[`"'\]]+$/g, '')
+        .toLowerCase();
+    if (!/^[a-z_][a-z0-9_$]*(\.[a-z_][a-z0-9_$]*)?$/.test(cleaned)) return null;
+    return cleaned.replace(/\$/g, '');
+}
+
+function tokenLower(tokens: string[], index: number): string {
+    return (tokens[index] ?? '').toLowerCase();
+}
+
+function readQualifiedIdentifier(tokens: string[], start: number): { value: string; next: number } | null {
+    const first = normalizeSqlIdentifier(tokens[start] ?? '');
+    if (!first) return null;
+
+    let value = first;
+    let next = start + 1;
+    if (tokens[next] === '.') {
+        const second = normalizeSqlIdentifier(tokens[next + 1] ?? '');
+        if (!second || second.includes('.')) return { value, next };
+        value = `${first}.${second}`;
+        next += 2;
+    }
+
+    return { value, next };
+}
+
+function skipParenthesized(tokens: string[], start: number): number {
+    let depth = 0;
+    let index = start;
+    while (index < tokens.length) {
+        if (tokens[index] === '(') depth += 1;
+        if (tokens[index] === ')') {
+            depth -= 1;
+            if (depth <= 0) return index + 1;
+        }
+        index += 1;
+    }
+    return tokens.length;
+}
+
+function collectCteNames(tokens: string[]): Set<string> {
+    const ctes = new Set<string>();
+    if (tokenLower(tokens, 0) !== 'with') return ctes;
+
+    let index = 1;
+    while (tokenLower(tokens, index) === 'recursive') {
+        index += 1;
+    }
+    while (index < tokens.length) {
+        const candidate = normalizeSqlIdentifier(tokens[index] ?? '');
+        if (!candidate) break;
+        ctes.add(candidate);
+        index += 1;
+
+        if (tokens[index] === '(') {
+            const afterColumnList = skipParenthesized(tokens, index);
+            if (tokenLower(tokens, afterColumnList) === 'as') {
+                index = afterColumnList;
+            }
+        }
+        if (tokenLower(tokens, index) === 'as') index += 1;
+        if (tokens[index] !== '(') break;
+        index = skipParenthesized(tokens, index);
+
+        if (tokens[index] === ',') {
+            index += 1;
+            continue;
+        }
+        break;
+    }
+
+    return ctes;
+}
+
+function noteTable(
+    tables: Set<string>,
+    aliases: Record<string, string>,
+    cteNames: Set<string>,
+    table: string,
+    nextToken: string | undefined,
+    tokenAfterNext: string | undefined,
+) {
+    if (cteNames.has(table)) return;
+    tables.add(table);
+
+    let aliasCandidate: string | undefined;
+    if ((nextToken ?? '').toLowerCase() === 'as') {
+        aliasCandidate = tokenAfterNext;
+    } else {
+        aliasCandidate = nextToken;
+    }
+
+    const alias = normalizeSqlIdentifier(aliasCandidate ?? '');
+    if (!alias || alias.includes('.') || SQL_RESERVED_WORDS.has(alias)) return;
+    aliases[alias] = table;
+}
+
 /** SELECT SQL에서 테이블명 추출 (FROM/JOIN 절) */
 function extractSelectTables(sql: string): string[] {
     const tables = new Set<string>();
@@ -268,6 +485,75 @@ function extractSelectTables(sql: string): string[] {
         tables.add(m[1]!.toLowerCase());
     }
     return [...tables];
+}
+
+function extractSqlTables(sql: string, fallbackKind: 'select' | 'write'): SqlTableExtraction {
+    const normalizedSql = normalizeSqlBuffer(sql);
+    const tokens = tokenizeSql(normalizedSql);
+    const tables = new Set<string>();
+    const aliases: Record<string, string> = {};
+    const parseWarnings: string[] = [];
+    const cteNames = collectCteNames(tokens);
+
+    for (let i = 0; i < tokens.length; i += 1) {
+        const lower = tokenLower(tokens, i);
+        let tableStart: number | null = null;
+
+        if (lower === 'from' || lower === 'join') {
+            tableStart = i + 1;
+        } else if (lower === 'into' && tokenLower(tokens, i - 1) === 'insert') {
+            tableStart = i + 1;
+        } else if (lower === 'update') {
+            tableStart = i + 1;
+        } else if (lower === 'from' && tokenLower(tokens, i - 1) === 'delete') {
+            tableStart = i + 1;
+        }
+
+        if (tableStart === null) continue;
+        if (tokens[tableStart] === '(') {
+            i = skipParenthesized(tokens, tableStart) - 1;
+            continue;
+        }
+
+        const tableRef = readQualifiedIdentifier(tokens, tableStart);
+        if (!tableRef) {
+            parseWarnings.push(`unresolved_table_ref_after_${lower}`);
+            continue;
+        }
+
+        noteTable(
+            tables,
+            aliases,
+            cteNames,
+            tableRef.value,
+            tokens[tableRef.next],
+            tokens[tableRef.next + 1],
+        );
+    }
+
+    if (tables.size > 0) {
+        return {
+            tables: [...tables],
+            aliases,
+            statementType: fallbackKind,
+            parser: 'tokenizer',
+            parseWarnings,
+        };
+    }
+
+    const fallbackTables = fallbackKind === 'select'
+        ? extractSelectTables(sql)
+        : extractWriteTables(sql);
+
+    return {
+        tables: fallbackTables,
+        aliases: {},
+        statementType: fallbackKind,
+        parser: 'fallback_regex',
+        parseWarnings: fallbackTables.length === 0
+            ? [...parseWarnings, 'no_table_detected']
+            : [...parseWarnings, 'tokenizer_empty_fallback_regex'],
+    };
 }
 
 /** INSERT/UPDATE/DELETE SQL에서 테이블명 추출 */
@@ -311,16 +597,25 @@ export function scanMyBatisXml(filePath: string, content: string): FileScanResul
                 sqlBuffer = line;
 
                 if (new RegExp(`</${currentTag}>`, 'i').test(line)) {
-                    const tables = currentTag === 'select'
-                        ? extractSelectTables(sqlBuffer)
-                        : extractWriteTables(sqlBuffer);
+                    const extraction = extractSqlTables(
+                        sqlBuffer,
+                        currentTag === 'select' ? 'select' : 'write',
+                    );
                     const kind: ExtractedSignal['kind'] = currentTag === 'select' ? 'db_read' : 'db_write';
-                    for (const table of tables) {
+                    for (const table of extraction.tables) {
                         signals.push({
                             kind, symbol: table,
                             lineStart: tagStartLine, lineEnd: i + 1,
-                            excerpt: line.trim(), confidence: 0.8,
-                            metadata: { sqlTag: currentTag },
+                            excerpt: line.trim(),
+                            confidence: extraction.parser === 'tokenizer' ? 0.8 : 0.6,
+                            metadata: {
+                                sqlTag: currentTag,
+                                statementType: extraction.statementType,
+                                tables: extraction.tables,
+                                aliases: extraction.aliases,
+                                parser: extraction.parser,
+                                parseWarnings: extraction.parseWarnings,
+                            },
                         });
                     }
                     currentTag = null;
@@ -331,18 +626,26 @@ export function scanMyBatisXml(filePath: string, content: string): FileScanResul
             sqlBuffer += '\n' + line;
 
             if (new RegExp(`</${currentTag}>`, 'i').test(line)) {
-                const tables = currentTag === 'select'
-                    ? extractSelectTables(sqlBuffer)
-                    : extractWriteTables(sqlBuffer);
+                const extraction = extractSqlTables(
+                    sqlBuffer,
+                    currentTag === 'select' ? 'select' : 'write',
+                );
                 const kind: ExtractedSignal['kind'] = currentTag === 'select' ? 'db_read' : 'db_write';
 
-                for (const table of tables) {
+                for (const table of extraction.tables) {
                     signals.push({
                         kind, symbol: table,
                         lineStart: tagStartLine, lineEnd: i + 1,
                         excerpt: `<${currentTag}> SQL`,
-                        confidence: 0.8,
-                        metadata: { sqlTag: currentTag },
+                        confidence: extraction.parser === 'tokenizer' ? 0.8 : 0.6,
+                        metadata: {
+                            sqlTag: currentTag,
+                            statementType: extraction.statementType,
+                            tables: extraction.tables,
+                            aliases: extraction.aliases,
+                            parser: extraction.parser,
+                            parseWarnings: extraction.parseWarnings,
+                        },
                     });
                 }
                 currentTag = null;

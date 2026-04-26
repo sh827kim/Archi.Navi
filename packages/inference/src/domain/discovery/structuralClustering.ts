@@ -6,7 +6,25 @@ import type {
   DiscoveryObjectInput,
 } from './types';
 
-export const AFFINITY_THRESHOLD = 0.25;
+export const AFFINITY_THRESHOLD = 0.2;
+
+const DEFAULT_SIGNAL_WEIGHTS = {
+  path: 0.1,
+  route: 0.3,
+  topic: 0.2,
+  name: 0.15,
+  code: 0.2,
+  table: 0.05,
+} as const;
+
+const TABLE_SIGNAL_WEIGHTS = {
+  path: 0.05,
+  route: 0.2,
+  topic: 0.1,
+  name: 0.15,
+  code: 0.1,
+  table: 0.4,
+} as const;
 
 const STRIPPABLE_NAME_SUFFIXES = [
   'service',
@@ -25,6 +43,23 @@ const STRIPPABLE_NAME_SUFFIXES = [
 ];
 
 const LOW_VALUE_TOKENS = new Set(['robot', 'core', 'mgt', 'mgmt', 'robotcore', 'rb']);
+const ROUTE_LOW_VALUE_TOKENS = new Set([
+  ...LOW_VALUE_TOKENS,
+  'get',
+  'post',
+  'put',
+  'delete',
+  'patch',
+  'options',
+  'head',
+  'any',
+  'id',
+  'ids',
+  'list',
+  'show',
+  'index',
+  'home',
+]);
 const TABLE_OBJECT_TYPES = new Set(['db_table', 'db_view', 'database_table', 'table']);
 const PACKAGE_NAMESPACE_ROOTS = new Set([
   'com',
@@ -119,10 +154,14 @@ export function runStructuralClustering(inputs: DiscoveryInputs): StructuralClus
       const codeMatch = hasSeedSlug(objectSeeds, slug, ['class', 'file', 'package']) ? 1 : 0;
       const tableMatch = hasSeedSlug(objectSeeds, slug, ['table']) ? 1 : 0;
 
-      const affinity = Math.min(
-        1,
-        (pathMatch + routeMatch + topicMatch + nameJaccard + codeMatch + tableMatch) / 4,
-      );
+      const affinity = computeWeightedAffinity(obj, {
+        pathMatch,
+        routeMatch,
+        topicMatch,
+        nameJaccard,
+        codeMatch,
+        tableMatch,
+      });
       if (affinity < AFFINITY_THRESHOLD) continue;
 
       if (pathMatch === 1 && topPathPrefix === null) topPathPrefix = firstPathSegment(obj.path);
@@ -252,8 +291,7 @@ function collectObjectSeedSources(
   for (const seed of objectSeeds) sources.push(`${seed.source}:${seed.value}`);
   for (const intent of intents) {
     for (const routeSeed of extractIntentRouteSeeds(intent)) {
-      const segment = firstPathSegment(routeSeed.value);
-      if (segment) sources.push(`route:/${segment}`);
+      sources.push(`route:/${routeSeed.slug}`);
     }
   }
   return uniqueStrings(sources);
@@ -349,15 +387,38 @@ function isTableLikeObject(obj: DiscoveryObjectInput): boolean {
   return metadataType !== null && TABLE_OBJECT_TYPES.has(metadataType.toLowerCase());
 }
 
+function computeWeightedAffinity(
+  obj: DiscoveryObjectInput,
+  signals: {
+    pathMatch: 0 | 1;
+    routeMatch: 0 | 1;
+    topicMatch: 0 | 1;
+    nameJaccard: number;
+    codeMatch: 0 | 1;
+    tableMatch: 0 | 1;
+  },
+): number {
+  const weights = isTableLikeObject(obj) ? TABLE_SIGNAL_WEIGHTS : DEFAULT_SIGNAL_WEIGHTS;
+  const totalWeight =
+    weights.path + weights.route + weights.topic + weights.name + weights.code + weights.table;
+  const weighted =
+    signals.pathMatch * weights.path +
+    signals.routeMatch * weights.route +
+    signals.topicMatch * weights.topic +
+    signals.nameJaccard * weights.name +
+    signals.codeMatch * weights.code +
+    signals.tableMatch * weights.table;
+
+  return Math.min(1, weighted / totalWeight);
+}
+
 function extractIntentRouteSeeds(intent: DiscoveryIntentInput): DomainSeed[] {
   const seeds: DomainSeed[] = [];
   for (const candidate of [intent.externalPathHint, intent.externalRoutePattern]) {
     if (!candidate) continue;
-    const seg = firstPathSegment(candidate);
-    if (!seg) continue;
-    const slug = normalizeSlug(seg);
-    if (!isUsefulSlug(slug)) continue;
-    seeds.push(makeSeed(slug, 'route', candidate));
+    for (const slug of extractRouteSlugs(candidate)) {
+      seeds.push(makeSeed(slug, 'route', candidate));
+    }
   }
   return uniqueSeeds(seeds);
 }
@@ -402,8 +463,7 @@ function pickFirstRouteMatch(intents: DiscoveryIntentInput[], slug: string): str
   for (const intent of intents) {
     for (const seed of extractIntentRouteSeeds(intent)) {
       if (seed.slug !== slug) continue;
-      const segment = firstPathSegment(seed.value);
-      if (segment) return `/${segment}`;
+      return `/${slug}`;
     }
   }
   return null;
@@ -430,6 +490,20 @@ function firstPathSegment(input: string): string | null {
     if (!isNonDomainSegment(segment)) return segment;
   }
   return segments[segments.length - 1] ?? null;
+}
+
+function extractRouteSlugs(input: string): string[] {
+  const segments = input
+    .split(/[\/]/)
+    .filter((s) => s.length > 0 && !s.startsWith(':') && !s.startsWith('{'));
+  const slugs: string[] = [];
+  for (const segment of segments) {
+    if (isNonDomainSegment(segment)) continue;
+    const slug = normalizeSlug(segment);
+    if (!isUsefulRouteSlug(slug)) continue;
+    slugs.push(slug);
+  }
+  return uniqueStrings(slugs);
 }
 
 function firstTopicSegment(topic: string): string | null {
@@ -484,6 +558,13 @@ function isNonDomainSegment(segment: string): boolean {
 function isUsefulSlug(slug: string): boolean {
   if (!slug) return false;
   if (LOW_VALUE_TOKENS.has(slug)) return false;
+  return slug.length >= 2 || /[가-힣]/.test(slug);
+}
+
+function isUsefulRouteSlug(slug: string): boolean {
+  if (!slug) return false;
+  if (/^\d+$/.test(slug)) return false;
+  if (ROUTE_LOW_VALUE_TOKENS.has(slug)) return false;
   return slug.length >= 2 || /[가-힣]/.test(slug);
 }
 

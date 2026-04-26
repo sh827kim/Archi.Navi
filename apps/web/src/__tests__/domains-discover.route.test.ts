@@ -225,7 +225,6 @@ describe('POST /api/domains/discover', () => {
                         path: '/orders/create',
                         parentId: null,
                         memberEligible: true,
-                        metadata: { className: 'OrderService', filePath: 'src/order/service.ts' },
                     },
                 ],
                 intents: [],
@@ -315,6 +314,190 @@ describe('POST /api/domains/discover', () => {
                 ],
             },
         });
+    });
+
+    it('api_endpoint 객체는 inbound_endpoint intent 로 변환되어 route 신호에 포함된다', async () => {
+        const db = buildDbMock([
+            [{ count: 1 }],
+            [
+                {
+                    id: 'ep-cart-checkout',
+                    objectType: 'api_endpoint',
+                    name: 'POST /cart/checkout',
+                    displayName: null,
+                    path: '/monolith/api/cart-checkout',
+                    parentId: 'svc-monolith',
+                    metadata: { method: 'POST', path: '/cart/checkout' },
+                },
+            ],
+            [],
+            [],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        runDomainDiscoveryMock.mockResolvedValue({ candidates: [] });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1' }));
+
+        expect(res.status).toBe(200);
+        expect(runDomainDiscoveryMock).toHaveBeenCalledTimes(1);
+        expect(runDomainDiscoveryMock.mock.calls[0]?.[0]).toMatchObject({
+            inputs: {
+                intents: [
+                    {
+                        sourceObjectId: 'ep-cart-checkout',
+                        intentType: 'inbound_endpoint',
+                        externalPathHint: '/cart/checkout',
+                        externalRoutePattern: '/cart/checkout',
+                        messageTopicHints: [],
+                    },
+                ],
+            },
+        });
+    });
+
+    it('selectedServiceIds 가 있으면 선택한 물리 서비스에서 나온 신호만 discovery 입력으로 전달한다', async () => {
+        const db = buildDbMock([
+            [{ count: 1 }],
+            [{ id: 'svc-cart' }],
+            [
+                {
+                    id: 'svc-cart',
+                    objectType: 'service',
+                    name: 'CartService',
+                    displayName: null,
+                    path: '/cart',
+                    parentId: null,
+                    metadata: null,
+                },
+                {
+                    id: 'svc-order',
+                    objectType: 'service',
+                    name: 'OrderService',
+                    displayName: null,
+                    path: '/order',
+                    parentId: null,
+                    metadata: null,
+                },
+                {
+                    id: 'fn-cart',
+                    objectType: 'function',
+                    name: 'CartService.add',
+                    displayName: null,
+                    path: '/cart/fn',
+                    parentId: 'svc-cart',
+                    metadata: null,
+                },
+                {
+                    id: 'fn-order',
+                    objectType: 'function',
+                    name: 'OrderService.create',
+                    displayName: null,
+                    path: '/order/fn',
+                    parentId: 'svc-order',
+                    metadata: null,
+                },
+                {
+                    id: 'ep-cart',
+                    objectType: 'api_endpoint',
+                    name: 'POST /cart',
+                    displayName: null,
+                    path: '/cart/api',
+                    parentId: 'svc-cart',
+                    metadata: { path: '/cart' },
+                },
+                {
+                    id: 'db-cart',
+                    objectType: 'db_table',
+                    name: 'cart',
+                    displayName: null,
+                    path: '/db/cart',
+                    parentId: null,
+                    metadata: null,
+                },
+            ],
+            [
+                {
+                    sourceServiceId: 'svc-cart',
+                    sourceFunctionId: 'fn-cart',
+                    intentType: 'db_access',
+                    externalPathHint: null,
+                    externalRoutePattern: null,
+                    messageTopicHints: [],
+                },
+                {
+                    sourceServiceId: 'svc-order',
+                    sourceFunctionId: 'fn-order',
+                    intentType: 'http_call',
+                    externalPathHint: '/orders',
+                    externalRoutePattern: null,
+                    messageTopicHints: [],
+                },
+                {
+                    sourceServiceId: 'svc-order',
+                    sourceFunctionId: null,
+                    intentType: 'service_topic',
+                    externalPathHint: null,
+                    externalRoutePattern: null,
+                    messageTopicHints: ['orders'],
+                },
+            ],
+            [
+                { subjectObjectId: 'fn-cart', objectId: 'db-cart', relationType: 'read' },
+                { subjectObjectId: 'fn-cart', objectId: 'svc-order', relationType: 'call' },
+                { subjectObjectId: 'fn-order', objectId: 'db-cart', relationType: 'write' },
+                { subjectObjectId: 'fn-order', objectId: 'ep-cart', relationType: 'call' },
+            ],
+            [
+                { ownerObjectId: 'fn-cart', packageName: 'demo.cart', filePath: 'CartService.java' },
+                { ownerObjectId: 'fn-order', packageName: 'demo.order', filePath: 'OrderService.java' },
+            ],
+        ]);
+        getDbMock.mockResolvedValue(db);
+        runDomainDiscoveryMock.mockResolvedValue({ candidates: [] });
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1', selectedServiceIds: ['svc-cart'] }));
+
+        expect(res.status).toBe(200);
+        const inputs = runDomainDiscoveryMock.mock.calls[0]?.[0].inputs;
+        expect(inputs.objects.map((o: { id: string }) => o.id)).toEqual([
+            'svc-cart',
+            'fn-cart',
+            'ep-cart',
+            'db-cart',
+        ]);
+        expect(inputs.intents).toEqual([
+            expect.objectContaining({ sourceObjectId: 'fn-cart', intentType: 'db_access' }),
+            expect.objectContaining({
+                sourceObjectId: 'ep-cart',
+                intentType: 'inbound_endpoint',
+                externalPathHint: '/cart',
+            }),
+        ]);
+        expect(inputs.relations).toEqual([
+            { subjectObjectId: 'fn-cart', objectId: 'db-cart', relationType: 'read' },
+        ]);
+        expect(inputs.codeArtifacts).toEqual([
+            { ownerObjectId: 'fn-cart', packageName: 'demo.cart', filePath: 'CartService.java' },
+        ]);
+    });
+
+    it('selectedServiceIds 에 service 가 아닌 id 가 있으면 400 INVALID_SERVICE_SCOPE', async () => {
+        const db = buildDbMock([
+            [{ count: 1 }],
+            [],
+        ]);
+        getDbMock.mockResolvedValue(db);
+
+        const res = await POST(makeRequest({ workspaceId: 'ws-1', selectedServiceIds: ['fn-cart'] }));
+
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error).toMatchObject({
+            code: 'INVALID_SERVICE_SCOPE',
+            invalidServiceIds: ['fn-cart'],
+        });
+        expect(runDomainDiscoveryMock).not.toHaveBeenCalled();
     });
 
     it('T-pre: workspace 에 service 외 객체가 없으면 400 PREREQUISITE_NOT_MET', async () => {

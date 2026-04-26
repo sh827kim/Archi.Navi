@@ -699,6 +699,20 @@ function isCompoundToCompound(c: RelationCandidate): boolean {
   return c.subjectGranularity === 'COMPOUND' && c.objectGranularity === 'COMPOUND';
 }
 
+function isSameDbTableCandidate(c: RelationCandidate): boolean {
+  return c.relationType === 'same_db_table';
+}
+
+function getSameDbTableMetadata(candidate: RelationCandidate) {
+  const meta = asRecord(candidate.metadata) ?? {};
+  return {
+    databaseKey: asString(meta.databaseKey),
+    table: asString(meta.table),
+    qualifiedSchema: asString(meta.qualifiedSchema),
+    ambiguity: asString(meta.ambiguity),
+  };
+}
+
 function getContradictionBadge(candidate: RelationCandidate) {
   const contradictions = Array.isArray(candidate.crossValidation?.contradictions)
     ? candidate.crossValidation.contradictions
@@ -789,6 +803,8 @@ export function ApprovalList() {
   const [activeSmartRunId, setActiveSmartRunId] = useState<string | null>(null);
   const [isPending, startTransition] = useTransition();
   const [rejectTarget, setRejectTarget] = useState<RelationCandidate | null>(null);
+  const [mergeTarget, setMergeTarget] = useState<RelationCandidate | null>(null);
+  const [mergingDbTableCandidate, setMergingDbTableCandidate] = useState(false);
 
   // 세부 매핑 Sheet 상태
   const [mappingTarget, setMappingTarget] = useState<RelationCandidate | null>(null);
@@ -1148,6 +1164,37 @@ export function ApprovalList() {
     });
   }
 
+  async function handleMergeDbTableCandidate() {
+    if (!workspaceId || !mergeTarget) return;
+    setMergingDbTableCandidate(true);
+    try {
+      const res = await fetch('/api/db-tables/merge-candidate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ workspaceId, candidateId: mergeTarget.id }),
+      });
+      const payload = (await res.json()) as unknown;
+      if (!res.ok) {
+        throw new Error(getApiErrorMessage(payload, 'DB 테이블 병합 실패'));
+      }
+
+      const mergedId = mergeTarget.id;
+      setCandidates((prev) => prev.filter((candidate) => candidate.id !== mergedId));
+      setSelectedCandidateIds((prev) => {
+        const next = new Set(prev);
+        next.delete(mergedId);
+        return next;
+      });
+      setMergeTarget(null);
+      toast.success('DB 테이블 후보를 병합했습니다.');
+      window.dispatchEvent(new Event('archi-navi:refresh-approval-candidates'));
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : 'DB 테이블 병합 실패');
+    } finally {
+      setMergingDbTableCandidate(false);
+    }
+  }
+
   const handleBulkAction = useCallback(async (action: 'APPROVED' | 'REJECTED') => {
     if (!workspaceId) return;
     const ids = [...selectedCandidateIds];
@@ -1361,7 +1408,9 @@ export function ApprovalList() {
     .sort((a, b) => compareCandidates(a, b, crossValidationSort));
   const compoundCandidateCount = visibleCandidates.filter(isCompoundToCompound).length;
   const firstCompoundIndex = visibleCandidates.findIndex(isCompoundToCompound);
-  const selectableVisibleCandidates = visibleCandidates.filter((candidate) => !isCompoundToCompound(candidate));
+  const selectableVisibleCandidates = visibleCandidates.filter(
+    (candidate) => !isCompoundToCompound(candidate) && !isSameDbTableCandidate(candidate),
+  );
   const allSelectableVisibleSelected = selectableVisibleCandidates.length > 0
     && selectableVisibleCandidates.every((candidate) => selectedCandidateIds.has(candidate.id));
 
@@ -1503,8 +1552,10 @@ export function ApprovalList() {
             const contradictionBadge = getContradictionBadge(cand);
             const badge = getCrossValidationBadge(cand);
             const compoundCandidate = isCompoundToCompound(cand);
+            const sameDbTableCandidate = isSameDbTableCandidate(cand);
             const showCompoundHeader = compoundCandidate && index === firstCompoundIndex;
             const llmExplanation = getLlmExplanationSummary(cand);
+            const sameDbTableMetadata = getSameDbTableMetadata(cand);
 
             return (
               <div key={cand.id}>
@@ -1565,6 +1616,74 @@ export function ApprovalList() {
                           className="text-muted-foreground hover:text-destructive"
                         >
                           <X className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    </div>
+                  </div>
+                ) : sameDbTableCandidate ? (
+                  <div
+                    data-testid="approval-candidate-card"
+                    data-candidate-id={cand.id}
+                    className="flex items-start justify-between rounded-xl border border-amber-500/30 bg-amber-500/5 p-4 transition-all"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-3 flex-wrap">
+                        <span className="font-medium text-foreground">{cand.subjectName}</span>
+                        <Badge variant="outline">same_db_table</Badge>
+                        <span className="text-muted-foreground">→</span>
+                        <span className="font-medium text-foreground">{cand.objectName}</span>
+                        <Badge variant="secondary" className="text-xs">암묵 schema 테이블 후보</Badge>
+                      </div>
+                      <div className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                        {sameDbTableMetadata.databaseKey && (
+                          <span>databaseKey {sameDbTableMetadata.databaseKey}</span>
+                        )}
+                        {sameDbTableMetadata.table && (
+                          <span>table {sameDbTableMetadata.table}</span>
+                        )}
+                        {sameDbTableMetadata.qualifiedSchema && (
+                          <span>schema {sameDbTableMetadata.qualifiedSchema}</span>
+                        )}
+                        {sameDbTableMetadata.ambiguity === 'multiple_schema_candidates' && (
+                          <span className="text-amber-700 dark:text-amber-300">
+                            다중 schema 후보
+                          </span>
+                        )}
+                      </div>
+                      {llmExplanation && (
+                        <p className="mt-2 text-sm text-muted-foreground">
+                          {llmExplanation}
+                        </p>
+                      )}
+                      <ProofChainPanel candidate={cand} />
+                    </div>
+
+                    <div className="ml-4 flex items-center gap-4">
+                      <div className="text-right">
+                        <div className="text-xs text-muted-foreground">신뢰도</div>
+                        <div className="text-sm font-medium text-foreground">
+                          {Math.round(cand.confidence * 100)}%
+                        </div>
+                      </div>
+
+                      <div className="flex gap-1.5">
+                        <Button
+                          size="sm"
+                          onClick={() => setMergeTarget(cand)}
+                          disabled={isPending || mergingDbTableCandidate}
+                        >
+                          <Check className="h-3.5 w-3.5 mr-1" />
+                          병합
+                        </Button>
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          onClick={() => setRejectTarget(cand)}
+                          disabled={isPending || mergingDbTableCandidate}
+                          className="text-destructive hover:bg-destructive/10"
+                        >
+                          <X className="h-3.5 w-3.5 mr-1" />
+                          거부
                         </Button>
                       </div>
                     </div>
@@ -1684,6 +1803,22 @@ export function ApprovalList() {
         onConfirm={() => {
           if (rejectTarget) handleAction(rejectTarget.id, 'REJECTED');
         }}
+      />
+
+      <ConfirmDialog
+        open={!!mergeTarget}
+        onOpenChange={(open) => { if (!open) setMergeTarget(null); }}
+        title="DB 테이블 병합"
+        description={mergeTarget
+          ? `“${mergeTarget.subjectName}” 객체의 관계, 후보, 도메인 소속을 “${mergeTarget.objectName}”로 이관하고 “${mergeTarget.subjectName}” 객체를 삭제합니다.${
+            getSameDbTableMetadata(mergeTarget).ambiguity === 'multiple_schema_candidates'
+              ? ' 같은 이름의 schema-qualified table이 여러 개 있습니다. 선택한 대상이 맞는지 확인하세요.'
+              : ''
+          }`
+          : ''}
+        confirmLabel="병합"
+        onConfirm={() => void handleMergeDbTableCandidate()}
+        loading={mergingDbTableCandidate}
       />
 
       {/* 세부 매핑 Sheet */}

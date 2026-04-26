@@ -58,6 +58,15 @@ describe('runDomainDiscovery', () => {
             path: '/orders/x',
           },
         ],
+        intents: [
+          {
+            sourceObjectId: 'svc-x',
+            intentType: 'http_endpoint',
+            externalPathHint: '/orders',
+            externalRoutePattern: null,
+            messageTopicHints: [],
+          },
+        ],
       }),
     });
 
@@ -86,7 +95,7 @@ describe('runDomainDiscovery', () => {
           {
             id: 'b',
             objectType: 'service',
-            name: 'OrdersDetail',
+            name: 'OrdersService',
             displayName: null,
             path: '/orders/b',
           },
@@ -248,6 +257,29 @@ describe('runDomainDiscovery', () => {
             path: '/orders/audit',
           },
         ],
+        intents: [
+          {
+            sourceObjectId: 'cmd',
+            intentType: 'http_endpoint',
+            externalPathHint: '/orders/command',
+            externalRoutePattern: null,
+            messageTopicHints: [],
+          },
+          {
+            sourceObjectId: 'query',
+            intentType: 'http_endpoint',
+            externalPathHint: '/orders/query',
+            externalRoutePattern: null,
+            messageTopicHints: [],
+          },
+          {
+            sourceObjectId: 'audit',
+            intentType: 'http_endpoint',
+            externalPathHint: '/orders/audit',
+            externalRoutePattern: null,
+            messageTopicHints: [],
+          },
+        ],
         relations: [
           { subjectObjectId: 'cmd', objectId: 'query', relationType: 'call' },
           { subjectObjectId: 'audit', objectId: 'cmd', relationType: 'call' },
@@ -313,7 +345,7 @@ describe('runDomainDiscovery', () => {
           {
             id: 'path-member',
             objectType: 'service',
-            name: 'Worker',
+            name: 'OrdersService',
             displayName: null,
             path: '/orders/worker',
           },

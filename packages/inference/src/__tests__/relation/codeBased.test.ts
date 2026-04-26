@@ -1051,6 +1051,403 @@ describe('inferRelationsFromCodeSignals', () => {
     expect(candidates[0]?.objectId).toBe(tableRows[0]?.id);
   });
 
+  it('테이블명과 같은 SQL alias는 실제 테이블 참조로 유지해야 한다', async () => {
+    const svcId = generateId();
+    await db.insert(objects).values({
+      id: svcId,
+      workspaceId,
+      objectType: 'service',
+      category: 'COMPUTE',
+      granularity: 'COMPOUND',
+      name: 'order-service',
+      path: `/${svcId}`,
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    });
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'java',
+      repoRoot,
+      filePath: 'src/OrderMapper.xml',
+      ownerObjectId: svcId,
+      sha256: 'db-self-alias',
+    });
+
+    const evRead = generateId();
+    await db.insert(evidences).values({
+      id: evRead,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/OrderMapper.xml',
+      lineStart: 1,
+      lineEnd: 1,
+      excerpt: '<select>SELECT * FROM orders orders</select>',
+      metadata: {
+        kind: 'db_read',
+        confidence: 0.82,
+        parser: 'tokenizer',
+        tables: ['orders'],
+        aliases: { orders: 'orders' },
+      },
+    });
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'orders',
+      weight: 1,
+      evidenceId: evRead,
+    });
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.createdDbTableCount).toBe(1);
+    expect(result.candidateCount).toBe(1);
+
+    const tableRows = await db
+      .select({ id: objects.id, name: objects.name })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'db_table')));
+    expect(tableRows).toHaveLength(1);
+    expect(tableRows[0]?.name).toBe('orders');
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.relationType).toBe('read');
+    expect(candidates[0]?.objectId).toBe(tableRows[0]?.id);
+  });
+
+  it('같은 JDBC canonical key를 쓰는 여러 서비스는 database/db_table을 공유해야 한다', async () => {
+    const svcA = generateId();
+    const svcB = generateId();
+    await db.insert(objects).values([
+      {
+        id: svcA,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'order-service',
+        path: `/${svcA}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: svcB,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'billing-service',
+        path: `/${svcB}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+    ]);
+
+    for (const [serviceId, filePath, kind] of [
+      [svcA, 'src/OrderDb.java', 'db_read'],
+      [svcB, 'src/BillingDb.java', 'db_write'],
+    ] as const) {
+      const artifactId = generateId();
+      await db.insert(codeArtifacts).values({
+        id: artifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath,
+        ownerObjectId: serviceId,
+        sha256: filePath,
+      });
+      const evidenceId = generateId();
+      await db.insert(evidences).values({
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'SELECT * FROM orders',
+        metadata: {
+          kind,
+          confidence: 0.82,
+          datasourceUrl: 'jdbc:postgresql://shared-db:5432/core',
+          tables: ['orders'],
+          parser: 'tokenizer',
+        },
+      });
+      await db.insert(codeCallEdges).values({
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: artifactId,
+        calleeSymbol: 'orders',
+        weight: 1,
+        evidenceId,
+      });
+    }
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.createdDatabaseCount).toBe(1);
+    expect(result.createdDbTableCount).toBe(1);
+    expect(result.sharedDbTableCount).toBeGreaterThanOrEqual(1);
+
+    const databaseRows = await db
+      .select({ id: objects.id, metadata: objects.metadata })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'database')));
+    expect(databaseRows).toHaveLength(1);
+    expect(databaseRows[0]?.metadata).toMatchObject({
+      sharingModel: 'SHARED',
+      observedByServiceIds: expect.arrayContaining([svcA, svcB]),
+    });
+
+    const tableRows = await db
+      .select({ id: objects.id, parentId: objects.parentId, metadata: objects.metadata })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'db_table')));
+    expect(tableRows).toHaveLength(1);
+    expect(tableRows[0]?.parentId).toBe(databaseRows[0]?.id);
+    expect(tableRows[0]?.metadata).toMatchObject({
+      sharingModel: 'SHARED',
+      observedByServiceIds: expect.arrayContaining([svcA, svcB]),
+    });
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(2);
+    expect(candidates.map((c) => c.metadata as Record<string, unknown>)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ dbAccessRole: 'shared_user', sharingModel: 'SHARED' }),
+        expect.objectContaining({ dbAccessRole: 'owner_candidate', sharingModel: 'SHARED' }),
+      ]),
+    );
+  });
+
+  it('config 없는 동일 테이블 다중 서비스 접근은 자동 병합하지 않고 suspected shared로 표시해야 한다', async () => {
+    const svcA = generateId();
+    const svcB = generateId();
+    await db.insert(objects).values([
+      {
+        id: svcA,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'alpha-service',
+        path: `/${svcA}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: svcB,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'beta-service',
+        path: `/${svcB}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+    ]);
+
+    for (const [serviceId, filePath] of [
+      [svcA, 'src/AlphaDb.java'],
+      [svcB, 'src/BetaDb.java'],
+    ] as const) {
+      const artifactId = generateId();
+      await db.insert(codeArtifacts).values({
+        id: artifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath,
+        ownerObjectId: serviceId,
+        sha256: filePath,
+      });
+      const evidenceId = generateId();
+      await db.insert(evidences).values({
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'SELECT * FROM robot_instance',
+        metadata: { kind: 'db_read', confidence: 0.82, tables: ['robot_instance'], parser: 'tokenizer' },
+      });
+      await db.insert(codeCallEdges).values({
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: artifactId,
+        calleeSymbol: 'robot_instance',
+        weight: 1,
+        evidenceId,
+      });
+    }
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.createdDatabaseCount).toBe(2);
+    expect(result.createdDbTableCount).toBe(2);
+    expect(result.suspectedSharedDatabaseCount).toBeGreaterThanOrEqual(1);
+
+    const databaseRows = await db
+      .select()
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'database')));
+    expect(databaseRows).toHaveLength(2);
+
+    const tableRows = await db
+      .select({ id: objects.id, metadata: objects.metadata })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'db_table')));
+    expect(tableRows).toHaveLength(2);
+    expect(tableRows.every((row) => (row.metadata as Record<string, unknown>)['sharingModel'] === 'SUSPECTED_SHARED')).toBe(true);
+
+    const readCandidates = await db
+      .select({ metadata: relationCandidates.metadata })
+      .from(relationCandidates)
+      .where(and(eq(relationCandidates.workspaceId, workspaceId), eq(relationCandidates.relationType, 'read')));
+    expect(readCandidates).toHaveLength(2);
+    expect(readCandidates.every((row) => {
+      const metadata = row.metadata as Record<string, unknown>;
+      return metadata['sharingModel'] === 'SUSPECTED_SHARED'
+        && metadata['dbAccessRole'] === 'shared_user'
+        && metadata['dbTopologyConfidence'] === 0.55;
+    })).toBe(true);
+  });
+
+  it('suspected shared 표시는 fallback databaseKey 테이블에만 적용해야 한다', async () => {
+    const canonicalDbId = generateId();
+    const canonicalTableId = generateId();
+    const svcA = generateId();
+    const svcB = generateId();
+    await db.insert(objects).values([
+      {
+        id: canonicalDbId,
+        workspaceId,
+        objectType: 'database',
+        category: 'STORAGE',
+        granularity: 'COMPOUND',
+        name: 'canonical-db',
+        path: `/${canonicalDbId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: { databaseKey: 'postgres:db.example.com:5432:app', sharingModel: 'PRIVATE' },
+      },
+      {
+        id: canonicalTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'STORAGE',
+        granularity: 'ATOMIC',
+        name: 'users',
+        parentId: canonicalDbId,
+        path: `/${canonicalDbId}/${canonicalTableId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: {
+          databaseKey: 'postgres:db.example.com:5432:app',
+          table: 'users',
+          sharingModel: 'PRIVATE',
+        },
+      },
+      {
+        id: svcA,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'alpha-service',
+        path: `/${svcA}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: svcB,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'beta-service',
+        path: `/${svcB}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+    ]);
+
+    for (const [serviceId, filePath] of [
+      [svcA, 'src/AlphaUsers.java'],
+      [svcB, 'src/BetaUsers.java'],
+    ] as const) {
+      const artifactId = generateId();
+      await db.insert(codeArtifacts).values({
+        id: artifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath,
+        ownerObjectId: serviceId,
+        sha256: filePath,
+      });
+      const evidenceId = generateId();
+      await db.insert(evidences).values({
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'SELECT * FROM users',
+        metadata: { kind: 'db_read', confidence: 0.82, tables: ['users'], parser: 'tokenizer' },
+      });
+      await db.insert(codeCallEdges).values({
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: artifactId,
+        calleeSymbol: 'users',
+        weight: 1,
+        evidenceId,
+      });
+    }
+
+    await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+
+    const [canonicalTable] = await db
+      .select({ metadata: objects.metadata })
+      .from(objects)
+      .where(eq(objects.id, canonicalTableId))
+      .limit(1);
+    expect(canonicalTable?.metadata).toMatchObject({
+      databaseKey: 'postgres:db.example.com:5432:app',
+      sharingModel: 'PRIVATE',
+    });
+
+    const fallbackTables = await db
+      .select({ metadata: objects.metadata })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'db_table'), eq(objects.name, 'users')));
+    const fallbackMetas = fallbackTables
+      .map((row) => row.metadata as Record<string, unknown>)
+      .filter((metadata) => typeof metadata.databaseKey === 'string' && metadata.databaseKey.endsWith(':default'));
+    expect(fallbackMetas).toHaveLength(2);
+    expect(fallbackMetas.every((metadata) => metadata.sharingModel === 'SUSPECTED_SHARED')).toBe(true);
+  });
+
   it('expose는 후보를 생성하지 않아야 한다', async () => {
     const svcId = generateId();
     await db.insert(objects).values({
@@ -1100,5 +1497,255 @@ describe('inferRelationsFromCodeSignals', () => {
 
     const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
     expect(result.candidateCount).toBe(0);
+  });
+
+  it('같은 database 아래 schema-qualified table과 unqualified table이면 same_db_table 후보를 만든다', async () => {
+    const svcId = generateId();
+    await db.insert(objects).values({
+      id: svcId,
+      workspaceId,
+      objectType: 'service',
+      category: 'COMPUTE',
+      granularity: 'COMPOUND',
+      name: 'robot-service',
+      path: `/${svcId}`,
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    });
+
+    for (const tableName of ['robot_instance', 'schema_a.robot_instance']) {
+      const artifactId = generateId();
+      await db.insert(codeArtifacts).values({
+        id: artifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath: `src/${tableName}.java`,
+        ownerObjectId: svcId,
+        sha256: tableName,
+      });
+      const evidenceId = generateId();
+      await db.insert(evidences).values({
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `src/${tableName}.java`,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: `SELECT * FROM ${tableName}`,
+        metadata: {
+          kind: 'db_read',
+          confidence: 0.8,
+          databaseKey: 'robot-db',
+          tables: [tableName],
+          parser: 'tokenizer',
+        },
+      });
+      await db.insert(codeCallEdges).values({
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: artifactId,
+        calleeSymbol: tableName,
+        weight: 1,
+        evidenceId,
+      });
+    }
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.implicitSchemaTableCandidateCount).toBe(1);
+
+    const rows = await db
+      .select({
+        relationType: relationCandidates.relationType,
+        confidence: relationCandidates.confidence,
+        metadata: relationCandidates.metadata,
+      })
+      .from(relationCandidates)
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.relationType, 'same_db_table'),
+        ),
+      );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      relationType: 'same_db_table',
+      confidence: 0.65,
+    });
+    expect(rows[0]?.metadata).toMatchObject({
+      reason: 'implicit_schema_match',
+      unqualifiedName: 'robot_instance',
+      qualifiedName: 'schema_a.robot_instance',
+    });
+
+    const schemaEvidences = await db
+      .select({ id: evidences.id })
+      .from(evidences)
+      .where(and(eq(evidences.workspaceId, workspaceId), eq(evidences.evidenceType, 'SCHEMA')));
+    expect(schemaEvidences).toHaveLength(1);
+
+    await db
+      .update(relationCandidates)
+      .set({ status: 'APPROVED' })
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.relationType, 'same_db_table'),
+        ),
+      );
+
+    const repeatedResult = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(repeatedResult.implicitSchemaTableCandidateCount).toBe(0);
+
+    const repeatedSchemaEvidences = await db
+      .select({ id: evidences.id })
+      .from(evidences)
+      .where(and(eq(evidences.workspaceId, workspaceId), eq(evidences.evidenceType, 'SCHEMA')));
+    expect(repeatedSchemaEvidences).toHaveLength(1);
+  });
+
+  it('다른 databaseKey의 schema-qualified/unqualified table은 same_db_table 후보를 만들지 않는다', async () => {
+    const svcId = generateId();
+    await db.insert(objects).values({
+      id: svcId,
+      workspaceId,
+      objectType: 'service',
+      category: 'COMPUTE',
+      granularity: 'COMPOUND',
+      name: 'robot-service',
+      path: `/${svcId}`,
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    });
+
+    for (const [tableName, databaseKey] of [
+      ['robot_instance', 'robot-db-a'],
+      ['schema_a.robot_instance', 'robot-db-b'],
+    ] as const) {
+      const artifactId = generateId();
+      await db.insert(codeArtifacts).values({
+        id: artifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath: `src/${databaseKey}.java`,
+        ownerObjectId: svcId,
+        sha256: databaseKey,
+      });
+      const evidenceId = generateId();
+      await db.insert(evidences).values({
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `src/${databaseKey}.java`,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: `SELECT * FROM ${tableName}`,
+        metadata: {
+          kind: 'db_read',
+          confidence: 0.8,
+          databaseKey,
+          tables: [tableName],
+          parser: 'tokenizer',
+        },
+      });
+      await db.insert(codeCallEdges).values({
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: artifactId,
+        calleeSymbol: tableName,
+        weight: 1,
+        evidenceId,
+      });
+    }
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.implicitSchemaTableCandidateCount).toBe(0);
+
+    const rows = await db
+      .select()
+      .from(relationCandidates)
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.relationType, 'same_db_table'),
+        ),
+      );
+    expect(rows).toHaveLength(0);
+  });
+
+  it('다중 schema-qualified target이면 same_db_table 후보 confidence를 낮춘다', async () => {
+    const svcId = generateId();
+    await db.insert(objects).values({
+      id: svcId,
+      workspaceId,
+      objectType: 'service',
+      category: 'COMPUTE',
+      granularity: 'COMPOUND',
+      name: 'robot-service',
+      path: `/${svcId}`,
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    });
+
+    for (const tableName of ['robot_instance', 'schema_a.robot_instance', 'schema_b.robot_instance']) {
+      const artifactId = generateId();
+      await db.insert(codeArtifacts).values({
+        id: artifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath: `src/${tableName}.java`,
+        ownerObjectId: svcId,
+        sha256: tableName,
+      });
+      const evidenceId = generateId();
+      await db.insert(evidences).values({
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath: `src/${tableName}.java`,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: `SELECT * FROM ${tableName}`,
+        metadata: {
+          kind: 'db_read',
+          confidence: 0.8,
+          databaseKey: 'robot-db',
+          tables: [tableName],
+          parser: 'tokenizer',
+        },
+      });
+      await db.insert(codeCallEdges).values({
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: artifactId,
+        calleeSymbol: tableName,
+        weight: 1,
+        evidenceId,
+      });
+    }
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.implicitSchemaTableCandidateCount).toBe(2);
+
+    const rows = await db
+      .select({
+        confidence: relationCandidates.confidence,
+        metadata: relationCandidates.metadata,
+      })
+      .from(relationCandidates)
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.relationType, 'same_db_table'),
+        ),
+      );
+    expect(rows).toHaveLength(2);
+    expect(rows.every((row) => row.confidence === 0.4)).toBe(true);
+    expect(rows.every((row) => (row.metadata as Record<string, unknown>)['ambiguity'] === 'multiple_schema_candidates')).toBe(true);
   });
 });

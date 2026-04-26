@@ -20,6 +20,10 @@ export interface CommonBootstrapRepoResult {
   createdQueueCount: number;
   createdDatabaseCount: number;
   createdDbTableCount: number;
+  sqlParseFallbackCount: number;
+  suspectedSharedDatabaseCount: number;
+  sharedDbTableCount: number;
+  implicitSchemaTableCandidateCount: number;
   createdAtomicCount: number;
   warning: string | null;
   scanFailureCount: number;
@@ -39,6 +43,10 @@ export interface CommonBootstrapSummary {
   createdQueueCount: number;
   createdDatabaseCount: number;
   createdDbTableCount: number;
+  sqlParseFallbackCount: number;
+  suspectedSharedDatabaseCount: number;
+  sharedDbTableCount: number;
+  implicitSchemaTableCandidateCount: number;
   createdAtomicCount: number;
   warnings: string[];
 }
@@ -116,6 +124,10 @@ export async function runCommonBootstrapForRepo(
     createdQueueCount: inferred.createdQueueCount,
     createdDatabaseCount: inferred.createdDatabaseCount,
     createdDbTableCount: inferred.createdDbTableCount,
+    sqlParseFallbackCount: inferred.sqlParseFallbackCount ?? 0,
+    suspectedSharedDatabaseCount: inferred.suspectedSharedDatabaseCount ?? 0,
+    sharedDbTableCount: inferred.sharedDbTableCount ?? 0,
+    implicitSchemaTableCandidateCount: inferred.implicitSchemaTableCandidateCount ?? 0,
     createdAtomicCount:
       inferred.createdEndpointCount
       + inferred.createdTopicCount
@@ -146,6 +158,10 @@ export async function runCommonBootstrapForRepoRoots(
     createdQueueCount: 0,
     createdDatabaseCount: 0,
     createdDbTableCount: 0,
+    sqlParseFallbackCount: 0,
+    suspectedSharedDatabaseCount: 0,
+    sharedDbTableCount: 0,
+    implicitSchemaTableCandidateCount: 0,
     createdAtomicCount: 0,
     warnings: [],
   };
@@ -178,6 +194,10 @@ export async function runCommonBootstrapForRepoRoots(
       summary.createdQueueCount += result.createdQueueCount;
       summary.createdDatabaseCount += result.createdDatabaseCount;
       summary.createdDbTableCount += result.createdDbTableCount;
+      summary.sqlParseFallbackCount += result.sqlParseFallbackCount;
+      summary.suspectedSharedDatabaseCount += result.suspectedSharedDatabaseCount;
+      summary.sharedDbTableCount += result.sharedDbTableCount;
+      summary.implicitSchemaTableCandidateCount += result.implicitSchemaTableCandidateCount;
       summary.createdAtomicCount += result.createdAtomicCount;
       if (result.warning) {
         summary.warnings.push(`[${repoRoot}] ${result.warning}`);
