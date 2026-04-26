@@ -345,6 +345,70 @@ describe('scanMyBatisXml', () => {
         expect(symbols).toContain('order_items');
     });
 
+    it('SELECT alias는 테이블 신호로 emit하지 않고 aliases metadata에만 보존해야 한다', () => {
+        const content = `
+<mapper namespace="com.example.mapper.RobotMapper">
+    <select id="find">
+        SELECT * FROM robot_instance a WHERE a.id = #{id}
+    </select>
+</mapper>
+`;
+        const result = scanMyBatisXml('/mapper/RobotMapper.xml', content);
+        const dbReadSignals = result.signals.filter((s) => s.kind === 'db_read');
+
+        expect(dbReadSignals.map((s) => s.symbol)).toEqual(['robot_instance']);
+        expect(dbReadSignals.map((s) => s.symbol)).not.toContain('a');
+        expect(dbReadSignals[0]?.metadata).toMatchObject({
+            parser: 'tokenizer',
+            tables: ['robot_instance'],
+            aliases: { a: 'robot_instance' },
+        });
+    });
+
+    it('schema.table과 JOIN alias를 함께 보존해야 한다', () => {
+        const content = `
+<mapper namespace="com.example.mapper.RobotMapper">
+    <select id="find">
+        SELECT ri.*, s.status
+        FROM ops.robot_instance ri
+        JOIN robot_status s ON ri.status_id = s.id
+    </select>
+</mapper>
+`;
+        const result = scanMyBatisXml('/mapper/RobotMapper.xml', content);
+        const dbReadSignals = result.signals.filter((s) => s.kind === 'db_read');
+        const symbols = dbReadSignals.map((s) => s.symbol);
+
+        expect(symbols).toContain('ops.robot_instance');
+        expect(symbols).toContain('robot_status');
+        expect(dbReadSignals[0]?.metadata['aliases']).toMatchObject({
+            ri: 'ops.robot_instance',
+            s: 'robot_status',
+        });
+    });
+
+    it('CDATA/CTE/subquery에서는 CTE 이름을 테이블로 emit하지 않아야 한다', () => {
+        const content = `
+<mapper namespace="com.example.mapper.RobotMapper">
+    <select id="find"><![CDATA[
+        WITH active_robot AS (
+            SELECT * FROM robot_instance a WHERE a.deleted = 0
+        )
+        SELECT *
+        FROM active_robot ar
+        WHERE EXISTS (SELECT 1 FROM robot_status s WHERE s.robot_id = ar.id)
+    ]]></select>
+</mapper>
+`;
+        const result = scanMyBatisXml('/mapper/RobotMapper.xml', content);
+        const symbols = result.signals.filter((s) => s.kind === 'db_read').map((s) => s.symbol);
+
+        expect(symbols).toContain('robot_instance');
+        expect(symbols).toContain('robot_status');
+        expect(symbols).not.toContain('active_robot');
+        expect(symbols).not.toContain('ar');
+    });
+
     it('한 줄 태그(select/insert)가 닫히는 경우도 신호를 추출해야 한다', () => {
         const content = `
 <mapper namespace="com.example.mapper.InlineMapper">

@@ -14,3 +14,11 @@ export type {
 } from './crossSignalValidation';
 export { approveRelationCandidate } from './approveRelationCandidate';
 export type { ApproveRelationCandidateResult } from './approveRelationCandidate';
+export {
+  DbTableMergeError,
+  mergeImplicitSchemaDbTableCandidate,
+} from './dbTableMerge';
+export type {
+  DbTableMergeErrorCode,
+  MergeDbTableCandidateResult,
+} from './dbTableMerge';

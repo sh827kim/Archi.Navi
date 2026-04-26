@@ -44,6 +44,10 @@ export interface CodeCandidateInferenceResult {
   createdDatabaseCount: number;
   createdDbTableCount: number;
   createdEndpointCount: number;
+  sqlParseFallbackCount?: number;
+  suspectedSharedDatabaseCount?: number;
+  sharedDbTableCount?: number;
+  implicitSchemaTableCandidateCount?: number;
 }
 
 export interface ApiEndpointBootstrapOptions {
@@ -627,7 +631,67 @@ export async function bootstrapApiEndpointsFromExposeSignals(
   };
 }
 
-function normalizeTableName(value: string): string | null {
+type SharingModel = 'PRIVATE' | 'SHARED' | 'SUSPECTED_SHARED';
+type DatabaseIdentitySource = 'explicit_relation' | 'candidate_relation' | 'canonical_key' | 'fallback';
+
+function metadataRecord(value: unknown): Record<string, unknown> {
+  return asRecord(value) ?? {};
+}
+
+function mergeObservedServiceIds(value: unknown, serviceId: string): string[] {
+  const existing = Array.isArray(value)
+    ? value.filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+    : [];
+  return [...new Set([...existing, serviceId])].sort();
+}
+
+function sharingModelForObservedServices(observedServiceIds: string[]): SharingModel {
+  return observedServiceIds.length > 1 ? 'SHARED' : 'PRIVATE';
+}
+
+function canonicalizeJdbcUrl(value: string): string | null {
+  const trimmed = value.trim();
+  const match = trimmed.match(/^jdbc:([a-zA-Z0-9]+):\/\/([^/:?#]+)(?::(\d+))?\/?([^?#;]*)/);
+  if (!match) return null;
+
+  const dbType = (match[1] ?? 'unknown').toLowerCase();
+  const host = (match[2] ?? 'localhost').toLowerCase();
+  const port = match[3] ?? '';
+  const dbName = (match[4] ?? '').split('/')[0]?.toLowerCase() ?? '';
+  return [dbType, host, port, dbName].filter((part) => part.length > 0).join(':');
+}
+
+function extractDatabaseIdentity(
+  meta: EvidenceMeta,
+  serviceName: string,
+): { databaseKey: string; source: DatabaseIdentitySource; schema: string | null } {
+  const explicitKey = asString(meta['databaseKey']);
+  if (explicitKey) {
+    return { databaseKey: explicitKey.toLowerCase(), source: 'canonical_key', schema: null };
+  }
+
+  for (const key of ['datasourceUrl', 'jdbcUrl', 'dbUrl']) {
+    const rawUrl = asString(meta[key]);
+    if (!rawUrl) continue;
+    const canonical = canonicalizeJdbcUrl(rawUrl);
+    if (canonical) {
+      return { databaseKey: canonical, source: 'canonical_key', schema: null };
+    }
+  }
+
+  const schema = asString(meta['schema']) ?? asString(meta['catalog']);
+  if (schema) {
+    return {
+      databaseKey: `schema:${schema.toLowerCase()}`,
+      source: 'canonical_key',
+      schema: schema.toLowerCase(),
+    };
+  }
+
+  return { databaseKey: `${serviceName}:default`, source: 'fallback', schema: null };
+}
+
+function normalizeTableName(value: string, meta?: EvidenceMeta): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
 
@@ -637,10 +701,117 @@ function normalizeTableName(value: string): string | null {
 
   // table 또는 schema.table 형태까지만 허용(Phase 1 보수적)
   if (!/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/.test(lower)) return null;
+
+  const aliases = metadataRecord(meta?.['aliases']);
+  if (Object.keys(aliases).some((alias) => alias.toLowerCase() === lower)) return null;
+
+  const sqlTables = extractStringArray(meta?.['tables']);
+  if (sqlTables.length > 0) {
+    const normalizedTables = new Set(
+      sqlTables
+        .map((table) => normalizeTableName(table))
+        .filter((table): table is string => table !== null),
+    );
+    if (!normalizedTables.has(lower)) return null;
+  }
+
   return lower;
 }
 
-type DatabaseResolved = { id: string; urn: string; isNew: boolean };
+type DatabaseResolved = {
+  id: string;
+  urn: string;
+  isNew: boolean;
+  databaseKey: string;
+  sharingModel: SharingModel;
+  identitySource: DatabaseIdentitySource;
+  dbTopologyConfidence: number;
+};
+
+async function upsertDatabaseByIdentity(
+  db: DbClient,
+  params: {
+    workspaceId: string;
+    serviceId: string;
+    serviceName: string;
+    repoRoot: string;
+    databaseKey: string;
+    schema: string | null;
+  },
+): Promise<DatabaseResolved> {
+  const { workspaceId, serviceId, serviceName, repoRoot, databaseKey, schema } = params;
+  const urn = buildUrn(workspaceId, 'storage', 'database', databaseKey);
+
+  const existing = await db
+    .select({ id: objects.id, metadata: objects.metadata })
+    .from(objects)
+    .where(and(eq(objects.workspaceId, workspaceId), eq(objects.urn, urn)))
+    .limit(1);
+
+  if (existing[0]) {
+    const meta = metadataRecord(existing[0].metadata);
+    const observedByServiceIds = mergeObservedServiceIds(meta['observedByServiceIds'], serviceId);
+    const sharingModel = sharingModelForObservedServices(observedByServiceIds);
+    await db
+      .update(objects)
+      .set({
+        metadata: {
+          ...meta,
+          inferredFrom: meta['inferredFrom'] ?? 'CODE',
+          repoRoot,
+          databaseKey,
+          ...(schema ? { schema } : {}),
+          observedByServiceIds,
+          sharingModel,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(objects.id, existing[0].id));
+
+    return {
+      id: existing[0].id,
+      urn,
+      isNew: false,
+      databaseKey,
+      sharingModel,
+      identitySource: 'canonical_key',
+      dbTopologyConfidence: sharingModel === 'SHARED' ? 0.9 : 0.8,
+    };
+  }
+
+  const id = generateId();
+  await db.insert(objects).values({
+    id,
+    workspaceId,
+    objectType: 'database',
+    category: 'STORAGE',
+    granularity: 'COMPOUND',
+    urn,
+    name: databaseKey === `${serviceName}:default` ? `${serviceName} DB` : databaseKey,
+    displayName: databaseKey === `${serviceName}:default` ? `${serviceName} DB` : databaseKey,
+    path: `/${id}`,
+    depth: 0,
+    visibility: 'VISIBLE',
+    metadata: {
+      inferredFrom: 'CODE',
+      repoRoot,
+      databaseKey,
+      ...(schema ? { schema } : {}),
+      observedByServiceIds: [serviceId],
+      sharingModel: 'PRIVATE',
+    },
+  });
+
+  return {
+    id,
+    urn,
+    isNew: true,
+    databaseKey,
+    sharingModel: 'PRIVATE',
+    identitySource: 'canonical_key',
+    dbTopologyConfidence: 0.8,
+  };
+}
 
 async function resolveDatabaseForService(
   db: DbClient,
@@ -649,13 +820,14 @@ async function resolveDatabaseForService(
     serviceId: string;
     serviceName: string;
     repoRoot: string;
+    metadata: EvidenceMeta;
   },
 ): Promise<DatabaseResolved> {
-  const { workspaceId, serviceId, serviceName, repoRoot } = params;
+  const { workspaceId, serviceId, serviceName, repoRoot, metadata } = params;
 
   // 1) 실제 관계(object_relations)의 database를 우선 사용한다(결정론적으로 1개 선택).
   const relationDbRows = await db
-    .select({ id: objects.id, urn: objects.urn })
+    .select({ id: objects.id, urn: objects.urn, metadata: objects.metadata })
     .from(objectRelations)
     .innerJoin(objects, eq(objectRelations.objectId, objects.id))
     .where(
@@ -671,7 +843,16 @@ async function resolveDatabaseForService(
     const chosen = [...relationDbRows]
       .sort((a, b) => a.id.localeCompare(b.id))[0]!;
     const urn = chosen.urn && chosen.urn.length > 0 ? chosen.urn : `database:${chosen.id}`;
-    return { id: chosen.id, urn, isNew: false };
+    const meta = metadataRecord(chosen.metadata);
+    return {
+      id: chosen.id,
+      urn,
+      isNew: false,
+      databaseKey: asString(meta['databaseKey']) ?? urn,
+      sharingModel: (asString(meta['sharingModel']) as SharingModel | null) ?? 'PRIVATE',
+      identitySource: 'explicit_relation',
+      dbTopologyConfidence: 0.95,
+    };
   }
 
   // 2) 후보(relation_candidates) 기반으로 database를 선택한다(confidence 우선, tie-break는 objectId).
@@ -679,6 +860,7 @@ async function resolveDatabaseForService(
     .select({
       id: objects.id,
       urn: objects.urn,
+      metadata: objects.metadata,
       confidence: relationCandidates.confidence,
     })
     .from(relationCandidates)
@@ -701,37 +883,33 @@ async function resolveDatabaseForService(
       return a.id.localeCompare(b.id);
     })[0]!;
     const urn = chosen.urn && chosen.urn.length > 0 ? chosen.urn : `database:${chosen.id}`;
-    return { id: chosen.id, urn, isNew: false };
+    const meta = metadataRecord(chosen.metadata);
+    return {
+      id: chosen.id,
+      urn,
+      isNew: false,
+      databaseKey: asString(meta['databaseKey']) ?? urn,
+      sharingModel: (asString(meta['sharingModel']) as SharingModel | null) ?? 'PRIVATE',
+      identitySource: 'candidate_relation',
+      dbTopologyConfidence: clamp01((chosen.confidence ?? 0.8) + 0.05),
+    };
   }
 
-  // 3) code-only fallback: 서비스 단위 기본 database를 생성한다(결정론적 URN).
-  const databaseKey = `${serviceName}:default`;
-  const urn = buildUrn(workspaceId, 'storage', 'database', databaseKey);
-
-  const existing = await db
-    .select({ id: objects.id })
-    .from(objects)
-    .where(and(eq(objects.workspaceId, workspaceId), eq(objects.urn, urn)))
-    .limit(1);
-  if (existing[0]) return { id: existing[0].id, urn, isNew: false };
-
-  const id = generateId();
-  await db.insert(objects).values({
-    id,
+  // 3) code signal metadata의 datasource/JDBC/schema canonical key를 사용한다.
+  const identity = extractDatabaseIdentity(metadata, serviceName);
+  const resolved = await upsertDatabaseByIdentity(db, {
     workspaceId,
-    objectType: 'database',
-    category: 'STORAGE',
-    granularity: 'COMPOUND',
-    urn,
-    name: `${serviceName} DB`,
-    displayName: `${serviceName} DB`,
-    path: `/${id}`,
-    depth: 0,
-    visibility: 'VISIBLE',
-    metadata: { inferredFrom: 'CODE', repoRoot, databaseKey },
+    serviceId,
+    serviceName,
+    repoRoot,
+    databaseKey: identity.databaseKey,
+    schema: identity.schema,
   });
-
-  return { id, urn, isNew: true };
+  return {
+    ...resolved,
+    identitySource: identity.source,
+    dbTopologyConfidence: identity.source === 'fallback' ? 0.65 : resolved.dbTopologyConfidence,
+  };
 }
 
 async function upsertDbTable(
@@ -741,9 +919,20 @@ async function upsertDbTable(
     databaseId: string;
     databaseUrn: string;
     normalizedTableName: string;
+    serviceId: string;
+    databaseKey: string;
+    sharingModel: SharingModel;
   },
 ): Promise<{ id: string; isNew: boolean }> {
-  const { workspaceId, databaseId, databaseUrn, normalizedTableName } = params;
+  const {
+    workspaceId,
+    databaseId,
+    databaseUrn,
+    normalizedTableName,
+    serviceId,
+    databaseKey,
+    sharingModel,
+  } = params;
   const urn = buildUrn(
     workspaceId,
     'storage',
@@ -752,15 +941,36 @@ async function upsertDbTable(
   );
 
   const existingByUrn = await db
-    .select({ id: objects.id })
+    .select({ id: objects.id, metadata: objects.metadata })
     .from(objects)
     .where(and(eq(objects.workspaceId, workspaceId), eq(objects.urn, urn)))
     .limit(1);
-  if (existingByUrn[0]) return { id: existingByUrn[0].id, isNew: false };
+  if (existingByUrn[0]) {
+    const meta = metadataRecord(existingByUrn[0].metadata);
+    const observedByServiceIds = mergeObservedServiceIds(meta['observedByServiceIds'], serviceId);
+    await db
+      .update(objects)
+      .set({
+        metadata: {
+          ...meta,
+          source: meta['source'] ?? 'CODE',
+          databaseKey,
+          sharingModel: sharingModelForObservedServices(observedByServiceIds) === 'SHARED'
+            ? 'SHARED'
+            : sharingModel,
+          table: normalizedTableName.split('.').pop() ?? normalizedTableName,
+          ...(normalizedTableName.includes('.') ? { schema: normalizedTableName.split('.')[0] } : {}),
+          observedByServiceIds,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(objects.id, existingByUrn[0].id));
+    return { id: existingByUrn[0].id, isNew: false };
+  }
 
   // legacy/seed 등 urn 없는 데이터와의 중복을 줄이기 위해 parentId+name도 확인
   const existingByName = await db
-    .select({ id: objects.id })
+    .select({ id: objects.id, metadata: objects.metadata })
     .from(objects)
     .where(
       and(
@@ -771,7 +981,28 @@ async function upsertDbTable(
       ),
     )
     .limit(1);
-  if (existingByName[0]) return { id: existingByName[0].id, isNew: false };
+  if (existingByName[0]) {
+    const meta = metadataRecord(existingByName[0].metadata);
+    const observedByServiceIds = mergeObservedServiceIds(meta['observedByServiceIds'], serviceId);
+    await db
+      .update(objects)
+      .set({
+        metadata: {
+          ...meta,
+          source: meta['source'] ?? 'CODE',
+          databaseKey,
+          sharingModel: sharingModelForObservedServices(observedByServiceIds) === 'SHARED'
+            ? 'SHARED'
+            : sharingModel,
+          table: normalizedTableName.split('.').pop() ?? normalizedTableName,
+          ...(normalizedTableName.includes('.') ? { schema: normalizedTableName.split('.')[0] } : {}),
+          observedByServiceIds,
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(objects.id, existingByName[0].id));
+    return { id: existingByName[0].id, isNew: false };
+  }
 
   const id = generateId();
   await db.insert(objects).values({
@@ -787,10 +1018,282 @@ async function upsertDbTable(
     path: `/${id}`,
     depth: 1,
     visibility: 'VISIBLE',
-    metadata: { source: 'CODE' },
+    metadata: {
+      source: 'CODE',
+      databaseKey,
+      sharingModel,
+      table: normalizedTableName.split('.').pop() ?? normalizedTableName,
+      ...(normalizedTableName.includes('.') ? { schema: normalizedTableName.split('.')[0] } : {}),
+      observedByServiceIds: [serviceId],
+    },
   });
 
   return { id, isNew: true };
+}
+
+type DbTableNameParts = {
+  schema: string | null;
+  table: string;
+};
+
+function parseDbTableNameParts(name: string, metadata?: unknown): DbTableNameParts | null {
+  const meta = metadataRecord(metadata);
+  const explicitTable = asString(meta['table']);
+  const explicitSchema = asString(meta['schema']);
+  if (explicitTable) {
+    return {
+      schema: explicitSchema ? explicitSchema.toLowerCase() : null,
+      table: explicitTable.toLowerCase(),
+    };
+  }
+
+  const normalized = normalizeTableName(name);
+  if (!normalized) return null;
+  const parts = normalized.split('.');
+  if (parts.length === 2 && parts[0] && parts[1]) {
+    return { schema: parts[0], table: parts[1] };
+  }
+  if (parts.length === 1 && parts[0]) {
+    return { schema: null, table: parts[0] };
+  }
+  return null;
+}
+
+async function hasRejectedSameDbTableCandidate(
+  db: DbClient,
+  workspaceId: string,
+  sourceObjectId: string,
+  targetObjectId: string,
+): Promise<boolean> {
+  const rows = await db
+    .select({ id: relationCandidates.id })
+    .from(relationCandidates)
+    .where(
+      and(
+        eq(relationCandidates.workspaceId, workspaceId),
+        eq(relationCandidates.relationType, 'same_db_table'),
+        eq(relationCandidates.subjectObjectId, sourceObjectId),
+        eq(relationCandidates.objectId, targetObjectId),
+        eq(relationCandidates.status, 'REJECTED'),
+      ),
+    )
+    .limit(1);
+  return rows.length > 0;
+}
+
+async function createImplicitSchemaTableCandidates(
+  db: DbClient,
+  params: {
+    workspaceId: string;
+    databaseId: string;
+    databaseKey: string;
+    tableId: string;
+    normalizedTableName: string;
+    repoRoot: string;
+  },
+): Promise<number> {
+  const {
+    workspaceId,
+    databaseId,
+    databaseKey,
+    tableId,
+    normalizedTableName,
+    repoRoot,
+  } = params;
+  const currentParts = parseDbTableNameParts(normalizedTableName);
+  if (!currentParts) return 0;
+
+  const tableRows = await db
+    .select({
+      id: objects.id,
+      name: objects.name,
+      metadata: objects.metadata,
+    })
+    .from(objects)
+    .where(
+      and(
+        eq(objects.workspaceId, workspaceId),
+        eq(objects.objectType, 'db_table'),
+        eq(objects.parentId, databaseId),
+      ),
+    );
+
+  const siblings = tableRows
+    .map((row) => ({
+      ...row,
+      parts: parseDbTableNameParts(row.name, row.metadata),
+    }))
+    .filter((row): row is typeof row & { parts: DbTableNameParts } => row.parts !== null)
+    .filter((row) => row.parts.table === currentParts.table);
+  const unqualified = siblings.find((row) => row.parts.schema === null);
+  const qualified = siblings
+    .filter((row) => row.parts.schema !== null)
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  if (!unqualified || qualified.length === 0) return 0;
+  if (!siblings.some((row) => row.id === tableId)) return 0;
+
+  const confidence = qualified.length === 1 ? 0.65 : 0.4;
+  let createdCount = 0;
+
+  for (const target of qualified) {
+    if (target.id === unqualified.id) continue;
+    if (await hasRejectedSameDbTableCandidate(db, workspaceId, unqualified.id, target.id)) {
+      continue;
+    }
+
+    const evidenceId = generateId();
+    await db.insert(evidences).values({
+      id: evidenceId,
+      workspaceId,
+      evidenceType: 'SCHEMA',
+      excerpt: `implicit schema table candidate: ${unqualified.name} -> ${target.name}`,
+      metadata: {
+        source: 'CODE',
+        reason: 'implicit_schema_match',
+        databaseKey,
+        table: currentParts.table,
+        unqualifiedName: unqualified.name,
+        qualifiedName: target.name,
+        qualifiedSchema: target.parts.schema,
+        repoRoot,
+      },
+    });
+
+    const saved = await saveRelationCandidate(
+      db,
+      {
+        workspaceId,
+        relationType: 'same_db_table',
+        subjectObjectId: unqualified.id,
+        objectId: target.id,
+        confidence,
+        metadata: {
+          source: 'CODE',
+          kind: 'same_db_table',
+          reason: 'implicit_schema_match',
+          databaseKey,
+          table: currentParts.table,
+          unqualifiedName: unqualified.name,
+          qualifiedSchema: target.parts.schema,
+          qualifiedName: target.name,
+          sourceTableObjectId: unqualified.id,
+          targetTableObjectId: target.id,
+          mergeMode: 'hard_merge_available',
+          repoRoot,
+          ...(qualified.length > 1
+            ? { ambiguity: 'multiple_schema_candidates', candidateTargetCount: qualified.length }
+            : {}),
+        },
+      },
+      evidenceId,
+    );
+    if (saved.created) createdCount += 1;
+  }
+
+  if (qualified.length > 1) {
+    for (const target of qualified) {
+      const [pending] = await db
+        .select({
+          id: relationCandidates.id,
+          metadata: relationCandidates.metadata,
+        })
+        .from(relationCandidates)
+        .where(
+          and(
+            eq(relationCandidates.workspaceId, workspaceId),
+            eq(relationCandidates.relationType, 'same_db_table'),
+            eq(relationCandidates.subjectObjectId, unqualified.id),
+            eq(relationCandidates.objectId, target.id),
+            eq(relationCandidates.status, 'PENDING'),
+          ),
+        )
+        .limit(1);
+      if (!pending) continue;
+      await db
+        .update(relationCandidates)
+        .set({
+          confidence: 0.4,
+          metadata: {
+            ...(metadataRecord(pending.metadata)),
+            ambiguity: 'multiple_schema_candidates',
+            candidateTargetCount: qualified.length,
+          },
+        })
+        .where(eq(relationCandidates.id, pending.id));
+    }
+  }
+
+  return createdCount;
+}
+
+async function markSuspectedSharedTables(
+  db: DbClient,
+  workspaceId: string,
+  normalizedTableName: string,
+): Promise<number> {
+  const tableRows = await db
+    .select({ id: objects.id, metadata: objects.metadata })
+    .from(objects)
+    .where(
+      and(
+        eq(objects.workspaceId, workspaceId),
+        eq(objects.objectType, 'db_table'),
+        eq(objects.name, normalizedTableName),
+      ),
+    );
+
+  if (tableRows.length < 2) return 0;
+
+  for (const row of tableRows) {
+    const meta = metadataRecord(row.metadata);
+    if (meta['sharingModel'] === 'SHARED') continue;
+    await db
+      .update(objects)
+      .set({
+        metadata: {
+          ...meta,
+          sharingModel: 'SUSPECTED_SHARED',
+        },
+        updatedAt: new Date(),
+      })
+      .where(eq(objects.id, row.id));
+  }
+
+  return tableRows.length;
+}
+
+async function markDbTableCandidatesShared(
+  db: DbClient,
+  workspaceId: string,
+  tableId: string,
+  databaseKey: string,
+) {
+  const rows = await db
+    .select({ id: relationCandidates.id, metadata: relationCandidates.metadata })
+    .from(relationCandidates)
+    .where(
+      and(
+        eq(relationCandidates.workspaceId, workspaceId),
+        eq(relationCandidates.objectId, tableId),
+      ),
+    );
+
+  for (const row of rows) {
+    const meta = metadataRecord(row.metadata);
+    const kind = asString(meta['kind']);
+    await db
+      .update(relationCandidates)
+      .set({
+        metadata: {
+          ...meta,
+          databaseKey,
+          sharingModel: 'SHARED',
+          ...(kind === 'db_read' ? { dbAccessRole: 'shared_user' } : {}),
+        },
+      })
+      .where(eq(relationCandidates.id, row.id));
+  }
 }
 
 export async function inferRelationsFromCodeSignals(
@@ -892,6 +1395,10 @@ export async function inferRelationsFromCodeSignals(
   let createdQueueCount = 0;
   let createdDatabaseCount = 0;
   let createdDbTableCount = 0;
+  let sqlParseFallbackCount = 0;
+  let suspectedSharedDatabaseCount = 0;
+  let sharedDbTableCount = 0;
+  let implicitSchemaTableCandidateCount = 0;
   const createdEndpointCount = bootstrapResult.createdEndpointCount;
 
   const databaseCache = new Map<string, DatabaseResolved>();
@@ -907,6 +1414,10 @@ export async function inferRelationsFromCodeSignals(
       createdDatabaseCount: 0,
       createdDbTableCount: 0,
       createdEndpointCount,
+      sqlParseFallbackCount: 0,
+      suspectedSharedDatabaseCount: 0,
+      sharedDbTableCount: 0,
+      implicitSchemaTableCandidateCount: 0,
     };
   }
 
@@ -1057,13 +1568,17 @@ export async function inferRelationsFromCodeSignals(
         continue;
       }
 
-      const normalized = normalizeTableName(calleeSymbol);
+      if (asString(meta['parser']) === 'fallback_regex') sqlParseFallbackCount += 1;
+
+      const normalized = normalizeTableName(calleeSymbol, meta);
       if (!normalized) {
         skippedEdgeCount += 1;
         continue;
       }
 
-      const cached = databaseCache.get(ownerContext.serviceId);
+      const databaseIdentity = extractDatabaseIdentity(meta, serviceName);
+      const databaseCacheKey = `${ownerContext.serviceId}::${databaseIdentity.databaseKey}`;
+      const cached = databaseCache.get(databaseCacheKey);
       const database =
         cached ??
         (await resolveDatabaseForService(db, {
@@ -1071,8 +1586,9 @@ export async function inferRelationsFromCodeSignals(
           serviceId: ownerContext.serviceId,
           serviceName,
           repoRoot,
+          metadata: meta,
         }));
-      databaseCache.set(ownerContext.serviceId, database);
+      databaseCache.set(databaseCacheKey, database);
       if (database.isNew) createdDatabaseCount += 1;
 
       const { id: tableId, isNew } = await upsertDbTable(db, {
@@ -1080,8 +1596,34 @@ export async function inferRelationsFromCodeSignals(
         databaseId: database.id,
         databaseUrn: database.urn,
         normalizedTableName: normalized,
+        serviceId: ownerContext.serviceId,
+        databaseKey: database.databaseKey,
+        sharingModel: database.sharingModel,
       });
       if (isNew) createdDbTableCount += 1;
+      const implicitSchemaCandidates = await createImplicitSchemaTableCandidates(db, {
+        workspaceId,
+        databaseId: database.id,
+        databaseKey: database.databaseKey,
+        tableId,
+        normalizedTableName: normalized,
+        repoRoot,
+      });
+      if (implicitSchemaCandidates > 0) {
+        candidateCount += implicitSchemaCandidates;
+        implicitSchemaTableCandidateCount += implicitSchemaCandidates;
+      }
+      let effectiveSharingModel = database.sharingModel;
+      let effectiveTopologyConfidence = database.dbTopologyConfidence;
+      if (database.sharingModel === 'SHARED') sharedDbTableCount += 1;
+      if (database.identitySource === 'fallback') {
+        const marked = await markSuspectedSharedTables(db, workspaceId, normalized);
+        if (marked > 0) {
+          suspectedSharedDatabaseCount += 1;
+          effectiveSharingModel = 'SUSPECTED_SHARED';
+          effectiveTopologyConfidence = 0.55;
+        }
+      }
 
       // db_mapping은 “존재/매핑” 신호이므로 후보 생성은 하지 않는다.
       if (kind === 'db_mapping') {
@@ -1090,6 +1632,11 @@ export async function inferRelationsFromCodeSignals(
       }
 
       const relationType = kind === 'db_read' ? 'read' : 'write';
+      const dbAccessRole = kind === 'db_write'
+        ? 'owner_candidate'
+        : effectiveSharingModel === 'SHARED' || effectiveSharingModel === 'SUSPECTED_SHARED'
+          ? 'shared_user'
+          : 'reader';
       processedEdgeCount += 1;
       const saved = await saveRelationCandidate(
         db,
@@ -1105,12 +1652,19 @@ export async function inferRelationsFromCodeSignals(
             kind,
             table: normalized,
             repoRoot,
+            dbAccessRole,
+            dbTopologyConfidence: effectiveTopologyConfidence,
+            databaseKey: database.databaseKey,
+            sharingModel: effectiveSharingModel,
           },
           ...(candidateGenerationMode ? { generationMode: candidateGenerationMode } : {}),
         },
         evidenceId,
       );
       if (saved.created) candidateCount += 1;
+      if (database.sharingModel === 'SHARED') {
+        await markDbTableCandidatesShared(db, workspaceId, tableId, database.databaseKey);
+      }
       continue;
     }
 
@@ -1127,5 +1681,9 @@ export async function inferRelationsFromCodeSignals(
     createdDatabaseCount,
     createdDbTableCount,
     createdEndpointCount,
+    sqlParseFallbackCount,
+    suspectedSharedDatabaseCount,
+    sharedDbTableCount,
+    implicitSchemaTableCandidateCount,
   };
 }

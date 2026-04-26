@@ -16,8 +16,8 @@
  */
 'use client';
 
-import { useState } from 'react';
-import { CheckCircle2, ChevronDown, ChevronUp, Loader2, Search, XCircle } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { CheckCircle2, ChevronDown, ChevronUp, GitMerge, Loader2, Search, XCircle } from 'lucide-react';
 import { Badge, Button, Input } from '@archi-navi/ui';
 import { toast } from 'sonner';
 import { getClientAiRequestHeaders } from '@/lib/client-ai-settings';
@@ -83,7 +83,7 @@ interface DiscoveredCandidate {
   members: CandidateMember[];
   review: CandidateReview | null;
   implementingServices: ImplementingService[];
-  origin?: 'structural' | 'llm_split';
+  origin?: 'structural' | 'llm_split' | 'manual_merge';
   parentCandidateId?: string | null;
   splitReason?: string | null;
   splitEvidenceHints?: string[];
@@ -92,6 +92,13 @@ interface DiscoveredCandidate {
 interface DiscoverResponseData {
   candidates: DiscoveredCandidate[];
   llmReviewed: boolean;
+}
+
+interface PhysicalServiceOption {
+  id: string;
+  name: string;
+  displayName: string | null;
+  path: string;
 }
 
 interface Props {
@@ -133,6 +140,44 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
   const [llmReviewed, setLlmReviewed] = useState(false);
   const [cardStates, setCardStates] = useState<Record<string, CardState>>({});
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [selectedCandidateIds, setSelectedCandidateIds] = useState<Set<string>>(new Set());
+  const [physicalServices, setPhysicalServices] = useState<PhysicalServiceOption[]>([]);
+  const [selectedServiceIds, setSelectedServiceIds] = useState<Set<string>>(new Set());
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPhysicalServices() {
+      try {
+        const params = new URLSearchParams({ workspaceId, objectType: 'service' });
+        const res = await fetch(`/api/objects?${params.toString()}`);
+        const json = (await res.json()) as PhysicalServiceOption[] | ApiEnvelope<unknown>;
+        if (cancelled) return;
+        if (Array.isArray(json)) {
+          setPhysicalServices(
+            json.map((service) => ({
+              id: service.id,
+              name: service.name,
+              displayName: service.displayName,
+              path: service.path,
+            })),
+          );
+          setSelectedServiceIds(new Set());
+          return;
+        }
+        toast.error(json.error?.message ?? '물리 서비스 목록 조회 실패');
+      } catch (err) {
+        if (cancelled) return;
+        console.error('[discover] load physical services', err);
+        toast.error('물리 서비스 목록 조회 중 오류가 발생했습니다.');
+      }
+    }
+
+    void loadPhysicalServices();
+    return () => {
+      cancelled = true;
+    };
+  }, [workspaceId]);
 
   function initCardState(c: DiscoveredCandidate): CardState {
     return {
@@ -156,7 +201,12 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
       const res = await fetch('/api/domains/discover', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...getClientAiRequestHeaders() },
-        body: JSON.stringify({ workspaceId }),
+        body: JSON.stringify({
+          workspaceId,
+          ...(selectedServiceIds.size > 0
+            ? { selectedServiceIds: Array.from(selectedServiceIds) }
+            : {}),
+        }),
       });
       const json = (await res.json()) as ApiEnvelope<DiscoverResponseData>;
       if (!json.success || !json.data) {
@@ -170,6 +220,7 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
         states[c.id] = initCardState(c);
       }
       setCardStates(states);
+      setSelectedCandidateIds(new Set());
       toast.success(
         `${json.data.candidates.length}개 후보를 찾았습니다.${json.data.llmReviewed ? ' (LLM 검토 포함)' : ''}`,
       );
@@ -213,6 +264,11 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
       toast.success(`"${name}" 도메인 승인 (멤버 ${json.data.memberCount}개)`);
       // 미리보기에서 제거
       setCandidates((prev) => prev.filter((x) => x.id !== c.id));
+      setSelectedCandidateIds((prev) => {
+        const next = new Set(prev);
+        next.delete(c.id);
+        return next;
+      });
       setCardStates((prev) => {
         const { [c.id]: _, ...rest } = prev;
         return rest;
@@ -229,6 +285,11 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
 
   function rejectCandidate(c: DiscoveredCandidate) {
     setCandidates((prev) => prev.filter((x) => x.id !== c.id));
+    setSelectedCandidateIds((prev) => {
+      const next = new Set(prev);
+      next.delete(c.id);
+      return next;
+    });
     setCardStates((prev) => {
       const { [c.id]: _, ...rest } = prev;
       return rest;
@@ -258,6 +319,73 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
   function rejectAll() {
     setCandidates([]);
     setCardStates({});
+    setSelectedCandidateIds(new Set());
+  }
+
+  function toggleCandidateSelection(id: string, checked: boolean) {
+    setSelectedCandidateIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  function toggleServiceSelection(id: string, checked: boolean) {
+    setSelectedServiceIds((prev) => {
+      const next = new Set(prev);
+      if (checked) next.add(id);
+      else next.delete(id);
+      return next;
+    });
+  }
+
+  async function mergeSelectedCandidates() {
+    const selected = candidates.filter((candidate) => selectedCandidateIds.has(candidate.id));
+    if (selected.length < 2) {
+      toast.error('병합하려면 후보를 2개 이상 선택해주세요.');
+      return;
+    }
+    const baseName = cardStates[selected[0]!.id]?.name.trim() || selected[0]!.autoName;
+    setBulkBusy(true);
+    try {
+      const res = await fetch('/api/domains/candidates/merge', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          workspaceId,
+          name: baseName,
+          candidates: selected.map((candidate) => ({
+            ...candidate,
+            autoName: cardStates[candidate.id]?.name.trim() || candidate.autoName,
+          })),
+        }),
+      });
+      const json = (await res.json()) as ApiEnvelope<{ candidate: DiscoveredCandidate }>;
+      if (!json.success || !json.data) {
+        toast.error(json.error?.message ?? '후보 병합 실패');
+        return;
+      }
+      const merged = json.data.candidate;
+      const selectedIds = new Set(selected.map((candidate) => candidate.id));
+      setCandidates((prev) => [
+        merged,
+        ...prev.filter((candidate) => !selectedIds.has(candidate.id)),
+      ]);
+      setCardStates((prev) => {
+        const next = { ...prev };
+        for (const id of selectedIds) delete next[id];
+        next[merged.id] = initCardState(merged);
+        return next;
+      });
+      setSelectedCandidateIds(new Set([merged.id]));
+      toast.success(`후보 ${selected.length}개를 "${merged.autoName}" 후보로 병합했습니다.`);
+    } catch (err) {
+      console.error('[merge candidates] error', err);
+      toast.error('후보 병합 중 오류가 발생했습니다.');
+    } finally {
+      setBulkBusy(false);
+    }
   }
 
   return (
@@ -271,6 +399,16 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
         <div className="flex items-center gap-2">
           {candidates.length > 0 ? (
             <>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={mergeSelectedCandidates}
+                disabled={bulkBusy || discovering || selectedCandidateIds.size < 2}
+              >
+                <GitMerge className="mr-1.5 h-3.5 w-3.5" />
+                선택 병합
+                {selectedCandidateIds.size > 0 ? ` (${selectedCandidateIds.size})` : ''}
+              </Button>
               <Button
                 size="sm"
                 variant="outline"
@@ -296,11 +434,70 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
       </div>
 
       {candidates.length === 0 ? (
-        <div className="rounded-lg border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
-          {discovering
-            ? '결정적 신호 분석 중...'
-            : '아직 발견된 후보가 없습니다. [도메인 발견] 을 눌러 결정적 클러스터링을 실행하세요. (LLM 키가 있으면 검토 단계가 자동 추가됩니다.)'}
-        </div>
+        <>
+          {physicalServices.length > 0 ? (
+            <section className="mb-3 rounded-lg border border-border bg-card p-3">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-medium">발견 범위</h3>
+                  <p className="text-xs text-muted-foreground">
+                    선택한 물리 서비스에서 추출된 신호만 사용합니다. 선택하지 않으면 전체 서비스 기준입니다.
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  <Badge variant="secondary">
+                    {selectedServiceIds.size > 0 ? `${selectedServiceIds.size}개 선택` : '전체'}
+                  </Badge>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedServiceIds(new Set(physicalServices.map((s) => s.id)))}
+                    disabled={discovering || bulkBusy}
+                  >
+                    전체 선택
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => setSelectedServiceIds(new Set())}
+                    disabled={discovering || bulkBusy || selectedServiceIds.size === 0}
+                  >
+                    선택 해제
+                  </Button>
+                </div>
+              </div>
+              <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 lg:grid-cols-3">
+                {physicalServices.map((service) => (
+                  <label
+                    key={service.id}
+                    className="flex min-w-0 items-center gap-2 rounded border border-border/60 px-2 py-1.5 text-xs"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedServiceIds.has(service.id)}
+                      onChange={(event) => toggleServiceSelection(service.id, event.target.checked)}
+                      disabled={discovering || bulkBusy}
+                      aria-label={`${service.displayName ?? service.name} 서비스 선택`}
+                    />
+                    <span className="min-w-0">
+                      <span className="block truncate font-medium">
+                        {service.displayName ?? service.name}
+                      </span>
+                      <span className="block truncate text-[11px] text-muted-foreground">
+                        {service.path}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </section>
+          ) : null}
+          <div className="rounded-lg border border-dashed border-border/60 p-8 text-center text-sm text-muted-foreground">
+            {discovering
+              ? '결정적 신호 분석 중...'
+              : '아직 발견된 후보가 없습니다. [도메인 발견] 을 눌러 결정적 클러스터링을 실행하세요. (LLM 키가 있으면 검토 단계가 자동 추가됩니다.)'}
+          </div>
+        </>
       ) : (
         <div className="space-y-3">
           <p className="text-xs text-muted-foreground">
@@ -323,6 +520,16 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
               >
                 {/* 카드 헤더 */}
                 <div className="flex flex-wrap items-center gap-2">
+                  <label className="flex h-8 items-center gap-2 rounded border border-border px-2 text-xs">
+                    <input
+                      type="checkbox"
+                      checked={selectedCandidateIds.has(c.id)}
+                      onChange={(event) => toggleCandidateSelection(c.id, event.target.checked)}
+                      disabled={state.busy || bulkBusy}
+                      aria-label={`${state.name} 후보 선택`}
+                    />
+                    선택
+                  </label>
                   <Input
                     value={state.name}
                     onChange={(e) => updateCard(c.id, { name: e.target.value })}
@@ -370,6 +577,7 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                     </Badge>
                   ) : null}
                   {c.origin === 'llm_split' ? <Badge variant="secondary">LLM 분할 후보</Badge> : null}
+                  {c.origin === 'manual_merge' ? <Badge variant="secondary">수동 병합 후보</Badge> : null}
                   <Badge variant="secondary" className="ml-auto text-xs">
                     멤버 {c.members.length}
                   </Badge>
@@ -389,7 +597,7 @@ export function DomainDiscoverSection({ workspaceId, onApproved }: Props) {
                   </div>
                 ) : null}
 
-                {c.origin !== 'llm_split' && c.review?.splitSuggestions?.length > 0 ? (
+                {c.origin !== 'llm_split' && (c.review?.splitSuggestions?.length ?? 0) > 0 ? (
                   <div className="mt-2 rounded border border-amber-500/30 bg-amber-500/10 p-2 text-xs">
                     <p className="font-medium">분할 권장 - 자동 후보 생성 실패</p>
                   </div>

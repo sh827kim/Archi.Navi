@@ -1171,6 +1171,10 @@ export async function executeInferenceRun(
     createdQueueCount: 0,
     createdDatabaseCount: 0,
     createdDbTableCount: 0,
+    sqlParseFallbackCount: 0,
+    suspectedSharedDatabaseCount: 0,
+    sharedDbTableCount: 0,
+    implicitSchemaTableCandidateCount: 0,
     createdAtomicCount: 0,
     warnings: [] as string[],
   };
@@ -1219,6 +1223,7 @@ export async function executeInferenceRun(
     enabled: requestedCompatDeterministic.enabled,
     configCandidatesCreated: 0,
     codeCandidatesCreated: 0,
+    implicitSchemaTableCandidateCount: 0,
     boundEndpointCandidatesCreated: 0,
     configBindingCount: 0,
     configBindingUnresolvedCount: 0,
@@ -2622,6 +2627,8 @@ export async function executeInferenceRun(
             candidateGenerationMode: 'compat_deterministic',
           });
           compatDeterministic.codeCandidatesCreated += result.candidateCount;
+          compatDeterministic.implicitSchemaTableCandidateCount +=
+            result.implicitSchemaTableCandidateCount ?? 0;
         }
         if (modeSet.has('config') || modeSet.has('code')) {
           const result = await bindConfigToCodeEndpoints(db, {
@@ -2841,6 +2848,7 @@ export async function executeInferenceRun(
           enabled: compatDeterministic.enabled,
           configCandidatesCreated: compatDeterministic.configCandidatesCreated,
           codeCandidatesCreated: compatDeterministic.codeCandidatesCreated,
+          implicitSchemaTableCandidateCount: compatDeterministic.implicitSchemaTableCandidateCount,
           boundEndpointCandidatesCreated: compatDeterministic.boundEndpointCandidatesCreated,
           configBindingCount: compatDeterministic.configBindingCount,
           configBindingUnresolvedCount: compatDeterministic.configBindingUnresolvedCount,
@@ -2918,6 +2926,7 @@ export async function executeInferenceRun(
       relationCandidatesCreated,
       proofCandidatesCreated,
       compatCandidatesCreated,
+      implicitSchemaTableCandidateCount: compatDeterministic.implicitSchemaTableCandidateCount,
       compatModeEnabled: compatDeterministic.enabled,
       executionMode: Array.from(modeSet),
     },

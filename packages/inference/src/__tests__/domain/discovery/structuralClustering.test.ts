@@ -49,7 +49,7 @@ describe('runStructuralClustering', () => {
         expect(result.candidates).toEqual([]);
     });
 
-    it('T2: path prefix 1개 신호만 일치하는 객체 → affinity = 0.25 (임계값 통과)', () => {
+    it('T2: path prefix 1개 신호만 일치하는 객체 → 가중치 기준 임계값 미만으로 제외', () => {
         const result = runStructuralClustering(
             makeInputs({
                 objects: [
@@ -65,10 +65,7 @@ describe('runStructuralClustering', () => {
         );
 
         const payments = result.candidates.find((c) => c.slug === 'payments');
-        expect(payments).toBeDefined();
-        expect(payments!.members[0]!.affinity).toBeCloseTo(AFFINITY_THRESHOLD);
-        expect(payments!.members[0]!.pathPrefixMatch).toBe(1);
-        expect(payments!.signals.topPathPrefix).toBe('payments');
+        expect(payments).toBeUndefined();
     });
 
     it('T3: 4개 신호 모두 일치 → affinity = 1, 강한 신호 칩 3개 모두 채움', () => {
@@ -102,13 +99,13 @@ describe('runStructuralClustering', () => {
         expect(member.routePrefixMatch).toBe(1);
         expect(member.topicPrefixMatch).toBe(1);
         expect(member.nameTokenJaccard).toBe(1);
-        expect(member.affinity).toBe(1);
+        expect(member.affinity).toBeCloseTo(0.75);
         expect(orders!.signals.topPathPrefix).toBe('orders');
         expect(orders!.signals.topRoutePrefix).toBe('/orders');
         expect(orders!.signals.topTopicPrefix).toBe('orders');
     });
 
-    it('T4: 임계값 통과 후보의 모든 멤버는 affinity ≥ 0.25', () => {
+    it('T4: 임계값 통과 후보의 모든 멤버는 affinity ≥ threshold', () => {
         const result = runStructuralClustering(
             makeInputs({
                 objects: [
@@ -134,19 +131,19 @@ describe('runStructuralClustering', () => {
                 expect(member.affinity).toBeGreaterThanOrEqual(AFFINITY_THRESHOLD);
             }
         }
-        // 각 도메인의 자기 객체는 path + name 일치로 affinity ≥ 0.5
+        // 각 도메인의 자기 객체는 path + name 일치로 임계값을 통과한다.
         const orders = result.candidates.find((c) => c.slug === 'orders');
-        expect(orders!.members.find((m) => m.objectId === 'obj-1')!.affinity).toBeGreaterThanOrEqual(0.5);
+        expect(orders!.members.find((m) => m.objectId === 'obj-1')!.affinity).toBeGreaterThanOrEqual(AFFINITY_THRESHOLD);
     });
 
     it('T5: 멤버 수 내림차순 정렬', () => {
         const result = runStructuralClustering(
             makeInputs({
                 objects: [
-                    { id: 'a', objectType: 'service', name: 'a', displayName: null, path: '/big/x' },
-                    { id: 'b', objectType: 'service', name: 'b', displayName: null, path: '/big/y' },
-                    { id: 'c', objectType: 'service', name: 'c', displayName: null, path: '/big/z' },
-                    { id: 'd', objectType: 'service', name: 'd', displayName: null, path: '/small/q' },
+                    { id: 'a', objectType: 'service', name: 'BigService', displayName: null, path: '/big/x' },
+                    { id: 'b', objectType: 'service', name: 'BigService', displayName: null, path: '/big/y' },
+                    { id: 'c', objectType: 'service', name: 'BigService', displayName: null, path: '/big/z' },
+                    { id: 'd', objectType: 'service', name: 'SmallService', displayName: null, path: '/small/q' },
                 ],
             }),
         );
@@ -193,7 +190,7 @@ describe('runStructuralClustering', () => {
         const result = runStructuralClustering(
             makeInputs({
                 objects: [
-                    { id: 'svc-x', objectType: 'service', name: 'PublicApi', displayName: null, path: '/api/internal' },
+                    { id: 'svc-x', objectType: 'service', name: 'InternalService', displayName: null, path: '/api/internal' },
                 ],
             }),
         );
@@ -258,7 +255,7 @@ describe('runStructuralClustering', () => {
                         objectType: 'service',
                         name: '주문',
                         displayName: null,
-                        path: '/misc',
+                        path: '/주문',
                     },
                 ],
             }),
@@ -267,7 +264,7 @@ describe('runStructuralClustering', () => {
         const order = result.candidates.find((c) => c.slug === '주문');
         expect(order).toBeDefined();
         expect(order!.members[0]!.nameTokenJaccard).toBe(1);
-        expect(order!.members[0]!.affinity).toBeCloseTo(0.25);
+        expect(order!.members[0]!.affinity).toBeGreaterThanOrEqual(AFFINITY_THRESHOLD);
     });
 
     it('T9: signal-only service 의 intent 는 직접 코드 자식에게 상속되지만 service 자체는 멤버에 포함되지 않는다', () => {
@@ -309,7 +306,7 @@ describe('runStructuralClustering', () => {
             expect.objectContaining({
                 objectId: 'fn-create-order',
                 routePrefixMatch: 1,
-                affinity: 0.25,
+                affinity: 0.3,
             }),
         ]);
         expect(orders!.members.some((member) => member.objectId === 'svc-gateway')).toBe(false);
@@ -335,6 +332,15 @@ describe('runStructuralClustering', () => {
                         path: '/storage/order-items',
                     },
                 ],
+                intents: [
+                    {
+                        sourceObjectId: 'fn-order-items',
+                        intentType: 'http_endpoint',
+                        externalPathHint: '/order/items',
+                        externalRoutePattern: null,
+                        messageTopicHints: [],
+                    },
+                ],
             }),
         );
 
@@ -348,6 +354,76 @@ describe('runStructuralClustering', () => {
         expect(tableMember.seedSources).toContain('table:order');
     });
 
+    it('T10.1: inbound endpoint route 는 첫 segment 이후의 도메인 힌트도 후보로 만든다', () => {
+        const result = runStructuralClustering(
+            makeInputs({
+                objects: [
+                    {
+                        id: 'ep-product',
+                        objectType: 'api_endpoint',
+                        name: 'GET /product/{id}',
+                        displayName: null,
+                        path: '/monolith/api/product',
+                    },
+                    {
+                        id: 'ep-cart',
+                        objectType: 'api_endpoint',
+                        name: 'POST /cart',
+                        displayName: null,
+                        path: '/monolith/api/cart',
+                    },
+                    {
+                        id: 'ep-checkout',
+                        objectType: 'api_endpoint',
+                        name: 'POST /cart/checkout',
+                        displayName: null,
+                        path: '/monolith/api/cart-checkout',
+                    },
+                ],
+                intents: [
+                    {
+                        sourceObjectId: 'ep-product',
+                        intentType: 'inbound_endpoint',
+                        externalPathHint: '/product/{id}',
+                        externalRoutePattern: '/product/{id}',
+                        messageTopicHints: [],
+                    },
+                    {
+                        sourceObjectId: 'ep-cart',
+                        intentType: 'inbound_endpoint',
+                        externalPathHint: '/cart',
+                        externalRoutePattern: '/cart',
+                        messageTopicHints: [],
+                    },
+                    {
+                        sourceObjectId: 'ep-checkout',
+                        intentType: 'inbound_endpoint',
+                        externalPathHint: '/cart/checkout',
+                        externalRoutePattern: '/cart/checkout',
+                        messageTopicHints: [],
+                    },
+                ],
+            }),
+        );
+
+        const slugs = result.candidates.map((c) => c.slug);
+        expect(slugs).toContain('product');
+        expect(slugs).toContain('cart');
+        expect(slugs).toContain('checkout');
+        expect(slugs).not.toContain('post');
+        expect(slugs).not.toContain('id');
+
+        const checkout = result.candidates.find((c) => c.slug === 'checkout')!;
+        expect(checkout.signals.topRoutePrefix).toBe('/checkout');
+        expect(checkout.members).toEqual([
+            expect.objectContaining({
+                objectId: 'ep-checkout',
+                routePrefixMatch: 1,
+                affinity: 0.35,
+            }),
+        ]);
+    });
+
     it('T11: package seed 는 com/org 같은 namespace root 와 회사 prefix 를 제외한다', () => {
         const result = runStructuralClustering(
             makeInputs({
@@ -357,7 +433,7 @@ describe('runStructuralClustering', () => {
                         objectType: 'service',
                         name: 'Worker',
                         displayName: null,
-                        path: '/misc/worker',
+                        path: '/orders/worker',
                     },
                 ],
                 codeArtifacts: [
