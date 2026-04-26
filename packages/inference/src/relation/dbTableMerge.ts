@@ -371,7 +371,7 @@ async function mergeRelationCandidates(tx: DbExecutor, ctx: MergeContext): Promi
       continue;
     }
 
-    const [existing] = await tx
+    const existingRows = await tx
       .select({
         id: relationCandidates.id,
         status: relationCandidates.status,
@@ -385,7 +385,7 @@ async function mergeRelationCandidates(tx: DbExecutor, ctx: MergeContext): Promi
           eq(relationCandidates.relationType, row.relationType),
           eq(relationCandidates.subjectObjectId, nextSubject),
           eq(relationCandidates.objectId, nextObject),
-          row.status === 'PENDING'
+          row.status === 'PENDING' || row.status === 'APPROVED'
             ? or(
                 eq(relationCandidates.status, 'PENDING'),
                 eq(relationCandidates.status, 'APPROVED'),
@@ -393,13 +393,25 @@ async function mergeRelationCandidates(tx: DbExecutor, ctx: MergeContext): Promi
             : eq(relationCandidates.status, row.status),
         ),
       )
-      .limit(1);
+      .limit(2);
+    const existing = existingRows
+      .filter((candidate) => candidate.id !== row.id)
+      .sort((a, b) => {
+        if (a.status === b.status) return a.id.localeCompare(b.id);
+        return a.status === 'APPROVED' ? -1 : 1;
+      })[0];
 
-    if (existing && existing.id !== row.id) {
+    if (existing) {
+      const nextStatus =
+        existing.status === 'APPROVED' || row.status === 'APPROVED'
+          ? 'APPROVED'
+          : existing.status;
       await mergeCandidateEvidence(tx, ctx.workspaceId, row.id, existing.id);
       await tx
         .update(relationCandidates)
         .set({
+          status: nextStatus,
+          ...(nextStatus === 'APPROVED' ? { reviewedAt } : {}),
           confidence: Math.max(existing.confidence, row.confidence),
           metadata: mergeMetadata(existing.metadata, row.metadata, {
             mergedFromObjectIds: uniqueStrings([

@@ -437,6 +437,7 @@ describe('POST /api/domains/discover', () => {
             [
                 { subjectObjectId: 'fn-cart', objectId: 'db-cart', relationType: 'read' },
                 { subjectObjectId: 'fn-order', objectId: 'db-cart', relationType: 'write' },
+                { subjectObjectId: 'fn-order', objectId: 'ep-cart', relationType: 'call' },
             ],
             [
                 { ownerObjectId: 'fn-cart', packageName: 'demo.cart', filePath: 'CartService.java' },

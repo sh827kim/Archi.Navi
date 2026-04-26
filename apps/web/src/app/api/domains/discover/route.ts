@@ -178,8 +178,7 @@ function buildSelectedObjectScope(
 
     const baseScope = new Set(scope);
     for (const relation of relationRows) {
-        if (!baseScope.has(relation.subjectObjectId) && !baseScope.has(relation.objectId)) continue;
-        scope.add(relation.subjectObjectId);
+        if (!baseScope.has(relation.subjectObjectId)) continue;
         scope.add(relation.objectId);
     }
     return scope;
