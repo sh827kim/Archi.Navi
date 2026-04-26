@@ -1243,6 +1243,18 @@ describe('inferRelationsFromCodeSignals', () => {
       .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'db_table')));
     expect(tableRows).toHaveLength(2);
     expect(tableRows.every((row) => (row.metadata as Record<string, unknown>)['sharingModel'] === 'SUSPECTED_SHARED')).toBe(true);
+
+    const readCandidates = await db
+      .select({ metadata: relationCandidates.metadata })
+      .from(relationCandidates)
+      .where(and(eq(relationCandidates.workspaceId, workspaceId), eq(relationCandidates.relationType, 'read')));
+    expect(readCandidates).toHaveLength(2);
+    expect(readCandidates.every((row) => {
+      const metadata = row.metadata as Record<string, unknown>;
+      return metadata['sharingModel'] === 'SUSPECTED_SHARED'
+        && metadata['dbAccessRole'] === 'shared_user'
+        && metadata['dbTopologyConfidence'] === 0.55;
+    })).toBe(true);
   });
 
   it('expose는 후보를 생성하지 않아야 한다', async () => {

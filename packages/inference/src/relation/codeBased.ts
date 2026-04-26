@@ -1258,19 +1258,31 @@ async function markSuspectedSharedTables(
         updatedAt: new Date(),
       })
       .where(eq(objects.id, row.id));
+    await markDbTableCandidatesTopology(db, workspaceId, row.id, {
+      sharingModel: 'SUSPECTED_SHARED',
+      dbTopologyConfidence: 0.55,
+    });
   }
 
   return tableRows.length;
 }
 
-async function markDbTableCandidatesShared(
+async function markDbTableCandidatesTopology(
   db: DbClient,
   workspaceId: string,
   tableId: string,
-  databaseKey: string,
+  params: {
+    sharingModel: SharingModel;
+    dbTopologyConfidence: number;
+    databaseKey?: string;
+  },
 ) {
   const rows = await db
-    .select({ id: relationCandidates.id, metadata: relationCandidates.metadata })
+    .select({
+      id: relationCandidates.id,
+      relationType: relationCandidates.relationType,
+      metadata: relationCandidates.metadata,
+    })
     .from(relationCandidates)
     .where(
       and(
@@ -1282,14 +1294,16 @@ async function markDbTableCandidatesShared(
   for (const row of rows) {
     const meta = metadataRecord(row.metadata);
     const kind = asString(meta['kind']);
+    const isReader = kind === 'db_read' || row.relationType === 'read';
     await db
       .update(relationCandidates)
       .set({
         metadata: {
           ...meta,
-          databaseKey,
-          sharingModel: 'SHARED',
-          ...(kind === 'db_read' ? { dbAccessRole: 'shared_user' } : {}),
+          ...(params.databaseKey ? { databaseKey: params.databaseKey } : {}),
+          sharingModel: params.sharingModel,
+          dbTopologyConfidence: params.dbTopologyConfidence,
+          ...(isReader ? { dbAccessRole: 'shared_user' } : {}),
         },
       })
       .where(eq(relationCandidates.id, row.id));
@@ -1662,8 +1676,12 @@ export async function inferRelationsFromCodeSignals(
         evidenceId,
       );
       if (saved.created) candidateCount += 1;
-      if (database.sharingModel === 'SHARED') {
-        await markDbTableCandidatesShared(db, workspaceId, tableId, database.databaseKey);
+      if (effectiveSharingModel === 'SHARED' || effectiveSharingModel === 'SUSPECTED_SHARED') {
+        await markDbTableCandidatesTopology(db, workspaceId, tableId, {
+          sharingModel: effectiveSharingModel,
+          dbTopologyConfidence: effectiveTopologyConfidence,
+          databaseKey: database.databaseKey,
+        });
       }
       continue;
     }

@@ -56,6 +56,14 @@ function makeRequest(body: unknown): NextRequest {
   }) as NextRequest;
 }
 
+function makeRawRequest(body: string): NextRequest {
+  return new Request('http://localhost/api/db-tables/merge-candidate', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body,
+  }) as NextRequest;
+}
+
 describe('POST /api/db-tables/merge-candidate', () => {
   afterEach(() => {
     vi.clearAllMocks();
@@ -66,6 +74,14 @@ describe('POST /api/db-tables/merge-candidate', () => {
 
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: 'workspaceId와 candidateId가 필요합니다' });
+    expect(getDbMock).not.toHaveBeenCalled();
+  });
+
+  it('JSON 형식이 깨진 요청은 400을 반환한다', async () => {
+    const res = await POST(makeRawRequest('{ broken json'));
+
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: '요청 JSON 형식이 올바르지 않습니다' });
     expect(getDbMock).not.toHaveBeenCalled();
   });
 

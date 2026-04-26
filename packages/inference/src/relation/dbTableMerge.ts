@@ -76,6 +76,17 @@ function tableBaseName(name: string, metadata: unknown): string {
   return normalized.split('.').pop() ?? normalized;
 }
 
+function tableSchemaName(name: string, metadata: unknown): string | null {
+  const meta = asRecord(metadata) ?? {};
+  const schema = meta['schema'];
+  if (typeof schema === 'string' && schema.trim().length > 0) {
+    return schema.trim().toLowerCase();
+  }
+  const normalized = name.trim().toLowerCase();
+  const parts = normalized.split('.');
+  return parts.length === 2 && parts[0] ? parts[0] : null;
+}
+
 function mergeMetadata(
   existing: unknown,
   next: unknown,
@@ -461,7 +472,9 @@ export async function mergeImplicitSchemaDbTableCandidate(
         'merge table database mismatch',
       );
     }
-    if (source.name.includes('.') || !target.name.includes('.')) {
+    const sourceSchema = tableSchemaName(source.name, source.metadata);
+    const targetSchema = tableSchemaName(target.name, target.metadata);
+    if (sourceSchema || !targetSchema) {
       throw new DbTableMergeError('INVALID_MERGE_DIRECTION', 'invalid merge direction');
     }
     if (tableBaseName(source.name, source.metadata) !== tableBaseName(target.name, target.metadata)) {

@@ -21,7 +21,17 @@ function asNonEmptyString(value: unknown): string | null {
 
 export async function POST(req: NextRequest) {
   try {
-    const body = asRecord(await req.json());
+    let payload: unknown;
+    try {
+      payload = await req.json();
+    } catch {
+      return NextResponse.json(
+        { error: '요청 JSON 형식이 올바르지 않습니다' },
+        { status: 400 },
+      );
+    }
+
+    const body = asRecord(payload);
     const workspaceId = asNonEmptyString(body?.workspaceId);
     const candidateId = asNonEmptyString(body?.candidateId);
 

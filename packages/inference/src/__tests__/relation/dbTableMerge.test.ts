@@ -239,6 +239,75 @@ describe('mergeImplicitSchemaDbTableCandidate', () => {
     });
   });
 
+  it('target schema가 metadata에만 있어도 qualified target으로 병합한다', async () => {
+    const databaseId = generateId();
+    const sourceTableId = generateId();
+    const targetTableId = generateId();
+    const mergeCandidateId = generateId();
+
+    await db.insert(objects).values([
+      {
+        id: databaseId,
+        workspaceId,
+        objectType: 'database',
+        category: 'STORAGE',
+        granularity: 'COMPOUND',
+        name: 'robot-db',
+        path: `/${databaseId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: sourceTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'STORAGE',
+        granularity: 'ATOMIC',
+        name: 'robot_instance',
+        parentId: databaseId,
+        path: `/${databaseId}/${sourceTableId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { table: 'robot_instance' },
+      },
+      {
+        id: targetTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'STORAGE',
+        granularity: 'ATOMIC',
+        name: 'robot_instance',
+        parentId: databaseId,
+        path: `/${databaseId}/${targetTableId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { table: 'robot_instance', schema: 'schema_a' },
+      },
+    ]);
+    await db.insert(relationCandidates).values({
+      id: mergeCandidateId,
+      workspaceId,
+      relationType: 'same_db_table',
+      subjectObjectId: sourceTableId,
+      objectId: targetTableId,
+      confidence: 0.65,
+      metadata: { reason: 'implicit_schema_match' },
+      status: 'PENDING',
+    });
+
+    const result = await mergeImplicitSchemaDbTableCandidate(db, {
+      workspaceId,
+      candidateId: mergeCandidateId,
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      sourceObjectId: sourceTableId,
+      targetObjectId: targetTableId,
+    });
+  });
+
   it('source와 target base table명이 다르면 거부한다', async () => {
     const databaseId = generateId();
     const sourceTableId = generateId();
