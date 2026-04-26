@@ -1578,6 +1578,31 @@ describe('inferRelationsFromCodeSignals', () => {
       unqualifiedName: 'robot_instance',
       qualifiedName: 'schema_a.robot_instance',
     });
+
+    const schemaEvidences = await db
+      .select({ id: evidences.id })
+      .from(evidences)
+      .where(and(eq(evidences.workspaceId, workspaceId), eq(evidences.evidenceType, 'SCHEMA')));
+    expect(schemaEvidences).toHaveLength(1);
+
+    await db
+      .update(relationCandidates)
+      .set({ status: 'APPROVED' })
+      .where(
+        and(
+          eq(relationCandidates.workspaceId, workspaceId),
+          eq(relationCandidates.relationType, 'same_db_table'),
+        ),
+      );
+
+    const repeatedResult = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(repeatedResult.implicitSchemaTableCandidateCount).toBe(0);
+
+    const repeatedSchemaEvidences = await db
+      .select({ id: evidences.id })
+      .from(evidences)
+      .where(and(eq(evidences.workspaceId, workspaceId), eq(evidences.evidenceType, 'SCHEMA')));
+    expect(repeatedSchemaEvidences).toHaveLength(1);
   });
 
   it('다른 databaseKey의 schema-qualified/unqualified table은 same_db_table 후보를 만들지 않는다', async () => {

@@ -20,7 +20,7 @@ import {
 } from '@archi-navi/db';
 import { buildUrn, generateId } from '@archi-navi/shared';
 import { and, eq, like, or } from 'drizzle-orm';
-import { saveRelationCandidate } from './candidateStore';
+import { saveRelationCandidate, saveRelationCandidateWithLazyEvidence } from './candidateStore';
 import { asRecord } from './utils';
 import { preferredSignalOwnerId, resolveExistingSignalOwnerId } from '../code/ownerResolution';
 import { normalizePath, uniqueSortedStrings } from '../extraction/shared';
@@ -1149,25 +1149,7 @@ async function createImplicitSchemaTableCandidates(
       continue;
     }
 
-    const evidenceId = generateId();
-    await db.insert(evidences).values({
-      id: evidenceId,
-      workspaceId,
-      evidenceType: 'SCHEMA',
-      excerpt: `implicit schema table candidate: ${unqualified.name} -> ${target.name}`,
-      metadata: {
-        source: 'CODE',
-        reason: 'implicit_schema_match',
-        databaseKey,
-        table: currentParts.table,
-        unqualifiedName: unqualified.name,
-        qualifiedName: target.name,
-        qualifiedSchema: target.parts.schema,
-        repoRoot,
-      },
-    });
-
-    const saved = await saveRelationCandidate(
+    const saved = await saveRelationCandidateWithLazyEvidence(
       db,
       {
         workspaceId,
@@ -1193,7 +1175,26 @@ async function createImplicitSchemaTableCandidates(
             : {}),
         },
       },
-      evidenceId,
+      async () => {
+        const evidenceId = generateId();
+        await db.insert(evidences).values({
+          id: evidenceId,
+          workspaceId,
+          evidenceType: 'SCHEMA',
+          excerpt: `implicit schema table candidate: ${unqualified.name} -> ${target.name}`,
+          metadata: {
+            source: 'CODE',
+            reason: 'implicit_schema_match',
+            databaseKey,
+            table: currentParts.table,
+            unqualifiedName: unqualified.name,
+            qualifiedName: target.name,
+            qualifiedSchema: target.parts.schema,
+            repoRoot,
+          },
+        });
+        return evidenceId;
+      },
     );
     if (saved.created) createdCount += 1;
   }

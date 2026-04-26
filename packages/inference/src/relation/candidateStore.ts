@@ -24,6 +24,8 @@ export interface SaveRelationCandidateParams {
   generationMode?: 'compat_deterministic';
 }
 
+type EvidenceIdFactory = () => Promise<string> | string;
+
 function mergeSpecializedRelationMetadata(
   nextMetadata: Record<string, unknown>,
   currentMetadata: unknown,
@@ -49,10 +51,10 @@ function hasSpecializationDelta(
   return current.framework !== nextMetadata.framework || current.language !== nextMetadata.language;
 }
 
-export async function saveRelationCandidate(
+async function saveRelationCandidateInternal(
   db: DbClient,
   params: SaveRelationCandidateParams,
-  evidenceId: string,
+  evidenceIdFactory: EvidenceIdFactory,
 ): Promise<{ created: boolean }> {
   const {
     workspaceId,
@@ -153,6 +155,7 @@ export async function saveRelationCandidate(
         .where(eq(relationCandidates.id, pending.id));
     }
 
+    const evidenceId = await evidenceIdFactory();
     await db
       .insert(relationCandidateEvidences)
       .values({ workspaceId, candidateId: pending.id, evidenceId })
@@ -171,6 +174,23 @@ export async function saveRelationCandidate(
     metadata: adjustedParams.metadata,
     status: 'PENDING',
   });
+  const evidenceId = await evidenceIdFactory();
   await db.insert(relationCandidateEvidences).values({ workspaceId, candidateId, evidenceId });
   return { created: true };
+}
+
+export async function saveRelationCandidate(
+  db: DbClient,
+  params: SaveRelationCandidateParams,
+  evidenceId: string,
+): Promise<{ created: boolean }> {
+  return saveRelationCandidateInternal(db, params, () => evidenceId);
+}
+
+export async function saveRelationCandidateWithLazyEvidence(
+  db: DbClient,
+  params: SaveRelationCandidateParams,
+  evidenceIdFactory: EvidenceIdFactory,
+): Promise<{ created: boolean }> {
+  return saveRelationCandidateInternal(db, params, evidenceIdFactory);
 }
