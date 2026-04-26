@@ -430,6 +430,12 @@ function collectCteNames(tokens: string[]): Set<string> {
         ctes.add(candidate);
         index += 1;
 
+        if (tokens[index] === '(') {
+            const afterColumnList = skipParenthesized(tokens, index);
+            if (tokenLower(tokens, afterColumnList) === 'as') {
+                index = afterColumnList;
+            }
+        }
         if (tokenLower(tokens, index) === 'as') index += 1;
         if (tokens[index] !== '(') break;
         index = skipParenthesized(tokens, index);

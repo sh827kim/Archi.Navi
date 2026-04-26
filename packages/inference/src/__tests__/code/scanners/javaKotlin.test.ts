@@ -431,6 +431,31 @@ describe('scanMyBatisXml', () => {
         expect(symbols).not.toContain('robot_tree');
     });
 
+    it('CTE column list를 query body로 오인하지 않고 다음 CTE 이름도 수집해야 한다', () => {
+        const content = `
+<mapper namespace="com.example.mapper.RobotMapper">
+    <select id="findWithColumns"><![CDATA[
+        WITH active_robot(id, status_id) AS (
+            SELECT r.id, r.status_id FROM robot_instance r
+        ),
+        robot_status_cte(status_id) AS (
+            SELECT s.id FROM robot_status s
+        )
+        SELECT *
+        FROM active_robot ar
+        JOIN robot_status_cte rs ON ar.status_id = rs.status_id
+    ]]></select>
+</mapper>
+`;
+        const result = scanMyBatisXml('/mapper/RobotMapper.xml', content);
+        const symbols = result.signals.filter((s) => s.kind === 'db_read').map((s) => s.symbol);
+
+        expect(symbols).toContain('robot_instance');
+        expect(symbols).toContain('robot_status');
+        expect(symbols).not.toContain('active_robot');
+        expect(symbols).not.toContain('robot_status_cte');
+    });
+
     it('한 줄 태그(select/insert)가 닫히는 경우도 신호를 추출해야 한다', () => {
         const content = `
 <mapper namespace="com.example.mapper.InlineMapper">
