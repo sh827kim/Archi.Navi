@@ -421,6 +421,9 @@ function collectCteNames(tokens: string[]): Set<string> {
     if (tokenLower(tokens, 0) !== 'with') return ctes;
 
     let index = 1;
+    while (tokenLower(tokens, index) === 'recursive') {
+        index += 1;
+    }
     while (index < tokens.length) {
         const candidate = normalizeSqlIdentifier(tokens[index] ?? '');
         if (!candidate) break;

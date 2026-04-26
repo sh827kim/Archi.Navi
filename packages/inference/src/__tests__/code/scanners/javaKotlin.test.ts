@@ -409,6 +409,28 @@ describe('scanMyBatisXml', () => {
         expect(symbols).not.toContain('ar');
     });
 
+    it('WITH RECURSIVE modifier 이후의 CTE 이름을 올바르게 제외해야 한다', () => {
+        const content = `
+<mapper namespace="com.example.mapper.RobotMapper">
+    <select id="findRecursive"><![CDATA[
+        WITH RECURSIVE robot_tree AS (
+            SELECT * FROM robot_instance r WHERE r.parent_id IS NULL
+            UNION ALL
+            SELECT child.* FROM robot_instance child
+            JOIN robot_tree parent ON child.parent_id = parent.id
+        )
+        SELECT * FROM robot_tree
+    ]]></select>
+</mapper>
+`;
+        const result = scanMyBatisXml('/mapper/RobotMapper.xml', content);
+        const symbols = result.signals.filter((s) => s.kind === 'db_read').map((s) => s.symbol);
+
+        expect(symbols).toContain('robot_instance');
+        expect(symbols).not.toContain('recursive');
+        expect(symbols).not.toContain('robot_tree');
+    });
+
     it('한 줄 태그(select/insert)가 닫히는 경우도 신호를 추출해야 한다', () => {
         const content = `
 <mapper namespace="com.example.mapper.InlineMapper">

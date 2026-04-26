@@ -2,7 +2,9 @@ import type { DbClient } from '@archi-navi/db';
 import {
   codeCallEdges,
   objectDomainAffinities,
+  objectGraphStats,
   objectRelations,
+  objectRollups,
   objects,
   relationCandidateEvidences,
   relationCandidates,
@@ -423,6 +425,29 @@ async function mergeRelationCandidates(tx: DbExecutor, ctx: MergeContext): Promi
   return mergedCount;
 }
 
+async function clearSourceRollupReferences(tx: DbExecutor, ctx: MergeContext): Promise<void> {
+  await tx
+    .delete(objectRollups)
+    .where(
+      and(
+        eq(objectRollups.workspaceId, ctx.workspaceId),
+        or(
+          eq(objectRollups.subjectObjectId, ctx.sourceObjectId),
+          eq(objectRollups.objectId, ctx.sourceObjectId),
+        ),
+      ),
+    );
+
+  await tx
+    .delete(objectGraphStats)
+    .where(
+      and(
+        eq(objectGraphStats.workspaceId, ctx.workspaceId),
+        eq(objectGraphStats.objectId, ctx.sourceObjectId),
+      ),
+    );
+}
+
 export async function mergeImplicitSchemaDbTableCandidate(
   db: DbClient,
   params: { workspaceId: string; candidateId: string },
@@ -540,6 +565,13 @@ export async function mergeImplicitSchemaDbTableCandidate(
           eq(codeCallEdges.calleeOwnerObjectId, source.id),
         ),
       );
+
+    await clearSourceRollupReferences(tx, {
+      workspaceId,
+      candidateId,
+      sourceObjectId: source.id,
+      targetObjectId: target.id,
+    });
 
     await tx.delete(objects).where(and(eq(objects.workspaceId, workspaceId), eq(objects.id, source.id)));
 

@@ -2,13 +2,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createTestDb as createEmbeddedTestDb } from '@archi-navi/db';
 import {
   objectDomainAffinities,
+  objectGraphStats,
   objectRelations,
+  objectRollups,
   objects,
   relationCandidates,
   workspaces,
 } from '@archi-navi/db';
 import { generateId } from '@archi-navi/shared';
-import { and, eq } from 'drizzle-orm';
+import { and, eq, or } from 'drizzle-orm';
 import {
   DbTableMergeError,
   mergeImplicitSchemaDbTableCandidate,
@@ -155,6 +157,38 @@ describe('mergeImplicitSchemaDbTableCandidate', () => {
         source: 'APPROVED_INFERENCE',
       },
     ]);
+    await db.insert(objectRollups).values([
+      {
+        id: generateId(),
+        workspaceId,
+        rollupLevel: 'SERVICE_TO_DATABASE',
+        relationType: 'read',
+        subjectObjectId: serviceId,
+        objectId: sourceTableId,
+        edgeWeight: 1,
+        confidence: 0.7,
+        generationVersion: 1,
+      },
+      {
+        id: generateId(),
+        workspaceId,
+        rollupLevel: 'DATABASE_TO_SERVICE',
+        relationType: 'read',
+        subjectObjectId: sourceTableId,
+        objectId: serviceId,
+        edgeWeight: 1,
+        confidence: 0.7,
+        generationVersion: 1,
+      },
+    ]);
+    await db.insert(objectGraphStats).values({
+      workspaceId,
+      generationVersion: 1,
+      rollupLevel: 'SERVICE_TO_DATABASE',
+      objectId: sourceTableId,
+      outDegree: 1,
+      inDegree: 1,
+    });
 
     const result = await mergeImplicitSchemaDbTableCandidate(db, {
       workspaceId,
@@ -237,6 +271,31 @@ describe('mergeImplicitSchemaDbTableCandidate', () => {
       affinity: 0.8,
       confidence: 0.9,
     });
+
+    const staleRollups = await db
+      .select({ id: objectRollups.id })
+      .from(objectRollups)
+      .where(
+        and(
+          eq(objectRollups.workspaceId, workspaceId),
+          or(
+            eq(objectRollups.subjectObjectId, sourceTableId),
+            eq(objectRollups.objectId, sourceTableId),
+          ),
+        ),
+      );
+    expect(staleRollups).toHaveLength(0);
+
+    const staleStats = await db
+      .select({ objectId: objectGraphStats.objectId })
+      .from(objectGraphStats)
+      .where(
+        and(
+          eq(objectGraphStats.workspaceId, workspaceId),
+          eq(objectGraphStats.objectId, sourceTableId),
+        ),
+      );
+    expect(staleStats).toHaveLength(0);
   });
 
   it('target schema가 metadata에만 있어도 qualified target으로 병합한다', async () => {
