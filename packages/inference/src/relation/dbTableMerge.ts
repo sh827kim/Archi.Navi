@@ -21,6 +21,14 @@ export interface MergeDbTableCandidateResult {
   mergedCandidateCount: number;
   mergedDomainAffinityCount: number;
   affectedDomainIds: string[];
+  affectedRelationChanges: MergedRelationChange[];
+}
+
+export interface MergedRelationChange {
+  action: 'APPROVED' | 'DELETED';
+  relationType: string;
+  subjectObjectId: string;
+  objectId: string;
 }
 
 export type DbTableMergeErrorCode =
@@ -209,7 +217,38 @@ async function mergeDomainAffinities(tx: DbExecutor, ctx: MergeContext): Promise
   return { mergedCount, affectedDomainIds: Array.from(affectedDomainIds).sort() };
 }
 
-async function mergeObjectRelations(tx: DbExecutor, ctx: MergeContext): Promise<number> {
+function relationRollupChangesForMerge(
+  row: {
+    relationType: string;
+    subjectObjectId: string;
+    objectId: string;
+  },
+  next: {
+    subjectObjectId: string;
+    objectId: string;
+  },
+): MergedRelationChange[] {
+  if (row.relationType !== 'read' && row.relationType !== 'write') return [];
+  return [
+    {
+      action: 'DELETED',
+      relationType: row.relationType,
+      subjectObjectId: row.subjectObjectId,
+      objectId: row.objectId,
+    },
+    {
+      action: 'APPROVED',
+      relationType: row.relationType,
+      subjectObjectId: next.subjectObjectId,
+      objectId: next.objectId,
+    },
+  ];
+}
+
+async function mergeObjectRelations(tx: DbExecutor, ctx: MergeContext): Promise<{
+  mergedCount: number;
+  affectedRelationChanges: MergedRelationChange[];
+}> {
   const rows = await tx
     .select({
       id: objectRelations.id,
@@ -232,10 +271,17 @@ async function mergeObjectRelations(tx: DbExecutor, ctx: MergeContext): Promise<
     );
 
   let mergedCount = 0;
+  const affectedRelationChanges: MergedRelationChange[] = [];
   for (const row of rows) {
     const nextSubject =
       row.subjectObjectId === ctx.sourceObjectId ? ctx.targetObjectId : row.subjectObjectId;
     const nextObject = row.objectId === ctx.sourceObjectId ? ctx.targetObjectId : row.objectId;
+    affectedRelationChanges.push(
+      ...relationRollupChangesForMerge(row, {
+        subjectObjectId: nextSubject,
+        objectId: nextObject,
+      }),
+    );
 
     if (nextSubject === nextObject) {
       await tx.delete(objectRelations).where(eq(objectRelations.id, row.id));
@@ -294,7 +340,7 @@ async function mergeObjectRelations(tx: DbExecutor, ctx: MergeContext): Promise<
     mergedCount += 1;
   }
 
-  return mergedCount;
+  return { mergedCount, affectedRelationChanges };
 }
 
 async function mergeRelationCandidates(tx: DbExecutor, ctx: MergeContext): Promise<number> {
@@ -561,7 +607,7 @@ export async function mergeImplicitSchemaDbTableCandidate(
       sourceObjectId: source.id,
       targetObjectId: target.id,
     });
-    const mergedRelationCount = await mergeObjectRelations(tx, {
+    const relationResult = await mergeObjectRelations(tx, {
       workspaceId,
       candidateId,
       sourceObjectId: source.id,
@@ -597,10 +643,11 @@ export async function mergeImplicitSchemaDbTableCandidate(
       success: true,
       sourceObjectId: source.id,
       targetObjectId: target.id,
-      mergedRelationCount,
+      mergedRelationCount: relationResult.mergedCount,
       mergedCandidateCount,
       mergedDomainAffinityCount: domainResult.mergedCount,
       affectedDomainIds: domainResult.affectedDomainIds,
+      affectedRelationChanges: relationResult.affectedRelationChanges,
     };
   });
 }

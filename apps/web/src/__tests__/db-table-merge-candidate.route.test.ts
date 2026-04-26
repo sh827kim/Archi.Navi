@@ -8,6 +8,7 @@ const {
   mergeMock,
   applyRollupChangesMock,
   createDomainAffinityChangedEventMock,
+  createRelationChangeEventMock,
 } = vi.hoisted(() => ({
   getDbMock: vi.fn(),
   mergeMock: vi.fn(),
@@ -15,6 +16,14 @@ const {
   createDomainAffinityChangedEventMock: vi.fn((objectId: string, domainId: string) => ({
     type: 'DOMAIN_AFFINITY_CHANGED',
     payload: { objectId, domainId },
+  })),
+  createRelationChangeEventMock: vi.fn((action: string, relation: Record<string, unknown>) => ({
+    type: action === 'APPROVED' ? 'RELATION_APPROVED' : 'RELATION_DELETED',
+    payload: {
+      relationType: relation.relationType,
+      subjectObjectId: relation.subjectObjectId,
+      objectId: relation.objectId,
+    },
   })),
 }));
 
@@ -43,6 +52,7 @@ vi.mock('@archi-navi/inference', async () => {
 vi.mock('@/lib/rollup-change-events', () => ({
   applyRollupChanges: applyRollupChangesMock,
   createDomainAffinityChangedEvent: createDomainAffinityChangedEventMock,
+  createRelationChangeEvent: createRelationChangeEventMock,
 }));
 
 import { DbTableMergeError } from '@archi-navi/inference';
@@ -96,6 +106,20 @@ describe('POST /api/db-tables/merge-candidate', () => {
       mergedCandidateCount: 2,
       mergedDomainAffinityCount: 1,
       affectedDomainIds: ['domain-1'],
+      affectedRelationChanges: [
+        {
+          action: 'DELETED',
+          relationType: 'read',
+          subjectObjectId: 'svc-cart',
+          objectId: 'table-unqualified',
+        },
+        {
+          action: 'APPROVED',
+          relationType: 'read',
+          subjectObjectId: 'svc-cart',
+          objectId: 'table-qualified',
+        },
+      ],
     });
 
     const res = await POST(makeRequest({ workspaceId: 'ws-1', candidateId: 'cand-1' }));
@@ -103,8 +127,30 @@ describe('POST /api/db-tables/merge-candidate', () => {
     expect(res.status).toBe(200);
     expect(mergeMock).toHaveBeenCalledWith(db, { workspaceId: 'ws-1', candidateId: 'cand-1' });
     expect(applyRollupChangesMock).toHaveBeenCalledWith(db, 'ws-1', [
-      { type: 'DOMAIN_AFFINITY_CHANGED', payload: { objectId: 'table-unqualified', domainId: 'domain-1' } },
-      { type: 'DOMAIN_AFFINITY_CHANGED', payload: { objectId: 'table-qualified', domainId: 'domain-1' } },
+      {
+        type: 'RELATION_DELETED',
+        payload: {
+          relationType: 'read',
+          subjectObjectId: 'svc-cart',
+          objectId: 'table-unqualified',
+        },
+      },
+      {
+        type: 'RELATION_APPROVED',
+        payload: {
+          relationType: 'read',
+          subjectObjectId: 'svc-cart',
+          objectId: 'table-qualified',
+        },
+      },
+      {
+        type: 'DOMAIN_AFFINITY_CHANGED',
+        payload: { objectId: 'table-unqualified', domainId: 'domain-1' },
+      },
+      {
+        type: 'DOMAIN_AFFINITY_CHANGED',
+        payload: { objectId: 'table-qualified', domainId: 'domain-1' },
+      },
     ]);
     expect(await res.json()).toMatchObject({
       success: true,

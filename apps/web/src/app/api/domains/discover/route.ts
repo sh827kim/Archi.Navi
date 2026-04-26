@@ -159,7 +159,7 @@ function buildEndpointIntentInputs(objects: DiscoveryObjectInput[]): DiscoveryIn
 }
 
 function buildSelectedObjectScope(
-    objectRows: Array<{ id: string; parentId: string | null }>,
+    objectRows: Array<{ id: string; objectType: string; parentId: string | null }>,
     relationRows: Array<{ subjectObjectId: string; objectId: string }>,
     selectedServiceIds: string[],
 ): Set<string> | null {
@@ -177,8 +177,10 @@ function buildSelectedObjectScope(
     }
 
     const baseScope = new Set(scope);
+    const objectTypeById = new Map(objectRows.map((object) => [object.id, object.objectType]));
     for (const relation of relationRows) {
         if (!baseScope.has(relation.subjectObjectId)) continue;
+        if (objectTypeById.get(relation.objectId) === 'service') continue;
         scope.add(relation.objectId);
     }
     return scope;

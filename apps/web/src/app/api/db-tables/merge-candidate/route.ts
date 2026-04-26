@@ -7,6 +7,7 @@ import {
 import {
   applyRollupChanges,
   createDomainAffinityChangedEvent,
+  createRelationChangeEvent,
 } from '@/lib/rollup-change-events';
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -44,10 +45,14 @@ export async function POST(req: NextRequest) {
 
     const db = await getDb();
     const result = await mergeImplicitSchemaDbTableCandidate(db, { workspaceId, candidateId });
-    const rollupEvents = result.affectedDomainIds.flatMap((domainId) => [
+    const relationEvents = (result.affectedRelationChanges ?? []).map((change) =>
+      createRelationChangeEvent(change.action, change),
+    );
+    const domainEvents = result.affectedDomainIds.flatMap((domainId) => [
       createDomainAffinityChangedEvent(result.sourceObjectId, domainId),
       createDomainAffinityChangedEvent(result.targetObjectId, domainId),
     ]);
+    const rollupEvents = [...relationEvents, ...domainEvents];
 
     let warning: string | undefined;
     try {

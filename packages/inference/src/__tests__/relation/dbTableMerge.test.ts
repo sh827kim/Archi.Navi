@@ -201,6 +201,20 @@ describe('mergeImplicitSchemaDbTableCandidate', () => {
       targetObjectId: targetTableId,
       mergedDomainAffinityCount: 1,
       affectedDomainIds: [domainId],
+      affectedRelationChanges: [
+        {
+          action: 'DELETED',
+          relationType: 'read',
+          subjectObjectId: serviceId,
+          objectId: sourceTableId,
+        },
+        {
+          action: 'APPROVED',
+          relationType: 'read',
+          subjectObjectId: serviceId,
+          objectId: targetTableId,
+        },
+      ],
     });
 
     const sourceRows = await db

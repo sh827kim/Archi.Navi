@@ -433,9 +433,18 @@ describe('POST /api/domains/discover', () => {
                     externalRoutePattern: null,
                     messageTopicHints: [],
                 },
+                {
+                    sourceServiceId: 'svc-order',
+                    sourceFunctionId: null,
+                    intentType: 'service_topic',
+                    externalPathHint: null,
+                    externalRoutePattern: null,
+                    messageTopicHints: ['orders'],
+                },
             ],
             [
                 { subjectObjectId: 'fn-cart', objectId: 'db-cart', relationType: 'read' },
+                { subjectObjectId: 'fn-cart', objectId: 'svc-order', relationType: 'call' },
                 { subjectObjectId: 'fn-order', objectId: 'db-cart', relationType: 'write' },
                 { subjectObjectId: 'fn-order', objectId: 'ep-cart', relationType: 'call' },
             ],
