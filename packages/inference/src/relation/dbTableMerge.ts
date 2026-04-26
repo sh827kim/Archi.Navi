@@ -374,6 +374,7 @@ async function mergeRelationCandidates(tx: DbExecutor, ctx: MergeContext): Promi
     const [existing] = await tx
       .select({
         id: relationCandidates.id,
+        status: relationCandidates.status,
         confidence: relationCandidates.confidence,
         metadata: relationCandidates.metadata,
       })
@@ -384,7 +385,12 @@ async function mergeRelationCandidates(tx: DbExecutor, ctx: MergeContext): Promi
           eq(relationCandidates.relationType, row.relationType),
           eq(relationCandidates.subjectObjectId, nextSubject),
           eq(relationCandidates.objectId, nextObject),
-          eq(relationCandidates.status, row.status),
+          row.status === 'PENDING'
+            ? or(
+                eq(relationCandidates.status, 'PENDING'),
+                eq(relationCandidates.status, 'APPROVED'),
+              )
+            : eq(relationCandidates.status, row.status),
         ),
       )
       .limit(1);

@@ -1243,9 +1243,15 @@ async function markSuspectedSharedTables(
       ),
     );
 
-  if (tableRows.length < 2) return 0;
+  const fallbackTableRows = tableRows.filter((row) => {
+    const meta = metadataRecord(row.metadata);
+    const databaseKey = asString(meta['databaseKey']);
+    return databaseKey?.endsWith(':default') === true;
+  });
 
-  for (const row of tableRows) {
+  if (fallbackTableRows.length < 2) return 0;
+
+  for (const row of fallbackTableRows) {
     const meta = metadataRecord(row.metadata);
     if (meta['sharingModel'] === 'SHARED') continue;
     await db
@@ -1264,7 +1270,7 @@ async function markSuspectedSharedTables(
     });
   }
 
-  return tableRows.length;
+  return fallbackTableRows.length;
 }
 
 async function markDbTableCandidatesTopology(

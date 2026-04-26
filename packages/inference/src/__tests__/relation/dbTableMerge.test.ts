@@ -367,6 +367,128 @@ describe('mergeImplicitSchemaDbTableCandidate', () => {
     });
   });
 
+  it('source pending 후보가 target approved 후보와 중복되면 pending을 제거한다', async () => {
+    const serviceId = generateId();
+    const databaseId = generateId();
+    const sourceTableId = generateId();
+    const targetTableId = generateId();
+    const mergeCandidateId = generateId();
+    const sourceReadCandidateId = generateId();
+    const targetReadCandidateId = generateId();
+
+    await db.insert(objects).values([
+      {
+        id: serviceId,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'robot-service',
+        path: `/${serviceId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: databaseId,
+        workspaceId,
+        objectType: 'database',
+        category: 'STORAGE',
+        granularity: 'COMPOUND',
+        name: 'robot-db',
+        path: `/${databaseId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: sourceTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'STORAGE',
+        granularity: 'ATOMIC',
+        name: 'robot_instance',
+        parentId: databaseId,
+        path: `/${databaseId}/${sourceTableId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { table: 'robot_instance' },
+      },
+      {
+        id: targetTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'STORAGE',
+        granularity: 'ATOMIC',
+        name: 'schema_a.robot_instance',
+        parentId: databaseId,
+        path: `/${databaseId}/${targetTableId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: { table: 'robot_instance', schema: 'schema_a' },
+      },
+    ]);
+    await db.insert(relationCandidates).values([
+      {
+        id: mergeCandidateId,
+        workspaceId,
+        relationType: 'same_db_table',
+        subjectObjectId: sourceTableId,
+        objectId: targetTableId,
+        confidence: 0.65,
+        metadata: { reason: 'implicit_schema_match' },
+        status: 'PENDING',
+      },
+      {
+        id: sourceReadCandidateId,
+        workspaceId,
+        relationType: 'read',
+        subjectObjectId: serviceId,
+        objectId: sourceTableId,
+        confidence: 0.62,
+        metadata: { table: 'robot_instance' },
+        status: 'PENDING',
+      },
+      {
+        id: targetReadCandidateId,
+        workspaceId,
+        relationType: 'read',
+        subjectObjectId: serviceId,
+        objectId: targetTableId,
+        confidence: 0.81,
+        metadata: { table: 'schema_a.robot_instance' },
+        status: 'APPROVED',
+      },
+    ]);
+
+    await mergeImplicitSchemaDbTableCandidate(db, {
+      workspaceId,
+      candidateId: mergeCandidateId,
+    });
+
+    const sourceRows = await db
+      .select({ id: relationCandidates.id })
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, sourceReadCandidateId));
+    expect(sourceRows).toHaveLength(0);
+
+    const approvedRows = await db
+      .select({
+        id: relationCandidates.id,
+        status: relationCandidates.status,
+        confidence: relationCandidates.confidence,
+      })
+      .from(relationCandidates)
+      .where(eq(relationCandidates.id, targetReadCandidateId));
+    expect(approvedRows).toEqual([
+      expect.objectContaining({
+        id: targetReadCandidateId,
+        status: 'APPROVED',
+        confidence: 0.81,
+      }),
+    ]);
+  });
+
   it('source와 target base table명이 다르면 거부한다', async () => {
     const databaseId = generateId();
     const sourceTableId = generateId();

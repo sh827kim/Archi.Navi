@@ -1257,6 +1257,125 @@ describe('inferRelationsFromCodeSignals', () => {
     })).toBe(true);
   });
 
+  it('suspected shared 표시는 fallback databaseKey 테이블에만 적용해야 한다', async () => {
+    const canonicalDbId = generateId();
+    const canonicalTableId = generateId();
+    const svcA = generateId();
+    const svcB = generateId();
+    await db.insert(objects).values([
+      {
+        id: canonicalDbId,
+        workspaceId,
+        objectType: 'database',
+        category: 'STORAGE',
+        granularity: 'COMPOUND',
+        name: 'canonical-db',
+        path: `/${canonicalDbId}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: { databaseKey: 'postgres:db.example.com:5432:app', sharingModel: 'PRIVATE' },
+      },
+      {
+        id: canonicalTableId,
+        workspaceId,
+        objectType: 'db_table',
+        category: 'STORAGE',
+        granularity: 'ATOMIC',
+        name: 'users',
+        parentId: canonicalDbId,
+        path: `/${canonicalDbId}/${canonicalTableId}`,
+        depth: 1,
+        visibility: 'VISIBLE',
+        metadata: {
+          databaseKey: 'postgres:db.example.com:5432:app',
+          table: 'users',
+          sharingModel: 'PRIVATE',
+        },
+      },
+      {
+        id: svcA,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'alpha-service',
+        path: `/${svcA}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+      {
+        id: svcB,
+        workspaceId,
+        objectType: 'service',
+        category: 'COMPUTE',
+        granularity: 'COMPOUND',
+        name: 'beta-service',
+        path: `/${svcB}`,
+        depth: 0,
+        visibility: 'VISIBLE',
+        metadata: {},
+      },
+    ]);
+
+    for (const [serviceId, filePath] of [
+      [svcA, 'src/AlphaUsers.java'],
+      [svcB, 'src/BetaUsers.java'],
+    ] as const) {
+      const artifactId = generateId();
+      await db.insert(codeArtifacts).values({
+        id: artifactId,
+        workspaceId,
+        language: 'java',
+        repoRoot,
+        filePath,
+        ownerObjectId: serviceId,
+        sha256: filePath,
+      });
+      const evidenceId = generateId();
+      await db.insert(evidences).values({
+        id: evidenceId,
+        workspaceId,
+        evidenceType: 'FILE',
+        filePath,
+        lineStart: 1,
+        lineEnd: 1,
+        excerpt: 'SELECT * FROM users',
+        metadata: { kind: 'db_read', confidence: 0.82, tables: ['users'], parser: 'tokenizer' },
+      });
+      await db.insert(codeCallEdges).values({
+        id: generateId(),
+        workspaceId,
+        callerArtifactId: artifactId,
+        calleeSymbol: 'users',
+        weight: 1,
+        evidenceId,
+      });
+    }
+
+    await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+
+    const [canonicalTable] = await db
+      .select({ metadata: objects.metadata })
+      .from(objects)
+      .where(eq(objects.id, canonicalTableId))
+      .limit(1);
+    expect(canonicalTable?.metadata).toMatchObject({
+      databaseKey: 'postgres:db.example.com:5432:app',
+      sharingModel: 'PRIVATE',
+    });
+
+    const fallbackTables = await db
+      .select({ metadata: objects.metadata })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'db_table'), eq(objects.name, 'users')));
+    const fallbackMetas = fallbackTables
+      .map((row) => row.metadata as Record<string, unknown>)
+      .filter((metadata) => typeof metadata.databaseKey === 'string' && metadata.databaseKey.endsWith(':default'));
+    expect(fallbackMetas).toHaveLength(2);
+    expect(fallbackMetas.every((metadata) => metadata.sharingModel === 'SUSPECTED_SHARED')).toBe(true);
+  });
+
   it('expose는 후보를 생성하지 않아야 한다', async () => {
     const svcId = generateId();
     await db.insert(objects).values({
