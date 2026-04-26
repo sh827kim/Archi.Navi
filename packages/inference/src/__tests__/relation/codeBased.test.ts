@@ -1051,6 +1051,78 @@ describe('inferRelationsFromCodeSignals', () => {
     expect(candidates[0]?.objectId).toBe(tableRows[0]?.id);
   });
 
+  it('테이블명과 같은 SQL alias는 실제 테이블 참조로 유지해야 한다', async () => {
+    const svcId = generateId();
+    await db.insert(objects).values({
+      id: svcId,
+      workspaceId,
+      objectType: 'service',
+      category: 'COMPUTE',
+      granularity: 'COMPOUND',
+      name: 'order-service',
+      path: `/${svcId}`,
+      depth: 0,
+      visibility: 'VISIBLE',
+      metadata: {},
+    });
+
+    const artifactId = generateId();
+    await db.insert(codeArtifacts).values({
+      id: artifactId,
+      workspaceId,
+      language: 'java',
+      repoRoot,
+      filePath: 'src/OrderMapper.xml',
+      ownerObjectId: svcId,
+      sha256: 'db-self-alias',
+    });
+
+    const evRead = generateId();
+    await db.insert(evidences).values({
+      id: evRead,
+      workspaceId,
+      evidenceType: 'FILE',
+      filePath: 'src/OrderMapper.xml',
+      lineStart: 1,
+      lineEnd: 1,
+      excerpt: '<select>SELECT * FROM orders orders</select>',
+      metadata: {
+        kind: 'db_read',
+        confidence: 0.82,
+        parser: 'tokenizer',
+        tables: ['orders'],
+        aliases: { orders: 'orders' },
+      },
+    });
+    await db.insert(codeCallEdges).values({
+      id: generateId(),
+      workspaceId,
+      callerArtifactId: artifactId,
+      calleeSymbol: 'orders',
+      weight: 1,
+      evidenceId: evRead,
+    });
+
+    const result = await inferRelationsFromCodeSignals(db, { workspaceId, repoRoot });
+    expect(result.createdDbTableCount).toBe(1);
+    expect(result.candidateCount).toBe(1);
+
+    const tableRows = await db
+      .select({ id: objects.id, name: objects.name })
+      .from(objects)
+      .where(and(eq(objects.workspaceId, workspaceId), eq(objects.objectType, 'db_table')));
+    expect(tableRows).toHaveLength(1);
+    expect(tableRows[0]?.name).toBe('orders');
+
+    const candidates = await db
+      .select()
+      .from(relationCandidates)
+      .where(eq(relationCandidates.workspaceId, workspaceId));
+    expect(candidates).toHaveLength(1);
+    expect(candidates[0]?.relationType).toBe('read');
+    expect(candidates[0]?.objectId).toBe(tableRows[0]?.id);
+  });
+
   it('같은 JDBC canonical key를 쓰는 여러 서비스는 database/db_table을 공유해야 한다', async () => {
     const svcA = generateId();
     const svcB = generateId();

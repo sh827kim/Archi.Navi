@@ -691,7 +691,7 @@ function extractDatabaseIdentity(
   return { databaseKey: `${serviceName}:default`, source: 'fallback', schema: null };
 }
 
-function normalizeTableName(value: string, meta?: EvidenceMeta): string | null {
+function normalizeSqlTableIdentifier(value: string): string | null {
   const trimmed = value.trim();
   if (trimmed.length === 0) return null;
 
@@ -702,18 +702,25 @@ function normalizeTableName(value: string, meta?: EvidenceMeta): string | null {
   // table 또는 schema.table 형태까지만 허용(Phase 1 보수적)
   if (!/^[a-z_][a-z0-9_]*(\.[a-z_][a-z0-9_]*)?$/.test(lower)) return null;
 
-  const aliases = metadataRecord(meta?.['aliases']);
-  if (Object.keys(aliases).some((alias) => alias.toLowerCase() === lower)) return null;
+  return lower;
+}
+
+function normalizeTableName(value: string, meta?: EvidenceMeta): string | null {
+  const lower = normalizeSqlTableIdentifier(value);
+  if (!lower) return null;
 
   const sqlTables = extractStringArray(meta?.['tables']);
   if (sqlTables.length > 0) {
     const normalizedTables = new Set(
       sqlTables
-        .map((table) => normalizeTableName(table))
+        .map((table) => normalizeSqlTableIdentifier(table))
         .filter((table): table is string => table !== null),
     );
-    if (!normalizedTables.has(lower)) return null;
+    return normalizedTables.has(lower) ? lower : null;
   }
+
+  const aliases = metadataRecord(meta?.['aliases']);
+  if (Object.keys(aliases).some((alias) => alias.toLowerCase() === lower)) return null;
 
   return lower;
 }
